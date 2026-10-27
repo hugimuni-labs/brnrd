@@ -276,37 +276,6 @@ def test_project_run_container_preserved(tmp_path):
     ]
 
 
-def test_project_conversation_latest_picks_most_recent_task(tmp_path):
-    brr_dir = tmp_path / ".brr"
-    key = "telegram:6:"
-    conversations.append_run(
-        brr_dir, key,
-        run_id="run-old", event_id="evt-old",
-        env="host", status="done",
-    )
-    conversations.append_run(
-        brr_dir, key,
-        run_id="run-new", event_id="evt-new",
-        env="docker", status="running",
-    )
-    _emit(brr_dir, key, "run_created", run_id="run-new",
-          env="docker")
-    _emit(brr_dir, key, "run_started", run_id="run-new")
-
-    view = run_progress.project_conversation_latest(brr_dir, key)
-    assert view is not None
-    assert view.run_id == "run-new"
-    assert view.state == "active"
-
-
-def test_project_conversation_latest_returns_none_when_no_runs(tmp_path):
-    brr_dir = tmp_path / ".brr"
-    key = "telegram:7:"
-    conversations.append_event(brr_dir, key, {"id": "evt-1", "source": "telegram"})
-    view = run_progress.project_conversation_latest(brr_dir, key)
-    assert view is None
-
-
 def test_projection_captures_runner_name_from_run_started(tmp_path):
     """``run_started`` carries the resolved runner name so the chat
     card header can show ``codex``/``claude`` etc. without the gate

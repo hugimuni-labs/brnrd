@@ -6,6 +6,7 @@ import hashlib
 import os
 import re
 import secrets
+import threading
 from pathlib import Path
 
 _ALPHABET = "abcdefghijklmnopqrstuvwxyz0123456789"
@@ -153,7 +154,7 @@ class Home:
     def main_thread(self) -> str:
         """The home thread, where letters with no better address land.
 
-        ``brnrd`` once its folder exists, else a legacy ``inbox``, else ``brnrd``.
+        ``inbox`` once its folder exists, else a legacy ``brnrd``, else ``inbox``.
         """
         threads = self.root / "self" / "threads"
         return home_thread(n for n in (HOME_THREAD, LEGACY_HOME_THREAD) if (threads / n).is_dir())
@@ -172,12 +173,12 @@ class Home:
         return self.root / "rooms" / strand
 
 
-HOME_THREAD = "brnrd"
-LEGACY_HOME_THREAD = "inbox"
+HOME_THREAD = "inbox"
+LEGACY_HOME_THREAD = "brnrd"
 
 
 def home_thread(names) -> str:
-    """The home thread among thread names: brnrd, else a surviving inbox, else brnrd."""
+    """The home thread among thread names: inbox, else a surviving brnrd, else inbox."""
     names = set(names)
     return LEGACY_HOME_THREAD if LEGACY_HOME_THREAD in names and HOME_THREAD not in names else HOME_THREAD
 
@@ -197,13 +198,19 @@ def thread_of(to: str) -> str:
 
 def atomic_write(path: Path, text: str | bytes, *, sync_directory: bool = False) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_name(path.name + ".tmp")
-    fd = os.open(tmp, os.O_CREAT | os.O_TRUNC | os.O_WRONLY, 0o644)
-    with os.fdopen(fd, "wb") as stream:
-        stream.write(text.encode() if isinstance(text, str) else text)
-        stream.flush()
-        os.fsync(stream.fileno())
-    os.replace(tmp, path)
+    # One temp name per writer: two processes writing the same path must not
+    # rename each other's temp file away (two jacks stopping at once did).
+    tmp = path.with_name(f"{path.name}.{os.getpid()}.{threading.get_ident()}.tmp")
+    try:
+        fd = os.open(tmp, os.O_CREAT | os.O_TRUNC | os.O_WRONLY, 0o644)
+        with os.fdopen(fd, "wb") as stream:
+            stream.write(text.encode() if isinstance(text, str) else text)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(tmp, path)
+    except BaseException:
+        tmp.unlink(missing_ok=True)
+        raise
     if sync_directory:
         directory = os.open(path.parent, os.O_RDONLY)
         try:

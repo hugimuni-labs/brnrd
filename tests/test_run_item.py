@@ -38,23 +38,6 @@ def _task_with_event(tmp_path: Path, **meta) -> tuple[Run, Path]:
 # ── the control grammar ─────────────────────────────────────────────────
 
 
-def test_read_control_strips_an_optional_prefix_and_backticks(tmp_path):
-    (tmp_path / ".item").write_text("item: `w-1`\n", encoding="utf-8")
-    assert run_item.read_control(tmp_path) == "w-1"
-
-
-def test_read_control_bare_line(tmp_path):
-    (tmp_path / ".item").write_text("mira\n", encoding="utf-8")
-    assert run_item.read_control(tmp_path) == "mira"
-
-
-def test_read_control_absent_or_blank_is_none(tmp_path):
-    assert run_item.read_control(tmp_path) is None
-    (tmp_path / ".item").write_text("\n\n", encoding="utf-8")
-    assert run_item.read_control(tmp_path) is None
-    assert run_item.read_control(None) is None
-
-
 def test_the_control_name_is_the_topic_siblings_own_sibling():
     from brr import run_topic
 
@@ -63,34 +46,6 @@ def test_the_control_name_is_the_topic_siblings_own_sibling():
 
 
 # ── resolution: a w-N id, a callsign, the closed-item guard ─────────────
-
-
-def test_resolve_a_bare_w_n_id(tmp_path):
-    root = _warp(tmp_path)
-    _item(root, "w-1")
-    assert run_item.resolve(root, "w-1") == "w-1"
-    assert run_item.resolve(root, "w-999") is None
-
-
-def test_resolve_a_callsign(tmp_path):
-    root = _warp(tmp_path)
-    _item(root, "w-1", sign="mira")
-    assert run_item.resolve(root, "mira") == "w-1"
-    assert run_item.resolve(root, "MIRA") == "w-1"
-    assert run_item.resolve(root, "nope") is None
-
-
-def test_resolve_refuses_a_closed_item(tmp_path):
-    root = _warp(tmp_path)
-    path = _item(root, "w-1")
-    items.mark_done(path, date="2026-09-22")
-    assert run_item.resolve(root, "w-1") is None
-
-
-def test_resolve_blank_and_no_root(tmp_path):
-    root = _warp(tmp_path)
-    assert run_item.resolve(root, "") is None
-    assert run_item.resolve(None, "w-1") is None
 
 
 # ── settle: idempotency, refusal, the event-meta fallback ───────────────

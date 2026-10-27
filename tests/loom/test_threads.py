@@ -214,7 +214,7 @@ Path({str(receipt)!r}).write_text(json.dumps({{k: [p.returncode, p.stderr] for k
         assert not (root / 'self/threads/injected-repo').exists()
         assert 'unsafe thread id' in rows['unsafe'][1]
         assert 'pre-receive hook declined' in rows['failed'][1]
-        assert 'tainted strand' in rows['tainted'][1] and 'clean letter to brnrd' in rows['tainted'][1]
+        assert 'tainted strand' in rows['tainted'][1] and 'clean letter to inbox' in rows['tainted'][1]
         assert not (root / 'self/threads/failed-open').exists()
         assert not (root / 'self/threads/tainted-open').exists()
         wait_until(lambda: holder(loom.facts(), 'opener') is None, 30, loom.dump)

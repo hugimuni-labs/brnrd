@@ -1535,17 +1535,18 @@ def main(argv: list[str] | None = None) -> None:
 
     try:
         if not raw:
-            # Bare `brnrd` — the narrated front door
-            # (`decision-retire-init.md` §"The front door"). Handled here
+            # Bare `brnrd` — the loom's guided setup, the same one as
+            # `brnrd setup` (the daemon-era `front_door` ladder set up a
+            # machine the loom no longer reads). Handled here
             # rather than as an argparse default because the subparsers are
             # `required=True` and must stay that way: `brnrd <verb>` is the
             # CLI it has always been, and a mistyped verb must still be an
             # argparse error, not a guided setup. The only argv this
             # intercepts is the empty one, which argparse could previously
             # only answer with "the following arguments are required".
-            from . import front_door
+            from .loom.runtime.setup_channel import main as guided_setup
 
-            return front_door.run()
+            return guided_setup([])
         if raw[:2] == ["loom", "check"]:
             from .loom.runtime.check import run
             return run(raw[2:])

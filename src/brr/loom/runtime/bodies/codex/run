@@ -2,6 +2,7 @@
 import json
 import os
 import sys
+from brr.loom.runtime.adapters import codex_model
 from brr.loom.runtime.port import wake_parts
 
 room, core = sys.argv[1:]
@@ -9,7 +10,11 @@ room, core = sys.argv[1:]
 # instructions; the user turn carries only the occasion.
 core_text, occasion = wake_parts(os.environ)
 system = ["-c", "developer_instructions=" + json.dumps(core_text, ensure_ascii=False)] if core_text else []
-os.execvp("codex", ["codex", "exec", "--ignore-user-config", "--model", core,
+# --ignore-user-config drops the person's own model too; an empty core
+# carries it over from their codex config, or leaves codex its default.
+core = core or codex_model()
+model = ["--model", core] if core else []
+os.execvp("codex", ["codex", "exec", "--ignore-user-config", *model,
                     "--dangerously-bypass-approvals-and-sandbox", "--json",
                     "-c", 'shell_environment_policy.inherit="all"', *system, "--",
                     occasion])

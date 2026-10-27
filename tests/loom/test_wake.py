@@ -134,7 +134,7 @@ def test_init_layout_noop_and_remote(tmp_path: Path) -> None:
         "memory/scars/.gitkeep",
         "memory/itches/.gitkeep",
         "memory/moves/.gitkeep",
-        "threads/brnrd/README.md",
+        "threads/inbox/README.md",
         "people/.gitkeep",
         "people/arseni/agreement.md",
     ]
@@ -145,7 +145,7 @@ def test_init_layout_noop_and_remote(tmp_path: Path) -> None:
     assert log.stdout.splitlines() == ["brnrd-loom loom@localhost"]
     count = _run(["git", "rev-list", "--count", "HEAD"], self_dir)
     assert count.stdout.strip() == "1"
-    check_readme_file(self_dir / "threads" / "brnrd" / "README.md")
+    check_readme_file(self_dir / "threads" / "inbox" / "README.md")
     assert "arseni" in (self_dir / "people" / "arseni" / "agreement.md").read_text(encoding="utf-8")
 
     pushed = _run(["git", "rev-parse", "main"], bare)
@@ -196,7 +196,7 @@ def test_wake_carries_the_self_and_skips_hearth(tmp_path: Path) -> None:
     assert "person:arseni" in out
     assert "loom part goes here verbatim" in out
     # First line of the file, which for a README is the frontmatter marker.
-    assert "threads/brnrd/README.md · # Letters with no thread yet · " in out
+    assert "threads/inbox/README.md · # Letters with no thread yet · " in out
     assert "people/sam/agreement.md · sam agrees in public · " in out
     assert "HEARTH-SECRET-should-not-appear" not in out
     assert "people/sam/hearth/" not in out
@@ -429,13 +429,13 @@ def test_missing_loom_part_and_bad_owed_are_loud(tmp_path: Path) -> None:
     owed = tmp_path / "owed.json"
     owed.write_text("[]", encoding="utf-8")
     recipe = clone / "core" / "loom" / "wake"
-    missing = _run([str(recipe), "brnrd", str(owed)], clone, env=_env())
+    missing = _run([str(recipe), "inbox", str(owed)], clone, env=_env())
     assert missing.returncode == 1
     assert "LOOM_PART is not set" in missing.stderr
     owed.write_text('{"id": "nope"}', encoding="utf-8")
     part = tmp_path / "part"
     part.write_text("part\n", encoding="utf-8")
-    bad = _run([str(recipe), "brnrd", str(owed)], clone, env=_env(LOOM_PART=str(part)))
+    bad = _run([str(recipe), "inbox", str(owed)], clone, env=_env(LOOM_PART=str(part)))
     assert bad.returncode == 1
     assert "expected a list" in bad.stderr
     (tmp_path / "empty.json").write_text("[]", encoding="utf-8")
@@ -446,6 +446,6 @@ def test_missing_loom_part_and_bad_owed_are_loud(tmp_path: Path) -> None:
     )
     assert missing_thread.returncode == 1
     assert "threads/no-such/README.md" in missing_thread.stderr
-    bad_room = cli(["wake", "--room", str(tmp_path), "--thread", "brnrd"])
+    bad_room = cli(["wake", "--room", str(tmp_path), "--thread", "inbox"])
     assert bad_room.returncode == 1
     assert "no self clone" in bad_room.stderr

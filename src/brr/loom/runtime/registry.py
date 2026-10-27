@@ -73,6 +73,7 @@ REGISTRY = (
     _kind("wish.verdict",      "wish",    "wish as evidence ref",                              "strand person", "global"),
     _kind("wish.left",         "wish",    "wish steps gen same?",                              "strand",        "global"),
     _kind("left.asked",        "wish",    "strand gen wishes",                                 "strand",        "global"),
+    _kind("thread.reopened",   "wish",    "thread wish was closed? why?",                      "strand",        "global"),
     _kind("pr.opened",         "pr",      "thread repo number url head",                       "strand",        "global"),
     _kind("pr.merged",         "pr",      "thread repo number head merge_commit",              "strand",        "global"),
     # Read by the body's table, owned elsewhere, not enforced here.
@@ -86,6 +87,9 @@ REGISTRY = (
     _kind("loom.degraded",     "loom",    "install step error where since",                   "loom",        "machine"),
     _kind("loom.recovered",    "loom",    "install step since count last",                    "loom",        "machine"),
     _kind("loom.moved",        "loom",    "install from to merges started",                   "loom",        "global"),
+    _kind("self.healed",       "loom",    "thread commit",                                    "loom",        "global",  once=True),
+    _kind("library.problem",   "loom",    "install name problem text since",                  "loom",        "machine"),
+    _kind("library.cleared",   "loom",    "install name problem",                             "loom",        "machine"),
 )
 
 KINDS = {row.kind: row for row in REGISTRY}

@@ -38,7 +38,7 @@ def stuck(reason):
 def root(tmp_path):
     path = tmp_path / "home"
     init_self(path)
-    write_thread(path, "brnrd", (Home(path).thread_dir("brnrd") / "README.md").read_text(),
+    write_thread(path, "inbox", (Home(path).thread_dir("inbox") / "README.md").read_text(),
                  "answer-fast", wait="0.1")
     return path
 
@@ -195,31 +195,29 @@ def test_impossible_router_window_does_not_silently_abandon_messages(root):
         wait_until(lambda: answered(loom, original), 2, loom.dump)
 
 
-@pytest.mark.parametrize("destination", ["thread:removed", "nowhere", "thread:brnrd"])
+@pytest.mark.parametrize("destination", ["thread:removed", "nowhere", "thread:inbox"])
 def test_unroutable_letter_gets_a_disposition(root, destination):
-    readme = Home(root).thread_dir("brnrd") / "README.md"
-    if destination == "thread:brnrd":
+    readme = Home(root).thread_dir("inbox") / "README.md"
+    if destination == "thread:inbox":
         from brr.loom.runtime.selfrepo import git, _commit
         readme.unlink()
-        git(root / "self", "add", "threads/brnrd/README.md")
+        git(root / "self", "add", "threads/inbox/README.md")
         _commit(root / "self", "Remove brnrd from main.")
     original = "p-test/lost"
     append(Home(root), Fact(kind="letter", by="person:p-test", id=original,
                            data={"id": original, "from": "p-test", "to": destination,
                                  "body": "please help"}))
     with running(root) as loom:
-        if destination == "thread:brnrd":
-            # With no thread on main, the operator owns it visibly.
+        if destination == "thread:inbox":
+            # With no thread on main, the loom puts inbox back and inbox owns it.
             from brr.loom.runtime.owners import letter_owners
             from brr.loom.runtime.lifecycle import main_snapshot
-            from brr.loom.runtime.verbs_loom import _attention
             def table():
                 return letter_owners(loom.facts(), main_snapshot(loom.home))
-            wait_until(lambda: table()[original].owner == "operator", 5, loom.dump)
-            _attention(["--home", str(root), "--note", original, "--why", "handled by hand"])
-            assert table()[original].done
+            wait_until(lambda: table()[original].thread == "inbox"
+                       and table()[original].owner not in {"loom", "operator"}, 30, loom.dump)
         else:
-            told_and_settled(loom, original, "brnrd", repr(destination))
+            told_and_settled(loom, original, "inbox", repr(destination))
 
 
 def relay_event(ident):
@@ -315,15 +313,15 @@ def test_unavailable_channel_does_not_block_a_live_threads_new_letter(root, monk
         wait_until(lambda: answered(loom, fresh), 2, loom.dump)
 
 
-def test_stale_speech_gets_a_visible_disposition(root):
-    # Recovery can start the old lease before speak_out creates its notice.
-    # Keep reading boundaries so the fixture handles mail arriving after start.
+def _draft_under_gen_1(root, router_install=None):
+    """A channel draft stamped router gen 1, whose lease is then released."""
     thread(root, "answer-pings")
     home = Home(root)
     authority = LocalLeaseAuthority(root / "ledger" / "leases")
     lease = authority.acquire("router", home.install_id(), 30)
-    append(home, Fact(kind="router", by=f"loom:{home.install_id()}", id="router:1",
-                     data={"gen": 1, "install": home.install_id(), "until": lease.until}))
+    install = router_install or home.install_id()
+    append(home, Fact(kind="router", by=f"loom:{install}", id="router:1",
+                     data={"gen": 1, "install": install, "until": lease.until}))
     strand = f"s-{home.install_id()}-old123"
     append(home, Fact(kind="lease", by=f"loom:{home.install_id()}", id="lease:work:1",
            data={"strand": strand, "thread": "work", "gen": 1, "router_gen": 1}))
@@ -332,12 +330,31 @@ def test_stale_speech_gets_a_visible_disposition(root):
            data={"id": key, "from": strand, "to": "channel:fake", "body": "old answer",
                  "gen": 1, "router_gen": 1}))
     authority.release(lease)
+    return key
+
+
+def test_stale_speech_gets_a_visible_disposition(root):
+    # Gen 1 was another install's router: the lease moved machines, so the
+    # draft is refused. Recovery can start the old lease before speak_out
+    # creates its notice; keep reading boundaries for mail after start.
+    key = _draft_under_gen_1(root, router_install="other")
     with running(root) as loom:
         reach(lambda: any(f.kind == "router" and f.data["gen"] == 2
                           for f in loom.facts()), loom)
         # The thread that drafted it is woken, told, and settles it; never sent.
         told_and_settled(loom, key, "work", "was not sent", "send a fresh message")
         assert not (root / "loom" / "channel-fake.jsonl").exists()
+
+
+def test_a_draft_survives_a_new_router_gen_on_the_same_install(root):
+    # A network flap fails renew and this install takes gen 2: the same
+    # speaker, so the draft from gen 1 is still delivered, not refused.
+    key = _draft_under_gen_1(root)
+    sent = root / "loom" / "channel-fake.jsonl"
+    with running(root) as loom:
+        reach(lambda: sent.exists() and "old answer" in sent.read_text(), loom)
+        assert not any(f.kind == "letter" and f.data.get("about") == key
+                       and "stale-speech" in json.dumps(f.data) for f in loom.facts())
 
 
 def test_relay_poll_recovers_after_saved_cursor_is_repaired(root, tmp_path, monkeypatch):
@@ -366,7 +383,7 @@ def test_relay_poll_recovers_after_saved_cursor_is_repaired(root, tmp_path, monk
 
 @stuck("brnrd addressed to an absent thread leaves phone messages without even a refusal")
 def test_unavailable_home_thread_owner_explains_the_refusal_remotely(root, tmp_path, monkeypatch):
-    readme = Home(root).thread_dir("brnrd") / "README.md"
+    readme = Home(root).thread_dir("inbox") / "README.md"
     readme.write_text(readme.read_text().replace('for: ""', 'for: "absent-brnrd"'))
     person = root / "self" / "people" / "owner"
     person.mkdir(parents=True)
@@ -399,3 +416,69 @@ def test_unavailable_home_thread_owner_explains_the_refusal_remotely(root, tmp_p
                           for f in letter_owners(loom.facts(), main_snapshot(loom.home)).values()), loom)
         # Respect ownership; the requested outcome is a refusal the person sees.
         wait_until(lambda: any(p.get("body_markdown") for p in sent), 2, loom.dump)
+
+
+def _lose_home_and_write(root, monkeypatch, *bodies):
+    # Setup paired a chat, then main lost its home thread: the chat's letters
+    # are addressed to a thread main does not hold.
+    from brr.loom.runtime import connector
+    from brr.loom.runtime.selfrepo import git, _commit
+    monkeypatch.setattr(connector, "instances", lambda home: {"tg": "telegram"})
+    git(root / "self", "rm", "-q", "threads/inbox/README.md")
+    _commit(root / "self", "Remove inbox from main.\n\nLoom-Strand: test\nLoom-Label: taint=0; audience=self\n")
+    chat = "channel:tg/42"
+    append(Home(root), Fact(kind="source", by="loom:test", id="source:tg:1",
+                            data={"origin": "tg:1", "channel": chat, "from": "p-test"}))
+    letters = []
+    for n, body in enumerate(bodies):
+        ident = f"p-test/lost{n}"
+        append(Home(root), Fact(kind="letter", by="person:p-test", id=ident,
+                                data={"id": ident, "from": "p-test", "to": "thread:inbox",
+                                      "cites": "source:tg:1", "body": body}))
+        letters.append(ident)
+    return chat, letters
+
+
+def test_unroutable_chat_letter_puts_the_home_thread_back(root, monkeypatch):
+    from brr.loom.runtime.selfrepo import git
+    from brr.loom.runtime.owners import letter_owners
+    from brr.loom.runtime.lifecycle import main_snapshot
+    chat, (original,) = _lose_home_and_write(root, monkeypatch, "hello?")
+    loom = Loom(root)
+    loom.start()
+    try:
+        wait_until(lambda: git(root / "self", "cat-file", "-e", "main:threads/inbox/README.md",
+                               check=False).returncode == 0, 30, loom.dump)
+        wait_until(lambda: letter_owners(loom.facts(), main_snapshot(loom.home))[original].thread
+                   == "inbox" and letter_owners(loom.facts(), main_snapshot(loom.home))[original].owner
+                   not in {"loom", "operator"}, 5, loom.dump)
+        assert [f.kind for f in loom.facts() if f.kind == "self.healed"] == ["self.healed"]
+        assert not [f for f in loom.facts() if f.kind == "letter" and f.data.get("to") == chat]
+        assert not [f for f in loom.facts() if f.kind == "letter.disposed"
+                    and any(d["id"] == original for d in f.data["dispositions"])]
+    finally:
+        loom.halt()
+
+
+def test_a_home_the_loom_cannot_heal_holds_the_chat_once(root, monkeypatch):
+    # The self refuses the loom's push: the letters wait, and their chat
+    # hears once that they are held, with no chore and no resend.
+    from brr.loom.runtime.owners import letter_owners
+    from brr.loom.runtime.lifecycle import main_snapshot
+    chat, letters = _lose_home_and_write(root, monkeypatch, "hello?", "anyone?")
+    hook = root / "self" / ".git" / "hooks" / "pre-receive"
+    hook.write_text("#!/bin/sh\nexit 1\n")
+    loom = Loom(root)
+    loom.start()
+    try:
+        held = lambda: [f for f in loom.facts() if f.kind == "letter" and f.data.get("to") == chat]
+        wait_until(lambda: held(), 5, loom.dump)
+        time.sleep(0.5)
+        assert len(held()) == 1
+        body = held()[0].data["body"]
+        assert "hold on to this" in body and "setup" not in body and "again" not in body
+        owners = letter_owners(loom.facts(), main_snapshot(loom.home))
+        assert all(owners[ident].action == "unroutable" for ident in letters)
+        assert "run `brnrd setup` again" in (root / "loom" / "loom.log").read_text()
+    finally:
+        loom.halt()

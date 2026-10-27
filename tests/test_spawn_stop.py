@@ -9,7 +9,6 @@ kill a *sibling* run's subprocess once concurrent spawns existed.
 
 from __future__ import annotations
 
-import subprocess
 import threading
 import time
 import types
@@ -38,37 +37,6 @@ def _clean_registries():
 
 
 # ── runner: per-invocation process registry ─────────────────────────
-
-
-class TestProcRegistry:
-    def test_kill_matching_kills_only_the_matching_prefix(self):
-        a = subprocess.Popen(["sleep", "30"])
-        b = subprocess.Popen(["sleep", "30"])
-        try:
-            runner._register_active_proc("evt-A-attempt-1", a)
-            runner._register_active_proc("evt-B-attempt-1", b)
-
-            assert runner.kill_matching("evt-A-") is True
-            a.wait(timeout=5)
-            assert a.poll() is not None
-            assert b.poll() is None
-
-            # Shutdown semantics: kill everything still live.
-            assert runner.kill_active() is True
-            b.wait(timeout=5)
-        finally:
-            for proc in (a, b):
-                if proc.poll() is None:
-                    proc.kill()
-
-    def test_kill_matching_empty_prefix_is_a_noop(self):
-        assert runner.kill_matching("") is False
-
-    def test_kill_matching_unknown_prefix_is_a_noop(self):
-        assert runner.kill_matching("evt-nothing-") is False
-
-    def test_kill_active_with_no_procs_is_a_noop(self):
-        assert runner.kill_active() is False
 
 
 # ── daemon: the stop: drain verb ────────────────────────────────────

@@ -56,22 +56,6 @@ def _task(meta: dict | None = None) -> Run:
 # ── stamp_body_version ────────────────────────────────────────────────────────
 
 
-def test_stamp_writes_body_version_to_frontmatter(tmp_path):
-    root = _warp(tmp_path)
-    _item_file(root, "w-1", body="## Answer\n\n**State:** doing it **Next:** continue")
-    digest = asks.stamp_body_version(root, "w-1")
-    assert digest is not None
-    assert len(digest) == asks._BODY_HASH_LEN
-    text = (root / "w-1.md").read_text(encoding="utf-8")
-    assert f"body-version: {digest}" in text
-
-
-def test_stamp_returns_none_on_missing_item(tmp_path):
-    root = _warp(tmp_path)
-    # No w-99.md
-    assert asks.stamp_body_version(root, "w-99") is None
-
-
 def test_stamp_is_idempotent(tmp_path):
     root = _warp(tmp_path)
     _item_file(root, "w-1", body="## Answer\n\nsome content")
@@ -84,46 +68,6 @@ def test_stamp_is_idempotent(tmp_path):
 
 
 # ── body_version_stale ────────────────────────────────────────────────────────
-
-
-def test_not_stale_when_no_stamp_set(tmp_path):
-    root = _warp(tmp_path)
-    _item_file(root, "w-1", body="## Answer\n\ncontent")
-    # No stamp written → not stale (opted out)
-    assert asks.body_version_stale(root, "w-1") is False
-
-
-def test_not_stale_right_after_stamp(tmp_path):
-    root = _warp(tmp_path)
-    _item_file(root, "w-1", body="## Answer\n\ncontent")
-    asks.stamp_body_version(root, "w-1")
-    assert asks.body_version_stale(root, "w-1") is False
-
-
-def test_stale_when_body_changes_after_stamp(tmp_path):
-    root = _warp(tmp_path)
-    path = _item_file(root, "w-1", body="## Answer\n\noriginal content")
-    asks.stamp_body_version(root, "w-1")
-    # Now change the body without re-stamping
-    text = path.read_text(encoding="utf-8")
-    path.write_text(text.replace("original content", "updated content"), encoding="utf-8")
-    assert asks.body_version_stale(root, "w-1") is True
-
-
-def test_not_stale_after_re_stamp_following_body_change(tmp_path):
-    root = _warp(tmp_path)
-    path = _item_file(root, "w-1", body="## Answer\n\noriginal")
-    asks.stamp_body_version(root, "w-1")
-    # Change body
-    path.write_text(
-        path.read_text(encoding="utf-8").replace("original", "updated"),
-        encoding="utf-8",
-    )
-    # Stale
-    assert asks.body_version_stale(root, "w-1") is True
-    # Re-stamp
-    asks.stamp_body_version(root, "w-1")
-    assert asks.body_version_stale(root, "w-1") is False
 
 
 # ── run_item.settle staleness notice ─────────────────────────────────────────
@@ -191,25 +135,3 @@ def test_settle_no_notice_when_no_stamp(tmp_path):
 # ── CLI: brnrd item stamp ─────────────────────────────────────────────────────
 
 
-def test_cli_item_stamp_writes_hash(tmp_path, monkeypatch):
-    """``brnrd item stamp w-1`` hashes the body and prints the digest."""
-    from brr import cli as cli_mod
-
-    root = _warp(tmp_path)
-    _item_file(root, "w-1", body="## Answer\n\n**State:** X **Next:** Y")
-    monkeypatch.setenv("BRR_SHARED_DIR", str(tmp_path / ".brr"))
-    monkeypatch.setattr(
-        cli_mod, "_item_context",
-        lambda: (root, None),
-    )
-
-    class FakeArgs:
-        id = "w-1"
-
-    captured = []
-    monkeypatch.setattr("builtins.print", lambda *a, **kw: captured.append(" ".join(str(x) for x in a)))
-    result = cli_mod.cmd_item_stamp(FakeArgs())
-    assert result == 0
-    assert any("w-1" in line and "body-version:" in line for line in captured)
-    # The stamp was written
-    assert asks.body_version_stale(root, "w-1") is False

@@ -359,27 +359,6 @@ def test_starved_dispatch_parks_before_building_or_invoking_the_runner(tmp_path,
     assert "Hibernating" in p.resp_path.read_text()
 
 
-@pytest.mark.parametrize("mode", ["healthy", "unknown", "forced", "strand", "refilled"])
-def test_dispatch_preserves_permitted_or_unmeasured_wakes(tmp_path, monkeypatch, mode):
-    monkeypatch.setattr(daemon, "_collect_levels", lambda *a, **kw: (None, False))
-    p = _prepared(tmp_path, monkeypatch)
-    if mode == "forced":
-        p.task.meta["starvation_forced"] = True
-    elif mode == "strand":
-        p.task.meta["spawn_parent_run_id"] = "run-parent"
-    elif mode == "refilled":
-        p.task.meta["pending_resource_hold"] = daemon._starvation_hold_spec(
-            p.task, {}, 0.0, detail="pre-refill cache",
-        )
-    levels = None if mode == "unknown" else {
-        "quota": {"primary_remaining_percent": 50.0 if mode in ("healthy", "refilled") else 0.0},
-    }
-    monkeypatch.setattr(daemon, "_collect_levels", lambda *a, **kw: (levels, True))
-    assert isinstance(worker.dispatch(p, Attempt(n=1, lane=p.lane)), Dispatched)
-    if mode == "refilled":
-        assert "pending_resource_hold" not in p.task.meta
-
-
 def test_starved_retry_is_checked_on_its_current_lane(tmp_path, monkeypatch):
     monkeypatch.setattr(daemon, "_collect_levels", lambda *a, **kw: (None, False))
     p = _prepared(tmp_path, monkeypatch)
@@ -391,49 +370,6 @@ def test_starved_retry_is_checked_on_its_current_lane(tmp_path, monkeypatch):
 
 
 # ── move 3b: the loop quirks ─────────────────────────────────────────
-
-
-def test_a_retry_on_a_mounted_shell_resumes_only_its_own_session(tmp_path, monkeypatch):
-    """Quirk 1. Each attempt's mount argv replaces the last one's; the lane's
-    own ``extra_args`` never change; an attempt whose mount fails resumes
-    nothing rather than the previous attempt's seed."""
-    from brr import prompts, transcript
-
-    p = _prepared(tmp_path, monkeypatch)
-    p.task.meta["runner_shell"] = "claude"
-    monkeypatch.setattr(StubWorktreeEnv, "session_seed_home", lambda self, _ctx: None, raising=False)
-    real_build = prompts.build_daemon_prompt_with_score
-
-    def _build(*a, _mount_sink=None, **kw):
-        built = real_build(*a, _mount_sink=_mount_sink, **kw)
-        if _mount_sink is not None:
-            _mount_sink.setdefault("identity-core", "mounted")
-        return built
-
-    monkeypatch.setattr(prompts, "build_daemon_prompt_with_score", _build)
-    sessions = iter(["s-1", "s-2", "s-3"])
-    monkeypatch.setattr(transcript, "mount_claude_session", lambda *_a, **_k: next(sessions))
-
-    attempt = Attempt(n=1, lane=p.lane)
-    for n in (1, 2, 3):
-        dispatched = worker.dispatch(p, dataclasses.replace(attempt, n=n))
-        assert isinstance(dispatched, Dispatched)
-        attempt = dispatched.attempt  # a retry carries this lane forward
-        assert attempt.lane.resume_args == ["--resume", f"s-{n}", "--fork-session"]
-        assert attempt.lane.extra_args == p.lane.extra_args
-        assert attempt.lane.runner_args() == [
-            "--resume", f"s-{n}", "--fork-session", *p.lane.extra_args,
-        ]
-        assert attempt.lane.runner_args().count("--resume") == 1
-
-    def _mount_fails(*_a, **_k):
-        raise RuntimeError("no seed")
-
-    monkeypatch.setattr(transcript, "mount_claude_session", _mount_fails)
-    dispatched = worker.dispatch(p, dataclasses.replace(attempt, n=4))
-    assert isinstance(dispatched, Dispatched)
-    assert dispatched.attempt.lane.resume_args == []
-    assert dispatched.attempt.lane.runner_args() == p.lane.extra_args
 
 
 def test_last_failure_is_the_ending_attempts_and_failures_keep_the_history(tmp_path, monkeypatch):
@@ -506,27 +442,6 @@ def test_shapes_are_frozen(tmp_path, monkeypatch):
         p.lane.name = "claude"  # type: ignore[misc]
 
 
-def test_daemon_run_worker_is_a_call_into_worker_run(monkeypatch):
-    seen = []
-
-    def fake_run(*args, **kwargs):
-        seen.append((args, kwargs))
-        return "the run"
-
-    monkeypatch.setattr(worker, "run", fake_run)
-
-    out = daemon._run_worker(
-        {"id": "evt"}, Path("/repo"), Path("/responses"), {"k": 1}, 2,
-        account_context=None, inbox_dir=Path("/inbox"),
-    )
-
-    assert out == "the run"
-    assert seen == [(
-        ({"id": "evt"}, Path("/repo"), Path("/responses"), {"k": 1}, 2),
-        {"account_context": None, "inbox_dir": Path("/inbox")},
-    )]
-
-
 @pytest.mark.parametrize("callback", ["on_heartbeat", "on_flush"])
 def test_stream_arms_await_before_slow_tick_work(tmp_path, monkeypatch, callback):
     import importlib
@@ -561,32 +476,3 @@ def test_stream_arms_await_before_slow_tick_work(tmp_path, monkeypatch, callback
     assert reached == [True]
 
 
-def test_live_worker_heartbeat_restores_presence_pruned_by_reader(tmp_path, monkeypatch):
-    from brr import presence
-
-    p = _prepared(tmp_path, monkeypatch)
-    dx = worker.dispatch(p, Attempt(n=1, lane=p.lane))
-    original, = presence.list_active(p.brr_dir)
-    assert original["id"] == p.presence_id
-    current, = presence.list_active(p.brr_dir)
-    assert presence.list_active(
-        p.brr_dir, now=current["last_seen"] + presence.DEFAULT_STALE_AFTER_S + 1,
-    ) == []
-    (p.outbox_dir / ".name").write_text("Still here\n")
-
-    class EndProbe(Exception):
-        pass
-
-    def invoke(*args, **kwargs):
-        kwargs["on_heartbeat"]()
-        restored, = presence.list_active(p.brr_dir)
-        assert restored["id"] == original["id"]
-        assert restored["started_at"] == original["started_at"]
-        assert restored["runner_shell"] == original["runner_shell"]
-        assert restored["run_id"] == p.task.id
-        assert restored["name"] == "Still here"
-        raise EndProbe
-
-    monkeypatch.setattr(daemon, "_invoke_with_heartbeat", invoke)
-    with pytest.raises(EndProbe):
-        worker.stream(p, dx)

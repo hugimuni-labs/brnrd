@@ -16,6 +16,7 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
+from .adapters import body_label
 from .home import Home, thread_of
 from .project import cached_projection, fold, is_notice, projection_cache, sender_threads
 from .wishes import progress
@@ -204,9 +205,10 @@ class View:
                      for f in self.state.accepted if f.kind == "attempt.ended"}
         self.leases, cores = {}, {}
         for f in self.state.accepted:
-            if f.kind == "lease" and f.data.get("shell") and f.data.get("core"):
+            if f.kind == "lease" and f.data.get("shell"):
                 self.leases.setdefault(f.data["thread"], {})[f.data["strand"]] = f
-                cores.setdefault(f.data["shell"], set()).add(f.data["core"])
+                if f.data.get("core"):
+                    cores.setdefault(f.data["shell"], set()).add(f.data["core"])
         self.cores = {shell: sorted(c) for shell, c in cores.items()}
         self.told = wishes([f for f in facts if f.kind.startswith("wish") or f.kind == "letter"])
         self.shipped = receipts(facts, home.install_id())
@@ -241,7 +243,7 @@ def thread(v: View, row: dict) -> dict:
     strands = []
     for strand, lease in v.leases.get(thread, {}).items():
         word = now if v.held.get(strand) == thread else _state(v.ends.get(strand, ""))
-        strands.append({"id": strand, "body": f"{lease.data['shell']}/{lease.data['core']}",
+        strands.append({"id": strand, "body": body_label(lease.data["shell"], lease.data.get("core") or ""),
                         **({"state": word} if word else {}), "since": _iso(lease.at)})
     last = v.activity.get(thread)
     told = v.told
@@ -276,7 +278,7 @@ def presence(v: View) -> dict | None:
                 "strand": strand, "thread": thread, "state": now,
                 "now": (progress(v.told, thread) or {}).get("next"),
                 "owed": row["owed"],
-                "body": f"{lease.data['shell']}/{lease.data['core']}" if lease else None}))
+                "body": body_label(lease.data["shell"], lease.data.get("core") or "") if lease else None}))
     if not present:
         return None
     return {k: val for k, val in max(present, key=lambda p: p[0])[1].items() if val is not None}
@@ -289,7 +291,7 @@ def fuel(v: View) -> list[dict]:
 def bodies(v: View) -> dict:
     from .adapters import resolve
     config = v.config
-    choices = {f"{s}/{c}" for s, cs in v.cores.items() for c in cs} | ({config.body} if config.body else set())
+    choices = {body_label(s, c) for s, cs in v.cores.items() for c in cs} | ({config.body} if config.body else set())
 
     def usable(choice):
         try:

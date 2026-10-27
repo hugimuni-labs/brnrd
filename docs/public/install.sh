@@ -158,13 +158,46 @@ show_version() {
   brnrd --version || fail "brnrd --version failed; run it by hand."
 }
 
+# What --dev's editable uv tool collides with: another brnrd command on PATH, a
+# pipx release in the same bin directory (uv refuses to overwrite it), and a loom
+# this user runs from an interpreter other than uv's brnrd tool.
+preflight_other_installs() {
+  ubin="${HOME}/.local/bin"
+  utools="${HOME}/.local/share/uv/tools"
+  if command -v uv >/dev/null 2>&1; then
+    ubin=$(uv tool dir --bin 2>/dev/null </dev/null) || ubin="${HOME}/.local/bin"
+    utools=$(uv tool dir 2>/dev/null </dev/null) || utools="${HOME}/.local/share/uv/tools"
+  fi
+  if command -v pipx >/dev/null 2>&1; then
+    plist=$(pipx list --short 2>/dev/null </dev/null) || plist=""
+    if has_pkg brnrd "$plist"; then
+      warn "pipx has a brnrd release installed, and its brnrd command collides with this install; run pipx uninstall brnrd."
+    fi
+  fi
+  found=$(command -v brnrd 2>/dev/null) || found=""
+  if [ -n "$found" ] && [ "$found" != "${ubin}/brnrd" ]; then
+    warn "brnrd on PATH is ${found}, not ${ubin}/brnrd, so it shadows this install; remove it or put ${ubin} first on PATH."
+  fi
+  me=$(id -u 2>/dev/null) || return 0
+  procs=$(ps -U "$me" -o pid=,args= 2>/dev/null) || return 0
+  printf '%s\n' "$procs" | grep 'brr\.loom\.runtime loom' | grep -vF "${utools}/brnrd/" | while read -r pid args; do
+    warn "a loom from another install is running (pid ${pid}: ${args%% *}); loom install --dev replaces the loom service, but a loom started by hand keeps running beside it: stop it with that install's brnrd loom stop, or kill ${pid}."
+  done
+}
+
 preflight() {
   if [ -n "${PYTHONPATH:-}" ]; then
     warn "PYTHONPATH is set (${PYTHONPATH}), so brnrd may run another checkout's code instead of this install; unset it here and in your shell profile."
   fi
+  for unit in "${HOME}/Library/LaunchAgents/dev.brnrd.brr.plist" "${XDG_CONFIG_HOME:-${HOME}/.config}/systemd/user/brr.service"; do
+    if [ -e "$unit" ]; then
+      warn "an old brnrd daemon is installed (${unit}) and runs beside the loom; remove it with brnrd daemon uninstall."
+    fi
+  done
   if [ "$dev" -eq 0 ]; then
     return 0
   fi
+  preflight_other_installs
   if ! command -v claude >/dev/null 2>&1 && ! command -v codex >/dev/null 2>&1; then
     warn "neither claude nor codex is on PATH, and loom install picks the loom's body from them; install and sign in to one first."
   fi

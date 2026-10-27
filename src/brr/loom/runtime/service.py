@@ -26,7 +26,7 @@ from pathlib import Path
 from brr.daemon_install import linux, macos
 
 from . import entry
-from .config import config_path, load_config, seed_config
+from .config import config_path, fold_config, load_config, set_value
 from .home import found_homes, is_home, resolve_home
 from .threads import _age
 
@@ -144,38 +144,29 @@ def _service_home(flag, *, agents_home=None, system=None) -> tuple[Path, str]:
 
 
 def _body_choice(home: Path) -> str | None:
-    """``body`` from the home's config: None when unset, refused when not shell/core."""
+    """``body`` from the home's config: None when unset, refused when not a body folder's shell or shell/core."""
+    from .adapters import parse_body, resolve
+    from .home import Home
     choice = load_config(home).body
     if not isinstance(choice, str) or not choice.strip():
         return None
-    shell, slash, core = choice.partition("/")
-    if not slash or not shell.strip() or not core.strip():
+    try:
+        resolve(Home(home), parse_body(choice)[0])
+    except ValueError:
         raise SystemExit(
-            f"loom install: body must be shell/core, got {choice!r} in {config_path(home)}"
-        )
+            f"loom install: body must be shell or shell/core, got {choice!r} in {config_path(home)}"
+        ) from None
     return choice.strip()
 
 
 def _codex_model() -> str | None:
-    """The person's own codex default: top-level ``model`` in codex's config."""
-    path = Path(os.environ.get("CODEX_HOME") or "~/.codex").expanduser() / "config.toml"
-    try:
-        lines = path.read_text(encoding="utf-8").splitlines()
-    except OSError:
-        return None
-    for line in lines:
-        line = line.strip()
-        if line.startswith("["):
-            return None
-        match = re.fullmatch(r'model\s*=\s*"([^"]+)"\s*(#.*)?', line)
-        if match:
-            return match.group(1)
-    return None
+    from .adapters import codex_model
+    return codex_model()
 
 
 def _defaults() -> list[tuple[str, str | None]]:
-    """The bodies install may pick, in order."""
-    return [("claude", "sonnet"), ("codex", _codex_model())]
+    """The bodies install may pick, in order; claude's empty core is its own pick."""
+    return [("claude", ""), ("codex", _codex_model())]
 
 
 def _fuel(home: Path, shell: str) -> str | None:
@@ -200,25 +191,15 @@ def _fuel(home: Path, shell: str) -> str | None:
 
 def _write_body(home: Path, choice: str) -> None:
     """Set ``body`` in the config, keeping every other line as written."""
-    seed_config(home)
-    path = config_path(home)
-    lines = path.read_text(encoding="utf-8").splitlines()
-    setting = f'body = "{choice}"'
-    for index, line in enumerate(lines):
-        if re.match(r"\s*body\s*=", line):
-            lines[index] = setting
-            break
-    else:
-        lines.append(setting)
-    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    set_value(home, "body", choice)
 
 
 def _require_body(home: Path) -> str:
-    """Refuse a login service whose home has no ``shell/core`` body."""
+    """Refuse a login service whose home has no body."""
     choice = _body_choice(home)
     if choice is None:
         raise SystemExit(
-            f"loom install: body is unset in {config_path(home)}; set body to shell/core"
+            f"loom install: body is unset in {config_path(home)}; set body to a shell, e.g. claude"
         )
     return choice
 
@@ -229,23 +210,26 @@ def _settle_body(home: Path, *, write: bool = True) -> tuple[str, str]:
     Unset: the first default body whose CLI answers with fuel, written to
     the config so ``loom config`` and the service agree on it.
     """
+    if write:
+        fold_config(home)
     choice = _body_choice(home)
     if choice is not None:
         return choice, "from config"
     tried = []
     for shell, core in _defaults():
-        fuel = _fuel(home, shell) if core else None
+        fuel = _fuel(home, shell) if core is not None else None
         if fuel is None:
-            tried.append(shell if core else f"{shell} (no default model)")
+            tried.append(shell if core is not None else f"{shell} (no default model)")
             continue
-        choice = f"{shell}/{core}"
+        from .adapters import body_label
+        choice = body_label(shell, core)
         if write:
             _write_body(home, choice)
         where = f"written to {config_path(home)}" if write else "not written: dry run"
         return choice, f"picked: {shell} has fuel, {fuel}; {where}"
     raise SystemExit(
         f"loom install: body is unset in {config_path(home)} and no CLI answered with fuel "
-        f"({', '.join(tried)}); set body to shell/core with `brnrd loom config edit`"
+        f"({', '.join(tried)}); set body (claude, or shell/core) with `brnrd loom config edit`"
     )
 
 

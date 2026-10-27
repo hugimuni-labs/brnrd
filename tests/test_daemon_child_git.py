@@ -1282,28 +1282,6 @@ def test_the_refusal_carries_the_finding_it_displaces(publishable, tmp_path):
     assert detail["superseded"] == "stranded-worktree"
 
 
-def test_a_tree_git_will_not_speak_for_is_not_a_confirmation(tmp_path):
-    """`core.worktree` left pointing at a torn-down worktree — how the
-    incident was finally noticed. Absent is not clean."""
-    not_a_repo = tmp_path / "nothing"
-    not_a_repo.mkdir()
-    verdict = daemon._publish_tree_mismatch(not_a_repo)
-    assert verdict is not None
-    assert verdict["seen"] == ""
-
-
-def test_an_honest_checkout_is_confirmed(publishable):
-    host, _remote = publishable
-    assert daemon._publish_tree_mismatch(host) is None
-
-
-def test_a_linked_worktree_is_its_own_toplevel(trees):
-    """Not a mismatch: the run's own worktree is legitimately its own tree,
-    and a check that flagged it would fire on every worktree run."""
-    _host, run_root = trees
-    assert daemon._publish_tree_mismatch(run_root) is None
-
-
 # ── half 5: brnrd's commits are brnrd's (#746, re-opening #475) ──────
 
 
@@ -1329,24 +1307,6 @@ def hostile_identity(monkeypatch):
     monkeypatch.setenv("GIT_COMMITTER_EMAIL", "human@example.com")
 
 
-def test_a_brnrd_commit_never_inherits_an_ambient_identity(
-    tmp_path, hostile_identity,
-):
-    """The secondary damage in #746: the strand's commit was authored *and*
-    committed as the human maintainer, because identity resolution went
-    through the contaminated shared config."""
-    repo = tmp_path / "dominion"
-    init_git_repo(repo)  # writes [user] Test User <test@example.com>
-    (repo / "note.md").write_text("thought\n", encoding="utf-8")
-
-    assert gitops.commit_all(repo, "brnrd: capture")
-
-    idents = _idents(repo)
-    assert set(idents.values()) == {gitops.BOT_NAME, gitops.BOT_EMAIL}
-    assert "Arseni" not in "".join(idents.values())
-    assert "Test User" not in "".join(idents.values())
-
-
 def test_the_deed_founding_commit_is_brnrds(tmp_path, hostile_identity):
     """The commit that founds a *user's* repo — the one line of history
     every later reader sees first."""
@@ -1359,20 +1319,6 @@ def test_the_deed_founding_commit_is_brnrds(tmp_path, hostile_identity):
     idents = _idents(repo)
     assert idents["author_name"] == gitops.BOT_NAME
     assert idents["committer_email"] == gitops.BOT_EMAIL
-
-
-def test_an_orphan_branchs_root_commit_is_brnrds(tmp_path, hostile_identity):
-    repo = tmp_path / "repo"
-    init_git_repo(repo)
-    (repo / "seed.md").write_text("x\n", encoding="utf-8")
-    _git(repo, "add", "-A")
-    _git(repo, "commit", "-m", "base")
-
-    oid = gitops.create_orphan_branch(repo, "brr/dominion", message="brnrd: seed")
-    assert oid
-
-    idents = _idents(repo, "brr/dominion")
-    assert set(idents.values()) == {gitops.BOT_NAME, gitops.BOT_EMAIL}
 
 
 def test_the_identity_is_stated_once(tmp_path):

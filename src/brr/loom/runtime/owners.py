@@ -210,7 +210,7 @@ def _letter_owners(facts, main, inputs=None, selected=None):
         d = letter.data
         thread = _destination(d)
         if thread == LEGACY_HOME_THREAD and thread not in main and HOME_THREAD in main:
-            thread = HOME_THREAD  # old letters still say inbox
+            thread = HOME_THREAD  # old letters still say brnrd
         reply = reply_address(letter, thread)
         disposition = dispositions.get(ident, {})
         reason = disposition.get('reason', '')
@@ -223,6 +223,9 @@ def _letter_owners(facts, main, inputs=None, selected=None):
             result[ident] = Ownership(letter, owner, why, target, reply, action, cited)
         if ident in state.handled or ident in sent or disposition.get('outcome') == 'done':
             keep(None, reason or 'reply or note recorded')
+        elif d.get('notice') and is_notice(letter) and any(ident in ids for ids in state.shown.values()):
+            # A passive notice informs; once a body was shown it, nobody owes it a word.
+            keep(None, 'passive notice shown')
         elif disposition.get('outcome') == 'operator':
             keep('operator', reason or 'failed attempt limit', action='note')
         elif d.get("at") and ident not in due:

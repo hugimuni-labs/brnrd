@@ -7,6 +7,7 @@ machine's service manager.
 from __future__ import annotations
 
 import plistlib
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -861,6 +862,63 @@ def test_cli_install_picks_a_body_with_fuel_and_writes_it(tmp_path, machine, mon
     assert "body: codex/gpt-6 (from config)" in capsys.readouterr().out
 
 
+def test_cli_install_writes_body_on_the_template_line_so_a_hand_edit_wins(tmp_path, machine, monkeypatch):
+    """Sasha's home: install appended a second body line below the template's,
+    and a hand edit of the template line lost to it."""
+    from brr.loom.runtime.config import load_config, render_config, seed_config
+
+    machine("Darwin")
+    home = tmp_path / "home"
+    seed_config(home)
+    at = render_config().splitlines().index("# body = \"\"")
+    monkeypatch.setattr(service, "_fuel", lambda h, shell: "session 91% week 76%" if shell == "claude" else None)
+    assert _brnrd("loom", "install", "--home", str(home)) == 0
+    path = home / "loom" / "config.toml"
+    lines = path.read_text().splitlines()
+    assert [i for i, l in enumerate(lines) if re.match(r"#?\s*body\s*=", l)] == [at]
+    assert lines[at] == 'body = "claude"'
+
+    lines[at] = 'body = "claude/opus"'
+    path.write_text("\n".join(lines) + "\n")
+    assert _brnrd("loom", "install", "--home", str(home)) == 0
+    assert load_config(home).body == "claude/opus"
+
+
+def test_cli_install_folds_a_body_set_twice_keeping_the_one_in_effect(tmp_path, machine, monkeypatch, capsys):
+    from brr.loom.runtime.config import ConfigError, load_config, render_config
+
+    machine("Darwin")
+    home = tmp_path / "home"
+    path = home / "loom" / "config.toml"
+    path.parent.mkdir(parents=True)
+    path.write_text(render_config().replace('# body = ""', 'body = "claude/opus"') + 'body = "claude/sonnet"\n')
+    with pytest.raises(ConfigError, match="body is set twice"):
+        load_config(home)
+    assert _brnrd("loom", "install", "--home", str(home)) == 0
+    assert load_config(home).body == "claude/sonnet"
+    assert "body: claude/sonnet (from config)" in capsys.readouterr().out
+    assert '# folded, an earlier duplicate the last line overrode: body = "claude/opus"' in path.read_text()
+
+
+def test_cli_install_with_no_body_writes_the_bare_claude_shell(tmp_path, machine, monkeypatch, capsys):
+    from brr.loom.runtime.config import load_config, seed_config
+
+    machine("Darwin")
+    home = tmp_path / "home"
+    seed_config(home)
+    monkeypatch.setattr(service, "_fuel", lambda h, shell: "week 80%" if shell == "claude" else None)
+    assert _brnrd("loom", "install", "--home", str(home)) == 0
+    assert load_config(home).body == "claude"
+    assert 'body = "claude"' in (home / "loom" / "config.toml").read_text().splitlines()
+    assert "body: claude (picked: claude has fuel, week 80%; written to" in capsys.readouterr().out
+
+
+def test_install_takes_a_bare_shell_body(tmp_path):
+    home = tmp_path / "home"
+    _body(home, "claude")
+    assert _install_mac(tmp_path, _Mac(), home) == 0
+
+
 def test_cli_install_dry_run_prints_the_receipt_and_changes_nothing(tmp_path, machine, monkeypatch, capsys):
     manager = machine("Darwin")
     home = _account_home(tmp_path, body=None)
@@ -875,7 +933,7 @@ def test_cli_install_dry_run_prints_the_receipt_and_changes_nothing(tmp_path, ma
         child.kill()
         child.wait()
     out = capsys.readouterr().out
-    assert "body: claude/sonnet (picked: claude has fuel, session 91% week 76%; not written: dry run)" in out
+    assert "body: claude (picked: claude has fuel, session 91% week 76%; not written: dry run)" in out
     assert f"replaced: would stop pid {child.pid}, a loom outside the service · bodies keep running" in out
     assert f"home: {home.resolve()} (the only one found)" in out
     assert "pid: - (dry run" in out
