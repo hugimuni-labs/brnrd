@@ -62,8 +62,9 @@
 
 <main class="mx-auto max-w-3xl px-5 pb-16 sm:px-6" data-testid="loom-thread">
 	<header class="flex items-center justify-between pt-4 pb-3">
-		<a href={resolve('/dashboard')} class="font-mono text-[11px] text-ink-quiet hover:text-amber-200"
-			>← threads</a
+		<a
+			href={resolve('/dashboard')}
+			class="font-mono text-[11px] text-ink-quiet hover:text-amber-200">← threads</a
 		>
 		<p class="eyebrow eyebrow--asis">{id}</p>
 	</header>

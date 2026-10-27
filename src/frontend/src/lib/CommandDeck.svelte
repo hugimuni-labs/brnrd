@@ -273,7 +273,8 @@
 							</div>{/if}
 						<div class="world-caption">
 							<span>Every movement comes from a reported action.</span><a
-								href={map ? resolve('/dashboard') : resolve('/dashboard/daily')}>{map ? 'Crew view' : 'Map view'} →</a
+								href={map ? resolve('/dashboard') : resolve('/dashboard/daily')}
+								>{map ? 'Crew view' : 'Map view'} →</a
 							>
 						</div>
 					</section>
@@ -393,8 +394,8 @@
 			<p role="status">{commandReply}</p>
 		</div>
 		<footer class="deck-footer">
-			<span>LOCAL EXECUTION. LASTING MEMORY. REAL RECEIPTS.</span><a href={resolve('/dashboard/repos')}
-				>Connect a conversation ↗</a
+			<span>LOCAL EXECUTION. LASTING MEMORY. REAL RECEIPTS.</span><a
+				href={resolve('/dashboard/repos')}>Connect a conversation ↗</a
 			>
 		</footer>
 	</main>

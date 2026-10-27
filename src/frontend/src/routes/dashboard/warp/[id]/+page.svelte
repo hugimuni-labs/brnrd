@@ -119,7 +119,9 @@
 	<div class="mx-auto max-w-xl p-6">
 		<p class="font-mono text-sm text-ink-quiet">
 			no item named <span class="text-stone-300">{itemId}</span> —
-			<a href={resolve('/dashboard/warp')} class="text-amber-300 hover:text-amber-100">back to the warp</a>
+			<a href={resolve('/dashboard/warp')} class="text-amber-300 hover:text-amber-100"
+				>back to the warp</a
+			>
 		</p>
 	</div>
 {:else}

@@ -55,7 +55,10 @@ test('runNodeHrefForPath turns a corpus run path into an edge, and ignores the r
 		runNodeHrefForPath('runs/Gurio__brr/run-1/messages/000001-terminal.md'),
 		'/dashboard/runs/Gurio__brr/run-1'
 	);
-	assert.equal(runNodeHrefForPath('runs/Gurio__brr/run-1/state.md'), '/dashboard/runs/Gurio__brr/run-1');
+	assert.equal(
+		runNodeHrefForPath('runs/Gurio__brr/run-1/state.md'),
+		'/dashboard/runs/Gurio__brr/run-1'
+	);
 	assert.equal(runNodeHrefForPath('knowledge/repos/Gurio__brr/design.md'), null);
 	assert.equal(runNodeHrefForPath('runs/Gurio__brr'), null);
 	assert.equal(runNodeHrefForPath('surface/index.md'), null);
@@ -220,7 +223,10 @@ test('dispatch edges link only to neighbours the corpus actually mirrors', () =>
 	);
 
 	assert.equal(edges.origin, '');
-	assert.deepEqual(edges.parent, { runId: 'run-parent', href: '/dashboard/runs/Gurio__brr/run-parent' });
+	assert.deepEqual(edges.parent, {
+		runId: 'run-parent',
+		href: '/dashboard/runs/Gurio__brr/run-parent'
+	});
 	// A real edge whose node is not in this snapshot is named, not linked.
 	assert.deepEqual(edges.children, [
 		{ runId: 'run-parent', href: '/dashboard/runs/Gurio__brr/run-parent' },

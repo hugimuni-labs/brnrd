@@ -57,7 +57,10 @@ test('an unrecorded repo is named, and the reopening act is a /repos link', asyn
 	const html = await renderNotice({ lane: 'corpus', unrecorded: ['Gurio/BeCenter'] });
 	ok(html.includes('Gurio/BeCenter'), 'the withholding repo must be named, not just "paused"');
 	ok(html.includes('never recorded a publish scope'));
-	ok(html.includes('href="/dashboard/repos"'), 'the reopening act must be an actual link to /repos');
+	ok(
+		html.includes('href="/dashboard/repos"'),
+		'the reopening act must be an actual link to /repos'
+	);
 	ok(!html.includes('paused — no publish scope'), 'the bare sentence must not also render');
 });
 

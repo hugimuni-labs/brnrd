@@ -1614,7 +1614,9 @@
 			     ("a small one somewhere") — a plain link, not a nav bar this
 			     single-page dashboard doesn't otherwise have. -->
 				<div class="flex flex-wrap items-center gap-4">
-					<a href={resolve('/dashboard/bridge')} class="font-mono text-[11px] text-amber-200">bridge ↗</a>
+					<a href={resolve('/dashboard/bridge')} class="font-mono text-[11px] text-amber-200"
+						>bridge ↗</a
+					>
 					<!-- /activity retired 2026-07-19. Its honest content — open runs,
 				     queued wakes, parked respawns — is the loom's NOW seam and
 				     the rack's future shelf, and its one real affordance over
