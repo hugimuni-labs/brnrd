@@ -39,7 +39,7 @@ def _door(folder, env, code):
 
 def _instructions(door, code, timeout, scan=False):
     """Say which way pairing runs: the person writes first; nothing arrives before."""
-    tail = (f"The bot does not write first; it answers 'heard you as <your id>'. "
+    tail = (f"The bot does not write first; it answers 'Paired ✓'. "
             f'Waiting up to {timeout:g}s.')
     if door:
         also = ", or scan the code below with your phone's camera" if scan else ''
@@ -261,10 +261,11 @@ def _choose_body(home):
     from .adapters import body_label
     from .service import _defaults
     _step('Which AI should brnrd think with?')
+    from .service import _body_choice, _write_body
     seed_config(home.root)
-    current = load_config(home.root).body
-    if isinstance(current, str) and current.strip():
-        _ok(f'{current.strip()} (already set)')
+    current = _body_choice(home.root)
+    if current:
+        _ok(f'{current} (already set)')
         return
     found = [(shell, core) for shell, core in _defaults() if core is not None and shutil.which(shell)]
     if not found:
@@ -282,7 +283,7 @@ def _choose_body(home):
             print(f"  {style.dot()} Type a number from the list.")
         found = [found[int(answer) - 1]]
     choice = body_label(*found[0])
-    set_value(home.root, 'body', choice)
+    _write_body(home.root, choice)
     _ok(choice)
 
 

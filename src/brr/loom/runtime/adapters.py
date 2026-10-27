@@ -131,6 +131,20 @@ def repos(text: str, home=None) -> list[tuple[str, str]]:
     return found
 
 
+_ROLE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*")
+
+
+def _preferences(home):
+    """``loom/preferences.toml`` read and checked: only ``model.<role>`` keys."""
+    from .config import ConfigError, read_values
+    path = home.root / "loom" / "preferences.toml"
+    found = read_values(path)
+    for key in found:
+        if not key.startswith("model.") or not _ROLE.fullmatch(key[6:]):
+            raise ConfigError(f"{path}: unknown key {key!r} (known: model.default, model.inbox, model.<thread>)")
+    return path, found
+
+
 def preferred_body(home, thread: str) -> str:
     """The person's body for ``thread`` from ``loom/preferences.toml``, or "".
 
@@ -138,12 +152,7 @@ def preferred_body(home, thread: str) -> str:
     whatever its folder is called, then ``model.default``. A seat's ``body:``
     still wins over all of them; ``config.toml``'s ``body`` is the fallback.
     """
-    from .config import ConfigError, read_values
-    path = home.root / "loom" / "preferences.toml"
-    found = read_values(path)
-    for key in found:
-        if not key.startswith("model.") or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*", key[6:]):
-            raise ConfigError(f"{path}: unknown key {key!r} (known: model.default, model.inbox, model.<thread>)")
+    _path, found = _preferences(home)
     roles = [thread]
     if thread == home.main_thread():
         roles.append("inbox")
@@ -151,6 +160,39 @@ def preferred_body(home, thread: str) -> str:
         if found.get(f"model.{role}"):
             return str(found[f"model.{role}"])
     return ""
+
+
+def default_body(home) -> str:
+    """The home's default body: ``model.default``, else ``config.toml``'s ``body``, else ""."""
+    from .config import load_config
+    choice = _preferences(home)[1].get("model.default") or load_config(home.root).body
+    return str(choice).strip() if choice else ""
+
+
+def prefer(home, role: str, body: str | None) -> None:
+    """Set ``model.<role>`` to ``body`` in ``loom/preferences.toml``; None or "" clears it.
+
+    ``role`` is ``default``, ``inbox`` or a thread id; ``body`` is checked as
+    ``shell`` or ``shell/core``. Every other line stays as written.
+    """
+    from .config import _render_value, _set_key
+    from .home import atomic_write
+    if not _ROLE.fullmatch(role):
+        raise ValueError(f"preference role must be default, inbox or a thread id: {role!r}")
+    if body:
+        body = body_label(*parse_body(body))
+    path, _found = _preferences(home)
+    key = f"model.{role}"
+    lines = path.read_text(encoding="utf-8").splitlines() if path.is_file() else []
+    live = [i for i, line in enumerate(lines) if _set_key(line) == key]
+    if body and live:
+        lines[live[0]] = f"{key} = {_render_value(body)}"
+        live = live[1:]
+    elif body:
+        lines.append(f"{key} = {_render_value(body)}")
+    lines = [line for i, line in enumerate(lines) if i not in live]
+    path.parent.mkdir(parents=True, exist_ok=True)
+    atomic_write(path, "\n".join(lines) + "\n" if lines else "")
 
 
 def at_birth(home, thread: str, default: tuple[str, str],

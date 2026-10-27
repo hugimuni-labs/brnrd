@@ -289,17 +289,20 @@ def fuel(v: View) -> list[dict]:
 
 
 def bodies(v: View) -> dict:
-    from .adapters import resolve
-    config = v.config
-    choices = {body_label(s, c) for s, cs in v.cores.items() for c in cs} | ({config.body} if config.body else set())
+    from .adapters import default_body, resolve
+    try:
+        default = default_body(v.home)
+    except ValueError:  # a broken preferences file: the config's body still runs
+        default = v.config.body
+    choices = {body_label(s, c) for s, cs in v.cores.items() for c in cs} | ({default} if default else set())
 
     def usable(choice):
         try:
             return bool(resolve(v.home, choice.partition("/")[0]))
         except ValueError:
             return False
-    found = {"default": config.body,
-             "choices": sorted(filter(usable, choices), key=lambda c: (c != config.body, c))}
+    found = {"default": default,
+             "choices": sorted(filter(usable, choices), key=lambda c: (c != default, c))}
     return {k: val for k, val in found.items() if val}
 
 

@@ -310,6 +310,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--name")
     p.add_argument("--person")
     p.add_argument("--timeout", type=float, default=180)
+    p.add_argument("--wait", type=float)
     p.set_defaults(func=cmd_setup_channel)
 
     gate_help = f"gate name ({', '.join(GATES)})"
@@ -6947,7 +6948,7 @@ def cmd_setup_channel(args):
         return _retired_command("setup", "brnrd gate setup <gate>")(args)
     from .loom.runtime.setup_channel import main
     argv = [args.step]
-    for key in ('home', 'kind', 'name', 'person', 'timeout'):
+    for key in ('home', 'kind', 'name', 'person', 'timeout', 'wait'):
         value = getattr(args, key, None)
         if value is not None:
             argv.extend(['--' + key, str(value)])

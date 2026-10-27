@@ -254,7 +254,8 @@ def test_guided_setup_asks_in_plain_words_and_derives_the_channel_name(tmp_path,
     for gone in ('Channel kind', 'Name this channel', 'Your person name', 'fake'):
         assert gone not in out
     assert [a[1:] for a in calls] == [('telegram', 'telegram', 'sasha-petrova')]
-    assert load_config(tmp_path).body.startswith('codex')
+    assert (tmp_path / 'loom' / 'preferences.toml').read_text().startswith('model.default = "codex')
+    assert load_config(tmp_path).body is None
 
 
 def test_a_second_channel_of_a_kind_gets_a_numbered_name(tmp_path):
@@ -344,3 +345,12 @@ def test_setup_says_when_nothing_is_running_to_hear_the_first_letter(tmp_path):
         setup_channel.first_letter(home, 'ada', timeout=.2, out=said.append, running=lambda: False,
                                    sleep=lambda s: None)
     assert said == [said[0]] and '`brnrd loom install`' in said[0]
+
+
+def test_brnrd_setup_passes_wait_through(monkeypatch):
+    """`brnrd setup --wait 15` was refused by the outer parser before the guided setup saw it."""
+    from brr import cli
+    seen = []
+    monkeypatch.setattr(setup_channel, 'main', lambda argv: seen.append(argv) or 0)
+    cli.main(['setup', '--kind', 'fake', '--wait', '15'])
+    assert seen == [['channel', '--kind', 'fake', '--timeout', '180', '--wait', '15.0']]
