@@ -135,3 +135,76 @@ def test_the_wake_folds_an_episodes_dips_into_one_line(tmp_path):
     section = since_gone(read_facts(home), "s-aaaa-after", 1, "inbox", {}, "aaaa")
     assert section.count("disk ") == 1
     assert f"disk dipped 3 times since {first}, the last at 2026-10-28T05:16:00.000Z" in section
+
+
+def test_a_pass_still_under_the_floor_prunes_caches_and_the_gauge_says_so(disk, monkeypatch):
+    home, clock, guard, at = disk
+    ran = []
+
+    real = reap.subprocess.run
+
+    def run(command, **kw):
+        if command[0] not in {c[0] for c in reap.PRUNE}:
+            return real(command, **kw)
+        ran.append(" ".join(command))
+        at(0, 13.0)   # the prune lifts the volume over the floor
+
+    monkeypatch.setattr(reap.shutil, "which", lambda name: f"/bin/{name}" if name != "pip" else None)
+    monkeypatch.setattr(reap.subprocess, "run", run)
+    monkeypatch.setattr(reap.Reaper, "reap", lambda self: None)
+    monkeypatch.setattr(reap, "time", clock)
+    h = Health(home, read_facts(home), lambda *_: None)
+    reaper = Reaper(home, lambda *_: None)
+    at(1, 11.3)
+    with pytest.raises(reap.DiskFloor):
+        reaper.disk()
+    guard(h); at(6, 11.3); guard(h)
+    reaper._pass()
+    assert reaper.failing is None
+    assert ran == ["uv cache prune", "npm cache verify"]
+    [pruned] = [f for f in read_facts(home) if f.kind == "loom.pruned"]
+    assert pruned.data["bytes"] == int(13.0 * GB) - int(11.3 * GB)
+    guard(h)
+    line = degraded_line(read_facts(home), home.install_id(), now=clock.now)
+    assert "did: pruned caches, 1.7 GB freed" in line and "told, watching" in line
+
+
+def test_a_pass_over_the_floor_prunes_nothing(disk, monkeypatch):
+    home, _clock, _guard, _at = disk
+    real = reap.subprocess.run
+    monkeypatch.setattr(reap.subprocess, "run", lambda command, **kw: real(command, **kw)
+                        if command[0] not in {c[0] for c in reap.PRUNE} else pytest.fail("pruned over the floor"))
+    monkeypatch.setattr(reap.Reaper, "reap", lambda self: None)
+    reaper = Reaper(home, lambda *_: None)
+    reaper.disk()
+    reaper._pass()
+    assert reaper.failing is None
+    assert not [f for f in read_facts(home) if f.kind == "loom.pruned"]
+
+
+def test_a_reap_that_clears_the_floor_prunes_nothing(disk, monkeypatch):
+    home, _clock, _guard, at = disk
+    real = reap.subprocess.run
+    monkeypatch.setattr(reap.subprocess, "run", lambda command, **kw: real(command, **kw)
+                        if command[0] not in {c[0] for c in reap.PRUNE} else pytest.fail("pruned over the floor"))
+    monkeypatch.setattr(reap.Reaper, "reap", lambda self: at(0, 13.0))   # the reap lifts the volume over
+    reaper = Reaper(home, lambda *_: None)
+    at(1, 11.3)
+    with pytest.raises(reap.DiskFloor):
+        reaper.disk()
+    reaper._pass()
+    assert reaper.failing is None
+    assert not [f for f in read_facts(home) if f.kind == "loom.pruned"]
+
+def test_the_disk_floor_is_the_homes_setting(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+
+    root = tmp_path / "home"
+    write_thread(root, "inbox", "Brnrd", "inbox")
+    monkeypatch.setattr(reap.shutil, "disk_usage", lambda _p: SimpleNamespace(total=228 * GB, free=11 * GB))
+    assert reap.floor(root) == (11 * GB, int(228 * GB * 0.05))
+    (root / "loom").mkdir(exist_ok=True)
+    (root / "loom/config.toml").write_text("disk_floor_pct = 2\n")
+    assert reap.floor(root) == (11 * GB, reap.FLOOR_BYTES)   # 2% of 228 GB is under 5 GiB
+    (root / "loom/config.toml").write_text("disk_floor_pct = 4\n")
+    assert reap.floor(root)[1] == int(228 * GB * 0.04)

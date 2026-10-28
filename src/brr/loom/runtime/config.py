@@ -88,6 +88,9 @@ KEYS: tuple[Key, ...] = (
         choices=("on", "off")),
     Key("hold_floor_pct", "percent", 3.0,
         "A quota window with this percent or less left counts as exhausted: a held body stays held."),
+    Key("disk_floor_pct", "percent", 5.0,
+        "The disk floor, as a percent of the home's volume (never under 5 GiB): below it the loom "
+        "is degraded, reaps rooms at once and prunes package caches."),
     Key("max_held", "positive", None,
         "Most live bodies this install keeps warm, the home thread's not counted. Past it, the "
         "body held longest with nothing to do leaves at its stop hook; a working body is never "
