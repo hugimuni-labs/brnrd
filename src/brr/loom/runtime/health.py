@@ -4,8 +4,15 @@ The first failure of a step writes ``loom.degraded``; the first pass after
 writes ``loom.recovered``. Between them a step that does not pace its own
 retries backs off (1, 2, 4 … 300 calls), and only the first traceback
 reaches loom.log. Open streaks are read back from the ledger at start, so a
-restart keeps them. A streak still open
-after ``NOTICE_AFTER`` seconds is told to the home thread once.
+restart keeps them.
+
+Streaks of one step less than ``CLEAR_AFTER`` apart are one episode: a disk
+that dips under the floor and climbs back every half hour is one standing
+condition, not a new one per dip. A streak still open after ``NOTICE_AFTER``
+seconds tells the home thread once per episode, again only when its cause
+(the error's type and frame) changes or its grade worsens, and an episode
+that was told and then stays up ``CLEAR_AFTER`` seconds ends with one passive
+"cleared" notice, owed by nobody.
 """
 
 from __future__ import annotations
@@ -22,6 +29,7 @@ from .ledger import LedgerConflict, append, kind_facts
 
 MAX_BACKOFF = 300
 NOTICE_AFTER = 300.0
+CLEAR_AFTER = 4 * 3600.0
 _BRR = Path(__file__).resolve().parents[2]
 
 
@@ -32,6 +40,28 @@ class Streak:
     count: int = 1
     skip: int = 0
     told: bool = False
+
+
+@dataclass
+class Episode:
+    """Streaks of one step that follow each other within ``CLEAR_AFTER``."""
+    since: str
+    dips: int = 1
+    told: str = ""  # the cause last told, "" while untold
+    grade: int = 0  # the grade last told
+    up: float = 0.0  # when the last streak recovered, 0 while one is open
+
+
+def cause(error: str, at: str) -> str:
+    """What an episode tells by: the error's type and the frame it broke in, never its reading."""
+    kind = error.split(":", 1)[0]
+    return f"{kind} at {Path(at).name}" if at else kind
+
+
+def grade(exc: BaseException) -> int:
+    """How bad a reading is, in steps; an error that carries none is grade 0."""
+    value = getattr(exc, "grade", 0)
+    return value if isinstance(value, int) else 0
 
 
 def _iso(seconds: float) -> str:
@@ -61,15 +91,51 @@ def open_streaks(facts, install: str | None = None) -> list[Fact]:
             and (install is None or f.data.get("install") == install)]
 
 
-def degraded_line(facts, install: str | None = None) -> str:
-    """One boundary line: what is degraded now, since when, and where it broke."""
+def _up(back: Fact) -> float:
+    return _seconds(str(back.data.get("up") or back.at))
+
+
+def _episodes(facts, install: str | None, now: float) -> dict[str, tuple[Fact, Fact | None]]:
+    """Per step, its latest streak and that streak's recovery, while the episode stands.
+
+    An episode stands while a streak is open or its recovery is younger than
+    ``CLEAR_AFTER``; a recovered one stands only once the told cause rides on it,
+    so the gauge keeps what a body was told about and drops a dip nobody heard of.
+    """
+    recovered = {f.id.replace("loom.recovered:", "loom.degraded:", 1): f
+                 for f in kind_facts(facts, "loom.recovered")
+                 if install is None or f.data.get("install") == install}
+    latest: dict[str, Fact] = {}
+    for fact in kind_facts(facts, "loom.degraded"):
+        if install is None or fact.data.get("install") == install:
+            step = str(fact.data.get("step"))
+            if step not in latest or str(fact.data.get("since")) >= str(latest[step].data.get("since")):
+                latest[step] = fact
+    standing = {}
+    for step, fact in latest.items():
+        back = recovered.get(fact.id)
+        if back is None or (back.data.get("told") and now - _up(back) < CLEAR_AFTER):
+            standing[step] = (fact, back)
+    return standing
+
+
+def degraded_line(facts, install: str | None = None, now: float | None = None) -> str:
+    """The gauge: per standing condition, since when, where it broke, and how often it dipped."""
     parts = []
-    for fact in open_streaks(facts, install):
+    standing = _episodes(facts, install, time.time() if now is None else now)
+    for step, (fact, back) in sorted(standing.items(), key=lambda kv: str(kv[1][0].data.get("since"))):
         data = fact.data
-        kind = str(data.get("error", "")).split(":", 1)[0]
-        at = Path(str(data.get("where") or "")).name
+        kind = cause(str(data.get("error", "")), str(data.get("where") or ""))
+        dips = int(data.get("dips") or 1)
+        first = str(data.get("episode") or data.get("since", ""))[11:16]
         since = str(data.get("since", ""))[11:16]
-        parts.append(f"{data.get('step')} since {since}Z ({kind}" + (f" at {at})" if at else ")"))
+        if back is None:
+            part = f"{step} since {since}Z ({kind}"
+            part += f"; dip {dips} since {first}Z)" if dips > 1 else ")"
+        else:
+            part = (f"{step} up since {_iso(_up(back))[11:16]}Z after {dips} dip{'s' * (dips > 1)} "
+                    f"since {first}Z ({kind}; told, watching)")
+        parts.append(part)
     return "degraded: " + "; ".join(parts) if parts else ""
 
 
@@ -80,9 +146,18 @@ class Health:
         self.home, self.log = home, log
         self.install = home.install_id()
         self.streaks: dict[str, Streak] = {}
+        self.episodes: dict[str, Episode] = {}
         for fact in open_streaks(facts, self.install):
             self.streaks[str(fact.data["step"])] = Streak(
                 str(fact.data["since"]), str(fact.data.get("error", "")))
+        # A restart inside an episode keeps it: its next dip tells nothing new.
+        for step, (fact, back) in _episodes(facts, self.install, time.time()).items():
+            data = fact.data
+            self.episodes[step] = Episode(
+                str(data.get("episode") or data.get("since")), int(data.get("dips") or 1),
+                str((back.data if back else {}).get("told") or ""),
+                int((back.data if back else {}).get("grade") or 0),
+                _up(back) if back else 0.0)
 
     def guard(self, step: str, fn, *args, backoff: bool = True) -> None:
         """``backoff=False`` for a step its caller already spaces out."""
@@ -97,32 +172,57 @@ class Health:
         else:
             if streak is not None:
                 self._passed(step, streak)
+            else:
+                episode = self.episodes.get(step)
+                if episode is not None and episode.up and time.time() - episode.up >= CLEAR_AFTER:
+                    del self.episodes[step]
+                    if episode.told:
+                        self._cleared(step, episode)
 
     def _failed(self, step: str, exc: Exception, backoff: bool) -> None:
         error = f"{type(exc).__name__}: {exc}"[:300]
         streak = self.streaks.get(step)
+        now = time.time()
         if streak is None:
-            streak = self.streaks[step] = Streak(_iso(time.time()), error)
-            self.log(self.home, f"degraded: {step}\n" + "".join(
-                traceback.format_exception(exc)).rstrip())
+            streak = self.streaks[step] = Streak(_iso(now), error)
+            episode = self.episodes.get(step)
+            if episode is not None and (not episode.up or now - episode.up < CLEAR_AFTER):
+                episode.dips += 1
+                episode.up = 0.0
+            else:
+                episode = self.episodes[step] = Episode(streak.since)
+            if episode.dips == 1:
+                self.log(self.home, f"degraded: {step}\n" + "".join(
+                    traceback.format_exception(exc)).rstrip())
+            else:
+                self.log(self.home, f"degraded: {step} again, dip {episode.dips} since {episode.since}: {error}")
             self._write("loom.degraded", step, streak.since, {
                 "install": self.install, "step": step, "error": error,
-                "where": where(exc), "since": streak.since})
+                "where": where(exc), "since": streak.since,
+                "episode": episode.since, "dips": episode.dips})
         else:
             streak.count += 1
             streak.error = error
         if backoff:
             streak.skip = min(2 ** (streak.count - 1), MAX_BACKOFF)
-        if not streak.told and time.time() - _seconds(streak.since) >= NOTICE_AFTER:
+        if not streak.told and now - _seconds(streak.since) >= NOTICE_AFTER:
             streak.told = True
-            self._tell(step, streak)
+            episode = self.episodes.setdefault(step, Episode(streak.since))
+            said, worse = cause(error, where(exc)), grade(exc)
+            if said != episode.told or worse > episode.grade:
+                episode.told, episode.grade = said, max(worse, episode.grade if said == episode.told else 0)
+                self._tell(step, streak, episode, said)
 
     def _passed(self, step: str, streak: Streak) -> None:
         del self.streaks[step]
+        episode = self.episodes.setdefault(step, Episode(streak.since))
+        episode.up = time.time()
         self.log(self.home, f"recovered: {step} after {streak.count} failures since {streak.since}")
         self._write("loom.recovered", step, streak.since, {
             "install": self.install, "step": step, "since": streak.since,
-            "count": streak.count, "last": streak.error})
+            "count": streak.count, "last": streak.error,
+            "episode": episode.since, "told": episode.told, "grade": episode.grade,
+            "up": _iso(episode.up)})
 
     def _write(self, kind: str, step: str, since: str, data: dict) -> None:
         # The guard's own bookkeeping must never be what stops the loop.
@@ -134,16 +234,31 @@ class Health:
         except Exception:
             self.log(self.home, f"health: {kind} {step} not written\n{traceback.format_exc().rstrip()}")
 
-    def _tell(self, step: str, streak: Streak) -> None:
+    def _tell(self, step: str, streak: Streak, episode: Episode, said: str) -> None:
         from .ledger import read_facts
         from .loom import notice
+        dips = (f", dip {episode.dips} of an episode since {episode.since}" if episode.dips > 1 else "")
         try:
-            notice(self.home, read_facts(self.home), "degraded", f"{step}:{streak.since}",
-                   f"the loom's {step} step has failed since {streak.since}, "
+            # The id is the episode, the cause and the grade: a restart or a dip with nothing new writes nothing.
+            notice(self.home, read_facts(self.home), "degraded",
+                   f"{step}:{episode.since}:{said}:{episode.grade}",
+                   f"the loom's {step} step has failed since {streak.since}{dips}, "
                    f"{streak.count} times: {streak.error}",
-                   f"the traceback is in loom/loom.log; the step retries with backoff "
-                   f"and loom.recovered says when it passes "
+                   f"the traceback is in loom/loom.log; the step retries with backoff, the "
+                   f"degraded: line on the boundary is its gauge, and further dips of the same "
+                   f"cause stay silent until it worsens or clears "
                    f"(fact loom.degraded:{self.install}:{step}:{streak.since})",
                    thread=self.home.main_thread())
         except Exception:
             self.log(self.home, f"health: notice for {step} not sent\n{traceback.format_exc().rstrip()}")
+
+    def _cleared(self, step: str, episode: Episode) -> None:
+        from .ledger import read_facts
+        from .loom import notice
+        try:
+            notice(self.home, read_facts(self.home), "cleared", f"{step}:{episode.since}",
+                   f"the loom's {step} step is clear: up since {_iso(episode.up)} after "
+                   f"{episode.dips} dip{'s' * (episode.dips > 1)} since {episode.since} ({episode.told})",
+                   "nothing to do", thread=self.home.main_thread(), passive=True)
+        except Exception:
+            self.log(self.home, f"health: cleared notice for {step} not sent\n{traceback.format_exc().rstrip()}")

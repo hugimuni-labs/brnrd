@@ -101,6 +101,7 @@ def since_gone(facts, strand: str, gen: int, thread: str, threads: dict[str, str
     letters = {str(f.data.get("id") or f.id): f for f in rows if f.kind == "letter"}
     recovered = {f.id.replace("loom.recovered:", "loom.degraded:", 1): f
                  for _, f in after if f.kind == "loom.recovered" and f.data.get("install") == install}
+    episodes: dict = {}
     for i, f in after:
         data = f.data or {}
         if f.kind in ROOM_KINDS and data.get("strand") == strand:
@@ -120,9 +121,15 @@ def since_gone(facts, strand: str, gen: int, thread: str, threads: dict[str, str
         elif f.kind == "loom.moved" and data.get("install") == install:
             lines.append((i, f"{moved_text(f)} ({f.id})"))
         elif f.kind == "loom.degraded" and f.id in recovered:
+            # One line per episode: a step that dipped nine times is one condition.
             back = recovered[f.id]
-            lines.append((i, f"{data.get('step')} degraded at {data.get('since')} and recovered after "
-                             f"{back.data.get('count')} failures, the last {_brief(back.data.get('last'), 80)} ({back.id})"))
+            episodes[(data.get("step"), data.get("episode") or data.get("since"))] = (i, f, back)
+    for (step, first), (i, f, back) in episodes.items():
+        dips = int(f.data.get("dips") or 1)
+        times = f"dipped {dips} times since {first}, the last at {f.data.get('since')}, and" if dips > 1 else \
+            f"degraded at {f.data.get('since')} and"
+        lines.append((i, f"{step} {times} recovered after {back.data.get('count')} failures, "
+                         f"the last {_brief(back.data.get('last'), 80)} ({back.id})"))
     for f in open_streaks(rows, install):
         data = f.data
         lines.append((len(rows), f"degraded now: {data.get('step')} since {data.get('since')}: "
