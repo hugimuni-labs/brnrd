@@ -123,3 +123,9 @@ def test_another_thread_mentioning_an_ask_does_not_answer_it():
     assert wishes(facts)["w-ask"].state == "heard"
     facts.append(letter("M2", at(4), by="strand:s-aaaa-else", sender="s-aaaa-else", re="w-ask"))
     assert wishes(facts)["w-ask"].answer == "M2"
+
+
+def test_a_correct_after_the_delivery_means_it_was_looked_at_and_never_expires():
+    correct = letter("C1", at(90))
+    correct.data.update(wish="w-want", verdict="correct")
+    assert wishes([*base(100), delivered("w-want", at(95)), correct])["w-want"].state == "delivered"

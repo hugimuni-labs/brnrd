@@ -82,8 +82,8 @@ class Wish:
     # An ask's answer: the first letter of whoever it waits on that replies to it,
     # cites it, replies to a letter that raised it, or is stamped on it.
     answer: str = ""
-    # The last time a person's letter was stamped on the wish: a steer after a
-    # delivery keeps it delivered, in front of them, instead of letting it expire.
+    # The last time a person's letter named the wish (a stamp, or a verdict letter):
+    # one after the delivery means they looked, so it stays delivered and never expires.
     heard_at: str = ""
 
     @property
@@ -100,9 +100,9 @@ class Wish:
         delivered = max((r["at"] for r in self.results if r["delivered"]), default="")
         if delivered:
             # Delivered, then expired once nobody looked for EXPIRES: never an
-            # acceptance, and a correct (a letter stamped on it) keeps it delivered.
-            later = max(delivered, self.heard_at)
-            if datetime.now(timezone.utc) - datetime.fromisoformat(later) > EXPIRES:
+            # acceptance. A correct or a steer after it keeps it delivered.
+            if self.heard_at <= delivered and (
+                    datetime.now(timezone.utc) - datetime.fromisoformat(delivered) > EXPIRES):
                 return "expired"
             return "delivered"
         if self.results:
@@ -178,9 +178,13 @@ def wishes(facts: Iterable[Fact]) -> dict[str, Wish]:
     asked = [w for w in found.values() if w.sender == "resident"]
     if asked:
         _answer(asked, letters, ordered)
+    named: dict[str, str] = {}
+    for letter in letters.values():
+        if letter.data.get("wish") and _person(letter):
+            named[str(letter.data["wish"])] = max(named.get(str(letter.data["wish"]), ""), letter.at)
     for wish in found.values():
-        wish.heard_at = max((s["at"] for s in wish.stamps
-                             if any(i in letters and _person(letters[i]) for i in s["letters"])), default="")
+        wish.heard_at = max([named.get(wish.id, ""), *(s["at"] for s in wish.stamps
+                             if any(i in letters and _person(letters[i]) for i in s["letters"]))])
 
         def own_say(say):
             letter = letters.get(say.letter)
