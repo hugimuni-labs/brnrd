@@ -537,19 +537,29 @@ def test_github_callback_surfaces_provider_failure(client, monkeypatch):
     assert "provider down" in r.text
 
 
-def test_github_callback_discovers_only_the_authenticated_users_installations(
+def test_github_callback_redirects_before_installation_discovery_finishes(
     monkeypatch,
 ):
+    """The callback hands the user token to a background sync and redirects
+    at once: discovery is GitHub round trips per installation and repo, and
+    a login waited on all of them."""
+    import threading
+
     client = _make_client(
         github_app_id="123",
         github_app_private_key_b64="cHJpdmF0ZSBrZXk=",
     )
     synced = []
+    release = threading.Event()
+    done = threading.Event()
+
+    def slow_sync(db, settings, account_id, *, user_access_token=None):
+        release.wait(timeout=5)
+        synced.append((account_id, user_access_token, threading.current_thread()))
+        done.set()
+
     monkeypatch.setattr(
-        "brnrd.routers.web_auth.sync_app_installations_for_account",
-        lambda db, settings, account_id, *, user_access_token=None: synced.append(
-            (account_id, user_access_token)
-        ),
+        "brnrd.routers._session.sync_app_installations_for_account", slow_sync
     )
 
     _start, callback, _seen = _login_web(
@@ -564,8 +574,12 @@ def test_github_callback_discovers_only_the_authenticated_users_installations(
     )
 
     assert callback.status_code == 303
+    assert synced == []
+    release.set()
+    assert done.wait(timeout=5), "login installation sync never ran"
     assert len(synced) == 1
     assert synced[0][1] == "ghu_login"
+    assert synced[0][2] is not threading.current_thread()
 
 
 def test_connect_page_is_spa_owned(client):

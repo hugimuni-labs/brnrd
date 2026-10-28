@@ -89,11 +89,14 @@ def sync_installation(db: Session, settings, installation_id: str, account_id: s
             target_login = str(owner.get("login") or "")
             target_type = str(owner.get("type") or "")
         row = db.execute(select(GitHubInstalledRepo).where(GitHubInstalledRepo.github_installation_id == installation.id, GitHubInstalledRepo.repo_full_name == full_name)).scalar_one_or_none()
-        if row is None:
+        appeared = row is None
+        if appeared:
             row = GitHubInstalledRepo(id=ids.github_installed_repo_id(), github_installation_id=installation.id, repo_full_name=full_name)
             db.add(row)
         label = str(settings.github_trigger_label or "").strip()
-        if label:
+        # Two calls per repo on every sync made each login wait ~0.3 s a
+        # repo; the label is created when the repo first appears.
+        if label and appeared:
             try:
                 gh_app.ensure_repository_label(
                     settings,

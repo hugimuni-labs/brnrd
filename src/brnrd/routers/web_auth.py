@@ -27,7 +27,6 @@ from brnrd.auth import get_db
 from brnrd.models import Account, ConfigChangeRequest, PairRequest, Repo, TermsAcceptance
 from brnrd.routers.accounts import SESSION_TTL, account_for_github_identity, issue_session_token
 from brnrd.routers.config_approval import decide_core as decide_config_change
-from brnrd.routers.github_app import sync_app_installations_for_account
 from brnrd.routers.pairing import (
     approve_core,
     initiator_proof_ok,
@@ -48,6 +47,7 @@ from ._session import (
     _repos,
     _resolve_or_create_repo_for_pair,
     _safe_next,
+    _start_login_installation_sync,
     _terms_status,
 )
 
@@ -336,18 +336,9 @@ def github_login_callback(request: Request, code: str | None = None, state: str 
         )
     account = account_for_github_identity(db, identity)
     if identity.access_token and s.github_app_id and s.github_app_private_key_b64:
-        try:
-            sync_app_installations_for_account(
-                db,
-                s,
-                account.id,
-                user_access_token=identity.access_token,
-            )
-        except Exception as exc:
-            # Installation discovery is a convenience of login, not an
-            # authentication prerequisite.  The setup callback and manual
-            # refresh remain available if GitHub's installation view fails.
-            print(f"[brnrd] github login installation sync failed: {exc}")
+        # Installation discovery is a convenience of login, not an
+        # authentication prerequisite, so the redirect does not wait on it.
+        _start_login_installation_sync(request, account.id, identity.access_token)
     raw = issue_session_token(db, account)
     # Authentication does not gate on the hosted-execution beta terms (#664).
     # Those terms apply "when HugiMuni SAS operates brnrd-hosted compute for
