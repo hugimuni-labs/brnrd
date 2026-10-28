@@ -702,6 +702,14 @@ def write_send(room: Path, *, to: str, sender: str, body: str = "",
                 echo.append(echo_line(stamp.data["wish"], says, [
                     "answered" if r["kind"] == "letter" and r["ref"] == letter_id else f"{r['kind']}:{r['ref']}"
                     for r in refs_of], letters))
+    fresh = [str(s.data.get("line", "")) for s in wish_stamps if not s.id.startswith("wish:")]
+    if echo is not None and (fresh or opening is not None):
+        # Recall at the act: the closest threads, settled ones included.
+        from .recall import related_line
+        query = " ".join(fresh + ([opening.replace("-", " "), body[:600]] if opening else []))
+        line = related_line(home, query, facts=facts, exclude={s.data["thread"] for s in wish_stamps})
+        if line:
+            echo.append(line)
     if (re in letters and note is None and molt is None and not is_channel(to)
             and thread_of(to) != home.main_thread()):
         from .dispositions import is_person

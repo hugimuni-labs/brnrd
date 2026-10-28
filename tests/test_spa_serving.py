@@ -412,3 +412,35 @@ def test_every_moved_path_exists_under_dashboard():
     moved = {child.name for child in (FRONTEND_ROUTES / "dashboard").iterdir() if child.is_dir()}
     assert MOVED_TO_DASHBOARD <= moved
     assert not MOVED_TO_DASHBOARD & _spa_top_level_routes()
+
+
+INSTALLER = REPO_ROOT / "docs" / "public" / "install.sh"
+
+
+@pytest.mark.parametrize("path", ["/install", "/install.sh"])
+def test_the_installer_is_served_as_text_not_the_shell(spa_client, path):
+    """``curl -fsSL https://brnrd.dev/install | sh`` must pipe the installer.
+
+    Both paths used to fall through to the SPA shell with a 200, so the pipe
+    handed HTML to ``sh``. HEAD is checked too: ``curl -I`` is how a person
+    checks a URL before piping it.
+    """
+    response = spa_client.get(path)
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("text/plain")
+    assert response.content == INSTALLER.read_bytes()
+    head = spa_client.head(path)
+    assert head.status_code == 200
+    assert head.headers["content-type"].startswith("text/plain")
+
+
+def test_the_image_tells_the_app_where_the_installer_is():
+    """The image deletes the source tree, so ``BRNRD_INSTALLER`` must name the
+    place it copies ``docs/public/install.sh`` to, or ``/install`` 404s in
+    production while passing here."""
+    dockerfile = (REPO_ROOT / "Dockerfile").read_text(encoding="utf-8")
+    declared = re.search(r"BRNRD_INSTALLER=(\S+)", dockerfile)
+    assert declared, "the image no longer declares BRNRD_INSTALLER"
+    copied = re.search(r"COPY docs/public/install\.sh (\S+)", dockerfile)
+    assert copied, "the image no longer copies docs/public/install.sh"
+    assert declared.group(1) == copied.group(1)

@@ -216,6 +216,17 @@ def _run_recipe(clone, thread, owed_path, part_path, repo_file, core_path, recip
         return code, wake.read(), why.read().strip()
 
 
+def _loom_line(home, facts) -> str:
+    """What this loom runs against main; a failure costs the line, never the wake."""
+    from .receipts import source_root
+    from .update import wake_line
+    try:
+        return wake_line(facts, home.install_id(), source_root())
+    except Exception as exc:  # noqa: BLE001
+        _log(home, f"wake: loom line skipped ({exc})")
+        return ""
+
+
 def _build_wake(home, strand, gen, clone, thread, rows, part, owed_path, part_path, repo_file, core_path):
     """Run the recipe; a home that cannot wake still wakes when it can be made to.
 
@@ -510,39 +521,32 @@ def _prepare(home: Home, strand: str, thread: str, gen: int,
     from .reap import kept_line
     gone += kept_line(home, thread, threads)
     forge = forge_threads(home.root / "self")
+    from .waits import GRAMMAR
     part = gone + _handover(facts, thread, gen, threads) + inherited + (
         f"you are strand {strand} on thread {thread}"
-        + (f" ({forge}/{thread})" if forge else "") + "; letters arrive at your "
-        "tool boundaries, each line naming its reply address; answer with "
-        "`brnrd runtime send --re <id> --to <reply address> \"…\"`; "
-        "where the address is `-` nobody is waiting for words: settle the letter with "
-        f"`brnrd runtime send --re <id> --to thread:{thread} --note "
-        "\"<what you did>\"`; if you commit in this self clone, land it with "
-        "`brnrd runtime send-self --room .`; you will forget what is "
-        "not written: keep this thread's README true (the spec and the decisions); "
-        "what is left on a wish lives on the wish: `brnrd runtime wish "
-        "<w-id> --left \"<step>\" --left \"<step>\"`, the whole list, latest wins "
-        "(`--left same` when nothing moved), and the stop asks for it once a wish "
-        "moved; progress is the wishes; land the edit with send-self. "
-        "When your context grows "
-        "heavy hand over with `brnrd runtime molt --why \"<where "
-        "things stand>\"`; `brnrd runtime settle <thread> --why "
-        "\"…\"` closes a thread whose work is done; "
-        "a letter from `loom` is a notice of something the loom could not settle, "
-        "yours to deal with: its last lines name what settles it "
-        "(core/loom/README.md, Notices); stamp what someone wants with "
-        "`send --wish` (core/loom/README.md, Wishes), and open a thread only for "
-        "a wish: `send --to thread:<new> --wish <w-id>` or `--wish new:\"<line>\"`; "
-        "a `face?` line proposes a face for a fact you just met: "
-        "`brnrd runtime face take` wears it, `face <face>` wears another, "
-        "and doing nothing lets it lapse; "
+        + (f" ({forge}/{thread})" if forge else "") + "; letters arrive at your tool "
+        "boundaries, each naming its reply address: answer with "
+        "`brnrd runtime send --re <id> --to <address> \"…\"`, or where the address is `-`, "
+        f"settle it with `send --re <id> --to thread:{thread} --note \"<what you did>\"`. "
+        "You forget what is not written: keep this thread's README true (spec, decisions) and "
+        "land self commits with `brnrd runtime send-self --room .`; what is left on a wish lives "
+        "on it: `wish <w-id> --left \"<step>\" …`, the whole list, latest wins (`--left same` "
+        "when nothing moved), and the stop asks for it once a wish moved. Heavy context: `molt --why \"<where things stand>\"`; work done: "
+        "`settle <thread> --why \"…\"`. A letter from `loom` is a notice yours to settle; its "
+        "last lines say how (core/loom/README.md, Notices). Stamp what someone wants with "
+        "`send --wish`; open a thread only for one: `send --to thread:<new> --wish <w-id>` or "
+        "`--wish new:\"<line>\"`. A `face?` line: `face take` wears it, `face <face>` another, "
+        "silence lets it lapse. "
         + ("call `$BRNRD_JACK --event start` now, `$BRNRD_JACK --event post` between "
            "steps and `$BRNRD_JACK --event stop` before ending; read each returned boundary\n"
            if jack == "hand" else
-           "before you stop with wishes open, say how this body ends: a result (`wish <w-id> --result`), "
-           "an `ask`, a park with its reason (`wish <w-id> --read \"waiting: …\"`), or `settle`; "
-           "then stop, and the jack holds you while letters may come\n")
-    )
+           "Stopping is resting, not ending: the jack holds you at no cost and the next letter "
+           "wakes you here. Waiting on CI, a PR, a command, a person or a time, park it: "
+           f"`wish <w-id> --read \"waiting: …\" --wait <{GRAMMAR}>`, then stop; the loom's letter "
+           "wakes you when it comes true. A sleep or poll loop is never the wait: no letter "
+           "lands inside it. Before you stop with wishes open, end each as a result "
+           "(`wish <w-id> --result`), an `ask`, a park or `settle`\n")
+    ) + _loom_line(home, facts)
     atomic_write(part_path, part)
     if repos is None:
         from .adapters import repos as seat_repos, seat_text
@@ -1800,6 +1804,43 @@ def _advance_bodies(home, bodies, facts, choice, *, reader=None):
     return facts
 
 
+def _displace(home: Home, facts: list[Fact]) -> None:
+    """Over ``max_held`` live bodies, the ones held longest are asked to leave.
+
+    The home thread's body is not counted and never displaced. Only a body
+    parked in its stop hook (``held_at`` in its jack state) is marked, so work
+    in flight is never cut; the count settles as working bodies park.
+    """
+    from .config import load_config
+    from .jack import DISPLACED
+    from .router import install_of
+    limit = load_config(home.root).max_held
+    if not limit:
+        return
+    main = home.main_thread()
+    live = [(thread, strand, home.room(strand))
+            for thread, (strand, _gen) in fold(facts).holder.items()
+            if thread != main and install_of(strand) == home.install_id()
+            and body_alive(home.room(strand))]
+    marked = sum((room / "port" / DISPLACED).exists() for _t, _s, room in live)
+    over = len(live) - int(limit) - marked
+    if over <= 0:
+        return
+    held = []
+    for thread, strand, room in live:
+        try:
+            held_at = json.loads((room / "port" / "jack-state.json").read_text()).get("held_at")
+        except (OSError, ValueError):
+            continue
+        if held_at and not (room / "port" / DISPLACED).exists():
+            held.append((float(held_at), thread, strand, room))
+    now = time.time()
+    for held_at, thread, strand, room in sorted(held)[:over]:
+        atomic_write(room / "port" / DISPLACED, f"{len(live)} live bodies, max_held {limit:g}\n")
+        _log(home, f"displace {strand} thread {thread}: held {(now - held_at) / 60:.0f} min,"
+                   f" {len(live)} live bodies over max_held {limit:g}")
+
+
 def tick_once(home: Home, bodies: dict[str, Body], adapter: str, core: str,
               router=None) -> None:
     """One read of the ledger, then ingest, route, boundaries, reap.
@@ -1821,6 +1862,7 @@ def tick_once(home: Home, bodies: dict[str, Body], adapter: str, core: str,
         facts = _grant_landed(home, facts)
         facts = _grant_opened(home, facts)
         facts = _advance_bodies(home, bodies, facts, (adapter, core), reader=router.reader)
+        _displace(home, facts)
         # Time enters the owner table once, using only the facts already held.
         facts = observe_due(home, facts, router.armed())
         # A park's condition is checked the same way; the forge is read off the loop.
@@ -1828,10 +1870,10 @@ def tick_once(home: Home, bodies: dict[str, Body], adapter: str, core: str,
         facts = observe_waits(home, facts, router.armed(), watcher.states if watcher else None)
         if watcher is not None:
             from .receipts import receipts
+            from .waits import open_claims
             from .wishes import told
             watcher.wants = forge_wants(told(facts))
-            watcher.prs = {f"{r.repo}#{r.number}" for rows in receipts(facts, home.install_id()).values()
-                           for r in rows if not r.merge_commit}
+            watcher.prs = open_claims(receipts(facts, home.install_id()))
         facts = router.route(facts, bodies, (adapter, core))
         facts = router.speak_out(facts)
 

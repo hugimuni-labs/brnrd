@@ -18,7 +18,7 @@ from .config import load_config, read_array, seed_config, set_value
 from .connector import addressed, environment, instances
 from .home import Home, atomic_write, channel_parts, resolve_home
 from .port import _front, parse_frontmatter
-from .selfrepo import SelfError, init_self
+from .selfrepo import IDENTITY_NOTE, SelfError, init_self
 
 
 def _door(folder, env, code):
@@ -257,34 +257,53 @@ def _person_id(name):
 
 
 def _choose_body(home):
-    """The harness brnrd thinks with: the config's, else one on PATH, asked when there are two."""
-    from .adapters import body_label
-    from .service import _defaults
+    """The harness brnrd thinks with: every one setup knows, found or not, with its fuel; asked when two are found."""
+    from .adapters import body_label, parse_body
+    from .service import _body_choice, _defaults, _windows, _write_body
     _step('Which AI should brnrd think with?')
-    from .service import _body_choice, _write_body
     seed_config(home.root)
     current = _body_choice(home.root)
-    if current:
-        _ok(f'{current} (already set)')
-        return
-    found = [(shell, core) for shell, core in _defaults() if core is not None and shutil.which(shell)]
+    floor = load_config(home.root).hold_floor_pct
+    found, offered = [], []
+    known = _defaults()
+    if current and parse_body(current)[0] not in {shell for shell, _core in known}:
+        known.append((parse_body(current)[0], ''))
+    for shell, core in known:
+        if not shutil.which(shell):
+            print(f"    {style.dim('·')} {shell}: {style.dim('not installed')}")
+            continue
+        windows = _windows(home.root, shell)
+        if windows is None:
+            fuel = style.dim('found, fuel unknown')
+        else:
+            fuel = ' · '.join(f"{w['name']} {w['left_pct']:g}%" for w in windows) + ' left'
+            if any(w['left_pct'] <= floor for w in windows):
+                fuel += style.dim(' (low: it waits until this refills)')
+        label = current if current and parse_body(current)[0] == shell else body_label(shell, core)
+        found.append(label)
+        offered.append(windows is not None and not any(w['left_pct'] <= floor for w in windows))
+        print(f"    {len(found)}. {shell}: {fuel}")
     if not found:
         # Like the daemon-era runner rung: say it, keep going; pairing does not need it.
         print(f"  {style.cross()} Neither claude nor codex is on PATH: install Claude Code "
               '(https://claude.com/claude-code) or Codex, then run brnrd setup again')
         return
+    # Enter keeps the one already set, else the first with fuel.
+    pick = next((i for i, label in enumerate(found) if label == current), None)
+    if pick is None:
+        pick = next((i for i, ok in enumerate(offered) if ok), 0)
     if len(found) > 1:
-        for number, (shell, _core) in enumerate(found, 1):
-            print(f"    {number}. {shell}")
         while True:
-            answer = _ask(f'Choose 1-{len(found)}:', '1')
+            answer = _ask(f'Choose 1-{len(found)}:', str(pick + 1))
             if answer.isdigit() and 1 <= int(answer) <= len(found):
                 break
             print(f"  {style.dot()} Type a number from the list.")
-        found = [found[int(answer) - 1]]
-    choice = body_label(*found[0])
-    _write_body(home.root, choice)
-    _ok(choice)
+        pick = int(answer) - 1
+    choice = found[pick]
+    if choice != current:
+        _write_body(home.root, choice)
+    _ok(f"{choice} (kept)" if choice == current else choice)
+    print(f"  {style.dim('Change it any time: brnrd setup, or model.default in loom/preferences.toml.')}")
 
 
 def main(argv=None):
@@ -322,7 +341,8 @@ def main(argv=None):
             person = _person_id(called)
             _ok(f'brnrd will call you {called}')
         # A letter lands only on a thread on the self's main: seed it before pairing.
-        init_self(home.root, person=person)
+        if init_self(home.root, person=person).startswith('initialized '):
+            _ok(IDENTITY_NOTE)
         _step(f'Connect {CHOICES.get(kind, kind).split(",")[0]}')
         paired = pair(home, kind, name, person, timeout=args.timeout)
         if paired and args.wait > 0:

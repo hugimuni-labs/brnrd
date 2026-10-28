@@ -121,6 +121,7 @@ test('a derived wish is labelled as brnrd’s reading; a resident ask is brnrd a
 	const html = await renderWishes([
 		{ id: 'w-derived', state: 'read', origin: 'derived', line: 'Never stop when one shell is dry' },
 		{ id: 'w-ask', from: 'resident', state: 'scoped', line: 'Pick a price ladder' },
+		{ id: 'w-rec', from: 'resident', state: 'heard', line: 'Merge #12?', rec: 'merge it' },
 		{ id: 'w-done', state: 'accepted', line: 'Park and wake', verdict: { as: 'accepted' } }
 	]);
 	const derived = rowOf(html, 'w-derived');
@@ -129,6 +130,8 @@ test('a derived wish is labelled as brnrd’s reading; a resident ask is brnrd a
 	const ask = rowOf(html, 'w-ask');
 	ok(ask.includes('brnrd asks you'), 'an ask reads as brnrd asking');
 	ok(ask.includes('data-owed="true"'), 'an unanswered ask waits on him');
+	const rec = rowOf(html, 'w-rec');
+	ok(rec.includes('proposed: merge it'), 'the asker’s rec reads as a proposal, not his answer');
 	ok(/show\s+1 done/.test(html), 'closed folds behind done');
 	ok(!html.includes('data-wish="w-done"'), 'closed rows stay folded');
 });

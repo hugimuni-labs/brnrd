@@ -36,8 +36,13 @@ def test_a_pr_wait_resolves_on_the_merge_and_tells_the_thread_once(ledger):
     assert read["wait"]["on"] == f"pr:{REPO}#12"
     assert read["wait"]["until"] > later(days=6).strftime("%Y-%m-%dT%H:%M:%SZ")
     assert told(home) == []
+    # publish writes the library name as ``repo``; only pr.opened carries the url.
     append(home, Fact(kind="pr.merged", by="strand:s-aaaa-test", data={
-        "thread": "work", "repo": REPO, "number": 12, "head": "loom/x", "merge_commit": "abcdef1234"}))
+        "thread": "work", "repo": "brnrd", "number": 12, "head": "loom/x", "merge_commit": "abcdef1234"}))
+    assert told(home) == [], "a merge of brnrd#12 names no owner until a pr.opened does"
+    append(home, Fact(kind="pr.opened", by="strand:s-aaaa-test", data={
+        "thread": "work", "repo": "brnrd", "number": 12, "head": "loom/x",
+        "url": f"https://github.com/{REPO}/pull/12"}))
     [letter] = told(home)
     assert letter.id == notice_id("wait", waits.subject(view(home, ident), read))
     assert letter.data["to"] == "thread:work" and letter.data["from"] == "loom"
@@ -224,6 +229,75 @@ for letter in ctx.owed():
     assert sum(1 for f in loom.facts() if f.kind == "letter" and f.id.startswith("loom/wait-")) == 1
 
 
+def test_a_file_wait_resolves_when_the_path_exists_and_says_what_it_holds(ledger, tmp_path, monkeypatch):
+    home, seat = ledger
+    ident = heard(home, seat, "Suite")
+    monkeypatch.chdir(tmp_path)
+    assert waits.canonical("file:out/done", later()) == f"file:{tmp_path}/out/done"
+    done = tmp_path / "done"
+    read = park(home, seat, ident, "--wait", f"file:{done}")
+    assert read["wait"]["on"] == f"file:{done}"
+    assert told(home) == []
+    done.write_text("")  # `> path` has opened it; `echo $?` has not written yet
+    assert told(home) == []
+    done.write_text("1\n")
+    [letter] = told(home)
+    assert f"wait on {ident} resolved: {done} exists (1)" in letter.data["body"]
+    assert told(home) == []
+
+
+def test_a_body_parks_on_its_own_command_and_the_loom_wakes_it_when_it_ends(tmp_path):
+    """The old `brnrd await --file`: no sleep loop, the body stops and the file's notice starts it again."""
+    from brr.loom.runtime.project import holder
+    from brr.loom.runtime.selfrepo import init_self
+    from _step import Loom, kill_bodies, wait_until, write_thread
+    from test_lifecycle import bodies
+
+    root = tmp_path / "home"
+    go, done = root / "go", root / "suite.done"
+    init_self(root, person="test")
+    write_thread(root, "work", "Work", "parker", wait="0")
+    bodies(root, f'''import json, subprocess, sys
+from pathlib import Path
+from brr.loom.runtime.fakebody import Ctx
+from brr.loom.runtime.home import atomic_write
+ctx = Ctx(Path(sys.argv[1]))
+def verb(*args):
+    proc = subprocess.run([sys.executable, "-m", "brr.loom.runtime", *args[:1], "--room", str(ctx.room), *args[1:]],
+                          capture_output=True, text=True)
+    assert proc.returncode == 0, proc.stderr
+    return proc.stdout.strip()
+for letter in ctx.owed():
+    if letter.body == "run the suite":
+        wish = verb("wish", "new", "--line", "Suite green", "--say", letter.id)
+        subprocess.Popen(["/bin/sh", "-c", "while [ ! -e {go} ]; do sleep 0.05; done; echo 0 > {done}"],
+                         start_new_session=True)
+        verb("wish", wish, "--read", "waiting: the suite", "--wait", "file:{done}")
+        atomic_write(Path({str(root / "parked")!r}), wish)
+    else:
+        atomic_write(Path({str(root / "woken")!r}), json.dumps({{"id": letter.id, "body": letter.body}}))
+    ctx.send("thread:work", note="read", re=letter.id)
+''')
+    inject_letter(root, to="thread:work", body="run the suite")
+    loom = Loom(root)
+    loom.start()
+    try:
+        wait_until((root / "parked").exists, 20, loom.dump)
+        wait_until(lambda: holder(loom.facts(), "work") is None, 20, loom.dump)
+        assert not (root / "woken").exists(), "a running command wakes nobody"
+        go.write_text("")
+        wait_until((root / "woken").exists, 20, loom.dump)
+        woken = json.loads((root / "woken").read_text())
+        wish = (root / "parked").read_text()
+        assert woken["id"].startswith("loom/wait-")
+        assert f"wait on {wish} resolved: {done} exists (0)" in woken["body"]
+    finally:
+        go.write_text("")
+        loom.halt()
+        kill_bodies(loom)
+    assert not loom.errors, loom.errors
+
+
 def test_the_board_row_carries_the_standing_wait(ledger):
     from brr.loom.runtime import snapshot
     from brr.loom.runtime.config import load_config
@@ -269,3 +343,79 @@ def test_watcher_writes_pr_cards_and_never_rereads_a_closed_one(tmp_path):
     watcher.prs = {"o/r#1", "o/r#2"}
     opened = {key for key in watcher.prs if watcher.cards.get(key, {}).get("state") not in ("merged", "closed")}
     assert opened == {"o/r#1"}
+
+
+def test_a_bare_pr_wait_takes_its_owner_from_the_opened_url_and_refuses_none(ledger, monkeypatch):
+    """pr.opened stores the library name as repo; a bare #N stored as pr:brnrd#N is a 404 forever."""
+    from brr.loom.runtime import verbs_wishes
+    home, seat = ledger
+    ident = heard(home, seat, "Bare")
+    append(home, Fact(kind="pr.opened", by="strand:s-aaaa-test", data={
+        "thread": "work", "repo": "brnrd", "number": 31, "head": "abc",
+        "url": f"https://github.com/{REPO}/pull/31"}))
+    assert park(home, seat, ident, "--wait", "pr:#31")["wait"]["on"] == f"pr:{REPO}#31"
+    now = datetime.now(timezone.utc)
+    for named in ("brnrd", "", None):
+        try:
+            waits.canonical("pr:#40", now, repo=lambda number: named)
+        except ValueError as exc:
+            assert "name the repo" in str(exc)
+        else:
+            raise AssertionError(f"{named!r} is no owner/repo")
+    monkeypatch.setattr(verbs_wishes, "_repo", lambda facts, number: "brnrd")
+    assert "name the repo" in command(home, seat, "wish", ident, "--read", "waiting: x",
+                                      "--wait", "pr:#40", ok=False)
+
+
+def test_one_failing_read_leaves_the_other_waits_resolving(ledger):
+    """gen 4: one 404 in Watcher._poll degraded every wait; now each condition fails alone."""
+    import urllib.error
+    from brr.loom.runtime.waits import Watcher
+    home, seat = ledger
+    merged, broken, gone = (heard(home, seat, line) for line in ("Merged", "Broken", "Gone"))
+    park(home, seat, merged, "--wait", f"pr:{REPO}#1")
+    park(home, seat, broken, "--wait", f"pr:{REPO}#2")
+    park(home, seat, gone, "--wait", "pr:o/nothing#3")
+
+    class Forge:
+        down = {2}
+
+        def pull(self, repo, number):
+            if number in self.down:
+                raise urllib.error.URLError("timed out")
+            if repo == "o/nothing":
+                raise urllib.error.HTTPError("u", 404, "Not Found", None, None)
+            return {"state": "merged", "at": "2026-10-27T18:00:00Z", "url": "u"}
+
+        def ci(self, repo, sha):
+            raise AssertionError("no ci wait")
+
+    watcher, forge = Watcher(), Forge()
+    watcher.states = {f"pr:{REPO}#2": {"state": "open", "url": "u"}, "pr:gone#9": {"state": "open"}}
+    watcher._poll(forge, waits.forge_wants(wishes(read_facts(home))))
+    assert watcher.failing is None, "one failing read is not an outage"
+    assert set(watcher.errors) == {f"pr:{REPO}#2"}
+    assert watcher.states[f"pr:{REPO}#2"] == {"state": "open", "url": "u"}, "a failed read keeps its last state"
+    assert "pr:gone#9" not in watcher.states
+    letters = told(home, forge=watcher.states)
+    bodies = {letter.data["body"].split()[2]: letter.data["body"] for letter in letters}
+    assert set(bodies) == {merged, gone}
+    assert f"pr:{REPO}#1 merged" in bodies[merged]
+    assert "pr:o/nothing#3 cannot be read: HTTP 404" in bodies[gone]
+    assert "corrected" in bodies[gone]
+    forge.down = {1, 2}
+    watcher._poll(forge, {f"pr:{REPO}#1", f"pr:{REPO}#2"})
+    assert isinstance(watcher.failing[0], urllib.error.URLError), "every read failing is an outage"
+
+
+def test_the_cards_poll_the_owner_the_opened_url_names(ledger):
+    """Live 18:xx: watcher.prs held brnrd#N (the library name), so every card read was a 404."""
+    from brr.loom.runtime.receipts import receipts
+    home, _seat = ledger
+    for number, merged in ((51, False), (52, True)):
+        append(home, Fact(kind="pr.opened", by="strand:s-aaaa-test", data={
+            "thread": "work", "repo": "brnrd", "number": number, "head": "abc",
+            "url": f"https://github.com/{REPO}/pull/{number}"}))
+    append(home, Fact(kind="pr.merged", by="strand:s-aaaa-test", data={
+        "thread": "work", "repo": "brnrd", "number": 52, "head": "abc", "merge_commit": "def"}))
+    assert waits.open_claims(receipts(read_facts(home), "i")) == {f"{REPO}#51"}

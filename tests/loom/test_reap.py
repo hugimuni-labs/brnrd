@@ -148,7 +148,7 @@ def test_a_stop_with_work_only_its_room_holds_is_blocked_and_says_how_to_clear_i
     held = _jack(room, "stop", "live")
     assert held["decision"] == "block"
     reason = held["reason"]
-    assert reason.startswith("left in room: ")
+    assert reason.startswith("the stop holds on 1 thing") and "\n\nleft in room: " in reason
     assert "pr2-body.md: a loose file" in reason and "self: 1 paths not committed (work.md)" in reason
     # Each item names the one command that clears it; run them as printed.
     for command in re.findall(r"or discard (?:it|them): `([^`]+)`", reason):
