@@ -8,7 +8,8 @@ import time
 
 import pytest
 
-from brr.loom.runtime.board import Parts, digest, serve, window
+from brr.loom.runtime import board
+from brr.loom.runtime.board import Parts, compute, digest, serve, window
 from brr.loom.runtime.config import load_config
 from brr.loom.runtime.home import Home
 from brr.daemon2.facts import Fact
@@ -52,6 +53,53 @@ def test_parts_are_hashed_stably_and_a_letter_moves_only_its_thread(parts):
     assert parts.hashes["thread/web"] != before["thread/web"]
     assert parts.hashes["index"] != before["index"]
     assert [r["body"] for r in parts.parts["thread/web"]["letters"]] == ["first", "second"]
+
+
+class Tape:
+    """A stand-in for the rooms' tapes: the test says when they moved and what they hold."""
+
+    def __init__(self):
+        self.tools, self.live, self.moved = {}, {}, False
+
+    def read(self):
+        moved, self.moved = self.moved, False
+        return moved
+
+
+def test_a_tape_move_relays_only_its_thread_and_equals_a_whole_compute(parts, monkeypatch):
+    """§D7's hot path: a tool line re-lays tools over the last parts, part for part what a whole compute gives."""
+    root = parts.home.root
+    inject_letter(root, to="thread:web", body="first")
+    inject_letter(root, to="thread:docs", body="other")
+    strand = "s-test-web001"
+    append(parts.home, Fact(kind="lease", by="loom:test", data={
+        "thread": "web", "strand": strand, "gen": 1, "shell": "fake", "core": "fake", "repos": []}))
+    parts.tape = tape = Tape()
+    assert parts.step()
+    assert [s["id"] for t in parts.parts["index"]["threads"] if t["id"] == "web" for s in t["strands"]] == [strand]
+    before = dict(parts.hashes)
+
+    whole = []
+    monkeypatch.setattr(board, "compute", lambda *a, **k: whole.append(1) or compute(*a, **k))
+    tape.tools[strand] = [{"at": "2026-10-28T15:00:00Z", "end": None, "tool": "Bash", "arg": "zq9 probe"}]
+    tape.live[strand] = {"open": [{"at": "2026-10-28T15:00:00Z", "tool": "Bash", "arg": "zq9 probe"}]}
+    tape.moved = True
+    assert parts.step()
+    assert not whole  # the ledger stood still: no whole compute
+    assert parts.hashes["thread/docs"] == before["thread/docs"]
+    assert parts.hashes["thread/web"] != before["thread/web"]
+    assert parts.parts["thread/web"]["tools"] == {strand: tape.tools[strand]}
+
+    relaid = dict(parts.hashes)
+    parts.revision = None  # the same inputs, recomputed whole
+    assert not parts.step()
+    assert whole and parts.hashes == relaid
+
+    tape.moved = True  # past WHOLE seconds, a tape move recomputes whole again
+    monkeypatch.setattr(board, "WHOLE", 0.0)
+    whole.clear()
+    parts.step()
+    assert whole
 
 
 def test_a_wish_ships_in_its_thread_part_and_the_index_keeps_counts(parts):

@@ -37,6 +37,7 @@ from .wishes import Say, receipt, told as told_of, waits_on, wishes
 from . import tooltrace
 from brr import emotes
 
+WHOLE = 10.0  # seconds a tape-only move may re-lay tools over the last parts before a whole recompute
 TICK = 0.25  # seconds between stats of the ledger and the rooms; a still home costs a few stats
 TOOLS = 120  # tool lines kept per strand
 LETTERS = 200  # letters per thread part; older ones by ?before=
@@ -400,8 +401,9 @@ FACES = {s: list(emotes.for_telemetry(s).frames) for s in ("idle", "running")}
 
 
 def compute(home: Home, facts, config, tools: dict, live: dict, person: str | None = None,
-            typed: dict | None = None) -> dict[str, dict]:
-    """Every part by name: ``index``, ``thread/<id>`` per thread, ``beads``. The index carries the others' hashes."""
+            typed: dict | None = None) -> tuple[dict[str, dict], dict[str, str]]:
+    """Every part by name, ``index``, ``thread/<id>`` per thread and ``beads``, with their hashes. The index
+    carries the others' hashes."""
     snap, raw, letters, told = board_threads(home, facts, config, person, typed)
     threads = snap.get("threads") or []
     parts: dict[str, dict] = {}
@@ -428,7 +430,28 @@ def compute(home: Home, facts, config, tools: dict, live: dict, person: str | No
              "unthreaded": [row for name, rows in wished.items() if name not in known for row in rows],
              **_as(home, person), "parts": hashes, "faces": FACES}
     parts["index"] = index
-    return parts
+    return parts, {**hashes, "index": digest(index)}
+
+
+def overlay(parts: dict, hashes: dict, tools: dict, live: dict) -> tuple[dict[str, dict], dict[str, str]]:
+    """The parts again when only the tapes moved: each thread part takes its strands' tools and live afresh and
+    keeps its letters and wishes; only a part that changed is hashed again, then the index that names it."""
+    index = parts["index"]
+    out, sums = dict(parts), dict(hashes)
+    for t in index.get("threads") or ():
+        name = f"thread/{t['id']}"
+        held = parts.get(name)
+        if held is None:
+            continue
+        strands = [s["id"] for s in t.get("strands") or ()]
+        mine = {s: tools[s] for s in strands if s in tools}, {s: live[s] for s in strands if s in live}
+        if mine == (held["tools"], held["live"]):
+            continue
+        out[name] = {**held, "tools": mine[0], "live": mine[1]}
+        sums[name] = digest(out[name])
+    out["index"] = {**index, "parts": {k: v for k, v in sums.items() if k != "index"}}
+    sums["index"] = digest(out["index"])
+    return out, sums
 
 
 def _as(home: Home, person: str | None) -> dict:
@@ -508,23 +531,29 @@ class Parts:
         self.reader, self.cache, self.tape = LedgerReader(), {}, Tools(home)
         self.parts: dict[str, dict] = {}
         self.hashes: dict[str, str] = {}
-        self.revision = None
+        self.revision, self.whole = None, 0.0
         # Which strand typed a letter through the board: the board's own note, outside the self repo.
         self.typed_path, self.typed, self.typed_mtime = home.root / "loom/board/typed.json", {}, None
         self.changed = threading.Condition()
         self.stop = threading.Event()
 
     def step(self) -> bool:
-        """One recompute when anything moved; True when a part's hash did."""
+        """One recompute when anything moved; True when a part's hash did. A move of the tapes alone re-lays only
+        the tools over the last parts (§D7: a tool line is the hot path); a ledger move, a typed note, or a tape
+        move ``WHOLE`` seconds after the last whole compute recomputes everything, so what the parts read from
+        the rooms and the clock is never older than that."""
         facts = self.reader.refresh(self.home)
-        moved = self.tape.read() | self._typed()
-        if self.reader.revision == self.revision and not moved:
+        taped, typed = self.tape.read(), self._typed()
+        if self.reader.revision == self.revision and not (taped or typed):
             return False
-        self.revision = self.reader.revision
-        with projection_cache(self.cache):
-            parts = compute(self.home, facts, self.config_of(), self.tape.tools, self.tape.live, self.person,
-                            self.typed)
-        hashes = {name: digest(part) for name, part in parts.items()}
+        if self.reader.revision == self.revision and not typed and self.parts \
+                and time.monotonic() - self.whole < WHOLE:
+            parts, hashes = overlay(self.parts, self.hashes, self.tape.tools, self.tape.live)
+        else:
+            self.revision, self.whole = self.reader.revision, time.monotonic()
+            with projection_cache(self.cache):
+                parts, hashes = compute(self.home, facts, self.config_of(), self.tape.tools, self.tape.live,
+                                        self.person, self.typed)
         if hashes == self.hashes:
             return False
         with self.changed:
