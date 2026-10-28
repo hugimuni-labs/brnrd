@@ -6,11 +6,21 @@ on:
   pull_request:
 
 jobs:
+  # The backend suite runs as three shards, each `-n 4` on its own runner
+  # (ci-speed, 2026-10-28: one runner's 4 vCPUs saturate at ~10 min). The
+  # root conftest.py keeps every 3rd test when `PYTEST_SHARD` is set; locally
+  # it is unset, so scripts/gate.py still runs the whole suite in one leg.
   backend:
-    name: Backend tests
+    name: Backend shard ${{ matrix.shard }}/3
     runs-on: ubuntu-latest
     permissions:
       contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3]
+    env:
+      PYTEST_SHARD: ${{ matrix.shard }}/3
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -23,14 +33,28 @@ jobs:
           python -m pip install -e ".[dev]"
       # Per-test times ride along as an artifact: what a slow suite spends is
       # read from here, not guessed (the daemon-tests cut measured with it).
+      # `-n 4` matches ubuntu-latest's 4 vCPUs on a public repo (ci-speed,
+      # 2026-10-28); a fixed count, not `auto`, so scripts/gate.py runs the
+      # same bounded number locally.
       - name: Run tests
-        run: python -m pytest -q --durations=30 --junitxml=pytest-times.xml
+        run: python -m pytest -q -n 4 --durations=30 --junitxml=pytest-times.xml
       - name: Upload test times
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: pytest-times
+          name: pytest-times-${{ matrix.shard }}
           path: pytest-times.xml
+
+  # The check branch protection names. Green only when every shard is.
+  backend-tests:
+    name: Backend tests
+    if: always()
+    needs: backend
+    runs-on: ubuntu-latest
+    permissions: {}
+    steps:
+      - name: Every shard passed
+        run: test "${{ needs.backend.result }}" = success
 
   hygiene:
     name: Repo hygiene
