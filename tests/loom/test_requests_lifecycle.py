@@ -129,3 +129,23 @@ def test_a_correct_after_the_delivery_means_it_was_looked_at_and_never_expires()
     correct = letter("C1", at(90))
     correct.data.update(wish="w-want", verdict="correct")
     assert wishes([*base(100), delivered("w-want", at(95)), correct])["w-want"].state == "delivered"
+
+
+def test_the_home_thread_relaying_an_ask_does_not_answer_it():
+    """setup-flow's w-x5arafp1ts0d: inbox replied 'raised to Arseni' to the raise, and the ask closed."""
+    raised = letter("R1", at(6), by="strand:s-aaaa-work", sender="s-aaaa-work", links=["w-ask"])
+    relay = letter("I1", at(5), by="strand:s-aaaa-inbox", sender="s-aaaa-inbox", re="R1")
+    facts = [*base(), lease("s-aaaa-inbox", "inbox", at(9)), raised, relay]
+    assert wishes(facts)["w-ask"].state == "heard"
+    facts.append(letter("L3", at(4), re="R1"))
+    assert wishes(facts)["w-ask"].answer == "L3"
+
+
+def test_an_ask_on_a_thread_the_home_thread_opened_waits_on_the_person():
+    from brr.loom.runtime.wishes import waits_on
+    main = {"work": {"opened-by": "thread:inbox"}, "inbox": {"opened-by": "person:loom", "status": "open"},
+            "else": {"opened-by": "thread:work", "status": "open"}}
+    assert waits_on(wishes(base()), main) == {"w-ask": "operator"}
+    # A non-home thread still holds the asks of the threads it opened.
+    facts = [*base(), wish("w-ask2", at(5), sender="resident", parent="w-want", thread="else")]
+    assert waits_on(wishes(facts), main)["w-ask2"] == "thread:work"
