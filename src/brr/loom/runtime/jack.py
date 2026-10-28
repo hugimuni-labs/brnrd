@@ -683,7 +683,7 @@ def _letter_miss(room: Path, parsed: Boundary, done: set[str]) -> str:
         rows.append(f"- {letter.id}: brnrd runtime send --re {letter.id} --to thread:{thread} --note \"<what you did>\""
                     if letter.reply == "-" else
                     f"- {letter.id}: brnrd runtime send --re {letter.id} --to {letter.reply} \"<answer>\"")
-    return "owed letters, each with its reply (a reply already in port/out counts):\n" + "\n".join(rows) if rows else ""
+    return "owed letters, each with its reply (a reply or --note already sent counts, drained or not):\n" + "\n".join(rows) if rows else ""
 
 
 STOP = "the stop holds on {n}; do each, then stop. This list comes back whole at every stop until it is empty."
