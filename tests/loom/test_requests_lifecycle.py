@@ -115,3 +115,11 @@ def test_a_delivery_writes_the_person_a_letter_on_the_chat_they_said_it_in(monke
     verbs_wishes._tell_delivered(None, SimpleNamespace(room=None), found["w-ask"], result)
     assert len(sent) == 1 and sent[0]["to"] == "channel:mine/42"
     assert sent[0]["body"].startswith("delivered &w-want: w-want\nPR #1: #1\nReply ok")
+
+
+def test_another_thread_mentioning_an_ask_does_not_answer_it():
+    facts = [*base(), lease("s-aaaa-else", "else", at(9)),
+             letter("M1", at(5), by="strand:s-aaaa-else", sender="s-aaaa-else", links=["w-ask"])]
+    assert wishes(facts)["w-ask"].state == "heard"
+    facts.append(letter("M2", at(4), by="strand:s-aaaa-else", sender="s-aaaa-else", re="w-ask"))
+    assert wishes(facts)["w-ask"].answer == "M2"

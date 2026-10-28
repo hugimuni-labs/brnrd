@@ -206,13 +206,13 @@ def _answer(asked: list[Wish], letters: dict, ordered: list[Fact]) -> None:
         def answers(letter) -> bool:
             if letter.at < ask.born:
                 return False
-            if letter.by.startswith("strand:") and writers.get(letter.by.removeprefix("strand:")) == ask.thread:
-                return False
-            if not _person(letter) and not letter.by.startswith("strand:"):
-                return False
             re = str(letter.data.get("re") or "")
-            return (re == ask.id or ask.id in (letter.data.get("links") or ())
-                    or ask.id in raised.get(re, ()))
+            replies = re == ask.id or ask.id in raised.get(re, ())
+            if _person(letter):
+                return replies or ask.id in (letter.data.get("links") or ())
+            # A thread asked onward answers only by replying: a mention is not an answer.
+            return (letter.by.startswith("strand:") and replies
+                    and writers.get(letter.by.removeprefix("strand:")) != ask.thread)
         stamped = [i for s in ask.stamps for i in s["letters"] if i in letters and _person(letters[i])]
         ask.answer = next(iter(stamped), None) or next((i for i, f in letters.items() if answers(f)), "")
 
