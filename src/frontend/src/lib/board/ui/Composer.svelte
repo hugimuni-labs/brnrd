@@ -36,6 +36,8 @@
 		id="say"
 		bind:this={ta}
 		bind:value={b.draft}
+		onfocus={() => (b.writing = true)}
+		onblur={() => (b.writing = false)}
 		placeholder="write to the inbox as you · ⌘↩ sends"
 		oninput={() => {
 			b.force = false;

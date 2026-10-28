@@ -25,6 +25,7 @@
 	class:done={DONE.includes(w.state)}
 	class:open={on}
 	data-wish={w.wish}
+	class:linked={b.linked.has(w.wish)}
 	style:--t={hue(w.thread || 'inbox')}
 >
 	<!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->

@@ -35,6 +35,7 @@
 				class:shut={!!a}
 				class:open={opened.has(c.wish)}
 				data-wish={c.wish}
+				class:linked={b.linked.has(c.wish)}
 				title={c.line}
 				onclick={() => {
 					if (!a) b.toggle(b.open, 'c:' + c.wish);
