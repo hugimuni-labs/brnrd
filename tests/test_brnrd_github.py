@@ -2095,7 +2095,6 @@ def test_sync_installation_prunes_rows_dropped_from_listing(env, monkeypatch):
     assert labels == [
         ("ghs_installation", "owner/kept", "brnrd"),
         ("ghs_installation", "owner/dropped", "brnrd"),
-        ("ghs_installation", "owner/kept", "brnrd"),
     ]
 
 
