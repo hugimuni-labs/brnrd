@@ -537,6 +537,8 @@ def test_a_patched_jack_clock_stays_out_of_the_shared_time_module(monkeypatch):
     """Other threads keep the real sleep (tests/loom/conftest.py `_private_jack_clock`)."""
     import time as shared
 
+    from brr.loom.runtime import jack
+
     real = shared.sleep
     monkeypatch.setattr(jack.time, "sleep", lambda s: None)
     assert shared.sleep is real
