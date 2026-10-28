@@ -167,6 +167,8 @@ def test_molt_refuses_while_a_left_is_owed(body):
         write_molt(seat, "context is heavy")
     assert not list((seat / "port/out").glob("*.md"))
     command(home, seat, "wish", wish, "--left", "freeze hover")
+    readme = next(seat.glob("*/threads/work/README.md"))
+    readme.write_text(readme.read_text() + "\n## Now\n- freeze hover\n")
     assert write_molt(seat, "context is heavy").startswith(STRAND + "/")
 
 
