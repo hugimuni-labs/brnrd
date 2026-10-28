@@ -757,7 +757,7 @@ async def put_loom_parts(request: Request, principal: Principal = Depends(requir
             raise ValueError("a pushed part is not in keys")
         rows = {k: (str(v["hash"])[:64], v["part"]) for k, v in parts.items()}
     except (ValueError, KeyError, TypeError) as exc:
-        raise HTTPException(status_code=422, detail=f"loom parts: {exc}") from exc
+        raise HTTPException(status_code=422, detail=_safe_detail(f"loom parts: {exc}")) from exc
     daemon = _current_daemon(db, principal)
     if daemon is None:
         daemon = _upsert_daemon(db, principal, schemas.DaemonRegister(daemon_name=LOOM_DAEMON_NAME))
