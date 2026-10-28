@@ -46,6 +46,11 @@ test('a bare id or an &ref is a chip; a word that only looks like one stays text
 	await l.locator('.body .ref', { hasText: '&w-charlie0000000' }).click();
 	const sheet = B.page.locator('#bead');
 	await sheet.waitFor();
+	// the sheet opens before the beads part lands; on a slow runner the first read sees only its header
+	await sheet
+		.getByText(/charlie happens/)
+		.first()
+		.waitFor();
 	assert.match(await sheet.innerText(), /charlie happens/);
 	await B.page.keyboard.press('Escape');
 	await sheet.waitFor({ state: 'hidden' });
