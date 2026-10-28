@@ -65,3 +65,22 @@ def reap_bodies(tmp_path):
                 os.killpg(pid, signal.SIGKILL)
             except (ProcessLookupError, PermissionError):
                 pass
+
+
+@pytest.fixture(autouse=True)
+def _private_jack_clock(monkeypatch):
+    """jack gets its own copy of `time` for each test.
+
+    Tests drive the stop hook's clock with `monkeypatch.setattr(jack.time,
+    "sleep", ...)`. `jack.time` is the shared module, so that patched every
+    thread's sleep: under xdist a thread a previous test left running ticked
+    a fake clock to 138 s (ci-speed, 2026-10-28, run 40772067022).
+    """
+    import time
+    import types
+
+    from brr.loom.runtime import jack
+
+    clock = types.ModuleType("time")
+    clock.__dict__.update(time.__dict__)
+    monkeypatch.setattr(jack, "time", clock)

@@ -193,7 +193,7 @@ def board_state(t: dict, calls: list[dict], left: int = 0, end: tuple | None = N
             "why": f"no body, {left} open wish{'es' if left > 1 else ''} ({ended}): wake or settle", **shown}
 
 
-DONE = {"delivered", "accepted", "dropped", "declined"}
+DONE = {"delivered", "accepted", "dropped", "declined", "expired", "answered"}
 
 
 def thread_marks(threads: list[dict], told: dict, unanswered: dict[str, tuple[str, ...]]) -> dict[str, dict]:

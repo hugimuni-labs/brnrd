@@ -72,6 +72,8 @@ REGISTRY = (
     _kind("wish.result",       "wish",    "wish kind ref line delivered cmd?",                  "strand loom",   "global"),
     _kind("wish.verdict",      "wish",    "wish as evidence ref",                              "strand person", "global"),
     _kind("wish.left",         "wish",    "wish steps gen same?",                              "strand",        "global"),
+    _kind("wish.top",          "wish",    "wish ref",                                          "strand person", "global"),
+    _kind("wish.pick",         "wish",    "wish why",                                          "strand",        "global"),
     _kind("left.asked",        "wish",    "strand gen wishes",                                 "strand",        "global"),
     _kind("thread.reopened",   "wish",    "thread wish was closed? why?",                      "strand",        "global"),
     _kind("pr.opened",         "pr",      "thread repo number url head",                       "strand",        "global"),

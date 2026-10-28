@@ -290,7 +290,9 @@ def test_an_open_ask_to_a_person_is_their_turn(tmp_path):
                                        says=[["p-test/site", 0, None]], thread="web"))
     ask = append(home, wish_fact(read_facts(home), by="person:test", ident="new", line="Pick a domain",
                                  thread="web", sender="resident", parent=root_wish.data["wish"]))
-    assert turn() != "yours"  # it waits on its opener, thread:inbox, until that asks onward
+    # Its opener is the home thread, which relays to the person: it is their turn already
+    # (threads/requests/design.md §5, F3), and an onward ask keeps it theirs.
+    assert turn() == "yours"
     onward = append(home, wish_fact(read_facts(home), by="person:test", ident="new", line="Pick a domain",
                                     thread="inbox", sender="resident", parent=ask.data["wish"]))
     assert turn() == "yours"
