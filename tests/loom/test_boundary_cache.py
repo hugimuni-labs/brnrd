@@ -9,6 +9,8 @@ from __future__ import annotations
 
 import fcntl
 import json
+import os
+import subprocess
 
 from brr.daemon2.facts import Fact
 from brr.loom.runtime import ledger, loom
@@ -50,6 +52,16 @@ def test_kept_boundary_equals_a_fresh_render_and_every_input_re_renders(tmp_path
         return text
 
     monkeypatch.setattr(loom, "_rendered", checked)
+    # The test holds each body's lock itself: a body the loom started for a
+    # dead lease would race the liveness this test sets, so a start runs a
+    # process that takes no lock and writes no facts.
+    started = []
+
+    def spawn(room, *a):
+        started.append(subprocess.Popen(["sleep", "600"]))
+        return started[-1], open(os.devnull, "ab")
+
+    monkeypatch.setattr(loom, "_spawn", spawn)
 
     def tick():
         renders.clear()
@@ -77,7 +89,8 @@ def test_kept_boundary_equals_a_fresh_render_and_every_input_re_renders(tmp_path
         assert tick()
         assert not tick()
 
-        # The child's body ends: its liveness was read, so the parent sees it.
+        # The child's body ends: the parent sees it (the loom records the end in
+        # the same tick, so the ledger revision alone re-renders it here).
         fcntl.flock(held, fcntl.LOCK_UN)
         assert tick()
         assert "opened: c-1 holding" not in boundary()
@@ -104,3 +117,5 @@ def test_kept_boundary_equals_a_fresh_render_and_every_input_re_renders(tmp_path
         monkeypatch.setattr(loom, "RENDER_MAX_AGE", 0.0)
         assert tick()
     held.close()
+    for proc in started:
+        proc.kill()
