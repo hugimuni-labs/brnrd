@@ -1080,3 +1080,21 @@ def test_full_flag_refuses_to_combine_with_changed_only_or_targeted():
         gate.main(["--full", "--changed-only"])
 
 
+
+
+def test_the_real_shard_aggregator_is_refused_not_run():
+    """`Backend tests` reads its shards' result through `${{ }}`; only the
+    runner evaluates that, so locally the leg is skipped with a reason while
+    the shard job's pytest leg still runs the whole suite."""
+    gate = _gate()
+    workflow = yaml.safe_load((REPO_ROOT / ".github" / "workflows" / "ci.yml").read_text())
+    expression_legs = [
+        leg for leg in gate.legs(workflow) if leg["kind"] == "run" and "${{" in leg["command"]
+    ]
+    assert expression_legs, "ci.yml no longer has a shard aggregator"
+    for leg in expression_legs:
+        assert gate.refusal(leg["command"]) is not None
+    pytest_legs = [
+        leg for leg in gate.legs(workflow, "backend") if leg["kind"] == "run" and "pytest" in leg["command"]
+    ]
+    assert pytest_legs and all(gate.refusal(leg["command"]) is None for leg in pytest_legs)

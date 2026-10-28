@@ -103,6 +103,10 @@ REFUSED = {
         "AGENTS.md -> Build and run: never from a worktree or a task; it writes "
         "a .pth into the shared venv (#762). Assumed already done in this checkout."
     ),
+    "${{": (
+        "a GitHub expression only the runner evaluates (the `Backend tests` "
+        "check reads its shards' result); locally the shards are one whole-suite leg."
+    ),
 }
 
 
