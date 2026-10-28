@@ -17,9 +17,10 @@
 	import Board from '$lib/board/ui/Board.svelte';
 	import { BASE, getJSON } from '$lib/board/parts';
 
-	// 2026-10-27 (web-main): `/` becomes the board. Until parity gates the switch it is tried only on a loopback origin
-	// or with localStorage `board` = 1, and shown only when a loom answers /v1/loom/index there: a dev server on
-	// localhost with no loom behind it (the repro drivers) keeps the page below. `board` = 0 skips the board.
+	// 2026-10-27 (web-main): `/` becomes the board. 2026-10-28: on brnrd.dev too, for a signed-in person whose loom
+	// pushes its parts (/v1/loom/* in the cloud). It is shown only when /v1/loom/index answers a board: signed out
+	// (401), no parts pushed (404), or a dev server on localhost with no loom behind it keeps the page below.
+	// localStorage `board` = 0 skips the board.
 	// Nothing renders until that is decided: mounting the page below first would fetch /v1/dashboard/* (404s on a
 	// loopback loom) before the board replaced it. The board then drops the app's body chrome (layout.css grain).
 	let mode = $state<'?' | 'board' | 'home'>('?');
@@ -32,12 +33,9 @@
 	};
 	onMount(() => {
 		const flag = localStorage.getItem('board');
-		const loopback = ['127.0.0.1', 'localhost', '[::1]'].includes(location.hostname);
 		let gone = false;
 		const probe =
-			flag === '0' || !(loopback || flag === '1')
-				? Promise.resolve(null)
-				: getJSON(`${BASE}/index`).catch(() => null);
+			flag === '0' ? Promise.resolve(null) : getJSON(`${BASE}/index`).catch(() => null);
 		probe.then((j) => {
 			if (gone) return;
 			index = j && typeof j === 'object' && 'parts' in j ? j : null;

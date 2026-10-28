@@ -2076,14 +2076,19 @@ def run(root: Path | str, *, adapter: str = "fake", core: str = "haiku",
         from .snapshot import Publisher
         publisher = Publisher(home, _log, functools.partial(health.guard, backoff=False))
         spa = None
+        pusher = None
+        # The board's parts feed the loopback (board_port) and the cloud (relay_state); both read at start.
+        if config.board_port or config.relay_state:
+            from .board import Parts, Pusher
+            board = Parts(home, lambda: load_config(home.root), _log)
+            threading.Thread(target=board.run, name="board", daemon=True).start()
+            pusher = Pusher(board)
         if config.board_port:  # read at start: a port change waits for the next re-exec
-            from .board import Parts, serve
+            from .board import serve
             from .spabuild import SpaBuild
             frontend = Path(__file__).resolve().parents[3] / "frontend"
             if (frontend / "package.json").is_file() and not os.environ.get("BRNRD_FRONTEND_DIR"):
                 spa = SpaBuild(frontend, lambda text: _log(home, text))
-            board = Parts(home, lambda: load_config(home.root), _log)
-            threading.Thread(target=board.run, name="board", daemon=True).start()
             try:
                 shell = serve(board, int(config.board_port))
             except (OSError, ValueError) as exc:  # a taken port or not a number: the loop runs on without a board
@@ -2118,6 +2123,8 @@ def run(root: Path | str, *, adapter: str = "fake", core: str = "haiku",
                     inputs.close()
                 health.guard("tick_once", tick_once, home, bodies, adapter, core, router)
                 health.guard("publisher", publisher.step, config, router, backoff=False)
+                if pusher is not None:
+                    health.guard("parts", pusher.step, config, backoff=False)
                 health.guard("waits", router.watcher.step, config, router.armed(), backoff=False)
                 health.guard("mirror", mirror.step, config, backoff=False)
                 health.guard("library", keeper.step, backoff=False)
