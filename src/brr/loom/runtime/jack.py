@@ -361,6 +361,20 @@ def _note_tool(room: Path, stdin_text: str) -> None:
     )
 
 
+def _shed(room: Path, fn, *args, default=None):
+    """A shed step that fails says nothing: logged apart, since jack-errors.log
+    taints the strand, and a broken tally must not end a held body."""
+    try:
+        return fn(*args)
+    except Exception:
+        try:
+            with (room / "port" / "shed-errors.log").open("a") as handle:
+                handle.write(traceback.format_exc())
+        except OSError:
+            pass
+        return default
+
+
 def _shed_news(room: Path, stdin_text: str, state: dict) -> str:
     """The shed numbers once two of the three bars are crossed, said when they change."""
     from . import shed
@@ -587,7 +601,8 @@ def execute(event: str, room: Path, stdin_text: str) -> str:
         (room / "port" / DISPLACED).unlink(missing_ok=True)
     elif event == "start":
         from .shed import heads
-        _set_state(room, boundary_at=time.time(), turn_open=True, turn_at=time.time(), heads=heads(room))
+        _set_state(room, boundary_at=time.time(), turn_open=True, turn_at=time.time(),
+                   heads=_shed(room, heads, room, default={}))
     text = _boundary_text(room)
     parsed = parse_boundary(text)
     opened = [[line.split()[1], line.split()[2], _ageless(line.rpartition(" · owed ")[2])]
@@ -618,7 +633,7 @@ def execute(event: str, room: Path, stdin_text: str) -> str:
         face_changed = bool(face) and face != state.get("face", "")
         # The loom's code moved under a seated body: said once, at the next post.
         moved_changed = bool(moved) and moved != state.get("moved", "")
-        weight = _shed_news(room, stdin_text, state)
+        weight = _shed(room, _shed_news, room, stdin_text, state, default="")
         paused = describe(read_paused_record(room / "port"))
         hook = _hook_event(stdin_text)
         # Past its allocation a strand is told at every boundary, not once.
@@ -664,7 +679,7 @@ def execute(event: str, room: Path, stdin_text: str) -> str:
             "hookEventName": hook, "additionalContext": text}})
     if _state(room).get("molted") or parsed.settled is not None:
         return ""
-    _turn(room, stdin_text)
+    _shed(room, _turn, room, stdin_text)
     out = _stop_block(room, text, plan) or _poll(room, stdin_text)
     if out:
         _opened(room)
@@ -716,7 +731,7 @@ def _stop_block(room: Path, text: str, plan: str) -> str:
     state = _state(room)
     if not sections:
         from .shed import ask
-        due, record = ask(room, state, os.environ.get("BRNRD_THREAD") or "")
+        due, record = _shed(room, ask, room, state, os.environ.get("BRNRD_THREAD") or "", default=("", {}))
         if record:
             _set_state(room, **record)
         sections = [due] if due else []

@@ -133,3 +133,14 @@ def test_shed_refuses_a_readme_its_successor_cannot_boot_into(room):
                       "| B | merged #5 |\n| C | next, w-aaaaaaaaaaaa |\n")
     found = shed.refusals(room, "work", [open_pr, *merged], state)
     assert found == ["dead row (every id it cites is closed): prune it or move it to a topic: | B | merged #5 |"]
+
+
+def test_a_broken_tally_never_ends_the_stop(room, tmp_path, monkeypatch):
+    def broken(*args):
+        raise OSError("no git")
+    monkeypatch.setattr(shed, "heads", broken)
+    monkeypatch.setattr(shed, "ask", broken)
+    execute("start", room, "")
+    assert _turn(room, _transcript(tmp_path, 40_000)) == ""
+    assert "no git" in (room / "port" / "shed-errors.log").read_text()
+    assert not (room / "port" / "jack-errors.log").exists()
