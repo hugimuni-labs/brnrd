@@ -108,8 +108,8 @@ REFUSED = {
 
 # ── the-tick-that-breathes, 2026-09-22: a bounded local `-n`, never `auto` ──
 #
-# CI's own `run:` text for pytest (`python -m pytest -q`) carries no `-n` at
-# all, and this script never edits `.github/workflows/ci.yml` or the text it
+# CI's own `run:` text for pytest names its own `-n 4` (ci-speed,
+# 2026-10-28; until then it carried none), and this script never edits `.github/workflows/ci.yml` or the text it
 # parses out of it — the whole point of this file is running exactly what CI
 # runs. What changed here is local-only: `scripts/gate.py` already serializes
 # itself machine-wide (`held_gate_lock`, `#1195` rec 1, above), but nothing
@@ -124,9 +124,7 @@ REFUSED = {
 # `GATE_WORKERS` (env) or `--workers N` (CLI, wins over the env) name the
 # worker count directly; neither given, `default_gate_workers()` picks a
 # fraction of *this* machine's own core count. Requires `pytest-xdist`
-# (added to the `dev` extra) — CI installs it as a side effect of
-# `pip install -e ".[dev]"` but never passes `-n`, so its presence there is
-# inert.
+# (added to the `dev` extra), which CI now uses itself.
 def default_gate_workers() -> int:
     """`min(4, cpu//2)`, floored at 1 — never 0, never unbounded `auto`."""
     cpu = os.cpu_count() or 4
