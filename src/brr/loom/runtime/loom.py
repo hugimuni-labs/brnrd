@@ -216,6 +216,17 @@ def _run_recipe(clone, thread, owed_path, part_path, repo_file, core_path, recip
         return code, wake.read(), why.read().strip()
 
 
+def _loom_line(home, facts) -> str:
+    """What this loom runs against main; a failure costs the line, never the wake."""
+    from .receipts import source_root
+    from .update import wake_line
+    try:
+        return wake_line(facts, home.install_id(), source_root())
+    except Exception as exc:  # noqa: BLE001
+        _log(home, f"wake: loom line skipped ({exc})")
+        return ""
+
+
 def _build_wake(home, strand, gen, clone, thread, rows, part, owed_path, part_path, repo_file, core_path):
     """Run the recipe; a home that cannot wake still wakes when it can be made to.
 
@@ -535,7 +546,7 @@ def _prepare(home: Home, strand: str, thread: str, gen: int,
            "wakes you when it comes true. A sleep or poll loop is never the wait: no letter "
            "lands inside it. Before you stop with wishes open, end each as a result "
            "(`wish <w-id> --result`), an `ask`, a park or `settle`\n")
-    )
+    ) + _loom_line(home, facts)
     atomic_write(part_path, part)
     if repos is None:
         from .adapters import repos as seat_repos, seat_text

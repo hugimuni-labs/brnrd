@@ -134,7 +134,8 @@ def test_stop_blocks_while_letters_are_owed(tmp_path):
     text = _write(room, [_letter()])
     payload = json.loads(execute("stop", room, "{}"))
     assert payload["decision"] == "block"
-    assert payload["reason"] == text
+    assert payload["reason"].endswith(text)
+    assert '- p-test/abcde: brnrd runtime send --re p-test/abcde --to thread:tb "<answer>"' in payload["reason"]
     state = json.loads((room / "port" / "jack-state.json").read_text())
     assert state["stop_blocks"] == 1
     assert list((room / "port" / "out").glob("*.md"))
@@ -238,7 +239,7 @@ def test_stop_shows_owed_letters_before_reading_wait(tmp_path):
     text = _write(room, [_letter()])
     (room / "port" / "wait").write_text("broken wait")
     payload = json.loads(execute("stop", room, "{}"))
-    assert payload == {"decision": "block", "reason": text}
+    assert payload["decision"] == "block" and payload["reason"].endswith(text)
     assert list((room / "port" / "out").glob("*.md"))
 
 
@@ -480,3 +481,32 @@ def test_a_post_says_only_what_changed_since_the_last_boundary(tmp_path):
     assert [letter.id for letter in parse_boundary(said).letters] == ["p-test/fghij"]
     _write(room, [first, second], shown={"p-test/abcde", "p-test/fghij"})
     assert execute("post", room, json.dumps({"tool_name": "Bash"})) == ""
+
+
+def _reply(room: Path, re: str) -> None:
+    (room / "port" / "out" / "zzzzz.md").write_text(
+        f"---\nkind: letter\nid: {STRAND}/zzzzz\nto: thread:tb\nfrom: {STRAND}\nre: {re}\n---\nanswered\n")
+
+
+def test_a_reply_waiting_in_port_out_counts_as_answered_at_the_stop(tmp_path, monkeypatch):
+    # The loom drains port/out on its tick; a slow loom kept re-showing answered letters.
+    monkeypatch.setenv("BRNRD_STOP_TIMEOUT", "91")  # ceiling 1s: the hold returns at once
+    room = _room(tmp_path)
+    _write(room, [_letter()])
+    _reply(room, "p-test/abcde")
+    held = json.loads(execute("stop", room, "{}"))
+    assert held["reason"].startswith("cache keepalive, nothing new arrived")
+    assert "send --re p-test/abcde" not in held["reason"]
+
+
+def test_the_stop_repeats_its_whole_list_after_work_and_lets_an_idle_repeat_through(tmp_path, monkeypatch):
+    monkeypatch.setenv("BRNRD_STOP_TIMEOUT", "91")
+    room = _room(tmp_path)
+    _write(room, [_letter()])
+    first = json.loads(execute("stop", room, "{}"))["reason"]
+    assert first.startswith("the stop holds on 1 thing")
+    execute("post", room, "{}")
+    again = json.loads(execute("stop", room, "{}"))["reason"]
+    assert "send --re p-test/abcde --to thread:tb" in again
+    # Nothing done since the same list: the body read it, and is not trapped.
+    assert "the stop holds" not in execute("stop", room, "{}")
