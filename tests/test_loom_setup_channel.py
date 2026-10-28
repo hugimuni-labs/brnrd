@@ -20,6 +20,15 @@ def code_in(line):
     return found and found.group(1)
 
 
+@pytest.fixture(autouse=True)
+def no_harness_on_path(monkeypatch):
+    """The body step sees no claude or codex unless a test puts them there; this Mac's PATH would make it ask."""
+    from brr.loom.runtime import service
+    real = service._defaults
+    monkeypatch.setattr(service, '_defaults', lambda: [])
+    return real
+
+
 def home_at(tmp_path):
     (tmp_path / 'loom').mkdir()
     return Home(tmp_path, 'aaaa')
@@ -297,7 +306,8 @@ def test_guided_setup_asks_in_plain_words_and_derives_the_channel_name(tmp_path,
     monkeypatch.setattr(setup_channel, 'pair', lambda *a, **kw: calls.append(a))
     monkeypatch.setattr(setup_channel, '_full_name', lambda: 'Sasha Petrova')
     monkeypatch.setattr(setup_channel.shutil, 'which', lambda name: f'/bin/{name}')
-    monkeypatch.setattr('brr.loom.runtime.service._codex_model', lambda: 'gpt-5')
+    monkeypatch.setattr('brr.loom.runtime.service._windows', lambda home, shell: None)
+    monkeypatch.setattr('brr.loom.runtime.service._defaults', lambda: [('claude', ''), ('codex', '')])
     # Piped answers: codex, Enter for Telegram, Enter for the OS name.
     monkeypatch.setattr('sys.stdin', io.StringIO('2\n\n\n'))
     assert setup_channel.main(['--home', str(tmp_path)]) == 0
@@ -308,7 +318,7 @@ def test_guided_setup_asks_in_plain_words_and_derives_the_channel_name(tmp_path,
     for gone in ('Channel kind', 'Name this channel', 'Your person name', 'fake'):
         assert gone not in out
     assert [a[1:] for a in calls] == [('telegram', 'telegram', 'sasha-petrova')]
-    assert (tmp_path / 'loom' / 'preferences.toml').read_text().startswith('model.default = "codex')
+    assert (tmp_path / 'loom' / 'preferences.toml').read_text().startswith('model.default = "codex"')
     assert load_config(tmp_path).body is None
 
 
@@ -408,3 +418,27 @@ def test_brnrd_setup_passes_wait_through(monkeypatch):
     monkeypatch.setattr(setup_channel, 'main', lambda argv: seen.append(argv) or 0)
     cli.main(['setup', '--kind', 'fake', '--wait', '15'])
     assert seen == [['channel', '--kind', 'fake', '--timeout', '180', '--wait', '15.0']]
+
+
+def test_the_body_step_shows_every_harness_with_its_fuel_and_keeps_a_set_one_on_enter(tmp_path, monkeypatch, capsys,
+                                                                                       no_harness_on_path):
+    """Sasha's install: claude was already set, codex (no model in its config) was neither offered nor shown."""
+    import io
+    from brr.loom.runtime.adapters import default_body, prefer
+    home = home_at(tmp_path)
+    prefer(home, 'default', 'claude')
+    monkeypatch.setattr(setup_channel.shutil, 'which', lambda name: f'/bin/{name}')
+    monkeypatch.setenv('CODEX_HOME', str(tmp_path / 'no-codex-config'))
+    fuel = {'claude': [{'name': 'session', 'left_pct': 71}, {'name': 'week', 'left_pct': 50}],
+            'codex': [{'name': 'session', 'left_pct': 100}]}
+    monkeypatch.setattr('brr.loom.runtime.service._windows', lambda home, shell: fuel[shell])
+    monkeypatch.setattr('brr.loom.runtime.service._defaults', no_harness_on_path)
+    monkeypatch.setattr('sys.stdin', io.StringIO('\n'))
+    setup_channel._choose_body(home)
+    out = capsys.readouterr().out
+    assert '1. claude: session 71% · week 50% left' in out
+    assert '2. codex: session 100% left' in out
+    assert 'claude (kept)' in out and default_body(home) == 'claude'
+    monkeypatch.setattr('sys.stdin', io.StringIO('2\n'))
+    setup_channel._choose_body(home)
+    assert default_body(home) == 'codex'

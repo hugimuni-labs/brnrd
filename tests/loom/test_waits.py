@@ -229,6 +229,75 @@ for letter in ctx.owed():
     assert sum(1 for f in loom.facts() if f.kind == "letter" and f.id.startswith("loom/wait-")) == 1
 
 
+def test_a_file_wait_resolves_when_the_path_exists_and_says_what_it_holds(ledger, tmp_path, monkeypatch):
+    home, seat = ledger
+    ident = heard(home, seat, "Suite")
+    monkeypatch.chdir(tmp_path)
+    assert waits.canonical("file:out/done", later()) == f"file:{tmp_path}/out/done"
+    done = tmp_path / "done"
+    read = park(home, seat, ident, "--wait", f"file:{done}")
+    assert read["wait"]["on"] == f"file:{done}"
+    assert told(home) == []
+    done.write_text("")  # `> path` has opened it; `echo $?` has not written yet
+    assert told(home) == []
+    done.write_text("1\n")
+    [letter] = told(home)
+    assert f"wait on {ident} resolved: {done} exists (1)" in letter.data["body"]
+    assert told(home) == []
+
+
+def test_a_body_parks_on_its_own_command_and_the_loom_wakes_it_when_it_ends(tmp_path):
+    """The old `brnrd await --file`: no sleep loop, the body stops and the file's notice starts it again."""
+    from brr.loom.runtime.project import holder
+    from brr.loom.runtime.selfrepo import init_self
+    from _step import Loom, kill_bodies, wait_until, write_thread
+    from test_lifecycle import bodies
+
+    root = tmp_path / "home"
+    go, done = root / "go", root / "suite.done"
+    init_self(root, person="test")
+    write_thread(root, "work", "Work", "parker", wait="0")
+    bodies(root, f'''import json, subprocess, sys
+from pathlib import Path
+from brr.loom.runtime.fakebody import Ctx
+from brr.loom.runtime.home import atomic_write
+ctx = Ctx(Path(sys.argv[1]))
+def verb(*args):
+    proc = subprocess.run([sys.executable, "-m", "brr.loom.runtime", *args[:1], "--room", str(ctx.room), *args[1:]],
+                          capture_output=True, text=True)
+    assert proc.returncode == 0, proc.stderr
+    return proc.stdout.strip()
+for letter in ctx.owed():
+    if letter.body == "run the suite":
+        wish = verb("wish", "new", "--line", "Suite green", "--say", letter.id)
+        subprocess.Popen(["/bin/sh", "-c", "while [ ! -e {go} ]; do sleep 0.05; done; echo 0 > {done}"],
+                         start_new_session=True)
+        verb("wish", wish, "--read", "waiting: the suite", "--wait", "file:{done}")
+        atomic_write(Path({str(root / "parked")!r}), wish)
+    else:
+        atomic_write(Path({str(root / "woken")!r}), json.dumps({{"id": letter.id, "body": letter.body}}))
+    ctx.send("thread:work", note="read", re=letter.id)
+''')
+    inject_letter(root, to="thread:work", body="run the suite")
+    loom = Loom(root)
+    loom.start()
+    try:
+        wait_until((root / "parked").exists, 20, loom.dump)
+        wait_until(lambda: holder(loom.facts(), "work") is None, 20, loom.dump)
+        assert not (root / "woken").exists(), "a running command wakes nobody"
+        go.write_text("")
+        wait_until((root / "woken").exists, 20, loom.dump)
+        woken = json.loads((root / "woken").read_text())
+        wish = (root / "parked").read_text()
+        assert woken["id"].startswith("loom/wait-")
+        assert f"wait on {wish} resolved: {done} exists (0)" in woken["body"]
+    finally:
+        go.write_text("")
+        loom.halt()
+        kill_bodies(loom)
+    assert not loom.errors, loom.errors
+
+
 def test_the_board_row_carries_the_standing_wait(ledger):
     from brr.loom.runtime import snapshot
     from brr.loom.runtime.config import load_config
@@ -337,3 +406,16 @@ def test_one_failing_read_leaves_the_other_waits_resolving(ledger):
     forge.down = {1, 2}
     watcher._poll(forge, {f"pr:{REPO}#1", f"pr:{REPO}#2"})
     assert isinstance(watcher.failing[0], urllib.error.URLError), "every read failing is an outage"
+
+
+def test_the_cards_poll_the_owner_the_opened_url_names(ledger):
+    """Live 18:xx: watcher.prs held brnrd#N (the library name), so every card read was a 404."""
+    from brr.loom.runtime.receipts import receipts
+    home, _seat = ledger
+    for number, merged in ((51, False), (52, True)):
+        append(home, Fact(kind="pr.opened", by="strand:s-aaaa-test", data={
+            "thread": "work", "repo": "brnrd", "number": number, "head": "abc",
+            "url": f"https://github.com/{REPO}/pull/{number}"}))
+    append(home, Fact(kind="pr.merged", by="strand:s-aaaa-test", data={
+        "thread": "work", "repo": "brnrd", "number": 52, "head": "abc", "merge_commit": "def"}))
+    assert waits.open_claims(receipts(read_facts(home), "i")) == {f"{REPO}#51"}

@@ -203,6 +203,32 @@ def test_wake_carries_the_self_and_skips_hearth(tmp_path: Path) -> None:
     assert "threads/w-1/notes/" not in out.split("## Tree\n", 1)[1]
 
 
+def test_the_role_wakes_after_the_stance_and_an_old_self_wakes_without_it(tmp_path: Path) -> None:
+    home = tmp_path / "home"
+    assert cli(["init", "--home", str(home)]).returncode == 0
+    self_dir = home / "self"
+    write_thread(self_dir, "w-1", "Headline")
+    commit(self_dir, "thread")
+    owed = tmp_path / "owed.json"
+    owed.write_text("[]", encoding="utf-8")
+    clone = selfrepo.room(home, "seeded")
+    stance = (clone / "memory" / "stance.md").read_text(encoding="utf-8")
+    role = (clone / "core" / "role.md").read_text(encoding="utf-8")
+    assert "--wait" in role and "sleep loop" in role
+    core = tmp_path / "core.md"
+    seeded = wake(clone, "w-1", owed, LOOM_CORE=str(core))
+    assert seeded.returncode == 0, seeded.stderr
+    assert core.read_text(encoding="utf-8").endswith(
+        f"## memory/stance.md\n{stance}## core/role.md\n{role}")
+    assert role not in seeded.stdout
+
+    (self_dir / "core" / "role.md").unlink()
+    commit(self_dir, "a self from before the role")
+    old = wake(selfrepo.room(home, "old"), "w-1", owed, LOOM_CORE=str(core))
+    assert old.returncode == 0, old.stderr
+    assert core.read_text(encoding="utf-8").endswith(f"## memory/stance.md\n{stance}")
+
+
 def test_the_self_decides(tmp_path: Path) -> None:
     home = tmp_path / "home"
     assert cli(["init", "--home", str(home)]).returncode == 0
