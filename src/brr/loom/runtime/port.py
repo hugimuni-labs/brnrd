@@ -313,7 +313,8 @@ def render_boundary(strand: str, gen: int, thread: str, letters: list[Fact],
         if row['opened-by'] != f"thread:{thread}" or row['status'] in {"settled", "retired"}:
             continue
         now, _, detail = row['now'].partition(' ')
-        prs = row.get('prs') or []
+        # A pull request's age is said in minutes too: a kept render may be 10 s old (loom.RENDER_MAX_AGE).
+        prs = [re.sub(r" (\d+)s$", lambda m: f" {int(m[1]) // 60}m", pr) for pr in row.get('prs') or []]
         # Only a moving thread gets a line (wake-vision); a due park is moving by the notice it owes.
         if now not in MOVING and not row['owed'] and not prs:
             idle += 1
