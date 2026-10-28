@@ -258,10 +258,14 @@ def _block(room: Path, text: str, parsed: Boundary) -> str:
         return ""
     if parsed.ids:
         _shown(room, parsed)
-    # Letters arrived: the body works again, so it is no longer held or displaced.
-    _set_state(room, stop_blocks=count + 1, held_at=None)
-    (room / "port" / DISPLACED).unlink(missing_ok=True)
+    _working(room, stop_blocks=count + 1)
     return _json({"decision": "block", "reason": text})
+
+
+def _working(room: Path, **state) -> None:
+    """A stop that blocks gives the body work: it is no longer held or displaced."""
+    _set_state(room, held_at=None, **state)
+    (room / "port" / DISPLACED).unlink(missing_ok=True)
 
 
 def _poll(room: Path, stdin_text: str = '') -> str:
@@ -743,7 +747,7 @@ def _stop_block(room: Path, text: str, plan: str) -> str:
     sections = [*sections, known] if known else sections
     if parsed.ids:
         _shown(room, parsed)
-    _set_state(room, stop_blocks=count + 1, stop_said=seen)
+    _working(room, stop_blocks=count + 1, stop_said=seen)
     head = STOP.format(n=f"{len(sections)} thing{'s' * (len(sections) > 1)}")
     news = _stop_news(room, text, parsed) if parsed.ids else ""
     return _json({"decision": "block", "reason": "\n\n".join([head, *sections, *([news] if news else [])])})
