@@ -274,3 +274,20 @@ def test_a_seated_body_hears_the_move_once_and_a_new_body_reads_it_in_its_wake(t
 def test_no_test_loom_follows_the_checkout_under_test():
     from brr.loom.runtime.receipts import source_root
     assert not (source_root() / ".git").exists(), source_root()
+
+
+def test_a_wake_says_what_the_loom_runs_against_main_and_what_it_loaded(world, monkeypatch):
+    from brr.loom.runtime.receipts import record_start
+    monkeypatch.setattr(update, "SEEN", {})
+    home = Home(world.root)
+    record_start(home, read_facts(home), root=world.source)
+    assert loom._loom_line(home, read_facts(home)) == (
+        f"loom: runs {world.old[:8]}; main not fetched by this loom (update off, or not polled yet)\n")
+    assert update.DevSource(world.source, Forge("red")).poll() is None
+    assert loom._loom_line(home, read_facts(home)) == (
+        f"loom: runs {world.old[:8]}; main {world.tip[:8]} is 2 commits ahead, not loaded: #7\n")
+    _git(world.source, "merge", "-q", "--ff-only", world.tip)
+    record_start(home, read_facts(home), root=world.source)
+    assert loom._loom_line(home, read_facts(home)) == (
+        f"loom: runs {world.tip[:8]}; main {world.tip[:8]}, nothing behind; "
+        f"last loom moved {world.old[:8]} → {world.tip[:8]}, loaded #7\n")

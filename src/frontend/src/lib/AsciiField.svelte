@@ -661,7 +661,7 @@
 	{#if header}
 		<header>
 			<span class="mark">b·_·d</span>
-			<a class="title" href={resolve('/bridge')}>← bridge</a>
+			<a class="title" href={resolve('/dashboard/bridge')}>← bridge</a>
 			<span class="title">the room, in characters</span>
 			<span class="hint">drag / ←↑↓→ move camera · f follow on/off · a atlas</span>
 			<span class="status">

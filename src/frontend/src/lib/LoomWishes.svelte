@@ -153,7 +153,7 @@
 				class={`min-w-0 text-sm leading-snug break-words ${wish.reading ? 'text-stone-300' : 'font-mono text-[11px] text-ink-mute'}`}
 				data-beat="assumed"
 			>
-				{wish.reading ?? 'not read yet'}
+				{wish.reading || (wish.rec ? `proposed: ${wish.rec}` : 'not read yet')}
 			</p>
 
 			{@render beat('resulted')}

@@ -250,6 +250,7 @@ def test_settling_worker_disposes_its_reply_without_an_extra_note(tmp_path):
     bodies(root, f'''import sys, subprocess, time
 from pathlib import Path
 from brr.loom.runtime.fakebody import Ctx, _own_thread
+from brr.loom.runtime.port import parse_boundary
 ctx = Ctx(Path(sys.argv[1]))
 if _own_thread(ctx.wake()) == 'worker':
     for l in ctx.owed():
@@ -260,19 +261,22 @@ else:
         ctx.send('thread:top', note='dispatched', re=l.id)
     ctx.send('thread:worker', 'Work', cite=l.id)
     deadline = time.monotonic() + 12
+    # A post shows a letter once; the boundary file still names every owed one.
+    owed = lambda: parse_boundary((ctx.room / 'port' / 'in' / 'boundary.md').read_text()).ids
+    seen = {{}}
     while time.monotonic() < deadline:
-        seen = ctx.jack('post').letters
-        answers = [l for l in seen if l.body == 'WORKED']
-        proposals = [l for l in seen if l.body.startswith('New proposal')]
+        seen.update((l.id, l) for l in ctx.jack('post').letters)
+        answers = [l for l in seen.values() if l.body == 'WORKED']
+        proposals = [l for l in seen.values() if l.body.startswith('New proposal')]
         if answers and proposals:
             answer = answers[0]
             p = subprocess.run([sys.executable, '-m', 'brr.loom.runtime', 'settle', 'worker',
                                 '--why', 'accepted', '--room', str(ctx.room)])
             assert p.returncode == 0
-            while any(l.id == answer.id for l in ctx.jack('post').letters):
+            while answer.id in owed():
                 assert time.monotonic() < deadline
                 time.sleep(.03)
-            assert any(l.id == proposals[0].id for l in ctx.jack('post').letters)
+            assert proposals[0].id in owed()
             ctx.send('thread:top', note='considered new proposal', re=proposals[0].id)
             Path({str(accepted)!r}).write_text(answer.id)
             sys.exit(0)

@@ -61,7 +61,8 @@ def test_ask_writes_the_wish_and_its_recommendation(ledger):
     ask = command(home, seat, "ask", "Pick a name", "--for", root, "--rec", "Call it loom")
     made = view(home, ask)
     assert (made.sender, made.parent, made.thread, made.line) == ("resident", root, "work", "Pick a name")
-    assert (made.state, made.reading, made.reads[-1]["by"]) == ("read", "Call it loom", "resident")
+    # The rec is the asker's proposal: it never reads as an answer.
+    assert (made.state, made.reading, made.reads, made.rec) == ("heard", "", [], "Call it loom")
     assert made.origin == "said"
     bare = command(home, seat, "ask", "Pick a colour", "--for", root)
     assert view(home, bare).state == "heard"
@@ -184,4 +185,4 @@ def test_a_retried_ask_finishes_the_one_that_half_happened(ledger):
     assert retry.returncode == 0 and f"reused {ask}" in retry.stderr
     assert mail(mid, ask) == []
     asks = [w for w in wishes(read_facts(home)).values() if w.sender == "resident"]
-    assert [w.id for w in asks] == [ask] and len(asks[0].reads) == 1
+    assert [w.id for w in asks] == [ask] and asks[0].reads == [] and asks[0].stamps == []

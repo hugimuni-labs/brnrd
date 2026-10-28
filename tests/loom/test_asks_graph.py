@@ -101,8 +101,16 @@ def test_operator_cli_reads_the_loom_asks(loom):
     assert "in hand\n" in result.stdout
 
 
-def test_a_person_thread_settles_only_on_their_word(loom):
+def test_a_person_thread_with_nothing_in_hand_settles_without_a_word(loom):
     home, seat = loom
+    run("settle", "work", "--room", str(seat), "--why", "Shipped")
+    assert read_thread(home, "work")["status"] == "settled"
+
+
+def test_a_person_thread_with_work_in_hand_settles_only_on_their_word(loom):
+    home, seat = loom
+    asked = inject_letter(home.root, to="thread:work", body="Please: fix it")
+    run("wish", "new", "--room", str(seat), "--line", "Fix it", "--say", asked)
     error = run("settle", "work", "--room", str(seat), "--why", "Shipped", ok=False)
     assert "--word" in error
     other = inject_letter(home.root, to="thread:inbox", body="done")

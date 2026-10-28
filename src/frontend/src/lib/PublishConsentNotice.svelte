@@ -43,9 +43,9 @@
 		<a
 			class="underline hover:text-amber-100"
 			href={target === null
-				? resolve('/repos')
+				? resolve('/dashboard/repos')
 				: resolve(
-						`/repos?scope=${encodeURIComponent(target.id)}#repo-${encodeURIComponent(target.id)}`
+						`/dashboard/repos?scope=${encodeURIComponent(target.id)}#repo-${encodeURIComponent(target.id)}`
 					)}>set a scope</a
 		>
 	</div>

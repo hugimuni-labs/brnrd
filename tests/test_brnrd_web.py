@@ -606,6 +606,20 @@ def test_connect_context_lists_repos_and_code_status(client, monkeypatch):
     assert unknown.status_code == 200
     assert unknown.json()["status"] == "unknown"
     assert unknown.json()["suggested_repo_full_name"] == ""
+    assert unknown.json()["requester"] == {"hostname": "", "os_user": ""}
+
+
+def test_connect_context_names_the_computer_that_asked(client, monkeypatch):
+    """A link carries its own proof, so anyone holding it can approve
+    (RFC 8628 §5.4). The page shows the computer that asked, beside the
+    code, so a link someone else sent reads as someone else's computer."""
+    _account_and_repo(client)
+    _login_web(client, monkeypatch)
+    pair = client.post("/v1/accounts/pair", json={"hostname": "eves-laptop", "os_user": "eve" + " " * 3 + "x" * 200}).json()
+    body = client.get(f"/v1/connect/{pair['pair_code']}").json()
+    assert body["requester"]["hostname"] == "eves-laptop"
+    # Stored trimmed and capped: it is a label on a page, not a payload.
+    assert body["requester"]["os_user"].startswith("eve") and len(body["requester"]["os_user"]) == 100
 
 
 def test_connect_context_reports_suggested_repo_from_pair_capabilities(client, monkeypatch):
@@ -639,7 +653,7 @@ def test_connect_approve_with_no_repo_id_creates_and_binds_the_suggested_repo(cl
     assert approve.status_code == 200
     body = approve.json()
     assert body["ok"] is True
-    assert "Your daemon is connected" in body["notice"]
+    assert "This computer is connected" in body["notice"]
 
     with client.app.state.SessionLocal() as db:
         repo = db.execute(select(Repo).where(Repo.repo_full_name == "Gurio/newbox")).scalar_one()
@@ -824,7 +838,7 @@ def test_connect_approve_makes_poll_return_token(client, monkeypatch):
     assert approve.status_code == 200
     body = approve.json()
     assert body["ok"] is True
-    assert "Your daemon is connected" in body["notice"]
+    assert "This computer is connected" in body["notice"]
     assert body["telegram"] is None
 
     # The CLI's poll now returns the freshly minted daemon token.
@@ -872,7 +886,7 @@ def test_connect_approve_leaves_messenger_pairing_to_the_connector_panel(monkeyp
     )
     assert approve.status_code == 200
     body = approve.json()
-    assert "Your daemon is connected" in body["notice"]
+    assert "This computer is connected" in body["notice"]
     assert body["telegram"] is None
 
     polled = client.get(

@@ -104,9 +104,13 @@ own: `wish <w-id> --left "<step>" --left "<step>"` restates the whole list,
 and the latest one wins (`--left same` when nothing moved). The loom asks for
 it at a stop and refuses a molt while a wish moved since its last left: a
 steer, a result, a fact this body wrote on it, or, on a thread with one open
-wish, this body's start. The stop asks once per wish (a `left.asked` fact), so
-nothing is trapped; the wake shows each open wish as done, left and the steers
-since. A Plan row that cites a wish (` · re: <letter-id>, <w-id>`) with a
+wish, this body's start. The stop shows everything it holds on in one block,
+each line with its command (owed letters, lefts, an end not yet said, a
+left in room, a broken guard, a kept folder's writes), and shows it whole at
+every stop after a call until it is empty; a reply still in `port/out` counts
+as answered. A stop again with no call and the same list passes, so nothing is
+trapped: the lefts still owed become a `left.asked` fact, and the wake shows
+each open wish as done, left and the steers since. A Plan row that cites a wish (` · re: <letter-id>, <w-id>`) with a
 receipt still grants it, and a pull request opened on a thread with one open
 wish is that wish's result. `settle` refuses while a delivered wish
 awaits a verdict; `--hand-to <thread>` moves those to a thread that will carry
@@ -154,9 +158,12 @@ reaches a person. The same ask again (same line, same `--for`) while it is
 open reuses it and sends only the mail that did not leave; it says `reused
 <id>`. Reword it to ask anew. `brnrd asks`
 lists, over every thread, what is in hand, the asks, the unanswered letters
-and the Done lines. A thread a person opened settles on their word only: when
+and the Done lines. A thread settles when nothing is in hand; a person's
+wish is accepted on their word only. A thread a person opened that still
+holds a wish in hand (heard, read, granting) settles on their word: when
 their reply says it is done, `settle <thread> --why "…" --word <their
-letter>`; silence never settles. `brnrd graph` lists each
+letter>`. A delivered wish keeps its state on a settled thread and waits
+on their verdict; a correct sent there reaches the inbox. `brnrd graph` lists each
 thread's strands, `--strands` each strand's threads, with the origin of each.
 
 ## Ends and starts

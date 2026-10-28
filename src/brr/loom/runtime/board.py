@@ -418,9 +418,18 @@ def compute(home: Home, facts, config, tools: dict, live: dict, person: str | No
     hashes = {name: digest(part) for name, part in parts.items()}
     index = {"v": 1, **{k: v for k, v in snap.items() if k not in {"at", "log"}}, "wishes": counts,
              "unthreaded": [row for name, rows in wished.items() if name not in known for row in rows],
-             "person": person, "parts": hashes}
+             **_as(home, person), "parts": hashes}
     parts["index"] = index
     return parts
+
+
+def _as(home: Home, person: str | None) -> dict:
+    """The index's ``person`` and ``via``: who a letter typed on the board goes out as (the header's "as ... via ...")."""
+    try:
+        name, instance, user = person_of(home, person)
+    except LookupError:
+        return {"person": person, "via": None}
+    return {"person": name, "via": f"channel:{instance}/{user}"}
 
 
 def window(part: dict, before: str | None = None, until: str | None = None, most: int = LETTERS) -> dict:
@@ -566,6 +575,11 @@ class Parts:
 
 def person_channel(home: Home, person: str | None) -> tuple[str, str]:
     """``(instance, user)``: the person's first direct channel on an enabled connector, from people/*/channels.toml."""
+    return person_of(home, person)[1:]
+
+
+def person_of(home: Home, person: str | None) -> tuple[str, str, str]:
+    """``(name, instance, user)``: who the board writes as, and the channel it writes through."""
     enabled = instances(home)
     for path in sorted((home.root / "self/people").glob("*/channels.toml")):
         if person and path.parent.name != person:
@@ -574,7 +588,7 @@ def person_channel(home: Home, person: str | None) -> tuple[str, str]:
             instance, _, user = entry.partition(":")
             if instance in enabled and user and ":" not in user:
                 channel_parts(f"channel:{instance}/{user}", home)
-                return instance, user
+                return path.parent.name, instance, user
     raise LookupError("no person with a direct channel on an enabled connector")
 
 

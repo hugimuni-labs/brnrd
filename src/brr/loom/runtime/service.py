@@ -168,18 +168,17 @@ def _preferred_default(home: Path) -> bool:
     return bool(_preferences(Home(home))[1].get("model.default"))
 
 
-def _codex_model() -> str | None:
-    from .adapters import codex_model
-    return codex_model()
+def _defaults() -> list[tuple[str, str]]:
+    """The bodies install may pick, in order; an empty core is the harness's own pick.
+
+    codex's body reads the person's codex model at each run, else runs codex's
+    own default, so codex needs no model named here to be offered.
+    """
+    return [("claude", ""), ("codex", "")]
 
 
-def _defaults() -> list[tuple[str, str | None]]:
-    """The bodies install may pick, in order; claude's empty core is its own pick."""
-    return [("claude", ""), ("codex", _codex_model())]
-
-
-def _fuel(home: Path, shell: str) -> str | None:
-    """``session 91% week 76%`` when the shell's CLI answers with fuel above the floor."""
+def _windows(home: Path, shell: str) -> list[dict] | None:
+    """The shell's quota windows, ``[{name, left_pct}]``; None when its CLI does not answer."""
     if shutil.which(shell) is None:
         return None
     from . import usage
@@ -189,9 +188,14 @@ def _fuel(home: Path, shell: str) -> str | None:
     reading = home / "loom" / "usage" / f"{shell}.json"
     try:
         usage._refresh(reading.resolve(), resolve(Home(home), shell) / "usage")
-        windows = json.loads(reading.read_text())["windows"]
+        return json.loads(reading.read_text())["windows"]
     except (OSError, ValueError, KeyError, TypeError):
         return None
+
+
+def _fuel(home: Path, shell: str) -> str | None:
+    """``session 91% week 76%`` when the shell's CLI answers with fuel above the floor."""
+    windows = _windows(home, shell)
     floor = load_config(home).hold_floor_pct
     if not windows or any(w["left_pct"] <= floor for w in windows):
         return None
@@ -228,9 +232,9 @@ def _settle_body(home: Path, *, write: bool = True) -> tuple[str, str]:
         return choice, "from preferences" if _preferred_default(home) else "from config"
     tried = []
     for shell, core in _defaults():
-        fuel = _fuel(home, shell) if core is not None else None
+        fuel = _fuel(home, shell)
         if fuel is None:
-            tried.append(shell if core is not None else f"{shell} (no default model)")
+            tried.append(shell)
             continue
         from .adapters import body_label
         choice = body_label(shell, core)

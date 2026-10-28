@@ -156,6 +156,8 @@ def test_a_board_letter_lands_as_the_persons_own_and_foreign_pages_cannot_send(p
     (root / "self/people/ada").mkdir(parents=True)
     (root / "self/people/ada/channels.toml").write_text('channels = ["mine:42"]\n')
     parts.step()
+    # The header's "as ada via channel:mine/42": who a letter typed here goes out as.
+    assert (parts.parts["index"]["person"], parts.parts["index"]["via"]) == ("ada", "channel:mine/42")
     server = serve(parts, 0)
     port = server.server_address[1]
     try:

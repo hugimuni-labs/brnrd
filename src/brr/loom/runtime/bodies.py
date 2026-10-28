@@ -38,6 +38,8 @@ FINISH = ("collect", "drain", "exit") + END
 TABLE = (
     Row(STARTABLE, "closed", "ended", ("end_settled",) + CLEANUP),
     Row(STARTABLE, "failure", "ended", ("exit", "end_failed") + CLEANUP),
+    Row(("wanted",), "fenced", "wanted", ()),
+    Row(("parked",), "fenced", "parked", ()),
     Row(("parked",), "woken on another body", "ended", ("end_molted",) + CLEANUP),
     Row(("parked",), "gauge unknown, before until", "parked", ()),
     Row(("parked",), "gauge refreshing", "parked", ()),
@@ -112,6 +114,7 @@ class Observation:
     stop_grace: float = 60
     failure: str = ""
     woken: str = ""
+    fenced: bool = False
 
 
 @dataclass(frozen=True)
@@ -175,6 +178,9 @@ def _state_of(facts, strand, gen, *, alive):
 # state and this tick's observation.
 OBSERVED = {
     "closed": lambda s, o: o.closed,
+    # This install lost the inbox lease: another may lead, so nothing starts
+    # and a seated body leaves as if its thread had closed.
+    "fenced": lambda s, o: o.fenced,
     "failure": lambda s, o: bool(o.failure),
     "woken on another body": lambda s, o: bool(o.woken),
     "gauge unknown, before until": lambda s, o: not o.force and o.gauge == "unknown" and o.now < s.until,
@@ -184,9 +190,9 @@ OBSERVED = {
     "not alive": lambda s, o: not o.alive,
     "alive, proven": lambda s, o: o.alive and o.proven is True,
     "alive, not proven": lambda s, o: o.alive and o.proven is not True,
-    "alive, open": lambda s, o: o.alive and not o.closed,
-    "alive, closed": lambda s, o: o.alive and o.closed,
-    "alive, reopened": lambda s, o: o.alive and not o.closed,
+    "alive, open": lambda s, o: o.alive and not (o.closed or o.fenced),
+    "alive, closed": lambda s, o: o.alive and (o.closed or o.fenced),
+    "alive, reopened": lambda s, o: o.alive and not (o.closed or o.fenced),
     "alive, before deadline": lambda s, o: o.alive and o.now < s.deadline,
     "alive, due, proven": lambda s, o: o.alive and o.now >= s.deadline and o.proven is True,
     "alive, due, unproven": lambda s, o: o.alive and o.now >= s.deadline and o.proven is False,

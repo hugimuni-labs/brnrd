@@ -86,7 +86,7 @@ def parse_boundary(text: str) -> Boundary:
             current = None
             continue
         if not line.strip() or line.startswith(("status:", "owed:", "opened:", "budget:", "repaired:", "degraded:", "library:", "moved:",
-                                                "face? ", "left? ")):
+                                                "face? ", "left? ", "gone: ", "idle: ")):
             current = None
             continue
         match = _ITEM.match(line)
@@ -261,6 +261,10 @@ def _letter_lines(letter: Fact, reply: str, compact: bool,
     return lines
 
 
+#: A child thread's ``now`` word that earns it a line: a body is on it or waiting on fuel.
+MOVING = frozenset({"working", "holding", "paced", "pending", "unidentified"})
+
+
 def render_boundary(strand: str, gen: int, thread: str, letters: list[Fact],
                     shown: set[str], sender_threads: dict[str, str], fuel: str = "",
                     settled: str | None = None,
@@ -271,7 +275,7 @@ def render_boundary(strand: str, gen: int, thread: str, letters: list[Fact],
                     reply_context: dict[str, str] | None = None,
                     budget: str = "", over: str = "", repaired: str = "",
                     degraded: str = "", face: str = "", left: str = "", moved: str = "",
-                    library: str = "") -> str:
+                    library: str = "", forge: str = "") -> str:
     """Shown letters keep their first line, reply context and attachments when compacted.
 
     ``budget`` sits before the plan: the jack compares what follows `` · plan ``,
@@ -304,15 +308,30 @@ def render_boundary(strand: str, gen: int, thread: str, letters: list[Fact],
         lines.insert(2, degraded)
     if settled is not None:
         lines.insert(2, f"settled: {settled}")
-    children = []
+    children, idle = [], 0
     for row in opened:
         if row['opened-by'] != f"thread:{thread}" or row['status'] in {"settled", "retired"}:
             continue
         now, _, detail = row['now'].partition(' ')
+        prs = row.get('prs') or []
+        # Only a moving thread gets a line (wake-vision); a due park is moving by the notice it owes.
+        if now not in MOVING and not row['owed'] and not prs:
+            idle += 1
+            continue
         # Child fuel is not a change of state; ages cost at most one write a minute.
         if re.fullmatch(r"\d+[smhd]", detail):
             now += ' ' + (f"{int(detail[:-1]) // 60}m" if detail.endswith('s') else detail)
-        children.append(f"opened: {row['thread']} {now} · owed {row['owed']}")
+        # The jack reads ``split()[1:3]`` and what follows `` · owed ``: new fields go after it.
+        fields = [f"owed {row['owed']}", *prs]
+        if row.get('waits'):
+            fields.append(f"waits {row['waits']}")
+        if row.get('headline'):
+            fields.append(row['headline'])
+        if forge:
+            fields.append(f"{forge}/{row['thread']}")
+        children.append(f"opened: {row['thread']} {now} · " + " · ".join(fields))
+    if idle:
+        children.append(f"idle: {idle} more opened here (brnrd runtime threads)")
     lines[2:2] = children
     for letter in letters:
         compact = str(letter.data["id"]) in shown
@@ -682,6 +701,14 @@ def write_send(room: Path, *, to: str, sender: str, body: str = "",
                 echo.append(echo_line(stamp.data["wish"], says, [
                     "answered" if r["kind"] == "letter" and r["ref"] == letter_id else f"{r['kind']}:{r['ref']}"
                     for r in refs_of], letters))
+    fresh = [str(s.data.get("line", "")) for s in wish_stamps if not s.id.startswith("wish:")]
+    if echo is not None and (fresh or opening is not None):
+        # Recall at the act: the closest threads, settled ones included.
+        from .recall import related_line
+        query = " ".join(fresh + ([opening.replace("-", " "), body[:600]] if opening else []))
+        line = related_line(home, query, facts=facts, exclude={s.data["thread"] for s in wish_stamps})
+        if line:
+            echo.append(line)
     if (re in letters and note is None and molt is None and not is_channel(to)
             and thread_of(to) != home.main_thread()):
         from .dispositions import is_person
@@ -839,6 +866,12 @@ def write_molt(room: Path, why: str, *, fresh: bool = False) -> str:
         raise PortError("molt: say what is left first, then molt:\n" + "\n".join(
             f'  brnrd runtime wish {ident} --left "<step>" --left "<step>"   ({why}; --left same if nothing moved)'
             for ident, why in owed))
+    held = unreplied_held(facts, strand)
+    if held:
+        # A person who wrote to this body hears from it before a stranger takes over.
+        raise PortError("molt: reply to each person letter you hold first, even with just an ack:\n" + "\n".join(
+            f'  brnrd runtime send --re {ident} --to {channel} "…"   (from {letter.data.get("from") or letter.by})'
+            for ident, (letter, channel) in held.items()))
     clone = resolve_clone(room)
     path = f"threads/{thread}/README.md"
     if not fresh and git(clone, "diff", "HEAD", "--quiet", "--", path, check=False).returncode:
@@ -859,6 +892,25 @@ def write_molt(room: Path, why: str, *, fresh: bool = False) -> str:
     from .jack import _set_state
     _set_state(room, molted=True)
     return fact_id
+
+
+def _words(value) -> tuple:
+    return tuple(value.split()) if isinstance(value, str) else tuple(value or ())
+
+
+def unreplied_held(facts, strand: str) -> dict:
+    """Person letters with a chat to answer on, shown to this strand, that no letter answers yet.
+
+    A reply counts once it is written: its delivery receipt may come after the molt.
+    """
+    from .owners import unanswered_letters
+    from .project import is_notice, reply_channels
+    channels = reply_channels(facts)
+    shown = {ident for f in facts if f.kind == "shown" and f.data.get("strand") == strand
+             for ident in _words(f.data.get("ids"))}
+    replied = {f.data.get("re") for f in facts if f.kind == "letter" and not is_notice(f)}
+    return {ident: (letter, channels[ident]) for ident, letter in unanswered_letters(facts).items()
+            if ident in shown and ident in channels and ident not in replied}
 
 
 def _current_label(room: Path | None, strand: str):

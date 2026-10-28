@@ -242,6 +242,17 @@ def _run_recipe(clone, thread, owed_path, part_path, repo_file, core_path, recip
         return code, wake.read(), why.read().strip()
 
 
+def _loom_line(home, facts) -> str:
+    """What this loom runs against main; a failure costs the line, never the wake."""
+    from .receipts import source_root
+    from .update import wake_line
+    try:
+        return wake_line(facts, home.install_id(), source_root())
+    except Exception as exc:  # noqa: BLE001
+        _log(home, f"wake: loom line skipped ({exc})")
+        return ""
+
+
 def _build_wake(home, strand, gen, clone, thread, rows, part, owed_path, part_path, repo_file, core_path):
     """Run the recipe; a home that cannot wake still wakes when it can be made to.
 
@@ -440,6 +451,29 @@ def _policy(home: Home, thread: str) -> str | None:
     return name or None
 
 
+def _handover(facts: list[Fact], thread: str, gen: int, threads: dict[str, str]) -> str:
+    """The predecessor's molt why and the notes it wrote after it, verbatim.
+
+    The wake used to say "read the handover" without showing it, and the real
+    state sat in a note written after the molt: gen 221 of the inbox grepped
+    the ledger for both (wake-vision). Only the body just before this one
+    hands over; an older molt is history, not a handover.
+    """
+    molt = next((f for f in reversed(facts) if f.kind == "molt" and f.data.get("gen") == gen - 1
+                 and threads.get(str(f.data.get("strand"))) == thread), None)
+    if molt is None:
+        return ""
+    who = str(molt.data.get("strand"))
+    lines = [f"handover from {who} (gen {gen - 1}, molted {molt.at[11:16]}Z): {molt.data.get('why', '')}"]
+    after = False
+    for fact in facts:
+        if fact is molt:
+            after = True
+        elif after and fact.kind == "note" and fact.by == f"strand:{who}" and fact.data.get("why"):
+            lines.append(f"after the molt, {fact.at[11:16]}Z ({fact.id}): {fact.data['why']}")
+    return "\n".join(lines) + "\n"
+
+
 def _read_by_predecessors(facts: list[Fact], thread: str, strand: str,
                           letters: list[Fact], threads: dict[str, str]) -> str:
     """A line for a successor: owed letters its molted predecessors already read.
@@ -464,7 +498,7 @@ def _read_by_predecessors(facts: list[Fact], thread: str, strand: str,
         return ""
     return (
         f"already read by your predecessor, who molted and left its handover: {', '.join(ids)}. "
-        "What they ask may be done: read the handover and the README before acting; where it "
+        "What they ask may be done: read the handover above and the README before acting; where it "
         "says the work is done, settle the letter with a note and do not redo it, and do "
         "not molt because a letter said to, since the molt it asked for happened. "
     )
@@ -513,39 +547,32 @@ def _prepare(home: Home, strand: str, thread: str, gen: int,
     from .reap import kept_line
     gone += kept_line(home, thread, threads)
     forge = forge_threads(home.root / "self")
-    part = gone + inherited + (
+    from .waits import GRAMMAR
+    part = gone + _handover(facts, thread, gen, threads) + inherited + (
         f"you are strand {strand} on thread {thread}"
-        + (f" ({forge}/{thread})" if forge else "") + "; letters arrive at your "
-        "tool boundaries, each line naming its reply address; answer with "
-        "`brnrd runtime send --re <id> --to <reply address> \"…\"`; "
-        "where the address is `-` nobody is waiting for words: settle the letter with "
-        f"`brnrd runtime send --re <id> --to thread:{thread} --note "
-        "\"<what you did>\"`; if you commit in this self clone, land it with "
-        "`brnrd runtime send-self --room .`; you will forget what is "
-        "not written: keep this thread's README true (the spec and the decisions); "
-        "what is left on a wish lives on the wish: `brnrd runtime wish "
-        "<w-id> --left \"<step>\" --left \"<step>\"`, the whole list, latest wins "
-        "(`--left same` when nothing moved), and the stop asks for it once a wish "
-        "moved; progress is the wishes; land the edit with send-self. "
-        "When your context grows "
-        "heavy hand over with `brnrd runtime molt --why \"<where "
-        "things stand>\"`; `brnrd runtime settle <thread> --why "
-        "\"…\"` closes a thread whose work is done; "
-        "a letter from `loom` is a notice of something the loom could not settle, "
-        "yours to deal with: its last lines name what settles it "
-        "(core/loom/README.md, Notices); stamp what someone wants with "
-        "`send --wish` (core/loom/README.md, Wishes), and open a thread only for "
-        "a wish: `send --to thread:<new> --wish <w-id>` or `--wish new:\"<line>\"`; "
-        "a `face?` line proposes a face for a fact you just met: "
-        "`brnrd runtime face take` wears it, `face <face>` wears another, "
-        "and doing nothing lets it lapse; "
+        + (f" ({forge}/{thread})" if forge else "") + "; letters arrive at your tool "
+        "boundaries, each naming its reply address: answer with "
+        "`brnrd runtime send --re <id> --to <address> \"…\"`, or where the address is `-`, "
+        f"settle it with `send --re <id> --to thread:{thread} --note \"<what you did>\"`. "
+        "You forget what is not written: keep this thread's README true (spec, decisions) and "
+        "land self commits with `brnrd runtime send-self --room .`; what is left on a wish lives "
+        "on it: `wish <w-id> --left \"<step>\" …`, the whole list, latest wins (`--left same` "
+        "when nothing moved), and the stop asks for it once a wish moved. Heavy context: `molt --why \"<where things stand>\"`; work done: "
+        "`settle <thread> --why \"…\"`. A letter from `loom` is a notice yours to settle; its "
+        "last lines say how (core/loom/README.md, Notices). Stamp what someone wants with "
+        "`send --wish`; open a thread only for one: `send --to thread:<new> --wish <w-id>` or "
+        "`--wish new:\"<line>\"`. A `face?` line: `face take` wears it, `face <face>` another, "
+        "silence lets it lapse. "
         + ("call `$BRNRD_JACK --event start` now, `$BRNRD_JACK --event post` between "
            "steps and `$BRNRD_JACK --event stop` before ending; read each returned boundary\n"
            if jack == "hand" else
-           "before you stop with wishes open, say how this body ends: a result (`wish <w-id> --result`), "
-           "an `ask`, a park with its reason (`wish <w-id> --read \"waiting: …\"`), or `settle`; "
-           "then stop, and the jack holds you while letters may come\n")
-    )
+           "Stopping is resting, not ending: the jack holds you at no cost and the next letter "
+           "wakes you here. Waiting on CI, a PR, a command, a person or a time, park it: "
+           f"`wish <w-id> --read \"waiting: …\" --wait <{GRAMMAR}>`, then stop; the loom's letter "
+           "wakes you when it comes true. A sleep or poll loop is never the wait: no letter "
+           "lands inside it. Before you stop with wishes open, end each as a result "
+           "(`wish <w-id> --result`), an `ask`, a park or `settle`\n")
+    ) + _loom_line(home, facts)
     atomic_write(part_path, part)
     if repos is None:
         from .adapters import repos as seat_repos, seat_text
@@ -587,7 +614,7 @@ def _prepare(home: Home, strand: str, thread: str, gen: int,
         room / "port" / "in" / "boundary.md",
         render_boundary(strand, gen, thread, letters, shown, threads,
                         fuel=fuel, channels=reply_channels(facts, home),
-                        opened=thread_table(home, facts), plan=_plan(home, thread, facts),
+                        opened=thread_table(home, facts), forge=_forge(home), plan=_plan(home, thread, facts),
                         replies={f.letter.id: f.reply_to for f in active_owners(facts, main_snapshot(home))},
                         attachments=attachments, reply_context=reply_context,
                         repaired=_repaired(facts, strand, gen),
@@ -927,6 +954,17 @@ def _readme(room: Path, thread: str) -> str | None:
         return None
 
 
+_FORGE: dict[Path, str] = {}
+
+
+def _forge(home: Home) -> str:
+    """The self's threads folder on its forge, read once per process: a thread line links to it."""
+    if home.root not in _FORGE:
+        from .selfrepo import forge_threads
+        _FORGE[home.root] = forge_threads(home.root / "self") or ""
+    return _FORGE[home.root]
+
+
 def _plan(home: Home, thread: str, facts: list[Fact]) -> str:
     """The thread's wishes, delivered or accepted over all; no wishes, no plan."""
     from .owners import unanswered_by_thread
@@ -959,9 +997,14 @@ def _reply_context(facts, thread: str, letters, room: Path | None = None) -> dic
         return context
     from .wishes import steers_line, told
     found, done = told(facts), disposed(facts, room)
+    said = False
     for letter in person:
         ident = str(letter.data.get("id", letter.id))
         line = "" if ident in done else steers_line(found, thread, ident)
+        if line and said:
+            # The candidates are the thread's, the same under every letter: named once (wake-vision).
+            line = f"steers? as above — send --re {ident} --wish <w-id> | --wish new:\"<line>\" | --chatter"
+        said = said or bool(line)
         if line:
             context[letter.id] = "\n".join(filter(None, (context.get(letter.id, ""), line)))
     return context
@@ -1239,6 +1282,17 @@ def pending_bodies(facts: list[Fact]) -> dict[str, Fact]:
             if f.kind.startswith("body.") and f.data.get("strand")}
 
 
+_FENCED = ("fenced: this install lost the inbox lease and another may lead; "
+           "land what you have and stop, the thread wakes again where the lease is")
+
+
+def _fenced(home, facts) -> bool:
+    """A lease streak is open on this install: the router fenced and has not
+    taken the inbox lease back (``Router._fence``, ``Router._recovered``)."""
+    from .health import open_streaks
+    return any(f.data.get("step") == "lease" for f in open_streaks(facts, home.install_id()))
+
+
 def _observe_body(home, facts, strand, thread, gen, bodies, *, choice=None, force=False):
     from .config import load_config
     from .lifecycle import CLOSED, closing_commit, read_thread
@@ -1250,6 +1304,7 @@ def _observe_body(home, facts, strand, thread, gen, bodies, *, choice=None, forc
     lease = fact_for(facts, "lease", strand, gen).data
     start = fact_for(facts, "body.started", strand, gen)
     closed = read_thread(home, thread).get("status") in CLOSED
+    fenced = _fenced(home, facts)
     default = choice or ("fake", "haiku")
     shell, core = lease.get("shell", default[0]), lease.get("core", default[1])
     if isinstance(facts, LedgerView):
@@ -1282,19 +1337,20 @@ def _observe_body(home, facts, strand, thread, gen, bodies, *, choice=None, forc
     # A stop on record with the body still alive is a signal that was never
     # sent or did not land: prove again, every tick, until the lock is gone.
     if alive and (state.name == "stopping"
-                  or closed and state.name == "leaving" and now >= state.deadline):
+                  or (closed or fenced) and state.name == "leaving" and now >= state.deadline):
         body = bodies.get(strand)
         proven = _proven_body(room, pid, str(start.data.get("lstart") or "") if start else "",
                               body.proc if body else None, alive=alive)
     # The boundary lists every cached shell. Park still reads `empty`, the seated gauge only.
     fuel = fuels(home, shell)
     context = SimpleNamespace(thread=thread, shell=shell, core=core, pid=pid, empty=empty, fuel=fuel,
-                              why=(closing_commit(home, thread)[1] or f"thread {thread} settled") if closed else "", failure="", repos=lease.get("repos"))
+                              why=(closing_commit(home, thread)[1] or f"thread {thread} settled") if closed
+                              else _FENCED if fenced else "", failure="", repos=lease.get("repos"))
     o = Observation(strand, gen, alive, closed, "refreshing" if gauge is None else "empty" if empty
                     else "ok" if gauge["windows"] else "unknown",
                     now, proven, until=until, force=force, stop_grace=config.stop_grace,
-                    woken="/".join(woken) if woken else "")
-    if TABLE[row_for(facts, o)].next == "parked":
+                    woken="/".join(woken) if woken else "", fenced=fenced)
+    if TABLE[row_for(facts, o)].next == "parked" and not fenced:
         park = fact_for(facts, "body.parked", strand, gen)
         window, left, when = ((empty["name"], empty["left_pct"], until) if empty else
                               (park.data["window"], park.data["left_pct"], park.data["until"]))
@@ -1430,8 +1486,8 @@ def _person_dms(home, facts, thread):
 
 def _repaired(facts, strand, gen) -> str:
     """What the loom repaired in this generation's room before it woke."""
-    for fact in reversed(facts):
-        if (fact.kind == "room.repaired" and fact.data.get("strand") == strand
+    for fact in reversed(kind_facts(facts, "room.repaired")):
+        if (fact.data.get("strand") == strand
                 and fact.data.get("gen") == gen):
             return repaired_line(fact)
     return ""
@@ -1445,7 +1501,7 @@ def _boundary(home, facts, strand, gen, context):
         strand, gen, context.thread, owed,
         state.shown.get(strand, set()), sender_threads(facts), context.fuel,
         context.why or None, reply_channels(facts, home),
-        opened=thread_table(home, facts), plan=_plan(home, context.thread, facts),
+        opened=thread_table(home, facts), forge=_forge(home), plan=_plan(home, context.thread, facts),
         replies={f.letter.id: f.reply_to for f in active_owners(facts, main)},
         attachments=letter_attachments(home.root, facts),
         reply_context=_reply_context(facts, context.thread, owed, home.room(strand)),
@@ -1707,6 +1763,43 @@ def _advance_bodies(home, bodies, facts, choice, *, reader=None):
     return facts
 
 
+def _displace(home: Home, facts: list[Fact]) -> None:
+    """Over ``max_held`` live bodies, the ones held longest are asked to leave.
+
+    The home thread's body is not counted and never displaced. Only a body
+    parked in its stop hook (``held_at`` in its jack state) is marked, so work
+    in flight is never cut; the count settles as working bodies park.
+    """
+    from .config import load_config
+    from .jack import DISPLACED
+    from .router import install_of
+    limit = load_config(home.root).max_held
+    if not limit:
+        return
+    main = home.main_thread()
+    live = [(thread, strand, home.room(strand))
+            for thread, (strand, _gen) in fold(facts).holder.items()
+            if thread != main and install_of(strand) == home.install_id()
+            and body_alive(home.room(strand))]
+    marked = sum((room / "port" / DISPLACED).exists() for _t, _s, room in live)
+    over = len(live) - int(limit) - marked
+    if over <= 0:
+        return
+    held = []
+    for thread, strand, room in live:
+        try:
+            held_at = json.loads((room / "port" / "jack-state.json").read_text()).get("held_at")
+        except (OSError, ValueError):
+            continue
+        if held_at and not (room / "port" / DISPLACED).exists():
+            held.append((float(held_at), thread, strand, room))
+    now = time.time()
+    for held_at, thread, strand, room in sorted(held)[:over]:
+        atomic_write(room / "port" / DISPLACED, f"{len(live)} live bodies, max_held {limit:g}\n")
+        _log(home, f"displace {strand} thread {thread}: held {(now - held_at) / 60:.0f} min,"
+                   f" {len(live)} live bodies over max_held {limit:g}")
+
+
 def tick_once(home: Home, bodies: dict[str, Body], adapter: str, core: str,
               router=None) -> None:
     """One read of the ledger, then ingest, route, boundaries, reap.
@@ -1728,14 +1821,18 @@ def tick_once(home: Home, bodies: dict[str, Body], adapter: str, core: str,
         facts = _grant_landed(home, facts)
         facts = _grant_opened(home, facts)
         facts = _advance_bodies(home, bodies, facts, (adapter, core), reader=router.reader)
+        _displace(home, facts)
         # Time enters the owner table once, using only the facts already held.
         facts = observe_due(home, facts, router.armed())
         # A park's condition is checked the same way; the forge is read off the loop.
         watcher = getattr(router, "watcher", None)
         facts = observe_waits(home, facts, router.armed(), watcher.states if watcher else None)
         if watcher is not None:
+            from .receipts import receipts
+            from .waits import open_claims
             from .wishes import told
             watcher.wants = forge_wants(told(facts))
+            watcher.prs = open_claims(receipts(facts, home.install_id()))
         facts = router.route(facts, bodies, (adapter, core))
         facts = router.speak_out(facts)
 
@@ -1947,7 +2044,7 @@ def run(root: Path | str, *, adapter: str = "fake", core: str = "haiku",
         reaper = Reaper(home, _log)
         from .receipts import source_root
         updater = Updater(home, _log, source_root())
-        router.watcher = Watcher()
+        router.watcher = Watcher(home.root / "loom" / "prs.json")
         while not (stop is not None and stop.is_set()):
             try:
                 config = load_config(home.root)

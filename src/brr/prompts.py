@@ -1407,6 +1407,9 @@ def _build_identity_core_block(_repo_root: Path) -> str:
     rewriting brr's loyalty, fallibility, and perception/action contract. This
     is intentionally not a normal per-repo prompt override: appearance should
     move through typed settings, not runtime prose overrides of the core.
+
+    The loom seeds a new self's ``core/identity.md`` from this same file
+    (``loom.runtime.selfrepo.identity_source``); there it is the self's own.
     """
     path = _PROMPTS_DIR / "identity-core.md"
     if not path.exists():

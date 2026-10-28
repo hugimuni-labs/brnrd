@@ -411,7 +411,7 @@
 								     reached it (his 2026-09-29: "the warp body is just nowhere,
 								     neither linked nor shown"). -->
 								<a
-									href={resolve('/warp/[id]', { id: row.id })}
+									href={resolve('/dashboard/warp/[id]', { id: row.id })}
 									target="_blank"
 									rel="noopener"
 									class="inline-block border border-amber-800/60 bg-stone-950/60 px-1.5 py-0.5 text-amber-200 hover:text-amber-100"

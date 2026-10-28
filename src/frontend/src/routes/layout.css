@@ -81,6 +81,10 @@ body {
    deliberately subtle ("cozy, but focused"): this reads as a screen
    materializing at its own edge, not a frame competing with the amber
    panel chrome or the hearth-glow bloom above. */
+html.board body::before {
+	display: none;
+}
+
 body::before {
 	content: '';
 	position: fixed;

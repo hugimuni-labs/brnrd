@@ -15,7 +15,11 @@ from brr.pause import read_paused_record
 
 from .home import atomic_write, home_of_room, mint
 from .pausing import describe
+from .waits import GRAMMAR
 from .port import Boundary, parse_boundary
+
+_HEADER_LINE = re.compile(r"<!-- port (\S+) gen (\d+) · owed[^>]*-->")
+_ITEM_LINE = re.compile(r"^- (\S+) · from \S+ · reply \S+")
 from . import tooltrace
 
 
@@ -45,6 +49,9 @@ def _set_state(room: Path, **updates) -> None:
 # timeout from the same number, in BRNRD_STOP_TIMEOUT.
 PARK = 6 * 3600.0
 MARGIN = 90.0
+#: Written by the loom into a held body's port when more bodies are live than
+#: ``max_held`` allows; the stop hook then lets the body leave.
+DISPLACED = "displaced"
 
 
 def _cache_access(stdin_text: str) -> str:
@@ -95,6 +102,100 @@ def _wait(room: Path, stdin_text: str = '') -> float | None:
 
 def _stop_timeout() -> float:
     return float(os.environ.get("BRNRD_STOP_TIMEOUT") or PARK + 60)
+
+
+_AGE = re.compile(r" \d+[smhd](?= ·|$)")
+
+
+def _ageless(line: str) -> str:
+    """A thread line without its ages: an hour passing on an idle child or a PR's push is not news."""
+    return _AGE.sub("", line)
+
+
+def _slot(key: str) -> str:
+    if key.startswith("opened: "):
+        return " ".join(key.split()[:2])
+    return "idle:" if key.startswith("idle: ") else key
+
+
+def _news(text: str, state: dict, plan_changed: bool) -> tuple[str, list[str], list[str]]:
+    """The boundary minus what an earlier boundary already said: (news, said, told).
+
+    The wake shows everything; a post shows a line only when it is new, the
+    status line only when the plan moved, and an owed letter only the first
+    time. A live boundary that repeated 54 rows and every owed letter cost
+    ~1.7k tokens a call (wake-vision). The port header names the letters
+    shown here; one ``owed:`` line names the ones still owed from before.
+    """
+    header = _HEADER_LINE.search(text)
+    if header is None:
+        return "", [], []
+    units: list[list[str]] = []
+    for line in text[header.end():].splitlines():
+        if line.startswith("  ") and units:
+            units[-1].append(line)
+        elif line.strip() and line != "owed:":
+            units.append([line])
+    before = set(state.get("said", []))
+    known = set(state.get("told", []))
+    said: list[str] = []
+    told: list[str] = []
+    body: list[str] = []
+    letters: list[str] = []
+    skipped: list[str] = []
+    for unit in units:
+        # Past its allocation the warning comes at every post (``over``), so it is never said nor gone.
+        if unit[0].startswith("budget: "):
+            continue
+        item = _ITEM_LINE.match(unit[0])
+        if item:
+            told.append(item.group(1))
+            if item.group(1) in known:
+                skipped.append(item.group(1))
+            else:
+                letters.extend(unit)
+            continue
+        status = unit[0].startswith("status:")
+        key = ("status: · plan " + unit[0].partition(" · plan ")[2] if status
+               else _ageless(unit[0]) if unit[0].startswith("opened: ") else "\n".join(unit))
+        said.append(key)
+        if (plan_changed if status else key not in before):
+            body.extend(unit)
+    # A row that left (a child settled, a line cleared) is news too; the status line moves, it never leaves.
+    # A thread line that changed is said anew, not gone: its slot (``opened: <thread>``, ``idle:``) is still here.
+    slots = {_slot(key) for key in said}
+    body.extend("gone: " + key.split("\n")[0] for key in state.get("said", [])
+                if key not in said and not key.startswith("status:") and _slot(key) not in slots)
+    if not body and not letters:
+        return "", said, told
+    shown = [item.group(1) for line in letters if (item := _ITEM_LINE.match(line))]
+    owed = (["owed: " + " ".join(skipped) + " (shown before)"] if skipped else []) \
+        + (["owed:"] if letters else [])
+    head = f"<!-- port {header.group(1)} gen {header.group(2)} · owed {' '.join(shown)} -->"
+    return "\n".join([head, *body, *owed, *letters, ""]), said, told
+
+
+def _stop_news(room: Path, text: str, parsed: Boundary) -> str:
+    """What a stop shows: the boundary minus what the wake or a call already said.
+
+    A stop that blocked, a letter that woke a held body and a keepalive each
+    repeated the whole boundary (~3 KB with 13 thread rows) though the body
+    had read all of it; across held strands that was most of the jack's
+    spend. A body that has seen no boundary yet still gets it whole. Letters
+    already shown come back as their ids on one ``owed:`` line.
+    """
+    state = _state(room)
+    if "said" not in state:
+        return text
+    plan = next((line.partition(" · plan ")[2] for line in text.splitlines()
+                 if line.startswith("status:")), "")
+    news, said, told = _news(text, state, plan != state.get("plan", ""))
+    _set_state(room, said=said, told=told, plan=plan)
+    header = _HEADER_LINE.search(text)
+    if not news and parsed.ids and header:
+        news = (f"<!-- port {header.group(1)} gen {header.group(2)} · owed  -->\n"
+                f"owed: {' '.join(parsed.ids)} (shown before)\n")
+    return news
 
 
 def _shown(room: Path, parsed: Boundary) -> None:
@@ -157,8 +258,14 @@ def _block(room: Path, text: str, parsed: Boundary) -> str:
         return ""
     if parsed.ids:
         _shown(room, parsed)
-    _set_state(room, stop_blocks=count + 1)
+    _working(room, stop_blocks=count + 1)
     return _json({"decision": "block", "reason": text})
+
+
+def _working(room: Path, **state) -> None:
+    """A stop that blocks gives the body work: it is no longer held or displaced."""
+    _set_state(room, held_at=None, **state)
+    (room / "port" / DISPLACED).unlink(missing_ok=True)
 
 
 def _poll(room: Path, stdin_text: str = '') -> str:
@@ -171,6 +278,10 @@ def _poll(room: Path, stdin_text: str = '') -> str:
     wait = _wait(room, stdin_text)
     deadline = ceiling if wait is None else min(begun + wait, ceiling)
     parked = False
+    # Held since the first stop with nothing to do; a keepalive turn keeps the
+    # mark, real work clears it. The loom displaces the longest held first.
+    if not _state(room).get("held_at"):
+        _set_state(room, held_at=time.time())
     while True:
         if _state(room).get("molted"):
             return ""
@@ -194,8 +305,14 @@ def _poll(room: Path, stdin_text: str = '') -> str:
                 # full rewrite for nothing. Hold on letters until the ceiling.
                 parked = False
                 deadline = ceiling
-        if (parsed.ids if _hand() else any(not letter.compact for letter in parsed.letters)):
-            return _block(room, text, parsed)
+        done = answered(room) if parsed.ids else set()
+        if (set(parsed.ids) - done if _hand() else
+                any(not letter.compact and letter.id not in done for letter in parsed.letters)):
+            return _block(room, _stop_news(room, text, parsed), parsed)
+        if (room / "port" / DISPLACED).exists():
+            # Over the loom's max_held: leave warm memory for a body with work.
+            # The next letter to this thread starts a fresh one.
+            return ""
         remaining = deadline - time.monotonic()
         if remaining <= 0:
             if _hand():
@@ -205,7 +322,7 @@ def _poll(room: Path, stdin_text: str = '') -> str:
             # then leave while it still owes. With no cache lifetime this
             # happens only at the hook ceiling.
             return _json({"decision": "block", "reason": "cache keepalive, nothing new arrived: stop, unless the boundary"
-                          " below shows work you already owed\n" + text})
+                          " below shows work you already owed\n" + _stop_news(room, text, parsed)})
         time.sleep(min(0.2, remaining))
 
 
@@ -390,58 +507,36 @@ def _guard_warnings(room: Path, at: str, stdin_text: str) -> tuple[str, bool]:
     return "\n".join(label for label, _ in hits), any(refuse for _, refuse in hits)
 
 
-def _guard_stop(room: Path) -> str:
-    """A broken path guard blocks the stop once per distinct set of breaks.
-
-    The same breaks a second time let the stop through: a body that has read
-    the guard and cannot fix it is not trapped in a loop. send-self, publish
-    and settle still refuse.
-    """
+def _guard_miss(room: Path) -> str:
+    """A broken path guard, as one section of the stop's block."""
     from .guards import violations
     guards, _errors = _guards(room)
     lines = violations([g for g in guards if g.paths], room)
-    if not lines:
-        if _state(room).get("guard_stop"):
-            _set_state(room, guard_stop="")
-        return ""
-    seen = "\n".join(lines)
-    if _state(room).get("guard_stop") == seen:
-        return ""
-    _set_state(room, guard_stop=seen)
-    return _json({"decision": "block", "reason": "a path guard is broken; undo the change, or ask the person"
-                  " who set it (send-self, publish and settle refuse until then):\n" + seen})
+    return ("a path guard is broken; undo the change, or ask the person who set it"
+            " (send-self, publish and settle refuse until then):\n" + "\n".join(lines)) if lines else ""
 
 
-def _kept_stop(room: Path) -> str:
-    """Uncommitted writes in a kept folder since this body began block one stop.
-
-    The same set a second time lets the stop through: they may be his, and
-    the body has been told. A check that cannot run never costs the stop.
-    """
+def _kept_miss(room: Path) -> str:
+    """Uncommitted writes in a kept folder since this body began. A check that cannot run never costs the stop."""
     from .library import written_since
     try:
         since = (room / "port" / "library.json").stat().st_mtime
         lines = written_since(room, since)
     except Exception:
         return ""
-    seen = "\n".join(lines)
-    if not lines or _state(room).get("kept_stop") == seen:
-        return ""
-    _set_state(room, kept_stop=seen)
-    return _json({"decision": "block", "reason": (
+    return ((
         "uncommitted changes in a kept folder since this body began. Commit what you wrote, "
         "only those paths: `python -m brr.loom.runtime lib commit <name> -m \"<what and why>\" <path>...`. "
-        "Leave what is the person's; the loom reports it after an hour:\n" + seen)})
+        "Leave what is the person's; the loom reports it after an hour:\n") + "\n".join(lines)) if lines else ""
 
 
-def _known_stop(room: Path) -> str:
-    """A known folder this body touched blocks one stop with a nudge to tidy or note it."""
+def _known_miss(room: Path) -> str:
+    """A known folder this body touched: a nudge to tidy or note it, once per folder (library.known_nudge)."""
     from .library import known_nudge
     try:
-        nudge = known_nudge(room)
+        return known_nudge(room)
     except Exception:
         return ""
-    return _json({"decision": "block", "reason": nudge}) if nudge else ""
 
 
 def _touch(room: Path, stdin_text: str) -> None:
@@ -493,12 +588,13 @@ def execute(event: str, room: Path, stdin_text: str) -> str:
                                                  "additionalContext": guarded}}) if guarded else ""
         # A call begun before this is not the body's current one (pausing.py):
         # a background call returns at once, so a boundary always follows it.
-        _set_state(room, stop_blocks=0, boundary_at=time.time())
+        _set_state(room, stop_blocks=0, boundary_at=time.time(), held_at=None)
+        (room / "port" / DISPLACED).unlink(missing_ok=True)
     elif event == "start":
         _set_state(room, boundary_at=time.time())
     text = _boundary_text(room)
     parsed = parse_boundary(text)
-    opened = [[line.split()[1], line.split()[2], line.rpartition(" · owed ")[2]]
+    opened = [[line.split()[1], line.split()[2], _ageless(line.rpartition(" · owed ")[2])]
               for line in text.splitlines() if line.startswith("opened: ")]
     plan = next((line.partition(" · plan ")[2] for line in text.splitlines()
                  if line.startswith("status:")), "")
@@ -514,7 +610,8 @@ def execute(event: str, room: Path, stdin_text: str) -> str:
             return ""
         if parsed.ids:
             _shown(room, parsed)
-        _set_state(room, opened=opened, plan=plan, face=face, moved=moved)
+        _set_state(room, opened=opened, plan=plan, face=face, moved=moved,
+                   **dict(zip(("said", "told"), _news(text, {}, True)[1:])))
         return text if text.endswith("\n") else text + "\n"
     if event == "post":
         state = _state(room)
@@ -531,12 +628,29 @@ def execute(event: str, room: Path, stdin_text: str) -> str:
         # Past its allocation a strand is told at every boundary, not once.
         over = next((line for line in text.splitlines() if line.startswith("budget: ")), "")
         left = _left(room, False).rstrip("\n")
+        # A left in room is news when it changes; the stop still holds on it every time.
+        if left == state.get("left_said", ""):
+            left = ""
+        else:
+            _set_state(room, left_said=left)
+        news, said, told = _news(text, state, plan_changed)
+        _set_state(room, said=said, told=told)
         if not parsed.ids and not settled_changed and not opened_changed and not plan_changed \
                 and not face_changed and not moved_changed:
+            news = ""
+        if not news:
+            if parsed.ids:
+                _shown(room, parsed)
+            _set_state(room, opened=opened, plan=plan, face=face, moved=moved)
+            if parsed.settled is not None:
+                _set_state(room, settled=parsed.settled)
             if not weight and not paused and not over and not guarded and not left:
                 return ""
             return _json({"hookSpecificOutput": {"hookEventName": hook, "additionalContext": "\n".join(
                 filter(None, (guarded, paused, weight, over, left)))}})
+        text = news
+        if over:
+            text = over + "\n" + text
         if left:
             text = left + "\n" + text
         if guarded:
@@ -554,51 +668,119 @@ def execute(event: str, room: Path, stdin_text: str) -> str:
             "hookEventName": hook, "additionalContext": text}})
     if _state(room).get("molted") or parsed.settled is not None:
         return ""
-    blocked = _guard_stop(room) or _kept_stop(room) or _known_stop(room)
-    if blocked:
-        return blocked
-    # Work only this room holds blocks the stop the way an owed letter does.
-    left = _left(room, True)
-    if left and (_hand() or not _state(room).get("stop_blocks") and not _dry(room)):
-        return _block(room, left + text, parsed)
-    if parsed.ids and (_hand() or not _state(room).get("stop_blocks") and not _dry(room)):
-        return _block(room, text, parsed)
-    refused = _left_owed(room, text) or _undeclared(room, plan)
+    refused = _stop_block(room, text, plan)
     if refused:
         return refused
     return _poll(room, stdin_text)
 
 
-END = """work is left on this thread (plan {plan}) and this body has not said how it ends. Do one, then stop:
+def answered(room: Path) -> set[str]:
+    """Letter ids a reply or note in this room's port/out already answers.
+
+    The loom drains port/out on its tick; until it does, the boundary still
+    names those letters as owed, and a slow loom made a stop re-show letters
+    the body had answered for minutes (stop-list)."""
+    from .port import PortError, parse_frontmatter
+    found = set()
+    for path in (room / "port" / "out").glob("*.md"):
+        try:
+            fields = parse_frontmatter(path.read_text())
+        except (PortError, OSError):
+            continue
+        if fields.get("kind") in {"letter", "note"} and fields.get("re"):
+            found.add(fields["re"])
+    return found
+
+
+def _letter_miss(room: Path, parsed: Boundary, done: set[str]) -> str:
+    thread = os.environ.get("BRNRD_THREAD") or "<thread>"
+    rows = []
+    for letter in parsed.letters:
+        if letter.id in done:
+            continue
+        rows.append(f"- {letter.id}: brnrd runtime send --re {letter.id} --to thread:{thread} --note \"<what you did>\""
+                    if letter.reply == "-" else
+                    f"- {letter.id}: brnrd runtime send --re {letter.id} --to {letter.reply} \"<answer>\"")
+    return "owed letters, each with its reply (a reply already in port/out counts):\n" + "\n".join(rows) if rows else ""
+
+
+STOP = "the stop holds on {n}; do each, then stop. This list comes back whole at every stop until it is empty."
+
+
+def _stop_block(room: Path, text: str, plan: str) -> str:
+    """Everything the stop holds on, in one block (stop-list).
+
+    Each miss is a section with its exact command: owed letters, a left in
+    room, wishes whose left moved, an end not yet said, a broken guard, a
+    kept folder's writes, a known folder touched. The block comes back whole at
+    every stop after a call until it is empty. A stop again with no call and
+    the same misses passes: a body that has read the list and cannot clear it
+    is never trapped; the wishes asked about become ``left.asked`` facts then,
+    and the wake shows them stale.
+    """
+    if _dry(room):
+        # A turn without fuel fails; the hold sleeps instead.
+        return ""
+    text, lefts = _settled_render(room, text)
+    parsed = parse_boundary(text)
+    if parsed.settled is not None:
+        return ""
+    sections = [
+        _letter_miss(room, parsed, answered(room)),
+        _left(room, True).rstrip("\n"),
+        LEFT.format(named=" · ".join(f"{ident} ({why})" for ident, why in lefts)) if lefts else "",
+        _end_miss(room, plan),
+        _guard_miss(room),
+        _kept_miss(room),
+    ]
+    sections = [section for section in sections if section]
+    state = _state(room)
+    count = int(state.get("stop_blocks") or 0)
+    seen = "\n\n".join(sections)
+    if (count >= 3) if _hand() else (count and seen == state.get("stop_said")):
+        # Stopped again with nothing done since the same list: let it through.
+        _asked(room, parsed, [ident for ident, _ in lefts])
+        return ""
+    known = _known_miss(room)
+    if not sections and not known:
+        return ""
+    sections = [*sections, known] if known else sections
+    if parsed.ids:
+        _shown(room, parsed)
+    _working(room, stop_blocks=count + 1, stop_said=seen)
+    head = STOP.format(n=f"{len(sections)} thing{'s' * (len(sections) > 1)}")
+    news = _stop_news(room, text, parsed) if parsed.ids else ""
+    return _json({"decision": "block", "reason": "\n\n".join([head, *sections, *([news] if news else [])])})
+
+
+END = """work is left on this thread (plan {plan}) and this body has not said how it ends. Do one:
 - a result: brnrd runtime wish <w-id> --result <kind>:<ref> --line "<what it is>" [--deliver]
 - an ask to a person: brnrd runtime ask "<question>" --for <w-id> --rec "<your call>"
-- a park with its reason: brnrd runtime wish <w-id> --read "waiting: <on what>"
+- a park with its reason: brnrd runtime wish <w-id> --read "waiting: <on what>" --wait <condition>
 - done: brnrd runtime settle {thread} --why "<what it became>"
-`brnrd runtime wishes` lists the w-ids. The jack then holds you while letters may come."""
+`brnrd runtime wishes` lists the w-ids, and `--wait` takes {grammar}.
+The jack then holds you, and the loom's letter wakes you when the wait comes true; never a sleep loop."""
 
 
 LEFT = """what is left on a wish moved since it was last said: {named}
-Restate each one's whole list, then stop:
+Restate each one's whole list:
 - brnrd runtime wish <w-id> --left "<step>" --left "<step>"   (--left same when nothing moved)
-- or a park: wish <w-id> --read "waiting: <on what>"; a delivery: --result <kind>:<ref> --line "<what>" --deliver
-This is asked once per wish: the next stop passes, and the wake shows an unanswered left as stale."""
+- or a park: wish <w-id> --read "waiting: <on what>"; a delivery: --result <kind>:<ref> --line "<what>" --deliver"""
 
-# Long enough for the loom to render a left written just before the stop.
+# Long enough for the loom to render a fact written just before the stop.
 LEFT_GRACE = 3.0
 
 
-def _left_owed(room: Path, text: str) -> str:
-    """Refuse a stop while the boundary names wishes whose left moved. Nothing is
-    remembered here: the loom derives the line from the ledger, and a refusal
-    becomes a ``left.asked`` fact through the port, after which the line drops it."""
-    if _hand() or _dry(room) or "\nleft? " not in "\n" + text:
-        return ""
+def _settled_render(room: Path, text: str) -> tuple[str, list[tuple[str, str]]]:
+    """The boundary once the loom has rendered this strand's last facts, and the
+    wishes its ``left?`` line still owes. A loom too slow to render within the
+    grace cannot be trusted to ask: the left fails open, the wake shows it stale."""
+    if _hand() or not text or "\nleft? " not in "\n" + text:
+        return text, []
     stop = time.monotonic() + LEFT_GRACE
     while _rendered_before_ledger(room):
         if time.monotonic() >= stop:
-            # A loom too slow to render cannot be trusted to ask: fail open, and
-            # the next wake shows the left as stale.
-            return ""
+            return _boundary_text(room), []
         time.sleep(0.2)
     text = _boundary_text(room)
     line = next((x for x in text.splitlines() if x.startswith("left? ")), "")
@@ -606,10 +788,15 @@ def _left_owed(room: Path, text: str) -> str:
     for path in (room / "port" / "out").glob("asked-*.md"):
         for listed in re.findall(r"^wishes: (.*)$", path.read_text(), re.M):
             pending.update(listed.split())
-    owed = [ident for ident in re.findall(r"(w-[0-9a-z]+) \(", line) if ident not in pending]
+    return text, [(ident, why) for ident, why in re.findall(r"(w-[0-9a-z]+) \(([^)]*)\)", line)
+                  if ident not in pending]
+
+
+def _asked(room: Path, parsed: Boundary, owed: list[str]) -> None:
+    """A stop let through with lefts still owed: a ``left.asked`` fact through the
+    port, after which the line drops them and the wake shows them stale."""
     if not owed:
-        return ""
-    parsed = parse_boundary(text)
+        return
     stem = mint(5)
     atomic_write(room / "port" / "out" / f"asked-{stem}.md", (
         "---\n"
@@ -617,7 +804,6 @@ def _left_owed(room: Path, text: str) -> str:
         f"id: {parsed.strand or room.name}/{stem}\n"
         f"wishes: {' '.join(owed)}\n"
         "---\n"))
-    return _json({"decision": "block", "reason": LEFT.format(named=line.removeprefix("left? "))})
 
 
 def _rendered_before_ledger(room: Path) -> bool:
@@ -637,18 +823,14 @@ def declare(room: Path, how: str) -> None:
     _set_state(room, declared=how)
 
 
-def _undeclared(room: Path, plan: str) -> str:
-    """The first stop with wishes still open is refused once unless this body
-    declared its end. The plan counts wish stamps, never Plan rows."""
+def _end_miss(room: Path, plan: str) -> str:
+    """Wishes still open and this body has not declared its end. The plan counts
+    wish stamps, never Plan rows."""
     done, _, total = plan.partition(" ")[0].partition("/")
-    if _hand() or not (done.isdigit() and total.isdigit() and int(done) < int(total)) or _dry(room):
+    if not (done.isdigit() and total.isdigit() and int(done) < int(total)) or _state(room).get("declared"):
         return ""
-    state = _state(room)
-    if state.get("declared") or state.get("end_refused"):
-        return ""
-    _set_state(room, end_refused=True)
     thread = os.environ.get("BRNRD_THREAD") or "<thread>"
-    return _json({"decision": "block", "reason": END.format(plan=f"{done}/{total}", thread=thread)})
+    return END.format(plan=f"{done}/{total}", thread=thread, grammar=GRAMMAR)
 
 
 def _dry(room: Path) -> bool:

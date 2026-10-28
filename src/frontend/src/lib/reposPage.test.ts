@@ -10,7 +10,7 @@ import test from 'node:test';
 // component tests use can stub cheaply, and the two claims here are about
 // literal markup (a link's text, a form's method/action), not derived state.
 const here = dirname(fileURLToPath(import.meta.url));
-const reposPagePath = join(here, '..', 'routes', 'repos', '+page.svelte');
+const reposPagePath = join(here, '..', 'routes', 'dashboard', 'repos', '+page.svelte');
 
 function source(): string {
 	return readFileSync(reposPagePath, 'utf8');

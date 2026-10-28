@@ -71,7 +71,7 @@ test('fetchBenchFile throws BenchAuthError on 401', async () => {
 test('benchFileHref keeps place nested and encodes every segment', () => {
 	assert.equal(
 		benchFileHref('Gurio__brr', 'src/brr/daemon.py', 'abc 1234'),
-		'/bench/Gurio__brr/src/brr/daemon.py/abc%201234'
+		'/dashboard/bench/Gurio__brr/src/brr/daemon.py/abc%201234'
 	);
 });
 
