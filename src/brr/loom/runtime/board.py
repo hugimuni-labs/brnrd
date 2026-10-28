@@ -581,6 +581,74 @@ class Parts:
             self.stop.wait(TICK)
 
 
+class Pusher:
+    """The parts whose hash moved, PUT to the cloud (``/v1/daemons/loom/parts``), at most once per ``EVERY`` s.
+
+    The PUT runs on its own thread, one at a time; the cloud answers the hashes it holds, so a restart or a lost
+    push resends exactly what it lacks. Batches stay under ``BATCH`` gzip bytes, the index in the last one, so a
+    reader the new index wakes finds the threads it names. Until a push succeeds again, each step raises the
+    last failure for the loop's guard.
+    """
+
+    EVERY, RETRY, BATCH = 3.0, 60.0, 3_000_000
+
+    def __init__(self, parts: Parts):
+        self.parts = parts
+        self.sent: dict[str, str] = {}
+        self.attempted: float | None = None
+        self.worker: threading.Thread | None = None
+        self.failing: tuple[Exception, object] | None = None
+
+    def step(self, config) -> None:
+        if not config.relay_state:
+            return
+        with self.parts.changed:
+            held, hashes = self.parts.parts, self.parts.hashes
+        now = time.monotonic()
+        busy = self.worker is not None and self.worker.is_alive()
+        wait = self.RETRY if self.failing else self.EVERY
+        if hashes and hashes != self.sent and not busy and (self.attempted is None or now - self.attempted >= wait):
+            self.attempted = now
+            self.worker = threading.Thread(target=self._put, args=(Path(config.relay_state), held, hashes),
+                                           name="loom-parts", daemon=True)
+            self.worker.start()
+        if self.failing is not None:
+            raise self.failing[0].with_traceback(self.failing[1])
+
+    def batches(self, held: dict, hashes: dict) -> list[bytes]:
+        """The gzip bodies of one push: every changed part once, the index last."""
+        keys = sorted(hashes)
+        moved = sorted((k for k in keys if self.sent.get(k) != hashes[k]), key=lambda k: k == "index")
+        bodies, batch, size = [], {}, 0
+        for key in moved:
+            one = len(gzip.compress(json.dumps(held[key], separators=(",", ":")).encode(), 1))
+            if batch and size + one > self.BATCH:
+                bodies.append(batch)
+                batch, size = {}, 0
+            batch[key], size = {"hash": hashes[key], "part": held[key]}, size + one
+        bodies.append(batch)
+        return [gzip.compress(json.dumps({"keys": keys, "parts": b}, separators=(",", ":")).encode(), 6)
+                for b in bodies]
+
+    def _put(self, state_dir: Path, held: dict, hashes: dict) -> None:
+        from brr.gates import cloud
+        try:
+            state = cloud._load_state_from_dir(state_dir)
+            if not state.get("brnrd_url") or not state.get("token"):
+                raise RuntimeError("cloud state has no URL or token")
+            url = state["brnrd_url"].rstrip("/") + "/v1/daemons/loom/parts"
+            headers = {"Authorization": f"Bearer {state['token']}", "Content-Type": "application/json",
+                       "Content-Encoding": "gzip"}
+            for body in self.batches(held, hashes):
+                resp = cloud._SESSION.request("PUT", url, data=body, headers=headers, timeout=60)
+                if not 200 <= resp.status_code < 300:
+                    raise RuntimeError(f"PUT /v1/daemons/loom/parts -> {resp.status_code}: {resp.text[:200]}")
+                self.sent = dict(resp.json().get("hashes") or {})
+            self.failing = None
+        except Exception as exc:
+            self.failing = (exc, exc.__traceback__)
+
+
 def person_channel(home: Home, person: str | None) -> tuple[str, str]:
     """``(instance, user)``: the person's first direct channel on an enabled connector, from people/*/channels.toml."""
     return person_of(home, person)[1:]

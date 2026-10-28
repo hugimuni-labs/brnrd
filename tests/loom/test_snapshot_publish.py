@@ -207,8 +207,10 @@ def test_a_failing_board_is_one_streak_and_the_loop_keeps_going(board):
         steps(board)
         board.now[0] += snapshot.IDLE
     kinds = lambda kind: [f for f in read_facts(Home(board.root)) if f.kind == kind]
-    [down] = kinds("loom.degraded")
-    assert down.data["step"] == "publisher" and "board unreachable" in down.data["error"]
+    # The parts pusher shares the unreachable cloud and keeps its own streak; this one is the publisher's.
+    publisher = lambda: [f for f in kinds("loom.degraded") if f.data["step"] == "publisher"]
+    [down] = publisher()
+    assert "board unreachable" in down.data["error"]
     log = board.root / "loom/loom.log"
     assert log.read_text().count("degraded: publisher") == 1
     board.cloud.fail = False
@@ -216,7 +218,7 @@ def test_a_failing_board_is_one_streak_and_the_loop_keeps_going(board):
     wait_until(lambda: kinds("loom.recovered"), 10, board.dump)
     board.cloud.fail = True
     board.now[0] += snapshot.IDLE
-    wait_until(lambda: len(kinds("loom.degraded")) == 2, 10, board.dump)
+    wait_until(lambda: len(publisher()) == 2, 10, board.dump)
     assert log.read_text().count("degraded: publisher") == 2
     assert board.thread.is_alive()
 

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from sqlalchemy import BigInteger, Boolean, DateTime, ForeignKey, Integer, String, Text, UniqueConstraint
+from sqlalchemy import BigInteger, Boolean, DateTime, ForeignKey, Integer, LargeBinary, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship, synonym
 
 from .db import Base
@@ -339,6 +339,27 @@ class Daemon(Base):
         info=_publish_store("activity", "repo"),
     )
     loom_updated_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+
+class LoomPart(Base):
+    """One board part a loom pushed (`PUT /v1/daemons/loom/parts`): ``index``,
+    ``thread/<id>`` or ``beads``, gzip JSON, with the loom's own hash of it.
+
+    The board's threads and letters are the loom's activity, so the rows sit
+    under that lane and a withdrawal deletes them by repo, as ActivityRecord.
+    """
+
+    __publish_lane__ = "activity"
+    __publish_purge__ = "repo"
+
+    __tablename__ = "loom_parts"
+    daemon_id: Mapped[str] = mapped_column(ForeignKey("daemons.id"), primary_key=True)
+    key: Mapped[str] = mapped_column(String(200), primary_key=True)
+    account_id: Mapped[str] = mapped_column(ForeignKey("accounts.id"), index=True)
+    repo_id: Mapped[str | None] = mapped_column(ForeignKey("repos.id"), nullable=True, index=True)
+    hash: Mapped[str] = mapped_column(String(64))
+    body: Mapped[bytes] = mapped_column(LargeBinary)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow, index=True)
 
 
 class DaemonRepo(Base):
