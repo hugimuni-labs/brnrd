@@ -85,6 +85,16 @@ class Wish:
     # The last time a person's letter named the wish (a stamp, or a verdict letter):
     # one after the delivery means they looked, so it stays delivered and never expires.
     heard_at: str = ""
+    # Rank is the person's alone: the letter a wish was said in, and each later
+    # letter of theirs that moved it to the top. Pick is the resident's.
+    said_at: str = ""
+    tops: list[dict] = field(default_factory=list)
+    pick: dict | None = None
+
+    @property
+    def ranked_at(self) -> str:
+        """When the person last put this wish on top; empty: never, so it is idle."""
+        return max([self.said_at, *(t["at"] for t in self.tops)])
 
     @property
     def left(self) -> dict | None:
@@ -142,7 +152,8 @@ def wishes(facts: Iterable[Fact]) -> dict[str, Wish]:
     letters = {str(f.data.get("id", f.id)): f for f in ordered if f.kind == "letter"}
     found: dict[str, Wish] = {}
     for fact in ordered:
-        if fact.kind not in {"wish", "wish.read", "wish.result", "wish.verdict", "wish.left"}:
+        if fact.kind not in {"wish", "wish.read", "wish.result", "wish.verdict", "wish.left",
+                             "wish.top", "wish.pick"}:
             continue
         d = fact.data
         ident = d["wish"]
@@ -167,6 +178,12 @@ def wishes(facts: Iterable[Fact]) -> dict[str, Wish]:
                 wish.reads.append(dict(d, at=fact.at, writer=fact.by))
             elif fact.kind == "wish.result":
                 wish.results.append(dict(d, at=fact.at, writer=fact.by))
+            elif fact.kind == "wish.top":
+                wish.tops.append({"at": fact.at, "ref": d.get("ref"), "by": fact.by})
+                continue
+            elif fact.kind == "wish.pick":
+                wish.pick = {"at": fact.at, "why": d.get("why", ""), "by": fact.by}
+                continue
             elif fact.kind == "wish.left":
                 steps = wish.left["steps"] if d.get("same") and wish.left else list(d.get("steps") or ())
                 wish.lefts.append({"steps": steps, "at": fact.at, "by": fact.by, "gen": d.get("gen")})
@@ -185,6 +202,9 @@ def wishes(facts: Iterable[Fact]) -> dict[str, Wish]:
     for wish in found.values():
         wish.heard_at = max([named.get(wish.id, ""), *(s["at"] for s in wish.stamps
                              if any(i in letters and _person(letters[i]) for i in s["letters"]))])
+        if wish.sender == "person":
+            wish.said_at = min((letters[s.letter].at for s in wish.says
+                                if s.letter in letters and _person(letters[s.letter])), default="")
 
         def own_say(say):
             letter = letters.get(say.letter)
@@ -221,7 +241,8 @@ def _answer(asked: list[Wish], letters: dict, ordered: list[Fact]) -> None:
         ask.answer = next(iter(stamped), None) or next((i for i, f in letters.items() if answers(f)), "")
 
 
-WISH_KINDS = ("wish", "wish.read", "wish.result", "wish.verdict", "wish.left", "letter", "lease")
+WISH_KINDS = ("wish", "wish.read", "wish.result", "wish.verdict", "wish.left", "wish.top", "wish.pick",
+              "letter", "lease")
 
 
 def told(facts) -> dict[str, Wish]:

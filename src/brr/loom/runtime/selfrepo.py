@@ -826,7 +826,14 @@ def run_wake(room_dir: Path, thread: str, owed: Path | None = None, *,
     if home is not None:
         from .lifecycle import main_snapshot
         rows = main_snapshot(home).get(thread, {}).get("plan_rows") or ()
-        section = wake_wishes(read_facts(home), thread, rows)
+        facts = read_facts(home)
+        section = wake_wishes(facts, thread, rows)
+        if thread == home.main_thread():
+            # The center wakes with both queues and Next build, derived, never a prose line.
+            from .queues import queues, render
+            from .wishes import told, waits_on
+            found = told(facts)
+            section += render(queues(found, waits_on(found, main_snapshot(home))))
     # Reserve the section before the recipe fits its tree/README to the budget.
     if section:
         limit = int(env.get("LOOM_BUDGET_BYTES") or 24000)
