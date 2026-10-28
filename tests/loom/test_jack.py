@@ -531,3 +531,14 @@ def test_the_stop_repeats_its_whole_list_after_work_and_lets_an_idle_repeat_thro
     assert "send --re p-test/abcde --to thread:tb" in again
     # Nothing done since the same list: the body read it, and is not trapped.
     assert "the stop holds" not in execute("stop", room, "{}")
+
+
+def test_a_patched_jack_clock_stays_out_of_the_shared_time_module(monkeypatch):
+    """Other threads keep the real sleep (tests/loom/conftest.py `_private_jack_clock`)."""
+    import time as shared
+
+    from brr.loom.runtime import jack
+
+    real = shared.sleep
+    monkeypatch.setattr(jack.time, "sleep", lambda s: None)
+    assert shared.sleep is real

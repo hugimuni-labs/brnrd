@@ -137,9 +137,12 @@ def list_all_processes() -> list[ProcInfo]:
     of Linux's procps, where `-e`/`-A` are aliases) — `-A` is the one flag
     both accept with the same meaning. `-o pid=,ppid=,lstart=,command=`
     drops the header row (each `=` suppresses its own column heading) so
-    every line is data.
+    every line is data. `-ww` keeps `command` whole: with no terminal and no
+    COLUMNS, procps cuts each line at 80 columns, and a pause then read a
+    call's argv as `/opt/hostedtoolcache/Python/3.12.15/x64` (ci-speed,
+    2026-10-28, under xdist).
     """
-    procs = _parse_ps_snapshot(_run_ps(["ps", "-A", "-o", "pid=,ppid=,lstart=,command="]))
+    procs = _parse_ps_snapshot(_run_ps(["ps", "-A", "-ww", "-o", "pid=,ppid=,lstart=,command="]))
     reader = _linux_reader if sys.platform.startswith("linux") else _darwin_reader if sys.platform == "darwin" else None
     try:
         exact = reader() if reader else None
