@@ -531,7 +531,7 @@ class Parts:
         self.reader, self.cache, self.tape = LedgerReader(), {}, Tools(home)
         self.parts: dict[str, dict] = {}
         self.hashes: dict[str, str] = {}
-        self.revision, self.whole = None, 0.0
+        self.revision, self.whole, self.due = None, 0.0, False
         # Which strand typed a letter through the board: the board's own note, outside the self repo.
         self.typed_path, self.typed, self.typed_mtime = home.root / "loom/board/typed.json", {}, None
         self.changed = threading.Condition()
@@ -539,17 +539,19 @@ class Parts:
 
     def step(self) -> bool:
         """One recompute when anything moved; True when a part's hash did. A move of the tapes alone re-lays only
-        the tools over the last parts (§D7: a tool line is the hot path); a ledger move, a typed note, or a tape
-        move ``WHOLE`` seconds after the last whole compute recomputes everything, so what the parts read from
-        the rooms and the clock is never older than that."""
+        the tools over the last parts (§D7: a tool line is the hot path), and when the last whole compute is
+        ``WHOLE`` seconds old it leaves one due for the next tick, after the tool line is out; a ledger move or
+        a typed note recomputes everything. What the parts read from the rooms and the clock is never older
+        than ``WHOLE`` and a tick."""
         facts = self.reader.refresh(self.home)
         taped, typed = self.tape.read(), self._typed()
-        if self.reader.revision == self.revision and not (taped or typed):
+        if self.reader.revision == self.revision and not (taped or typed or self.due):
             return False
-        if self.reader.revision == self.revision and not typed and self.parts \
-                and time.monotonic() - self.whole < WHOLE:
+        if self.reader.revision == self.revision and not typed and self.parts and taped:
+            self.due = time.monotonic() - self.whole >= WHOLE
             parts, hashes = overlay(self.parts, self.hashes, self.tape.tools, self.tape.live)
         else:
+            self.due = False
             self.revision, self.whole = self.reader.revision, time.monotonic()
             with projection_cache(self.cache):
                 parts, hashes = compute(self.home, facts, self.config_of(), self.tape.tools, self.tape.live,

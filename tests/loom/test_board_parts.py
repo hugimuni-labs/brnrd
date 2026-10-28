@@ -95,11 +95,17 @@ def test_a_tape_move_relays_only_its_thread_and_equals_a_whole_compute(parts, mo
     assert not parts.step()
     assert whole and parts.hashes == relaid
 
-    tape.moved = True  # past WHOLE seconds, a tape move recomputes whole again
+    tape.moved = True  # past WHOLE seconds a tape move still goes out re-laid; the whole compute is the next tick's
+    tape.tools[strand] = [*tape.tools[strand], {"at": "2026-10-28T15:00:01Z", "end": None, "tool": "Read",
+                                                "arg": "zq9 two"}]  # a fresh list, as Tools.read writes
     monkeypatch.setattr(board, "WHOLE", 0.0)
     whole.clear()
+    assert parts.step()
+    assert not whole
     parts.step()
     assert whole
+    whole.clear()
+    assert not parts.step() and not whole  # due once: a still home stays still
 
 
 def test_a_wish_ships_in_its_thread_part_and_the_index_keeps_counts(parts):
