@@ -180,3 +180,17 @@ def test_a_pass_over_the_floor_prunes_nothing(disk, monkeypatch):
     reaper._pass()
     assert reaper.failing is None
     assert not [f for f in read_facts(home) if f.kind == "loom.pruned"]
+
+
+def test_the_disk_floor_is_the_homes_setting(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+
+    root = tmp_path / "home"
+    write_thread(root, "inbox", "Brnrd", "inbox")
+    monkeypatch.setattr(reap.shutil, "disk_usage", lambda _p: SimpleNamespace(total=228 * GB, free=11 * GB))
+    assert reap.floor(root) == (11 * GB, int(228 * GB * 0.05))
+    (root / "loom").mkdir(exist_ok=True)
+    (root / "loom/config.toml").write_text("disk_floor_pct = 2\n")
+    assert reap.floor(root) == (11 * GB, reap.FLOOR_BYTES)   # 2% of 228 GB is under 5 GiB
+    (root / "loom/config.toml").write_text("disk_floor_pct = 4\n")
+    assert reap.floor(root)[1] == int(228 * GB * 0.04)
