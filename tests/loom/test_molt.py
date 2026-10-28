@@ -7,7 +7,7 @@ from brr.loom.runtime.ledger import inject_letter
 from brr.loom.runtime.selfrepo import init_self
 from brr.loom.runtime.project import is_notice
 
-from _step import Loom, wait_until, write_thread
+from _step import Loom, kill_bodies, wait_until, write_thread
 from test_lifecycle import bodies
 
 
@@ -73,6 +73,48 @@ assert not (ctx.room / "port/molt-pending").exists()
         assert not list((root / "rooms").glob("*/port/molt-pending"))
     finally:
         loom.halt()
+    assert not loom.errors
+
+
+def test_molt_counts_a_reply_the_loom_has_not_drained_yet(tmp_path):
+    # The loom drains port/out on its tick; a molt right after the ack ran
+    # before that tick in 1 of 5 runs and was refused. Here the loom is stopped
+    # between the ack and the molt, so the ack is only ever in port/out.
+    root = tmp_path / "home"
+    init_self(root, person="test")
+    write_thread(root, "work", "Work\n\nNext step: original", "work", wait="0")
+    ask = _chat_letter(root, "an ask")
+    go, result = root / "go", root / "result.txt"
+    bodies(root, f'''import sys, time
+from pathlib import Path
+from brr.loom.runtime.fakebody import Ctx
+from brr.loom.runtime.home import atomic_write
+ctx = Ctx(Path(sys.argv[1]))
+ctx.owed()
+while not Path({str(go)!r}).exists():
+    time.sleep(0.02)
+ctx.send("channel:fake", "on it, my successor finishes it", re={ask!r})
+try:
+    ctx.molt("carry the next step")
+except RuntimeError as exc:
+    atomic_write(Path({str(result)!r}), str(exc))
+else:
+    atomic_write(Path({str(result)!r}), "molted")
+''')
+    loom = Loom(root)
+    loom.start()
+    try:
+        wait_until(lambda: any(f.kind == "shown" and ask in f.data.get("ids", "") for f in loom.facts()),
+                   30, loom.dump)
+        loom.stop.set()
+        loom.thread.join(timeout=5)
+        go.touch()
+        wait_until(result.exists, 30, loom.dump)
+        assert result.read_text() == "molted"
+        assert loom.out_files(), "the loom drained port/out; the ack was not held back"
+    finally:
+        loom.halt()
+        kill_bodies(loom)
     assert not loom.errors
 
 

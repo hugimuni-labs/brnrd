@@ -867,7 +867,7 @@ def write_molt(room: Path, why: str, *, fresh: bool = False) -> str:
         raise PortError("molt: say what is left first, then molt:\n" + "\n".join(
             f'  brnrd runtime wish {ident} --left "<step>" --left "<step>"   ({why}; --left same if nothing moved)'
             for ident, why in owed))
-    held = unreplied_held(facts, strand)
+    held = unreplied_held(facts, strand, room)
     if held:
         # A person who wrote to this body hears from it before a stranger takes over.
         raise PortError("molt: reply to each person letter you hold first, even with just an ack:\n" + "\n".join(
@@ -899,17 +899,36 @@ def _words(value) -> tuple:
     return tuple(value.split()) if isinstance(value, str) else tuple(value or ())
 
 
-def unreplied_held(facts, strand: str) -> dict:
+def answered(room: Path) -> set[str]:
+    """Letter ids a reply or note in this room's port/out already answers.
+
+    The loom drains port/out on its tick; until it does, the ledger still
+    holds those letters as owed. A slow loom made a stop re-show letters the
+    body had answered (stop-list) and refused a molt whose ack was not yet
+    drained (molt-flake). The stop and the molt both read it here."""
+    found = set()
+    for path in (room / "port" / "out").glob("*.md"):
+        try:
+            fields = parse_frontmatter(path.read_text())
+        except (PortError, OSError):
+            continue
+        if fields.get("kind") in {"letter", "note"} and fields.get("re"):
+            found.add(fields["re"])
+    return found
+
+
+def unreplied_held(facts, strand: str, room: Path) -> dict:
     """Person letters with a chat to answer on, shown to this strand, that no letter answers yet.
 
-    A reply counts once it is written: its delivery receipt may come after the molt.
+    A reply counts once it is written: its delivery receipt may come after the
+    molt, and the loom may not have drained it from port/out yet.
     """
     from .owners import unanswered_letters
     from .project import is_notice, reply_channels
     channels = reply_channels(facts)
     shown = {ident for f in facts if f.kind == "shown" and f.data.get("strand") == strand
              for ident in _words(f.data.get("ids"))}
-    replied = {f.data.get("re") for f in facts if f.kind == "letter" and not is_notice(f)}
+    replied = {f.data.get("re") for f in facts if f.kind == "letter" and not is_notice(f)} | answered(room)
     return {ident: (letter, channels[ident]) for ident, letter in unanswered_letters(facts).items()
             if ident in shown and ident in channels and ident not in replied}
 

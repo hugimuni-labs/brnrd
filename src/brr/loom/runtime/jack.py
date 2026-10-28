@@ -16,7 +16,7 @@ from brr.pause import read_paused_record
 from .home import atomic_write, home_of_room, mint
 from .pausing import describe
 from .waits import GRAMMAR
-from .port import Boundary, parse_boundary
+from .port import Boundary, answered, parse_boundary
 
 _HEADER_LINE = re.compile(r"<!-- port (\S+) gen (\d+) · owed[^>]*-->")
 _ITEM_LINE = re.compile(r"^- (\S+) · from \S+ · reply \S+")
@@ -672,24 +672,6 @@ def execute(event: str, room: Path, stdin_text: str) -> str:
     if refused:
         return refused
     return _poll(room, stdin_text)
-
-
-def answered(room: Path) -> set[str]:
-    """Letter ids a reply or note in this room's port/out already answers.
-
-    The loom drains port/out on its tick; until it does, the boundary still
-    names those letters as owed, and a slow loom made a stop re-show letters
-    the body had answered for minutes (stop-list)."""
-    from .port import PortError, parse_frontmatter
-    found = set()
-    for path in (room / "port" / "out").glob("*.md"):
-        try:
-            fields = parse_frontmatter(path.read_text())
-        except (PortError, OSError):
-            continue
-        if fields.get("kind") in {"letter", "note"} and fields.get("re"):
-            found.add(fields["re"])
-    return found
 
 
 def _letter_miss(room: Path, parsed: Boundary, done: set[str]) -> str:
