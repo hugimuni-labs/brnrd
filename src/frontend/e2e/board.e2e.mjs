@@ -131,6 +131,21 @@ test('the composer sends a letter to the inbox and shows it pending', async () =
 	assert.deepEqual(B.errors, []);
 });
 
+test('signed out, `/` keeps the landing it drew while undecided and never mounts the old home', async () => {
+	const ctx = await B.browser.newContext(),
+		page = await ctx.newPage();
+	await page.route('**/v1/loom/**', (r) => r.fulfill({ status: 401, body: '{}' }));
+	await page.route('**/v1/dashboard/**', (r) => r.fulfill({ status: 401, body: '{}' }));
+	const probed = page.waitForResponse((r) => r.url().includes('/v1/loom/index'));
+	await page.goto(B.base);
+	await probed;
+	await page.waitForTimeout(300);
+	assert.equal(await page.locator('[data-landing] h1').count(), 1);
+	assert.equal(await page.locator('[data-home]').count(), 0);
+	assert.equal(await page.locator('.brd').count(), 0);
+	await ctx.close();
+});
+
 test('a localhost page with no loom behind it keeps the old home, as the repro drivers expect', async () => {
 	const ctx = await B.browser.newContext(),
 		page = await ctx.newPage();
