@@ -8,6 +8,7 @@ and repo-action cores are used by both ``dashboard.py`` and ``web_auth.py``.
 from __future__ import annotations
 
 import threading
+import time
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
@@ -551,6 +552,7 @@ def _run_login_installation_sync(session_factory, settings, account_id: str, use
     check per repo, serially, before the redirect. Its own session; failures
     log and stop, the dashboard's stale-gated refresh tries again.
     """
+    started = time.monotonic()
     try:
         with session_factory() as db:
             try:
@@ -558,23 +560,29 @@ def _run_login_installation_sync(session_factory, settings, account_id: str, use
                 db.commit()
             except Exception as e:
                 print(f"[brnrd] github login installation sync failed: {e}")
+        print(f"[brnrd] github login installation sync account={account_id} ms={(time.monotonic() - started) * 1000:.0f}")
     finally:
         with _GITHUB_BACKGROUND_SYNC_LOCK:
             _GITHUB_BACKGROUND_SYNC_IN_PROGRESS.discard(account_id)
 
 
-def _start_login_installation_sync(request: Request, account_id: str, user_access_token: str) -> None:
-    """Fire-and-forget login sync, sharing the dashboard refresh's single-flight set."""
+def _start_login_installation_sync(request: Request, account_id: str, user_access_token: str) -> threading.Thread | None:
+    """Start the login sync, sharing the dashboard refresh's single-flight set.
+
+    Returns the thread, or None when a sync for the account is already running.
+    """
     with _GITHUB_BACKGROUND_SYNC_LOCK:
         if account_id in _GITHUB_BACKGROUND_SYNC_IN_PROGRESS:
-            return
+            return None
         _GITHUB_BACKGROUND_SYNC_IN_PROGRESS.add(account_id)
-    threading.Thread(
+    thread = threading.Thread(
         target=_run_login_installation_sync,
         args=(request.app.state.SessionLocal, request.app.state.settings, account_id, user_access_token),
         name=f"github-login-sync-{account_id}",
         daemon=True,
-    ).start()
+    )
+    thread.start()
+    return thread
 
 
 def _start_github_background_refresh(request: Request, account_id: str) -> None:
