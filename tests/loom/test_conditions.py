@@ -182,6 +182,20 @@ def test_a_pass_over_the_floor_prunes_nothing(disk, monkeypatch):
     assert not [f for f in read_facts(home) if f.kind == "loom.pruned"]
 
 
+def test_a_reap_that_clears_the_floor_prunes_nothing(disk, monkeypatch):
+    home, _clock, _guard, at = disk
+    real = reap.subprocess.run
+    monkeypatch.setattr(reap.subprocess, "run", lambda command, **kw: real(command, **kw)
+                        if command[0] not in {c[0] for c in reap.PRUNE} else pytest.fail("pruned over the floor"))
+    monkeypatch.setattr(reap.Reaper, "reap", lambda self: at(0, 13.0))   # the reap lifts the volume over
+    reaper = Reaper(home, lambda *_: None)
+    at(1, 11.3)
+    with pytest.raises(reap.DiskFloor):
+        reaper.disk()
+    reaper._pass()
+    assert reaper.failing is None
+    assert not [f for f in read_facts(home) if f.kind == "loom.pruned"]
+
 def test_the_disk_floor_is_the_homes_setting(tmp_path, monkeypatch):
     from types import SimpleNamespace
 

@@ -311,7 +311,8 @@ class Reaper:
         try:
             self.rotate()
             self.reap()
-            if self.below:
+            free, least = floor(self.home.root)
+            if free < least:   # measured after the reap: a reap that cleared the floor prunes nothing
                 self.prune()
             self.failing = None
         except Exception as exc:
