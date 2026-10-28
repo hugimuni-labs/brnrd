@@ -107,6 +107,17 @@ def test_a_tape_move_relays_only_its_thread_and_equals_a_whole_compute(parts, mo
     whole.clear()
     assert not parts.step() and not whole  # due once: a still home stays still
 
+    monkeypatch.setattr(board, "WHOLE", 3600.0)  # a ledger move with the tool line: the tool line goes out first
+    inject_letter(root, to="thread:docs", body="moved with it")
+    tape.moved = True
+    tape.tools[strand] = [*tape.tools[strand], {"at": "2026-10-28T15:00:02Z", "end": None, "tool": "Bash",
+                                                "arg": "zq9 three"}]
+    assert parts.step() and not whole
+    assert parts.parts["thread/web"]["tools"] == {strand: tape.tools[strand]}
+    tape.moved = True  # a busy tape does not starve the due compute
+    assert parts.step() and whole
+    assert "moved with it" in json.dumps(parts.parts["thread/docs"])
+
 
 def test_a_wish_ships_in_its_thread_part_and_the_index_keeps_counts(parts):
     root = parts.home.root

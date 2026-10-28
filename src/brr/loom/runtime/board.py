@@ -539,16 +539,16 @@ class Parts:
 
     def step(self) -> bool:
         """One recompute when anything moved; True when a part's hash did. A move of the tapes alone re-lays only
-        the tools over the last parts (§D7: a tool line is the hot path), and when the last whole compute is
-        ``WHOLE`` seconds old it leaves one due for the next tick, after the tool line is out; a ledger move or
-        a typed note recomputes everything. What the parts read from the rooms and the clock is never older
-        than ``WHOLE`` and a tick."""
+        the tools over the last parts (§D7: a tool line is the hot path). A ledger move that came with it, or a
+        last whole compute ``WHOLE`` seconds old, leaves one due for the next tick, after the tool line is out:
+        on the live home a whole compute takes 0.7-2 s and the ledger moves every few seconds. A due compute runs
+        before the next overlay, so a busy tape never starves it; a typed note recomputes at once."""
         facts = self.reader.refresh(self.home)
         taped, typed = self.tape.read(), self._typed()
         if self.reader.revision == self.revision and not (taped or typed or self.due):
             return False
-        if self.reader.revision == self.revision and not typed and self.parts and taped:
-            self.due = time.monotonic() - self.whole >= WHOLE
+        if taped and not typed and self.parts and not self.due:
+            self.due = self.reader.revision != self.revision or time.monotonic() - self.whole >= WHOLE
             parts, hashes = overlay(self.parts, self.hashes, self.tape.tools, self.tape.live)
         else:
             self.due = False
