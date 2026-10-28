@@ -792,6 +792,17 @@ def propose_config_change(
         return {"error": str(e)}
 
 
+def requester() -> dict[str, str]:
+    """This computer as the approve page names it: ``{hostname, os_user}``, blanks dropped."""
+    import getpass
+    import socket
+    try:
+        user = getpass.getuser()
+    except (OSError, KeyError):
+        user = ""
+    return {k: v for k, v in {"hostname": socket.gethostname(), "os_user": user}.items() if v}
+
+
 def start_pair(brnrd_url: str, pair_body: dict | None) -> dict:
     """Open a pairing: ``{pair_code, pair_url, poll_secret}``, approved at ``pair_url``."""
     return _request(brnrd_url, "POST", "/v1/accounts/pair", json=pair_body or None)
@@ -847,9 +858,9 @@ def connect(brr_dir: Path, *, brnrd_url: str, daemon_name: str = _DEFAULT_DAEMON
         }.items()
         if isinstance(v, str) and v
     }
-    pair = start_pair(brnrd_url, pair_body)
+    pair = start_pair(brnrd_url, {**pair_body, **requester()})
     out(f"[brnrd] Approve this daemon at: {pair['pair_url']}")
-    out(f"[brnrd] Pairing code: {pair['pair_code']}")
+    out(f"[brnrd] Pairing code: {pair['pair_code']} (only approve a code you started yourself)")
     status = await_pair(brnrd_url, pair, poll_interval_s=poll_interval_s, timeout_s=timeout_s)
     state = _load_state(brr_dir)
     account_id = str(status.get("account_id") or "") or None
