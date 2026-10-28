@@ -137,10 +137,9 @@ test('a localhost page with no loom behind it keeps the old home, as the repro d
 	await page.route('**/v1/loom/**', (r) => r.fulfill({ status: 404, body: 'no loom' }));
 	await page.route('**/v1/dashboard/**', (r) => r.fulfill({ status: 401, body: '{}' }));
 	await page.goto(B.base);
-	// Wait on the decided home: a `main` past LoomHome's "reaching brnrd…" placeholder, which the 401s end.
-	await page.waitForFunction(
-		() => document.querySelector('main') && !/reaching brnrd/.test(document.body.innerText)
-	);
+	// Wait on the decided home (+page.svelte's `data-home`), not on `main`: the only `main` this path draws is
+	// LoomHome's "reaching brnrd…" placeholder, gone once the 401s land.
+	await page.locator('[data-home]').waitFor({ state: 'attached' });
 	assert.equal(
 		await page.evaluate(() => document.documentElement.classList.contains('board')),
 		false

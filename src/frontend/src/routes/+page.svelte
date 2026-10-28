@@ -61,5 +61,5 @@
 {#if mode === 'board'}
 	<Board {get} />
 {:else if mode === 'home'}
-	<LoomHome />
+	<div data-home class="contents"><LoomHome /></div>
 {/if}
