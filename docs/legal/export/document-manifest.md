@@ -11,9 +11,9 @@ population was empty of third parties, so no re-acceptance was owed).
 
 Hash snapshot:
 
-- Date: 2026-09-01
+- Date: 2026-10-28
 - Source revision (parent of this export-only change):
-  `67dbc907a47c76efb8bdb6c4e037dc30a6697ff8`
+  `9a97f4790ce81a23a693e5c22a024753bf4f2c2b`
 - Algorithm: SHA-256 over raw repository file bytes
 - Machine-readable list: [`SHA256SUMS`](SHA256SUMS)
 - Verification from the repository root:
