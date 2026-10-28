@@ -87,6 +87,7 @@ REGISTRY = (
     _kind("loom.degraded",     "loom",    "install step error where since episode? dips?",    "loom",        "machine"),
     _kind("loom.recovered",    "loom",    "install step since count last episode? told? grade? up?", "loom",        "machine"),
     _kind("loom.moved",        "loom",    "install from to merges started",                   "loom",        "global"),
+    _kind("loom.pruned",       "loom",    "install ran bytes",                                "loom",        "machine"),
     _kind("lease.fenced",      "loom",    "install gen why",                                  "loom",        "global"),
     _kind("self.healed",       "loom",    "thread commit",                                    "loom",        "global",  once=True),
     _kind("library.problem",   "loom",    "install name problem text since",                  "loom",        "machine"),
