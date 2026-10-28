@@ -900,13 +900,15 @@ def _words(value) -> tuple:
 
 
 def answered(room: Path) -> set[str]:
-    """Letter ids a reply or note in this room's port/out already answers.
+    """Letter ids a reply or note from this strand already answers, drained or not.
 
-    The loom drains port/out on its tick; until it does, the ledger still
-    holds those letters as owed. A slow loom made a stop re-show letters the
-    body had answered (stop-list) and refused a molt whose ack was not yet
-    drained (molt-flake). The stop and the molt both read it here."""
-    found = set()
+    The loom drains port/out on its tick and regenerates the boundary later; in
+    between, the boundary still lists those letters as owed. A slow loom made a
+    stop re-show letters the body had answered (stop-list, and again once the
+    reply had left port/out for the ledger: stop-answered) and refused a molt
+    whose ack was not yet drained (molt-flake). The stop and the molt both
+    read it here: port/out, then this strand's own ledger file."""
+    found = _ledger_answered(room)
     for path in (room / "port" / "out").glob("*.md"):
         try:
             fields = parse_frontmatter(path.read_text())
@@ -914,6 +916,35 @@ def answered(room: Path) -> set[str]:
             continue
         if fields.get("kind") in {"letter", "note"} and fields.get("re"):
             found.add(fields["re"])
+    return found
+
+
+def _ledger_answered(room: Path) -> set[str]:
+    """Letter ids this strand's drained letters and notes name in ``re``.
+
+    Only the strand's own file, and only lines that carry a ``re``: a stop
+    reads it at every attempt, never the whole ledger."""
+    try:
+        root = home_of_room(room).root / "ledger" / "facts"
+    except ValueError:
+        return set()
+    found = set()
+    by = f"strand:{room.name}"
+    for path in root.glob(f"*/{room.name}.jsonl"):
+        try:
+            lines = path.read_text().splitlines()
+        except OSError:
+            continue
+        for line in lines:
+            if '"re"' not in line:
+                continue
+            try:
+                row = json.loads(line)
+            except ValueError:
+                continue
+            ref = (row.get("data") or {}).get("re")
+            if row.get("kind") in {"letter", "note"} and row.get("by") == by and isinstance(ref, str) and ref:
+                found.add(ref)
     return found
 
 

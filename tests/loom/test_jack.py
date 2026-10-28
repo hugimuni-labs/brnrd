@@ -499,6 +499,27 @@ def test_a_reply_waiting_in_port_out_counts_as_answered_at_the_stop(tmp_path, mo
     assert "send --re p-test/abcde" not in held["reason"]
 
 
+@pytest.mark.parametrize("kind", ["letter", "note"])
+def test_a_reply_the_loom_drained_still_counts_while_the_boundary_lags(tmp_path, monkeypatch, kind):
+    # stop-answered: once the loom drained a reply from port/out it left
+    # 'answered', and the boundary listed the letter until the loom rendered again.
+    from brr.loom.runtime.ledger import append
+    from brr.loom.runtime.port import fact_from_port, parse_frontmatter
+    monkeypatch.setenv("BRNRD_STOP_TIMEOUT", "91")
+    room = _room(tmp_path)
+    _write(room, [_letter()])
+    _reply(room, "p-test/abcde")
+    if kind == "note":
+        (room / "port" / "out" / "zzzzz.md").write_text(
+            f"---\nkind: note\nid: {STRAND}/zzzzz\nre: p-test/abcde\nnote: an ack, nothing asked\n---\n")
+    for path in (room / "port" / "out").glob("*.md"):
+        append(Home(tmp_path), fact_from_port(parse_frontmatter(path.read_text()), STRAND, 1, room=room))
+        path.unlink()
+    held = json.loads(execute("stop", room, "{}"))
+    assert held["reason"].startswith("cache keepalive, nothing new arrived")
+    assert "send --re p-test/abcde" not in held["reason"]
+
+
 def test_the_stop_repeats_its_whole_list_after_work_and_lets_an_idle_repeat_through(tmp_path, monkeypatch):
     monkeypatch.setenv("BRNRD_STOP_TIMEOUT", "91")
     room = _room(tmp_path)
