@@ -176,13 +176,22 @@ def _send(argv: list[str]) -> int:
 
 
 def _molt(argv: list[str]) -> int:
-    parser = argparse.ArgumentParser(prog="python -m brr.loom.runtime molt")
+    """``shed``, and ``molt`` for one release: hand the seat on, or decline once."""
+    parser = argparse.ArgumentParser(prog="python -m brr.loom.runtime shed")
     parser.add_argument("--room")
-    parser.add_argument("--why", required=True)
+    parser.add_argument("--why")
+    parser.add_argument("--decline", metavar="REASON")
     parser.add_argument("--fresh", action="store_true")
     args = parser.parse_args(argv)
+    if (args.why is None) == (args.decline is None):
+        parser.error("give --why to shed, or --decline with a reason")
     room = _room(args.room)
     try:
+        if args.decline is not None:
+            from .shed import decline
+            decline(room, args.decline)
+            sys.stdout.write("declined\n")
+            return 0
         fact_id = write_molt(room, args.why, fresh=args.fresh)
     except (PortError, SelfError, ValueError, OSError) as exc:
         sys.stderr.write(f"{exc}\n")

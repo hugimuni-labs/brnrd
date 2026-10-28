@@ -361,40 +361,35 @@ def _note_tool(room: Path, stdin_text: str) -> None:
     )
 
 
-# Every tool call re-reads the whole context. One body held ~180k for 441
-# calls in a day, most of a five-hour window, and could not see it.
-WEIGHT_STEP = 50_000
-
-
-def _weight(room: Path, stdin_text: str, state: dict) -> str:
-    """Once per 50k band: this body's context against what it booted with."""
-    try:
-        path = Path(json.loads(stdin_text).get("transcript_path") or "")
-        size = path.stat().st_size
-        with path.open("rb") as handle:
-            head = handle.read(400_000).decode(errors="replace").splitlines()
-            handle.seek(max(size - 200_000, 0))
-            tail = handle.read().decode(errors="replace").splitlines()
-    except (OSError, ValueError, AttributeError, TypeError):
+def _shed_news(room: Path, stdin_text: str, state: dict) -> str:
+    """The shed numbers once two of the three bars are crossed, said when they change."""
+    from . import shed
+    from .config import load_config
+    if not state.get("turns"):
         return ""
-    boot, now = _context(head), _context(reversed(tail))
-    band = now // WEIGHT_STEP
-    if band < 2 or band == state.get("weight_band"):
+    said = shed.news(state, int(load_config(home_of_room(room).root).shed_excess), shed.pace(room))
+    if not said or said == state.get("shed_said"):
         return ""
-    _set_state(room, weight_band=band)
-    return (f"context: {now // 1000}k tokens, re-read on every call; this body booted at "
-            f"{boot // 1000}k. Molt at the next handover point.")
+    _set_state(room, shed_said=said)
+    return said
 
 
-def _context(lines) -> int:
-    for line in lines:
-        try:
-            usage = json.loads(line)["message"]["usage"]
-        except (ValueError, KeyError, TypeError):
-            continue
-        return sum(int(usage.get(key) or 0) for key in
-                   ("input_tokens", "cache_read_input_tokens", "cache_creation_input_tokens"))
-    return 0
+def _turn(room: Path, stdin_text: str) -> None:
+    """At a stop: the turn that ends here, ``[acted, context]``, joins the tally."""
+    from . import shed
+    state = _state(room)
+    if not state.get("turn_open"):
+        return
+    heads = shed.heads(room)
+    acted = heads != state.get("heads") or shed.wrote(room, float(state.get("turn_at") or 0))
+    boot, now = shed.contexts(stdin_text, state.get("boot"))
+    _set_state(room, turns=[*(state.get("turns") or []), [acted, now]], heads=heads,
+               boot=boot or state.get("boot"), turn_open=False)
+
+
+def _opened(room: Path) -> None:
+    """A stop that returns work opens the next turn."""
+    _set_state(room, turn_open=True, turn_at=time.time())
 
 
 # A delegate's report in a letter head; the whole report stays in the room.
@@ -588,10 +583,11 @@ def execute(event: str, room: Path, stdin_text: str) -> str:
                                                  "additionalContext": guarded}}) if guarded else ""
         # A call begun before this is not the body's current one (pausing.py):
         # a background call returns at once, so a boundary always follows it.
-        _set_state(room, stop_blocks=0, boundary_at=time.time(), held_at=None)
+        _set_state(room, stop_blocks=0, boundary_at=time.time(), held_at=None, turn_open=True)
         (room / "port" / DISPLACED).unlink(missing_ok=True)
     elif event == "start":
-        _set_state(room, boundary_at=time.time())
+        from .shed import heads
+        _set_state(room, boundary_at=time.time(), turn_open=True, turn_at=time.time(), heads=heads(room))
     text = _boundary_text(room)
     parsed = parse_boundary(text)
     opened = [[line.split()[1], line.split()[2], _ageless(line.rpartition(" · owed ")[2])]
@@ -622,7 +618,7 @@ def execute(event: str, room: Path, stdin_text: str) -> str:
         face_changed = bool(face) and face != state.get("face", "")
         # The loom's code moved under a seated body: said once, at the next post.
         moved_changed = bool(moved) and moved != state.get("moved", "")
-        weight = _weight(room, stdin_text, state)
+        weight = _shed_news(room, stdin_text, state)
         paused = describe(read_paused_record(room / "port"))
         hook = _hook_event(stdin_text)
         # Past its allocation a strand is told at every boundary, not once.
@@ -668,10 +664,11 @@ def execute(event: str, room: Path, stdin_text: str) -> str:
             "hookEventName": hook, "additionalContext": text}})
     if _state(room).get("molted") or parsed.settled is not None:
         return ""
-    refused = _stop_block(room, text, plan)
-    if refused:
-        return refused
-    return _poll(room, stdin_text)
+    _turn(room, stdin_text)
+    out = _stop_block(room, text, plan) or _poll(room, stdin_text)
+    if out:
+        _opened(room)
+    return out
 
 
 def _letter_miss(room: Path, parsed: Boundary, done: set[str]) -> str:
@@ -717,6 +714,12 @@ def _stop_block(room: Path, text: str, plan: str) -> str:
     ]
     sections = [section for section in sections if section]
     state = _state(room)
+    if not sections:
+        from .shed import ask
+        due, record = ask(room, state, os.environ.get("BRNRD_THREAD") or "")
+        if record:
+            _set_state(room, **record)
+        sections = [due] if due else []
     count = int(state.get("stop_blocks") or 0)
     seen = "\n\n".join(sections)
     if (count >= 3) if _hand() else (count and seen == state.get("stop_said")):

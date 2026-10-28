@@ -261,23 +261,6 @@ def test_a_dry_body_does_not_take_a_turn_for_an_owed_letter(tmp_path, monkeypatc
     assert json.loads(jack.execute("stop", room, "{}"))["decision"] == "block"
 
 
-def test_post_says_the_context_weight_once_per_band(tmp_path):
-    room = _room(tmp_path)
-    _write(room, [])
-    transcript = tmp_path / "t.jsonl"
-
-    def call(tokens):
-        with transcript.open("a") as out:
-            out.write(json.dumps({"message": {"usage": {"input_tokens": 1, "cache_read_input_tokens": tokens}}}) + "\n")
-        return execute("post", room, json.dumps({"tool_name": "Bash", "transcript_path": str(transcript)}))
-
-    assert call(40_000) == ""
-    first = json.loads(call(120_000))["hookSpecificOutput"]["additionalContext"]
-    assert first.startswith("context: 120k tokens") and "booted at 40k" in first
-    assert call(130_000) == ""
-    assert "context: 151k" in call(151_000)
-
-
 @pytest.mark.parametrize('shell,cache,override,creation,expected', [
     ('claude', None, None, {'ephemeral_1h_input_tokens': 5000}, 3300),
     ('claude', None, None, {'ephemeral_5m_input_tokens': 5000}, 7110),
