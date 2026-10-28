@@ -57,7 +57,13 @@ KEPT = "loom/reap-kept.json"
 
 
 class DiskFloor(Exception):
-    pass
+    """Free space under the floor; ``grade`` counts the halvings of the floor it is below."""
+
+    def __init__(self, free: int, least: int):
+        super().__init__(f"{free >> 20} MB free on the home's volume, under the floor of {least >> 20} MB")
+        self.grade, mark = 0, least // 2
+        while free < mark and self.grade < 8:
+            self.grade, mark = self.grade + 1, mark // 2
 
 
 def _seconds(at: str) -> float:
@@ -285,7 +291,7 @@ class Reaper:
             self.next = 0.0  # Once per streak: the pass is not a tick-rate loop.
         self.below = free < least
         if self.below:
-            raise DiskFloor(f"{free >> 20} MB free on the home's volume, under the floor of {least >> 20} MB")
+            raise DiskFloor(free, least)
 
     def step(self) -> None:
         """Until a pass succeeds again, raise the last pass's failure for the loop's guard."""

@@ -15,7 +15,8 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PORT=8000 \
     BRNRD_ENABLE_DEV=0 \
-    BRNRD_FRONTEND_DIR=/app/frontend
+    BRNRD_FRONTEND_DIR=/app/frontend \
+    BRNRD_INSTALLER=/app/install.sh
 
 WORKDIR /app
 
@@ -37,6 +38,7 @@ RUN python -m pip install --no-cache-dir ".[backend,postgres]" \
 RUN python scripts/stamp_build_info.py && rm -rf /app/scripts
 
 COPY --from=frontend-builder /build/frontend/build /app/frontend
+COPY docs/public/install.sh /app/install.sh
 
 EXPOSE 8000
 

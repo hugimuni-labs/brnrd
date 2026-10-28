@@ -6,6 +6,17 @@ import { createServer } from 'node:http';
 import { readFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 
+// board.window's cut: the newest `most` letters older than `before`, reaching back to `until`.
+export function cut(part, q, most = 200) {
+	const ids = (part.letters || []).map((l) => l.id);
+	const b = ids.indexOf(q.get('before')),
+		u = ids.indexOf(q.get('until'));
+	const end = b >= 0 ? b : ids.length;
+	let start = Math.max(0, end - most);
+	if (u >= 0) start = Math.min(start, u);
+	return { ...part, letters: part.letters.slice(start, end), more: start > 0 };
+}
+
 export function partsServer(dir, port = 0) {
 	const sent = [],
 		streams = new Set();
@@ -53,7 +64,9 @@ export function partsServer(dir, port = 0) {
 			return;
 		}
 		res.writeHead(200, { 'content-type': 'application/json', 'cache-control': 'no-cache' });
-		res.end(raw);
+		res.end(
+			path.startsWith('thread/') ? JSON.stringify(cut(JSON.parse(raw), url.searchParams)) : raw
+		);
 	});
 	return new Promise((ok) =>
 		server.listen(port, '127.0.0.1', () => ok({ server, sent, set, port: server.address().port }))

@@ -99,6 +99,10 @@ class GitHubChecks:
         return "green"
 
 
+#: Main's tip as this process last fetched it, for the wake's ``loom:`` line.
+SEEN: dict = {}
+
+
 class DevSource:
     """A git checkout that follows origin's main, fast-forward only."""
 
@@ -127,6 +131,7 @@ class DevSource:
         url = self._git("remote", "get-url", "origin")
         self._git("fetch", "--quiet", "--no-tags", "origin", "refs/heads/main")
         tip, head = self._git("rev-parse", "FETCH_HEAD"), self._git("rev-parse", "HEAD")
+        SEEN.update(tip=tip, at=time.time())
         if tip == head or self._ancestor(tip, head):
             return None
         if not self._ancestor(head, tip):
@@ -268,3 +273,25 @@ def moved_line(facts, strand: str, gen: int, install: str) -> str:
     moves = [moved_text(f) for f in kind_facts(facts, "loom.moved")
              if f.data.get("install") == install and _seconds(f.at) >= _seconds(began.at)]
     return "moved: " + "; ".join(moves) if moves else ""
+
+
+def wake_line(facts, install: str, root: Path) -> str:
+    """``loom:`` for a wake: the commit this loom runs against main as last fetched,
+    the pull requests main holds that it has not loaded, and what its last move loaded."""
+    from .ledger import kind_facts
+    running = next((str(f.data["commit"]) for f in reversed(kind_facts(facts, "loom.started"))
+                    if f.data.get("install") == install and f.data.get("commit")), "")
+    if not running:
+        return ""
+    tip = str(SEEN.get("tip") or "")
+    if not tip:
+        main = "main not fetched by this loom (update off, or not polled yet)"
+    elif tip == running or git(root, "merge-base", "--is-ancestor", tip, running, check=False).returncode == 0:
+        main = f"main {tip[:8]}, nothing behind"
+    else:
+        count = git(root, "rev-list", "--count", f"{running}..{tip}", check=False).stdout.strip() or "?"
+        pending = merges(root, running, tip)
+        main = (f"main {tip[:8]} is {count} commit{'s' * (count != '1')} ahead"
+                + (f", not loaded: {', '.join(pending)}" if pending else ""))
+    last = next((f for f in reversed(kind_facts(facts, "loom.moved")) if f.data.get("install") == install), None)
+    return f"loom: runs {running[:8]}; {main}" + (f"; last {moved_text(last)}" if last else "") + "\n"

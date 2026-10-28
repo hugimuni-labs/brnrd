@@ -72,12 +72,15 @@ def _table_inputs(facts, main):
     return state, ownership, axes, owed, activity, boundary, pending_bodies(state.accepted), unanswered
 
 
-def thread_table(home: Home, facts: list) -> list[dict]:
+def thread_table(home: Home, facts: list, opened_by: str | None = None) -> list[dict]:
     """Read main and the ledger; never ask a body to declare its state.
 
     A recent boundary is a shown fact or the jack's existing state-file mtime.
     There is no explicit 'waiting' fact: a live body with nothing owed, or a
     stop block, is the nearest derivable holding value.
+
+    ``opened_by`` keeps only the rows whose ``opened-by`` is that value: a
+    boundary prints its thread's children, and reads no other room.
     """
     from .loom import body_alive
     repo = home.root / 'self'
@@ -137,6 +140,8 @@ def thread_table(home: Home, facts: list) -> list[dict]:
     parked = {wish.thread: _short(read['reading'].removeprefix('waiting:').strip(), 60)
               for wish, read in sorted(live(told), key=lambda row: row[1]['at'])}
     for thread, data, choice, created, date in _MAIN[repo][1]:
+        if opened_by is not None and (data.get('opened-by') or '—') != opened_by:
+            continue
         why = '—'
         if opened_for(data):
             why = '; '.join(opened_for_line(ident, told.get(ident)) for ident in opened_for(data))
@@ -191,7 +196,7 @@ def thread_table(home: Home, facts: list) -> list[dict]:
                      'waits': parked.get(thread, ''),
                      'headline': _short((progress(told, thread) or {}).get('next') or '', 60)})
     for ident, fate in ownership.items():
-        if fate.owner == 'operator':
+        if fate.owner == 'operator' and (opened_by is None or (fate.thread or '—') == opened_by):
             rows.append({'thread': 'operator', 'seat': '—', 'now': ident + ': ' + fate.reason,
                          'owed': 1, 'unanswered': 0, 'opened-by': fate.thread or '—', 'opened-for': '—',
                          'plan': '—',

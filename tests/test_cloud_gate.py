@@ -215,7 +215,7 @@ def test_connect_persists_token(tmp_path, monkeypatch):
     assert register[2]["json"]["daemon_name"] == "laptop"
     assert output == [
         "[brnrd] Approve this daemon at: u",
-        "[brnrd] Pairing code: BR-TEST",
+        "[brnrd] Pairing code: BR-TEST (only approve a code you started yourself)",
         "[brnrd] Connected to brnrd account acct_x.",
     ]
 

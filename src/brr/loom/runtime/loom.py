@@ -216,6 +216,17 @@ def _run_recipe(clone, thread, owed_path, part_path, repo_file, core_path, recip
         return code, wake.read(), why.read().strip()
 
 
+def _loom_line(home, facts) -> str:
+    """What this loom runs against main; a failure costs the line, never the wake."""
+    from .receipts import source_root
+    from .update import wake_line
+    try:
+        return wake_line(facts, home.install_id(), source_root())
+    except Exception as exc:  # noqa: BLE001
+        _log(home, f"wake: loom line skipped ({exc})")
+        return ""
+
+
 def _build_wake(home, strand, gen, clone, thread, rows, part, owed_path, part_path, repo_file, core_path):
     """Run the recipe; a home that cannot wake still wakes when it can be made to.
 
@@ -529,7 +540,7 @@ def _prepare(home: Home, strand: str, thread: str, gen: int,
         + (" call `$BRNRD_JACK --event start` now, `$BRNRD_JACK --event post` between "
            "steps and `$BRNRD_JACK --event stop` before ending; read each returned boundary\n"
            if jack == "hand" else "\n")
-    )
+    ) + _loom_line(home, facts)
     atomic_write(part_path, part)
     if repos is None:
         from .adapters import repos as seat_repos, seat_text
@@ -571,7 +582,7 @@ def _prepare(home: Home, strand: str, thread: str, gen: int,
         room / "port" / "in" / "boundary.md",
         render_boundary(strand, gen, thread, letters, shown, threads,
                         fuel=fuel, channels=reply_channels(facts, home),
-                        opened=thread_table(home, facts), forge=_forge(home), plan=_plan(home, thread, facts),
+                        opened=thread_table(home, facts, f"thread:{thread}"), forge=_forge(home), plan=_plan(home, thread, facts),
                         replies={f.letter.id: f.reply_to for f in active_owners(facts, main_snapshot(home))},
                         attachments=attachments, reply_context=reply_context,
                         repaired=_repaired(facts, strand, gen),
@@ -623,18 +634,18 @@ def body_alive(room: Path) -> bool:
     """True while the body's process holds the flock on ``room/.body``."""
     path = Path(room) / ".body"
     if not path.exists():
-        return False
+        return _seen_alive(room, False)
     try:
         fd = os.open(path, os.O_RDWR)
     except OSError:
-        return False
+        return _seen_alive(room, False)
     try:
         fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
     except BlockingIOError:
-        return True
+        return _seen_alive(room, True)
     else:
         fcntl.flock(fd, fcntl.LOCK_UN)
-        return False
+        return _seen_alive(room, False)
     finally:
         os.close(fd)
 
@@ -1450,7 +1461,78 @@ def _repaired(facts, strand, gen) -> str:
     return ""
 
 
+# A boundary is rendered again only when something it read changed. What it
+# read is recorded, not listed: every path it opened or listed (main's ref,
+# config, gauges, a child's jack state, ...) with its stat, every body whose
+# liveness it probed, and the ledger's semantic revision. The clock is the one
+# input no stat sees, so a render is also retired after RENDER_MAX_AGE.
+RENDER_MAX_AGE = 10.0
+_RENDERS: dict[str, tuple] = {}
+_READING: list = [None]
+
+
+def _note_read(event, args):
+    """Audit hook: while a boundary renders on this thread, keep what it opens."""
+    reading = _READING[0]
+    if reading is None or reading[0] != threading.get_ident():
+        return
+    if event in ("open", "os.listdir", "os.scandir") and args and isinstance(args[0], (str, bytes, os.PathLike)):
+        reading[1].add(os.fsdecode(args[0]))
+
+
+sys.addaudithook(_note_read)
+
+
+def _stat(path):
+    try:
+        st = os.stat(path)
+    except OSError:
+        return None
+    return st.st_mtime_ns, st.st_size, st.st_ino
+
+
+def _seen_alive(room, alive):
+    reading = _READING[0]
+    if reading is not None and reading[0] == threading.get_ident():
+        reading[2][str(room)] = alive
+    return alive
+
+
+def _rendered(facts, key, render):
+    """``render()``, or its last text when nothing it read has changed since."""
+    prior = _RENDERS.get(key[0])
+    if (prior is not None and prior[5] is facts and prior[0] == key
+            and time.monotonic() - prior[1] < RENDER_MAX_AGE
+            and all(_stat(path) == stat for path, stat in prior[2].items())
+            and all(body_alive(Path(room)) == alive for room, alive in prior[3].items())):
+        return prior[4]
+    reading = _READING[0] = (threading.get_ident(), set(), {})
+    try:
+        text = render()
+    finally:
+        _READING[0] = None
+    paths = {path: _stat(path) for path in reading[1]}
+    _RENDERS[key[0]] = (key, time.monotonic(), paths, reading[2], text, facts)
+    return text
+
+
 def _boundary(home, facts, strand, gen, context):
+    if isinstance(facts, LedgerView):
+        # The view is replaced on repair and only appended to otherwise; a
+        # renewal is the one append no boundary reads.
+        key = (strand, gen, facts.semantic_revision, context.thread, context.fuel, context.why)
+        text = _rendered(facts, key, lambda: _render_boundary(home, facts, strand, gen, context))
+    else:
+        text = _render_boundary(home, facts, strand, gen, context)
+    path = home.room(strand) / "port/in/boundary.md"
+    if not path.is_file() or path.read_text() != text:
+        atomic_write(path, text)
+    else:
+        # Rendered from these facts: the jack's stop compares this mtime with the ledger's.
+        os.utime(path)
+
+
+def _render_boundary(home, facts, strand, gen, context):
     from .threads import thread_table
     main, state = main_snapshot(home), fold(facts)
     owed = letters_for(facts, main, context.thread)
@@ -1458,7 +1540,8 @@ def _boundary(home, facts, strand, gen, context):
         strand, gen, context.thread, owed,
         state.shown.get(strand, set()), sender_threads(facts), context.fuel,
         context.why or None, reply_channels(facts, home),
-        opened=thread_table(home, facts), forge=_forge(home), plan=_plan(home, context.thread, facts),
+        opened=thread_table(home, facts, f"thread:{context.thread}"), forge=_forge(home),
+        plan=_plan(home, context.thread, facts),
         replies={f.letter.id: f.reply_to for f in active_owners(facts, main)},
         attachments=letter_attachments(home.root, facts),
         reply_context=_reply_context(facts, context.thread, owed, home.room(strand)),
@@ -1470,12 +1553,7 @@ def _boundary(home, facts, strand, gen, context):
         left=_left(facts, context.thread, strand),
         **_budget(home, context.thread, facts),
     )
-    path = home.room(strand) / "port/in/boundary.md"
-    if not path.is_file() or path.read_text() != text:
-        atomic_write(path, text)
-    else:
-        # Rendered from these facts: the jack's stop compares this mtime with the ledger's.
-        os.utime(path)
+    return text
 
 
 _PAUSE_LOOKED: dict[Path, float] = {}
@@ -1720,6 +1798,43 @@ def _advance_bodies(home, bodies, facts, choice, *, reader=None):
     return facts
 
 
+def _displace(home: Home, facts: list[Fact]) -> None:
+    """Over ``max_held`` live bodies, the ones held longest are asked to leave.
+
+    The home thread's body is not counted and never displaced. Only a body
+    parked in its stop hook (``held_at`` in its jack state) is marked, so work
+    in flight is never cut; the count settles as working bodies park.
+    """
+    from .config import load_config
+    from .jack import DISPLACED
+    from .router import install_of
+    limit = load_config(home.root).max_held
+    if not limit:
+        return
+    main = home.main_thread()
+    live = [(thread, strand, home.room(strand))
+            for thread, (strand, _gen) in fold(facts).holder.items()
+            if thread != main and install_of(strand) == home.install_id()
+            and body_alive(home.room(strand))]
+    marked = sum((room / "port" / DISPLACED).exists() for _t, _s, room in live)
+    over = len(live) - int(limit) - marked
+    if over <= 0:
+        return
+    held = []
+    for thread, strand, room in live:
+        try:
+            held_at = json.loads((room / "port" / "jack-state.json").read_text()).get("held_at")
+        except (OSError, ValueError):
+            continue
+        if held_at and not (room / "port" / DISPLACED).exists():
+            held.append((float(held_at), thread, strand, room))
+    now = time.time()
+    for held_at, thread, strand, room in sorted(held)[:over]:
+        atomic_write(room / "port" / DISPLACED, f"{len(live)} live bodies, max_held {limit:g}\n")
+        _log(home, f"displace {strand} thread {thread}: held {(now - held_at) / 60:.0f} min,"
+                   f" {len(live)} live bodies over max_held {limit:g}")
+
+
 def tick_once(home: Home, bodies: dict[str, Body], adapter: str, core: str,
               router=None) -> None:
     """One read of the ledger, then ingest, route, boundaries, reap.
@@ -1741,6 +1856,7 @@ def tick_once(home: Home, bodies: dict[str, Body], adapter: str, core: str,
         facts = _grant_landed(home, facts)
         facts = _grant_opened(home, facts)
         facts = _advance_bodies(home, bodies, facts, (adapter, core), reader=router.reader)
+        _displace(home, facts)
         # Time enters the owner table once, using only the facts already held.
         facts = observe_due(home, facts, router.armed())
         # A park's condition is checked the same way; the forge is read off the loop.
@@ -1910,8 +2026,13 @@ def run(root: Path | str, *, adapter: str = "fake", core: str = "haiku",
         health = Health(home, read_facts(home), _log)
         from .snapshot import Publisher
         publisher = Publisher(home, _log, functools.partial(health.guard, backoff=False))
+        spa = None
         if config.board_port:  # read at start: a port change waits for the next re-exec
             from .board import Parts, serve
+            from .spabuild import SpaBuild
+            frontend = Path(__file__).resolve().parents[3] / "frontend"
+            if (frontend / "package.json").is_file() and not os.environ.get("BRNRD_FRONTEND_DIR"):
+                spa = SpaBuild(frontend, lambda text: _log(home, text))
             board = Parts(home, lambda: load_config(home.root), _log)
             threading.Thread(target=board.run, name="board", daemon=True).start()
             try:
@@ -1953,6 +2074,8 @@ def run(root: Path | str, *, adapter: str = "fake", core: str = "haiku",
                 health.guard("library", keeper.step, backoff=False)
                 health.guard("disk", reaper.disk, backoff=False)
                 health.guard("reap", reaper.step, backoff=False)
+                if spa is not None:  # the board's build follows the checkout; a failed one stays degraded
+                    health.guard("spa", spa.step, backoff=False)
                 # Only at an idle tick, and the re-exec follows in this same pass.
                 health.guard("update", updater.step, config, functools.partial(_idle, home),
                              backoff=False)

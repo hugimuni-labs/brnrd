@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import {
+	requesterLabel,
 	ConnectAuthError,
 	approvalProofFromHash,
 	approveConnect,
@@ -69,12 +70,12 @@ test('fetchConnectContext raises the auth error on 401', async () => {
 test('approveConnect posts the repo id and returns the backend notice', async () => {
 	const impl = fakeFetch(200, {
 		ok: true,
-		notice: 'Your daemon is connected. You can return to your terminal.',
+		notice: 'This computer is connected. You can return to your terminal.',
 		telegram: { pair_code: 'PK-1', instructions: 'send /start PK-1', deep_link: null }
 	});
 	const result = await approveConnect('BR-123', 'repo_1', 'proof-abc', impl);
 	assert.equal(result.ok, true);
-	assert.match(result.notice, /daemon is connected/);
+	assert.match(result.notice, /computer is connected/);
 	assert.equal(result.telegram?.pair_code, 'PK-1');
 	const calls = (impl as unknown as { calls: { url: string; init?: RequestInit }[] }).calls;
 	assert.equal(calls[0].init?.method, 'POST');
@@ -159,7 +160,7 @@ test('needsRepoEnable marks the one dead end that has somewhere to go', () => {
 test('approveConnect with no repo id posts an empty body (server auto-resolves)', async () => {
 	const impl = fakeFetch(200, {
 		ok: true,
-		notice: 'Your daemon is connected. You can return to your terminal.',
+		notice: 'This computer is connected. You can return to your terminal.',
 		telegram: null
 	});
 	await approveConnect('BR-123', '', 'proof-abc', impl);
@@ -205,4 +206,17 @@ test('missingApprovalProof names the live-code-but-truncated-link case', () => {
 	assert.equal(missingApprovalProof(ctx({ status: 'consumed' }), ''), false);
 	assert.equal(missingApprovalProof(ctx({ status: 'expired' }), ''), false);
 	assert.equal(missingApprovalProof(ctx({ repos: [] }), ''), false, 'the repo dead end wins');
+});
+
+test('requesterLabel names the computer that asked, or nothing', () => {
+	assert.equal(
+		requesterLabel({ requester: { hostname: 'eves-laptop', os_user: 'eve' } }),
+		'eve on eves-laptop'
+	);
+	assert.equal(
+		requesterLabel({ requester: { hostname: 'eves-laptop', os_user: '' } }),
+		'eves-laptop'
+	);
+	assert.equal(requesterLabel({ requester: { hostname: '', os_user: '' } }), '');
+	assert.equal(requesterLabel({}), '');
 });

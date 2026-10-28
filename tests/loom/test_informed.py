@@ -53,7 +53,8 @@ def test_a_failing_step_opens_one_streak_backs_off_and_recovers(tmp_path, monkey
     assert down.data["error"] == "ValueError: not enough values to unpack"
     assert down.data["where"].startswith("loom/runtime/")
     assert back.data == {"install": install, "step": "tick_once", "since": down.data["since"],
-                         "count": 3, "last": "ValueError: not enough values to unpack"}
+                         "count": 3, "last": "ValueError: not enough values to unpack",
+                         "episode": down.data["since"], "told": "", "grade": 0, "up": back.data["up"]}
     log = (root / "loom/loom.log").read_text()
     assert log.count("Traceback") == 1
     # Backoff skips 1, then 2, then 4 calls: the fourth attempt is the eighth tick.
@@ -88,7 +89,7 @@ def test_a_streak_that_lasts_is_told_to_the_home_thread_once(tmp_path, monkeypat
     _running(root, lambda: told() and len(_kinds(root, "loom.degraded")) == 1, timeout=10)
     [down] = _kinds(root, "loom.degraded")
     [letter] = told()
-    assert letter.id == notice_id("degraded", f"tick_once:{down.data['since']}")
+    assert letter.id == notice_id("degraded", f"tick_once:{down.data['since']}:KeyError at {down.data['where'].rsplit('/', 1)[-1]}:0")
     assert letter.data["to"] == "thread:inbox"
     assert "KeyError: 'says'" in letter.data["body"]
 

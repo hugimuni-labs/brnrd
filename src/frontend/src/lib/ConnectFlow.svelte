@@ -12,6 +12,7 @@
 		loginUrlForConnect,
 		missingApprovalProof,
 		needsRepoEnable,
+		requesterLabel,
 		statusNotice,
 		type ApproveResult,
 		type ConnectContext
@@ -183,10 +184,10 @@
 <svelte:head>
 	<title
 		>{phase === 'done'
-			? 'daemon connected'
+			? 'computer connected'
 			: phase === 'confirm'
-				? 'approve daemon'
-				: 'connect daemon'} · brnrd</title
+				? 'approve this computer'
+				: 'connect a computer'} · brnrd</title
 	>
 </svelte:head>
 
@@ -208,14 +209,15 @@
 	     screen wearing the first one's URL — and the second screen is the
 	     thing this flow exists to have deleted. -->
 	<h1 class="mt-1 font-mono text-2xl font-semibold tracking-tight text-amber-100">
-		{phase === 'done' ? 'Daemon connected' : 'Connect your daemon'}
+		{phase === 'done' ? 'Computer connected' : 'Connect your computer'}
 	</h1>
 
 	<section class="panel mt-6 p-5">
 		{#if phase === 'entry'}
 			<!-- Phase 1: code entry form -->
 			<p class="text-sm text-stone-300">
-				Run <code class="font-mono text-amber-200">brnrd account connect</code> in your checkout, then
+				Run <code class="font-mono text-amber-200">brnrd setup</code> (or
+				<code class="font-mono text-amber-200">brnrd account connect</code>) on your computer, then
 				enter the one-time code it prints.
 			</p>
 			<form
@@ -262,12 +264,21 @@
 			>
 				{code}
 			</p>
+			{#if context && requesterLabel(context)}
+				<p class="mt-2 text-sm text-stone-300" data-testid="requester">
+					asked by <span class="font-mono text-amber-200">{requesterLabel(context)}</span>
+				</p>
+			{/if}
+			<p class="mt-2 text-xs text-ink-quiet">
+				Only approve a code you started yourself, on your own computer. If someone sent you this
+				link, close the page.
+			</p>
 
 			{#if contextError}
 				<p class="text-sm text-red-400">{contextError}</p>
 			{:else if unauthenticated}
 				<p class="text-sm text-stone-400">
-					Sign in to approve this daemon — <a
+					Sign in to approve this computer — <a
 						class="text-sky-400 underline"
 						href={loginUrlForConnect(code, hash)}
 						rel="external">log in</a
@@ -353,7 +364,8 @@
 								type="button"
 								class="mt-4 cursor-pointer border border-amber-700 bg-amber-950/40 px-3 py-1.5 font-mono text-[11px] tracking-wide text-amber-100 uppercase hover:border-amber-500 disabled:cursor-not-allowed disabled:border-stone-800 disabled:text-ink-mute"
 								disabled={posting || !repoId}
-								onclick={() => approve(false)}>{posting ? 'approving…' : 'approve daemon'}</button
+								onclick={() => approve(false)}
+								>{posting ? 'approving…' : 'approve this computer'}</button
 							>
 							{#if suggested}
 								<button
@@ -372,7 +384,7 @@
 			{/if}
 		{:else}
 			<!-- Phase 3: done -->
-			<p class="text-sm text-amber-200">{result?.notice ?? 'Your daemon is connected.'}</p>
+			<p class="text-sm text-amber-200">{result?.notice ?? 'This computer is connected.'}</p>
 			<MessengerDoors doors={messengerDoors} heading="continue in another chat" />
 		{/if}
 	</section>

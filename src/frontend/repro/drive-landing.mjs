@@ -12,7 +12,7 @@
 // Usage: node repro/drive-landing.mjs [--out DIR] [--port N]
 import { spawn } from 'node:child_process';
 import { strict as assert } from 'node:assert';
-import { mkdir } from 'node:fs/promises';
+import { mkdir, readFile } from 'node:fs/promises';
 import { chromium } from 'playwright';
 import { setTimeout as delay } from 'node:timers/promises';
 import { closeBrowser, exerciseRecorder, runDriver, stopVite } from './finish.mjs';
@@ -25,6 +25,13 @@ const arg = (flag) => {
 const OUT = arg('--out') ?? '/tmp/landing';
 const PORT = Number(arg('--port') ?? 5207);
 const ORIGIN = `http://localhost:${PORT}`;
+
+// The headline is a constant awaiting its pick (Landing.svelte, HERO_HEADLINE).
+// Read it from the component so the pick is one edit, and assert the h1 shows it.
+const HERO_HEADLINE = (
+	await readFile(new URL('../src/lib/Landing.svelte', import.meta.url), 'utf8')
+).match(/const HERO_HEADLINE = '([^']+)';/)?.[1];
+assert.ok(HERO_HEADLINE, 'Landing.svelte declares HERO_HEADLINE as one quoted string');
 
 const VIEWPORTS = [
 	{ name: 'phone', width: 390, height: 844 },
@@ -133,7 +140,7 @@ async function main() {
 			// leaves its picture.
 			await delay(1500);
 			await fullPageShot(page, viewport, `${OUT}/${viewport.name}-landing.png`);
-			assert.equal(await text(hero), 'assign the work. get back a receipt.');
+			assert.equal(await text(hero), HERO_HEADLINE);
 
 			const body = await text(page.locator('body'));
 			for (const noun of ['letter', 'thread', 'strand', 'receipt'])

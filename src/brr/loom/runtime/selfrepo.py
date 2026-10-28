@@ -63,6 +63,18 @@ def seed_root() -> Path:
     return Path(__file__).resolve().parent / "seed"
 
 
+def identity_source() -> Path:
+    """The product's character, seeded once as ``core/identity.md``.
+
+    The daemon's inject stack reads the same file, so there is one copy.
+    """
+    return Path(__file__).resolve().parents[2] / "prompts" / "identity-core.md"
+
+
+IDENTITY_NOTE = ("core/identity.md is who brnrd is: the product's character, now this self's. "
+                 "Edit it or replace it; the next wake says the new thing.")
+
+
 def _env_without_pin() -> dict[str, str]:
     env = os.environ.copy()
     for key in _PINNED_GIT:
@@ -240,6 +252,11 @@ def _copy_seed(dest: Path) -> None:
             continue
         target.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(src, target)
+    identity = identity_source()
+    if not identity.is_file():
+        raise SelfError(f"identity missing at {identity}")
+    (dest / "core").mkdir(parents=True, exist_ok=True)
+    shutil.copy2(identity, dest / "core" / "identity.md")
     for rel in _EXECUTABLES:
         path = dest / rel
         if not path.is_file():
@@ -371,7 +388,7 @@ def init_self(home: Path, person: str | None = None, remote: str | None = None) 
         shutil.rmtree(aside, ignore_errors=True)
     seed_config(home)
     sha = git(self_dir, "rev-parse", "--short", "HEAD").stdout.strip()
-    return f"initialized {self_dir} {sha}"
+    return f"initialized {self_dir} {sha}\n{IDENTITY_NOTE}"
 
 
 def heal_home_thread(home: Path) -> str:
