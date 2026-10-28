@@ -11,7 +11,7 @@ from typing import Iterable
 
 from brr.daemon2.facts import Fact, union
 
-from .home import HOME_THREAD, LEGACY_HOME_THREAD
+from .home import HOME_THREAD
 
 
 @dataclass(frozen=True)
@@ -219,8 +219,9 @@ def wishes(facts: Iterable[Fact]) -> dict[str, Wish]:
     return found
 
 
-# The home thread (and its legacy name) routes letters; it holds no answer of its own.
-RELAYS = frozenset({HOME_THREAD, LEGACY_HOME_THREAD})
+# The home thread routes letters; it holds no answer of its own. Older ledgers carry letters it wrote under its
+# former name `brnrd` (#2500 dropped the routing alias, not the history), so that name still reads as a relay.
+RELAYS = frozenset({HOME_THREAD, "brnrd"})
 
 
 def _answer(asked: list[Wish], letters: dict, ordered: list[Fact]) -> None:
