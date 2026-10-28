@@ -101,6 +101,33 @@ def gate_for(home: Home, config: LoomConfig):
                              strict=config.lease_mode == "strict")
 
 
+
+def heir_of(home: Home, facts, letters, thread: str, gen: int) -> str | None:
+    """The strand whose room the next body of ``thread`` starts from, or None for main.
+
+    A molt hands its room on unless it was fresh. Any other end hands it on
+    too (handover): a displaced or crashed body's unlanded work sat in a room
+    the next fresh clone never saw. Only the thread's own last body hands on,
+    only if it ran (a wake that failed, e.g. a home over budget, left nothing
+    worth keeping and a room the repair never reached), and only while its
+    room is on this disk.
+    """
+    molts = {f.id: f for f in fold(facts).accepted if f.kind == "molt"}
+    for letter in reversed(letters):
+        molt = molts.get(letter.data.get("molt"))
+        # A molt marker on a letter to another thread would graft a foreign room.
+        if (molt is not None and molt.data.get("strand") == letter.data.get("from")
+                and molt.data.get("gen") == letter.data.get("gen")
+                and sender_threads(facts).get(letter.data.get("from")) == thread):
+            return None if molt.data.get("fresh", False) else letter.data["from"]
+    last = next((f for f in reversed(facts) if f.kind == "lease"
+                 and str(f.data.get("thread")) == thread
+                 and int(f.data.get("gen") or 0) == gen - 1), None)
+    strand = str(last.data.get("strand") or "") if last is not None else ""
+    ran = strand and any(f.kind == "body.started" and f.data.get("strand") == strand
+                         and int(f.data.get("gen") or 0) == gen - 1 for f in facts)
+    return strand if ran and (home.room(strand) / "self" / ".git").exists() else None
+
 class Router:
     def __init__(self, home: Home, config: LoomConfig | None = None):
         self.home = home
@@ -420,17 +447,9 @@ class Router:
                 "install": home.install_id(), "router_gen": self.lease.gen,
                 "shell": choice[0], "core": choice[1], "repos": declared,
             }
-            molts = {f.id: f for f in fold(facts).accepted if f.kind == "molt"}
-            for letter in reversed(letters):
-                molt = molts.get(letter.data.get("molt"))
-                # Only this thread's own last body may hand its room on: a molt
-                # marker on a letter to another thread would graft a foreign room.
-                if (molt is not None and molt.data.get("strand") == letter.data.get("from")
-                        and molt.data.get("gen") == letter.data.get("gen")
-                        and sender_threads(facts).get(letter.data.get("from")) == thread):
-                    if not molt.data.get("fresh", False):
-                        data["parent"] = letter.data["from"]
-                    break
+            parent = heir_of(home, facts, letters, thread, gen)
+            if parent:
+                data["parent"] = parent
             try:
                 stored = _record(home, "lease", data, f"lease:{thread}:{gen}")
             except LedgerConflict:

@@ -261,3 +261,46 @@ else:
     finally:
         loom.halt()
     assert not loom.errors
+
+
+def test_a_body_that_ends_without_a_molt_hands_on_its_room_and_says_how_it_ended(tmp_path):
+    """handover: a displaced or crashed body's successor started from main and saw
+    nothing of how it ended; a README decision it had committed but not landed was lost."""
+    root = tmp_path / "home"
+    init_self(root, person="test")
+    write_thread(root, "work", "Work\n\nNext step: original", "work", wait="0")
+    owed = inject_letter(root, to="thread:work", body="first ask")
+    chat = _chat_letter(root, "a person asks")
+    received = root / "successor.json"
+    bodies(root, f'''import json, subprocess, sys
+from pathlib import Path
+from brr.loom.runtime.fakebody import Ctx
+from brr.loom.runtime.home import atomic_write
+ctx = Ctx(Path(sys.argv[1]))
+readme = ctx.room / "self/threads/work/README.md"
+if "Decision: keep the room" in readme.read_text():
+    atomic_write(Path({str(received)!r}), json.dumps({{"wake": ctx.wake(), "readme": readme.read_text()}}))
+    for letter in ctx.owed():
+        ctx.send("thread:work", note="settled", re=letter.id)
+else:
+    ctx.send("channel:fake", "on it", re={chat!r})
+    readme.write_text(readme.read_text() + "\\nDecision: keep the room, because the edit was never landed\\n")
+    subprocess.run(["git", "commit", "-qam", "decision, unlanded"], cwd=ctx.room / "self", check=True)
+    raise SystemExit(0)
+''')
+    loom = Loom(root)
+    loom.start()
+    try:
+        wait_until(received.exists, 30, loom.dump)
+        result = json.loads(received.read_text())
+        assert "Decision: keep the room" in result["readme"]
+        assert "(gen 1): no molt" in result["wake"]
+        assert "README last landed" in result["wake"]
+        assert "→ channel:fake: on it" in result["wake"]
+        leases = [f for f in loom.facts() if f.kind == "lease" and f.data.get("thread") == "work"]
+        first, second = leases[0].data["strand"], leases[-1].data
+        assert second["gen"] == 2 and second.get("parent") == first
+        assert owed
+    finally:
+        loom.halt()
+    assert not loom.errors

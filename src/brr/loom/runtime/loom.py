@@ -425,27 +425,70 @@ def _policy(home: Home, thread: str) -> str | None:
     return name or None
 
 
-def _handover(facts: list[Fact], thread: str, gen: int, threads: dict[str, str]) -> str:
-    """The predecessor's molt why and the notes it wrote after it, verbatim.
+def _handover(facts: list[Fact], thread: str, gen: int, threads: dict[str, str],
+              home: Home | None = None) -> str:
+    """How the body before this one ended, and what it did since its README last landed.
 
     The wake used to say "read the handover" without showing it, and the real
     state sat in a note written after the molt: gen 221 of the inbox grepped
-    the ledger for both (wake-vision). Only the body just before this one
-    hands over; an older molt is history, not a handover.
+    the ledger for both (wake-vision). A body can also end with no molt, displaced
+    over ``max_held`` or gone mid-turn, and its successor then saw only how it
+    ended, not what it did (handover). Only the body just before this one hands over; an older end
+    is history, not a handover.
     """
-    molt = next((f for f in reversed(facts) if f.kind == "molt" and f.data.get("gen") == gen - 1
-                 and threads.get(str(f.data.get("strand"))) == thread), None)
-    if molt is None:
+    lease = next((f for f in reversed(facts) if f.kind == "lease" and str(f.data.get("thread")) == thread
+                  and int(f.data.get("gen") or 0) == gen - 1), None)
+    if lease is None:
         return ""
-    who = str(molt.data.get("strand"))
-    lines = [f"handover from {who} (gen {gen - 1}, molted {molt.at[11:16]}Z): {molt.data.get('why', '')}"]
+    who = str(lease.data.get("strand"))
+    molt = next((f for f in reversed(facts) if f.kind == "molt" and f.data.get("gen") == gen - 1
+                 and f.data.get("strand") == who and threads.get(who) == thread), None)
+    if molt is not None:
+        lines = [f"handover from {who} (gen {gen - 1}, molted {molt.at[11:16]}Z): {molt.data.get('why', '')}"]
+    else:
+        # How it ended is since_gone's line (attempt.ended); this says what it left.
+        lines = [f"handover from {who} (gen {gen - 1}): no molt; this thread's README and the wish lefts"
+                 " are what it left, and its room is yours"]
+    landed = _landed(home, thread) if home is not None else None
+    if landed is not None:
+        lines.append(f"README last landed {landed[0]} {datetime.fromtimestamp(landed[1], timezone.utc):%H:%MZ}"
+                     f" \"{landed[2]}\"")
     after = False
     for fact in facts:
         if fact is molt:
             after = True
         elif after and fact.kind == "note" and fact.by == f"strand:{who}" and fact.data.get("why"):
             lines.append(f"after the molt, {fact.at[11:16]}Z ({fact.id}): {fact.data['why']}")
+    since = landed[1] if landed is not None else 0
+    sent = [f for f in facts if f.kind == "letter" and f.by == f"strand:{who}" and not is_notice(f)
+            and not f.data.get("molt") and _stamp(f.at) > since]
+    for fact in sent[-SINCE_MOST:]:
+        first = " ".join(str(fact.data.get("body", "")).split())[:SINCE_HEAD]
+        lines.append(f"since then, {fact.at[11:16]}Z {fact.id} → {fact.data.get('to', '?')}: {first}")
+    if len(sent) > SINCE_MOST:
+        lines.insert(len(lines) - SINCE_MOST, f"since then: {len(sent) - SINCE_MOST} earlier letters not shown")
     return "\n".join(lines) + "\n"
+
+
+SINCE_MOST = 5
+SINCE_HEAD = 120
+
+
+def _stamp(at: str) -> float:
+    try:
+        return datetime.fromisoformat(at).timestamp()
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _landed(home: Home, thread: str) -> tuple[str, int, str] | None:
+    """The last commit on the loom's self main that touched this thread's folder."""
+    proc = git(home.root / "self", "log", "-1", "--format=%h%x00%ct%x00%s", "--", f"threads/{thread}",
+               check=False)
+    parts = proc.stdout.strip().split("\x00")
+    if proc.returncode or len(parts) != 3 or not parts[1].isdigit():
+        return None
+    return parts[0], int(parts[1]), parts[2]
 
 
 def _read_by_predecessors(facts: list[Fact], thread: str, strand: str,
@@ -522,7 +565,7 @@ def _prepare(home: Home, strand: str, thread: str, gen: int,
     gone += kept_line(home, thread, threads)
     forge = forge_threads(home.root / "self")
     from .waits import GRAMMAR
-    part = gone + _handover(facts, thread, gen, threads) + inherited + (
+    part = gone + _handover(facts, thread, gen, threads, home) + inherited + (
         f"you are strand {strand} on thread {thread}"
         + (f" ({forge}/{thread})" if forge else "") + "; letters arrive at your tool "
         "boundaries, each naming its reply address: answer with "
