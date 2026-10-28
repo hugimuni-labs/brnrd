@@ -11,6 +11,8 @@ from typing import Iterable
 
 from brr.daemon2.facts import Fact, union
 
+from .home import HOME_THREAD, LEGACY_HOME_THREAD
+
 
 @dataclass(frozen=True)
 class Say:
@@ -217,6 +219,10 @@ def wishes(facts: Iterable[Fact]) -> dict[str, Wish]:
     return found
 
 
+# The home thread (and its legacy name) routes letters; it holds no answer of its own.
+RELAYS = frozenset({HOME_THREAD, LEGACY_HOME_THREAD})
+
+
 def _answer(asked: list[Wish], letters: dict, ordered: list[Fact]) -> None:
     """Each ask's answer, if it has one. The asking thread's own letters never answer
     it: its mail links the ask, and its raises do too."""
@@ -235,8 +241,10 @@ def _answer(asked: list[Wish], letters: dict, ordered: list[Fact]) -> None:
             if _person(letter):
                 return replies or ask.id in (letter.data.get("links") or ())
             # A thread asked onward answers only by replying: a mention is not an answer.
+            # The home thread relays to the person and never answers for them.
+            writer = writers.get(letter.by.removeprefix("strand:"))
             return (letter.by.startswith("strand:") and replies
-                    and writers.get(letter.by.removeprefix("strand:")) != ask.thread)
+                    and writer != ask.thread and writer not in RELAYS)
         stamped = [i for s in ask.stamps for i in s["letters"] if i in letters and _person(letters[i])]
         ask.answer = next(iter(stamped), None) or next((i for i, f in letters.items() if answers(f)), "")
 
@@ -278,6 +286,9 @@ def waits_on(found: dict[str, Wish], main: dict) -> dict[str, str]:
             if head.startswith("thread:") and (opener not in main or main[opener].get("status") in CLOSED):
                 head = "operator"
             nxt = onward.get((opener, current.id)) if head.startswith("thread:") else None
+            if nxt is None and opener in RELAYS:
+                # The home thread opened it for the person and relays the ask: it waits on them.
+                head = "operator"
             if nxt is None or nxt.id in seen:
                 break
             current = nxt
