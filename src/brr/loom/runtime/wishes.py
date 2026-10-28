@@ -79,6 +79,12 @@ class Wish:
     born: str = ""
     lefts: list[dict] = field(default_factory=list)
     stamps: list[dict] = field(default_factory=list)
+    # An ask's answer: the first letter of whoever it waits on that replies to it,
+    # cites it, replies to a letter that raised it, or is stamped on it.
+    answer: str = ""
+    # The last time a person's letter was stamped on the wish: a steer after a
+    # delivery keeps it delivered, in front of them, instead of letting it expire.
+    heard_at: str = ""
 
     @property
     def left(self) -> dict | None:
@@ -89,7 +95,15 @@ class Wish:
     def state(self) -> str:
         if self.verdict:
             return self.verdict["as"]
-        if any(result["delivered"] for result in self.results):
+        if self.answer:
+            return "answered"
+        delivered = max((r["at"] for r in self.results if r["delivered"]), default="")
+        if delivered:
+            # Delivered, then expired once nobody looked for EXPIRES: never an
+            # acceptance, and a correct (a letter stamped on it) keeps it delivered.
+            later = max(delivered, self.heard_at)
+            if datetime.now(timezone.utc) - datetime.fromisoformat(later) > EXPIRES:
+                return "expired"
             return "delivered"
         if self.results:
             return "granting"
@@ -99,7 +113,7 @@ class Wish:
 
     @property
     def open(self) -> bool:
-        return self.state not in {"accepted", "dropped"}
+        return self.state not in SHUT
 
     @property
     def derived_unconfirmed(self) -> bool:
@@ -110,6 +124,17 @@ class Wish:
         return (self.state == "delivered" or self.derived_unconfirmed) and (
             (now or datetime.now(timezone.utc)) - datetime.fromisoformat(self.at)
             > timedelta(days=60))
+
+
+EXPIRES = timedelta(days=3)
+# A request nobody owes anything on any more: in no queue, done for its thread.
+SHUT = frozenset({"accepted", "dropped", "expired", "answered"})
+
+
+def _person(letter) -> bool:
+    # The sender is data.from: the connector writes a person's
+    # channel letters, so letter.by is loom:<install> for them.
+    return str(letter.data.get("from", "")).startswith(("p-", "person:"))
 
 
 def wishes(facts: Iterable[Fact]) -> dict[str, Wish]:
@@ -150,23 +175,49 @@ def wishes(facts: Iterable[Fact]) -> dict[str, Wish]:
             else:
                 wish.verdict = dict(d, at=fact.at)
         wish.at = fact.at
+    asked = [w for w in found.values() if w.sender == "resident"]
+    if asked:
+        _answer(asked, letters, ordered)
     for wish in found.values():
+        wish.heard_at = max((s["at"] for s in wish.stamps
+                             if any(i in letters and _person(letters[i]) for i in s["letters"])), default="")
+
         def own_say(say):
             letter = letters.get(say.letter)
             if letter is None:
                 return False
-            # The sender is data.from: the connector writes a person's
-            # channel letters, so letter.by is loom:<install> for them.
-            return (str(letter.data.get("from", "")).startswith(("p-", "person:"))
-                    if wish.sender == "person"
-                    else letter.by.startswith("strand:"))
+            return _person(letter) if wish.sender == "person" else letter.by.startswith("strand:")
         # An ask cites no letter: the resident who writes it is the one saying it.
         asked = wish.sender == "resident" and not wish.says
         wish.origin = "said" if asked or (wish.says and all(map(own_say, wish.says))) else "derived"
     return found
 
 
-WISH_KINDS = ("wish", "wish.read", "wish.result", "wish.verdict", "wish.left", "letter")
+def _answer(asked: list[Wish], letters: dict, ordered: list[Fact]) -> None:
+    """Each ask's answer, if it has one. The asking thread's own letters never answer
+    it: its mail links the ask, and its raises do too."""
+    # The latest lease names the thread a strand writes for.
+    writers = {str(f.data.get("strand")): str(f.data.get("thread")) for f in ordered if f.kind == "lease"}
+    raised: dict[str, set[str]] = {}
+    for ident, letter in letters.items():
+        for link in letter.data.get("links") or ():
+            raised.setdefault(ident, set()).add(str(link))
+    for ask in asked:
+        def answers(letter) -> bool:
+            if letter.at < ask.born:
+                return False
+            if letter.by.startswith("strand:") and writers.get(letter.by.removeprefix("strand:")) == ask.thread:
+                return False
+            if not _person(letter) and not letter.by.startswith("strand:"):
+                return False
+            re = str(letter.data.get("re") or "")
+            return (re == ask.id or ask.id in (letter.data.get("links") or ())
+                    or ask.id in raised.get(re, ()))
+        stamped = [i for s in ask.stamps for i in s["letters"] if i in letters and _person(letters[i])]
+        ask.answer = next(iter(stamped), None) or next((i for i, f in letters.items() if answers(f)), "")
+
+
+WISH_KINDS = ("wish", "wish.read", "wish.result", "wish.verdict", "wish.left", "letter", "lease")
 
 
 def told(facts) -> dict[str, Wish]:
@@ -215,7 +266,7 @@ def progress(found: dict[str, Wish], thread: str) -> dict | None:
             and w.state != "dropped"]
     if not rows:
         return None
-    plan = {"done": sum(w.state in {"delivered", "accepted"} for w in rows), "total": len(rows)}
+    plan = {"done": sum(w.state in {"delivered", "accepted", "expired"} for w in rows), "total": len(rows)}
     waiting = sorted((w for w in rows if w.open and w.state != "delivered"), key=lambda w: w.at)
     if waiting:
         plan["next"] = waiting[0].line

@@ -177,6 +177,8 @@ def cmd_wish(args):
             append(home, left)
         # A park is a reading that says what it waits on, the one the board shows.
         if actions and kind == "wish.result" and by.startswith("strand:"):
+            if args.deliver:
+                _tell_delivered(home, args, wishes(facts)[args.id], data)
             _declare(args, "result")
         elif actions and kind == "wish.read" and by.startswith("strand:") and "wait" in data:
             _declare(args, "park")
@@ -187,6 +189,24 @@ def cmd_wish(args):
     except (ValueError, OSError, RuntimeError) as exc:
         print(str(exc), file=sys.stderr)
         return 1
+
+
+def _tell_delivered(home, args, wish, result) -> None:
+    """A delivered person wish is a letter to that person on the chat they said it in:
+    the receipt, and how to give the verdict. Their reply ``ok`` to it accepts it."""
+    if wish.sender != "person":
+        return
+    from .port import write_send
+    from .project import reply_channels
+    from .verbs_loom import _room
+    chats = reply_channels(read_facts(home), home)
+    chat = next((chats[s.letter] for s in reversed(wish.says) if s.letter in chats), None)
+    if chat is None:
+        return
+    room = _room(args.room)
+    body = (f"delivered &{wish.id}: {wish.line}\n{result['line']}: {result['ref']}\n"
+            "Reply ok to accept, or say what is off.\n")
+    write_send(room, to=chat, sender=strand_of_room(room), body=body)
 
 
 def _related(home, line, facts, thread) -> None:

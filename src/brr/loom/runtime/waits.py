@@ -47,7 +47,7 @@ EVERY = 60
 #: Seconds between polls of every open pull request a thread claimed (``loom/prs.json``).
 PRS_EVERY = 300
 #: Wish states a ``wish:`` wait resolves on.
-SETTLED = {"delivered", "accepted", "dropped"}
+SETTLED = {"delivered", "accepted", "dropped", "expired", "answered"}
 
 _PR = re.compile(r"^pr:(?:([\w.-]+/[\w.-]+))?#(\d+)$")
 _CI = re.compile(r"^ci:(?:([\w.-]+/[\w.-]+))?@([0-9a-f]{7,40})$")
