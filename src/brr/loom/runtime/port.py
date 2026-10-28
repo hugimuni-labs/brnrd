@@ -846,8 +846,9 @@ def _carried(home, facts, stamped, re, target, sender) -> list:
 
 
 def write_molt(room: Path, why: str, *, fresh: bool = False) -> str:
+    """``shed`` (``molt`` is its old name): hand the seat to a successor."""
     if not why:
-        raise PortError("molt: --why is empty")
+        raise PortError("shed: --why is empty")
     from .ledger import read_facts
     from .project import sender_threads
     from .merge import send_to_self
@@ -859,20 +860,28 @@ def write_molt(room: Path, why: str, *, fresh: bool = False) -> str:
     facts = read_facts(home)
     thread = sender_threads(facts).get(strand)
     if thread is None:
-        raise PortError("molt: room has no thread")
+        raise PortError("shed: room has no thread")
     from .wishes import owed_lefts, wishes
     owed = owed_lefts(wishes(facts), facts, thread, strand)
     if owed:
         # The successor reads what is left from the wish, not from this body's memory.
-        raise PortError("molt: say what is left first, then molt:\n" + "\n".join(
+        raise PortError("shed: say what is left first, then shed:\n" + "\n".join(
             f'  brnrd runtime wish {ident} --left "<step>" --left "<step>"   ({why}; --left same if nothing moved)'
             for ident, why in owed))
     held = unreplied_held(facts, strand, room)
     if held:
         # A person who wrote to this body hears from it before a stranger takes over.
-        raise PortError("molt: reply to each person letter you hold first, even with just an ack:\n" + "\n".join(
+        raise PortError("shed: reply to each person letter you hold first, even with just an ack:\n" + "\n".join(
             f'  brnrd runtime send --re {ident} --to {channel} "…"   (from {letter.data.get("from") or letter.by})'
             for ident, (letter, channel) in held.items()))
+    if not fresh:
+        from .jack import _state
+        from .shed import refusals
+        refused = refusals(room, thread, facts, _state(room))
+        if refused:
+            # The successor boots into this README; gen 233's was committed unread.
+            raise PortError("shed: the README isn't one a successor can boot into yet:\n" + "\n".join(
+                f"  - {why}" for why in refused) + "\nfix each, then shed again.")
     clone = resolve_clone(room)
     path = f"threads/{thread}/README.md"
     if not fresh and git(clone, "diff", "HEAD", "--quiet", "--", path, check=False).returncode:
@@ -881,7 +890,7 @@ def write_molt(room: Path, why: str, *, fresh: bool = False) -> str:
     if not fresh and not _current_label(clone, strand).taint:
         outcome = send_to_self(clone)
         if outcome.status != "merged":
-            raise PortError(outcome.stderr or f"molt: landing {outcome.status}: {', '.join(outcome.files)}")
+            raise PortError(outcome.stderr or f"shed: landing {outcome.status}: {', '.join(outcome.files)}")
     stem = mint(5)
     fact_id = f"{strand}/{stem}"
     fields = {"kind": "molt", "id": fact_id, "why": why}

@@ -22,7 +22,7 @@ def test_a_face_is_the_face_itself_and_the_wordmark_never_moves(raw):
 def test_a_fact_proposes_the_body_decides_a_lapse_keeps_the_last_and_a_successor_wakes_faceless(tmp_path):
     root = tmp_path / "home"
     init_self(root, person="test")
-    write_thread(root, "work", "Work", "work", wait="0")
+    write_thread(root, "work", "Work\n\n## Now", "work", wait="0")
     write_thread(root, "other", "Other", "other", wait="0")
     letter = inject_letter(root, to="thread:work", body="first ask")
     seen, woke, taken = root / "seen.json", root / "woke.json", root / "taken"

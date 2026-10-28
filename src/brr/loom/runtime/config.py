@@ -98,6 +98,12 @@ KEYS: tuple[Key, ...] = (
     Key("thread_budget", "positive", 2_000_000,
         "Weighted tokens a thread opened by another thread may spend before its strand is told, at "
         "every boundary, to write to its parent for more. `send --budget` overrides it."),
+    Key("shed_excess", "positive", 60_000,
+        "Context tokens a body grows past its boot before a mostly-idle scroll makes a shed due; "
+        "fast quota pace lowers it, slack raises it, at most to double."),
+    Key("shed_hold", "names", ("home",),
+        "Threads whose bodies are never asked to shed; \"home\" names the home thread. "
+        "Set to [] to release them."),
     Key("stop_grace", "seconds", DEFAULT_STOP_GRACE,
         "Seconds a settled thread's body may take to land and exit before it is signalled."),
     Key("router_ttl", "positive", DEFAULT_TTL,

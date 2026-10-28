@@ -26,7 +26,7 @@ def _chat_letter(root, body):
 def test_molt_refuses_an_unanswered_person_letter_then_lands_readme_and_hands_over_the_rest(tmp_path):
     root = tmp_path / "home"
     init_self(root, person="test")
-    write_thread(root, "work", "Work\n\nNext step: original", "work", wait="0")
+    write_thread(root, "work", "Work\n\n## Now\nNext step: original", "work", wait="0")
     first = inject_letter(root, to="thread:work", body="first ask")
     second = _chat_letter(root, "second ask")
     received = root / "successor.json"
@@ -82,7 +82,7 @@ def test_molt_counts_a_reply_the_loom_has_not_drained_yet(tmp_path):
     # between the ack and the molt, so the ack is only ever in port/out.
     root = tmp_path / "home"
     init_self(root, person="test")
-    write_thread(root, "work", "Work\n\nNext step: original", "work", wait="0")
+    write_thread(root, "work", "Work\n\n## Now\nNext step: original", "work", wait="0")
     ask = _chat_letter(root, "an ask")
     go, result = root / "go", root / "result.txt"
     bodies(root, f'''import sys, time
@@ -126,7 +126,7 @@ def test_tainted_molt_carries_room_work_without_laundering_it(tmp_path):
 
     root = tmp_path / "home"
     init_self(root, person="test")
-    write_thread(root, "work", "Work\n\nNext step: original", "work", wait="0")
+    write_thread(root, "work", "Work\n\n## Now\nNext step: original", "work", wait="0")
     inject_letter(root, to="thread:work", body="research this")
     main = git(root / "self", "rev-parse", "main").stdout.strip()
     received = root / "successor.json"
@@ -197,7 +197,7 @@ def test_a_successor_is_told_which_owed_letters_its_predecessor_already_read(tmp
     molt; the successor read it as an instruction, redid it and molted again."""
     root = tmp_path / "home"
     init_self(root, person="test")
-    write_thread(root, "work", "Work\n\nNext step: original", "work", wait="0")
+    write_thread(root, "work", "Work\n\n## Now\nNext step: original", "work", wait="0")
     ask = inject_letter(root, to="thread:work", body="add the line, then molt")
     received = root / "successor.json"
     bodies(root, f'''import json, sys
@@ -231,7 +231,7 @@ def test_a_successor_wakes_with_its_predecessors_molt_why_and_the_notes_after_it
     note its predecessor wrote after the molt, which held the real state."""
     root = tmp_path / "home"
     init_self(root, person="test")
-    write_thread(root, "work", "Work\n\nNext step: original", "work", wait="0")
+    write_thread(root, "work", "Work\n\n## Now\nNext step: original", "work", wait="0")
     inject_letter(root, to="thread:work", body="merge it once green")
     received = root / "successor.json"
     bodies(root, f'''import json, sys
@@ -268,7 +268,7 @@ def test_a_body_that_ends_without_a_molt_hands_on_its_room_and_says_how_it_ended
     nothing of how it ended; a README decision it had committed but not landed was lost."""
     root = tmp_path / "home"
     init_self(root, person="test")
-    write_thread(root, "work", "Work\n\nNext step: original", "work", wait="0")
+    write_thread(root, "work", "Work\n\n## Now\nNext step: original", "work", wait="0")
     owed = inject_letter(root, to="thread:work", body="first ask")
     chat = _chat_letter(root, "a person asks")
     received = root / "successor.json"
