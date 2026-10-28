@@ -93,6 +93,8 @@ export function fixture() {
 			re: ask.id,
 			body: `on it: thread ${id}`,
 			threads: ['inbox', id],
+			// the inbox's strand picked it up
+			shown: [{ strand: 's-test-inbox0', at: at(m + 1.5) }],
 			wishes: [{ wish: wid, thread: id, line: wish.line, state: wstate, stamps: wish.stamps }]
 		});
 		ask.answers = [reply.id];

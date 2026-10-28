@@ -40,6 +40,9 @@ export type Letter = {
 	answers?: string[];
 	wishes?: { wish: string; thread?: string; line: string; state: string; stamps: Stamp[] }[];
 	chatter?: string[];
+	// each strand that picked the letter up, first sight; a channel send's state
+	shown?: { strand: string; at: string }[];
+	sent?: { state: string; at: string };
 	open?: boolean;
 	// a letter sent from this page that the ledger has not shown yet
 	pendingNote?: boolean;

@@ -10,6 +10,7 @@ import { inboxCards, ledger, threadWishes } from './ledger.ts';
 import { bar, beats, liveOf, withTools } from './tape.ts';
 import { ancestors, children, moved, Store, type Beads } from './parts.ts';
 import { face, moves, seen } from './rail.ts';
+import { stamps } from './stamps.ts';
 
 const L = (id: string, at: string, o: Partial<Letter> = {}): Letter => ({
 	id,
@@ -465,4 +466,33 @@ test('the rail logs a moved strand once, the first load moves none, and a workin
 	equal(face(faces, 'working', 3), 'b');
 	equal(face(faces, 'holding', 3), 'c');
 	equal(face(undefined, 'working', 3), 'brnrd');
+});
+
+test('a letter stamps who picked it up first, then its disposition, its send and its wishes in board.html order', () => {
+	const l = L('l1', '2026-10-27T10:00:00Z', {
+		shown: [{ strand: 's-ae66-inbox1', at: '2026-10-27T10:01:00Z' }],
+		chatter: ['s-x'],
+		sent: { state: 'failed', at: '2026-10-27T10:02:00Z' },
+		wishes: [
+			{
+				wish: 'w-abc123',
+				line: 'make it',
+				state: 'read',
+				stamps: [{ stamp: 'read', at: '2026-10-27T10:03:00Z', ref: 'brnrd#1' }]
+			}
+		],
+		wish: 'w-zzz999'
+	});
+	deepEqual(
+		stamps(l).map((s) => [s.cls, s.text]),
+		[
+			['read', 'picked up · inbox1 10-27 10:01'],
+			['heard', 'chatter'],
+			['heard', 'to channel · failed'],
+			['read', 'read · abc123 10-27 10:03'],
+			['heard', 'stamps zzz999']
+		]
+	);
+	equal(stamps(l)[3].title, 'make it\nbrnrd#1');
+	deepEqual(stamps(L('l2', '2026-10-27T10:00:00Z')), []);
 });

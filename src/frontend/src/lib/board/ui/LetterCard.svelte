@@ -4,6 +4,7 @@
 	import type { Letter } from '../types.ts';
 	import { hm, hue, splitQuote } from '../text.ts';
 	import { inSide, internal, routes, sender } from '../sides.ts';
+	import { stamps } from '../stamps.ts';
 	import Chips from './Chips.svelte';
 	import { board } from './board.svelte.ts';
 	let { l, col, inbox }: { l: Letter; col: string; inbox: boolean } = $props();
@@ -13,6 +14,7 @@
 	const shut = $derived(inbox && internal(l) && !b.showAll && !b.open.has('l:' + l.id));
 	const line = $derived(String(l.body).replace(/\s+/g, ' ').trim());
 	const dis = $derived(l.person && b.open.has('d:' + l.id));
+	const st = $derived(stamps(l));
 	let quoteOpen = $state(false);
 	function press() {
 		if (shut || (internal(l) && inbox)) return b.toggle(b.open, 'l:' + l.id);
@@ -75,12 +77,8 @@
 				}}>{q[0]}</span
 			>{/if}
 		<div class="body"><Chips text={q[1]} /></div>
-		{#if l.open}<div class="stamps"><span class="stamp open">no disposition</span></div>{/if}
-		{#if (l.wishes || []).length}<div class="stamps">
-				{#each l.wishes || [] as w (w.wish)}{#each w.stamps as s, i (i)}<span
-							class="stamp {s.stamp}"
-							title={w.line}>{s.stamp} · {w.wish.slice(-6)} {hm(s.at)}</span
-						>{/each}{/each}
+		{#if st.length}<div class="stamps">
+				{#each st as s, i (i)}<span class="stamp {s.cls}" title={s.title}>{s.text}</span>{/each}
 			</div>{/if}
 		{#if dis}
 			<div class="dissect">

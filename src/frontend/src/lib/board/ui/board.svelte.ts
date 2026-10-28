@@ -44,6 +44,9 @@ export class Board {
 	writing = $state(false);
 	typedBy = '';
 	now = $state(Date.now());
+	// the loom clock: when the index last came back whole (board.html read the snapshot's `at`; the index part drops
+	// `at` so its hash moves only with the board)
+	heard = $state('');
 
 	constructor(get: (path: string) => Promise<unknown> = getJSON) {
 		this.store = new Store(get);
@@ -84,6 +87,8 @@ export class Board {
 					this.pending = this.pending.filter((p) => !have.has(p.id));
 				if (this.beads && !this.store.beads) this.beads = await this.store.loadBeads();
 			}
+			// eslint-disable-next-line svelte/prefer-svelte-reactivity -- a temporary, not state
+			this.heard = new Date().toISOString();
 			this.error = '';
 		} catch (e) {
 			this.error = String(e);
