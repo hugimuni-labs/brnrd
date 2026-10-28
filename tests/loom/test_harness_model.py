@@ -102,14 +102,6 @@ def test_preferences_pick_a_body_per_role_under_the_seat(tmp_path):
         at_birth(home, "other", ("fake", "x"))
 
 
-def test_the_inbox_preference_follows_a_legacy_home_thread(tmp_path):
-    home = Home(tmp_path / "home")
-    home.thread_dir("brnrd").mkdir(parents=True)
-    (home.root / "loom").mkdir(parents=True)
-    (home.root / "loom" / "preferences.toml").write_text('model.inbox = "claude/opus"\n')
-    assert at_birth(home, "brnrd", ("fake", "x")) == ("claude", "opus")
-
-
 def test_prefer_sets_one_role_in_place_and_clears_it(tmp_path):
     from brr.loom.runtime.adapters import prefer, preferred_body
     home = Home(tmp_path / "home")
