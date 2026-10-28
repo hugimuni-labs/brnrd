@@ -15,7 +15,7 @@ from brr.daemon2.facts import Fact
 from brr.daemon2.leases import Lease, LocalLeaseAuthority
 
 from .config import LoomConfig, granting_window, load_config, loom_clock
-from .home import Home, home_thread, is_channel, mint
+from .home import HOME_THREAD, Home, is_channel, mint
 from .ledger import LedgerConflict, LedgerReader, LedgerView, kind_facts
 from .project import (
     fold, holder, is_notice, reply_channels, sender_threads,
@@ -550,7 +550,7 @@ class Router:
         """
         from .loom import _log
         from .selfrepo import SelfError, heal_home_thread
-        if home_thread(known) in known:
+        if HOME_THREAD in known:
             return True
         if not any(f.action == "unroutable" for f in active_owners(facts, main_snapshot(self.home))):
             return False
@@ -564,10 +564,10 @@ class Router:
             _log(self.home, f"home thread missing from main and not restored ({exc}); "
                             "letters are held: run `brnrd setup` again")
             return False
-        self._keep(facts, "self.healed", {"thread": home_thread(()), "commit": sha},
+        self._keep(facts, "self.healed", {"thread": HOME_THREAD, "commit": sha},
                    f"self.healed:{sha}")
-        _log(self.home, f"home thread {home_thread(())} was missing from main; restored at {sha}")
-        known.add(home_thread(()))
+        _log(self.home, f"home thread {HOME_THREAD} was missing from main; restored at {sha}")
+        known.add(HOME_THREAD)
         return True
 
     def _unrouted(self, facts: list[Fact], known: set[str]) -> list[Fact]:
@@ -582,7 +582,7 @@ class Router:
                 kind, target = "climbed", fate.thread
                 what = f"letter {letter.id} to closed thread {letter.data.get('to', '').removeprefix('thread:')} climbed here"
             else:
-                kind, target = "unroutable", home_thread(known)
+                kind, target = "unroutable", HOME_THREAD
                 target = target if target in known else None
                 what = f"letter {letter.id} addressed to {letter.data.get('to')!r}, which is not a thread on main"
             if not target and not homed:

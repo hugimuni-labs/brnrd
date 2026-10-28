@@ -152,12 +152,8 @@ class Home:
         return proc.returncode == 0
 
     def main_thread(self) -> str:
-        """The home thread, where letters with no better address land.
-
-        ``inbox`` once its folder exists, else a legacy ``brnrd``, else ``inbox``.
-        """
-        threads = self.root / "self" / "threads"
-        return home_thread(n for n in (HOME_THREAD, LEGACY_HOME_THREAD) if (threads / n).is_dir())
+        """The home thread, where letters with no better address land."""
+        return HOME_THREAD
 
     def routable(self, thread: object) -> bool:
         """A thread a body can be started on: a valid id with its README on main."""
@@ -174,13 +170,6 @@ class Home:
 
 
 HOME_THREAD = "inbox"
-LEGACY_HOME_THREAD = "brnrd"
-
-
-def home_thread(names) -> str:
-    """The home thread among thread names: inbox, else a surviving brnrd, else inbox."""
-    names = set(names)
-    return LEGACY_HOME_THREAD if LEGACY_HOME_THREAD in names and HOME_THREAD not in names else HOME_THREAD
 
 
 def check_thread_id(thread: str) -> str:
