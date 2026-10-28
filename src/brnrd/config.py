@@ -134,6 +134,10 @@ class Settings:
     # package); a container image that puts the build elsewhere names it here.
     # No directory at all is a legal backend-only deployment.
     frontend_dir: str = os.environ.get("BRNRD_FRONTEND_DIR", "")
+    # The `curl … | sh` installer served at `/install` and `/install.sh`.
+    # Empty means the source checkout's `docs/public/install.sh`, the one file
+    # GitHub Pages also publishes; the image copies that file and names it here.
+    installer_path: str = os.environ.get("BRNRD_INSTALLER", "")
 
     # `Strict-Transport-Security: max-age=<n>` on HTTPS responses; `0` disables
     # the header for an operator whose own edge already sets it. Default one
