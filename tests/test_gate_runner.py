@@ -193,11 +193,12 @@ def test_inject_workers_appends_bounded_n_never_auto():
     assert "auto" not in out
 
 
-def test_inject_workers_leaves_an_explicit_n_alone():
-    """The workflow text choosing its own `-n` outranks this default."""
+def test_inject_workers_replaces_the_workflows_own_n():
+    """CI's `-n` is sized to its runner; the shared local machine gets its bound."""
     gate = _gate()
-    command = "python -m pytest -q -n 2"
-    assert gate.inject_workers(command, workers=8) == command
+    command = "python -m pytest -q -n 4 --durations=30"
+    assert gate.inject_workers(command, workers=2) == "python -m pytest -q --durations=30 -n 2"
+    assert gate.inject_workers(command, workers=1) == "python -m pytest -q --durations=30"
 
 
 def test_inject_workers_only_touches_the_pytest_line(monkeypatch):

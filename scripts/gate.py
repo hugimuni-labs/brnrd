@@ -108,8 +108,9 @@ REFUSED = {
 
 # ── the-tick-that-breathes, 2026-09-22: a bounded local `-n`, never `auto` ──
 #
-# CI's own `run:` text for pytest names its own `-n 4` (ci-speed,
-# 2026-10-28; until then it carried none), and this script never edits `.github/workflows/ci.yml` or the text it
+# CI's own `run:` text for pytest names its own `-n 4`, sized to the runner
+# (ci-speed, 2026-10-28; `inject_workers` swaps it for the local bound), and
+# this script never edits `.github/workflows/ci.yml` or the text it
 # parses out of it — the whole point of this file is running exactly what CI
 # runs. What changed here is local-only: `scripts/gate.py` already serializes
 # itself machine-wide (`held_gate_lock`, `#1195` rec 1, above), but nothing
@@ -163,26 +164,28 @@ def gate_workers(explicit: int | None = None) -> int:
 #: today's *command* would be exactly the kind of copy this file exists not
 #: to keep.
 _PYTEST_INVOCATION = re.compile(r"(^|[\s/])pytest\b")
+_WORKERS_FLAG = re.compile(r" -n \S+")
 
 
 def inject_workers(command: str, *, workers: int) -> str:
-    """Append a bounded ``-n <workers>`` to any bare pytest invocation line.
+    """Bound every pytest invocation line to ``-n <workers>``.
 
-    ``workers <= 1`` returns *command* unchanged — sequential, exactly CI's
-    own text, xdist never involved. A line that already names its own `-n`
-    is left alone (an explicit choice in the workflow text outranks this
-    default). Every other line in a multi-line `run:` block (an install
+    A line with its own ``-n`` (CI's ``-n 4``, sized to the runner) has it
+    replaced: the local machine is shared, and this bound is the whole point.
+    ``workers <= 1`` drops any ``-n`` and appends none — sequential, xdist
+    never involved. Every other line in a multi-line `run:` block (an install
     step, a `mkdir`) passes through untouched — this only ever touches a
     line pytest itself will read as its own argv.
     """
-    if workers <= 1:
-        return command
     lines = command.splitlines()
     changed = False
     for i, line in enumerate(lines):
-        stripped = line.strip()
-        if _PYTEST_INVOCATION.search(stripped) and " -n " not in stripped:
-            lines[i] = f"{line} -n {workers}"
+        if not _PYTEST_INVOCATION.search(line.strip()):
+            continue
+        bare = _WORKERS_FLAG.sub("", line)
+        bounded = bare if workers <= 1 else f"{bare} -n {workers}"
+        if bounded != line:
+            lines[i] = bounded
             changed = True
     return "\n".join(lines) if changed else command
 
