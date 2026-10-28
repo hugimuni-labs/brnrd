@@ -100,8 +100,8 @@ def test_source_reply_binding_reaches_wake_and_boundary(home, mode):
     facts = read_facts(home)
     source = next(f for f in facts if f.id == "source:mine:incoming")
     letter = next(f for f in facts if f.id == "letter:mine:incoming")
-    thread = "first" if mode == "known" else "second"
-    assert route_bare(facts, "mine/42") == "thread:second"
+    thread = "first" if mode == "known" else "inbox"
+    assert route_bare(facts, "mine/42") == "thread:inbox"
     assert letter.data["to"] == f"thread:{thread}"
     assert letter.data.get("re") == (FIRST if mode == "known" else None)
     assert source.data.get("re") == native

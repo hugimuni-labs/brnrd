@@ -304,6 +304,17 @@ def _left_fact(args, facts, by):
     return Fact(kind="wish.left", by=by, id="wish.left:" + mint(12), data=data)
 
 
+def _person_dm(home, person: str | None) -> str | None:
+    """The person's direct channel an ask is mailed to (the operator's is the
+    first person page with one), or None when there is none."""
+    from .board import person_channel
+    try:
+        instance, user = person_channel(home, person)
+    except LookupError:
+        return None
+    return f"channel:{instance}/{user}"
+
+
 def _mailed(facts, room, to, marker):
     """A letter to ``to`` whose body starts with ``marker`` left this room:
     still in its port, or in the ledger. One pass over the facts the ask
@@ -367,6 +378,19 @@ def cmd_ask(args):
             # The &ref is the mail's parent: a thread letter cites what it answers.
             body += f"Answer &{ident}, or ask onward with: ask \"<what>\" --for {ident}\n"
             write_send(room, to=head, sender=strand_of_room(room), body=body)
+        elif head == "operator" or head.startswith("person:"):
+            # Typing an ask is sending it (requests R3): any thread may write the
+            # person, and the &ref binds his reply-to on this message to the ask.
+            to = _person_dm(home, head.removeprefix("person:") if head != "operator" else None)
+            if to is None:
+                print(f"ask: {ident} waits on the person, but no person has a direct channel: "
+                      "raise it from the inbox", file=sys.stderr)
+            elif not _mailed(facts, room, to, marker):
+                body = marker + args.what + "\n"
+                if args.rec is not None:
+                    body += f"rec: {args.rec}\n"
+                body += f"Reply to this message to answer &{ident}.\n"
+                write_send(room, to=to, sender=strand_of_room(room), body=body)
         if args.default_at is not None:
             # The asking wish parks on the ask; at its deadline the body is woken with its own rec.
             append(home, Fact(kind="wish.read", by=by, id="wish.read:" + mint(12), data={

@@ -84,6 +84,13 @@ def test_a_wish_wait_resolves_on_a_settled_state_or_a_citing_letter(ledger):
         "body": f"answering &{other}: yes", "links": [other]}))
     [letter] = told(home)
     assert f"{other} was answered by" in letter.data["body"]
+    # A body's own progress letter citing the wish is not an outcome (inbox pc379).
+    third = heard(home, seat, "Third")
+    park(home, seat, waiter, "--wait", f"wish:{third}")
+    append(home, Fact(kind="letter", by="strand:s-aaaa-test", id="s-aaaa-test/progress", data={
+        "id": "s-aaaa-test/progress", "to": "thread:inbox", "from": "s-aaaa-test",
+        "body": f"&{third} halfway there", "links": [third]}))
+    assert told(home) == []
 
 
 def test_letter_and_at_waits(ledger):
