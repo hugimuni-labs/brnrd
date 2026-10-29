@@ -17,6 +17,8 @@ from .raises import last_raise, move, prs
 
 RANK = re.compile(r"\b(first|before|most important|priority|top)\b", re.I)
 BAND = 5
+# The kinds that move or stale an ask; the band reads no others.
+MOVES = frozenset({"letter", "wish", "pr.opened", "pr.merged"})
 
 
 def flavour(facts, ask, found: dict, room: Path | None, closed=frozenset()) -> tuple[str, str]:
@@ -55,9 +57,12 @@ def band_line(facts, found: dict, thread: str, main: str, room: Path | None = No
     from .wishes import _short
     now = now or datetime.now(timezone.utc)
     order = {"stale": 0, "moved": 1, "live": 2}
-    rows = [(ask, *flavour(facts, ask, found, room, closed)) for ask in thread_asks(found, thread, main)]
-    if not rows:
+    asks = thread_asks(found, thread, main)
+    if not asks:
         return ""
+    # One pass over the ledger per render, not one per ask (loom-cpu).
+    facts = [f for f in facts if f.kind in MOVES]
+    rows = [(ask, *flavour(facts, ask, found, room, closed)) for ask in asks]
     rows.sort(key=lambda row: order[row[1]])
     items = []
     for ask, kind, why in rows[:BAND]:
