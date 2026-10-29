@@ -167,3 +167,34 @@ def test_login_shell_bypassing_shim_keeps_room_credentials(
     assert proc.returncode == 0, proc.stderr
     assert proc.stdout.splitlines() == [str(room / "port" / "gh"), expected, "", "", ""]
     assert list((room / "port" / "gh").iterdir()) == []
+
+
+@pytest.mark.parametrize("args", [
+    ["repo", "delete", "o/r", "--yes"],
+    ["api", "-X", "DELETE", "repos/o/r"],
+    ["api", "--method", "delete", "/repos/o/r/"],
+    ["api", "repos/{owner}/{repo}", "-XDELETE"],
+    ["api", "--method=DELETE", "repos/o/r?x=1"],
+])
+def test_the_shim_refuses_to_delete_a_repo_and_never_calls_gh(tmp_path, monkeypatch, args):
+    real = _fake_gh(tmp_path, monkeypatch)
+    called = tmp_path / "called"
+    real.write_text(f'#!/bin/sh\ntouch "{called}"\n')
+    proc = subprocess.run(["gh", *args], env=_env(_room(tmp_path, "home-token")),
+                          capture_output=True, text=True, timeout=5)
+    assert proc.returncode == 1
+    assert "refuses to delete a repository" in proc.stderr
+    assert not called.exists()
+
+
+@pytest.mark.parametrize("args", [
+    ["api", "-X", "DELETE", "repos/o/r/git/refs/heads/x"],
+    ["api", "-X", "DELETE", "repos/o/r/issues/comments/1"],
+    ["api", "repos/o/r"],
+    ["repo", "view", "o/r"],
+])
+def test_the_shim_passes_every_other_call(tmp_path, monkeypatch, args):
+    _fake_gh(tmp_path, monkeypatch)
+    proc = subprocess.run(["gh", *args], env=_env(_room(tmp_path, "home-token")),
+                          capture_output=True, text=True, timeout=5)
+    assert (proc.returncode, proc.stdout) == (0, "home-token\n")

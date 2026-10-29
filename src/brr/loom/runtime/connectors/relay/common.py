@@ -5,12 +5,15 @@ import os
 from pathlib import Path
 from urllib.parse import quote
 from brr.gates import cloud
+from brr.loom.runtime import gates
 from brr.loom.runtime.config import load_config
 from brr.loom.runtime.home import atomic_write
 
 
 def settings():
-    return load_config(Path(os.environ['BRNRD_CONFIG']).parent.parent), Path(os.environ['BRNRD_STATE'])
+    root = Path(os.environ['BRNRD_CONFIG']).parent.parent
+    config = load_config(root)
+    return config, Path(os.environ['BRNRD_STATE']), gates.state_dir(root, config)
 
 
 def read(path, default):

@@ -66,7 +66,9 @@ KEYS: tuple[Key, ...] = (
     Key("forge_token", "secret", None,
         "How to get the forge token `publish` pushes with and a body's gh uses: "
         "\"command: gh auth token\", \"file: ~/path\" or \"env: NAME\". Read at each "
-        "use and at body start, never stored. Unset: the machine's own git setup and gh login."),
+        "use and at body start, never stored. Install and loom start set it: \"command: gh auth "
+        "token\" when gh is signed in, the App's `forge-token` verb once the home holds a "
+        "cloud gate; any other value is left alone. Unset: the machine's own git setup."),
     Key("gh", "choice", "auto",
         "A body's `gh`: auto uses the forge token above when the home has one, "
         "else the machine's gh login; off signs it out.",
@@ -426,18 +428,19 @@ def _secret_source(spec: str) -> str:
     return f"{source}: {arg}"
 
 
-def resolve_secret(spec: str) -> str:
+def resolve_secret(spec: str, *, env: dict[str, str] | None = None) -> str:
     """Run a secret source now and return the value.
 
     Called at each use, never once at load: the bot's App token expires
     hourly, so a value read at start goes stale under a running loom. The
     value is returned, never logged; an error names the source, not the value.
+    ``env``, when given, is a command source's whole environment.
     """
     source, _, arg = _secret_source(spec).partition(": ")
     if source == "command":
         try:
             proc = subprocess.run(["sh", "-c", arg], capture_output=True, text=True,
-                                  timeout=_SECRET_TIMEOUT, stdin=subprocess.DEVNULL)
+                                  timeout=_SECRET_TIMEOUT, stdin=subprocess.DEVNULL, env=env)
         except subprocess.TimeoutExpired:
             raise ConfigError(f"secret command timed out after {_SECRET_TIMEOUT}s: {arg}") from None
         except OSError:

@@ -30,6 +30,7 @@ VERBS = {
     "lib": ("verbs_self", "cmd_lib"),
     "send-self": ("verbs_merge", "main"),
     "publish": ("publish", "main"),
+    "forge-token": ("gates", "main"),
     "reap": ("reap", "main"),
     "merge-driver": ("merge_driver", "main"),
 }

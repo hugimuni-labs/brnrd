@@ -51,11 +51,12 @@ class Cloud:
 def board(tmp_path, monkeypatch):
     root = tmp_path / "home"
     write_thread(root, "web", README, "answer-fast", wait="0")
-    state = tmp_path / "account"
+    # The gate lives in the home (gates.py): no relay_state needed.
+    state = root / "loom"
     (state / "gates").mkdir(parents=True)
     (state / "gates/cloud.json").write_text(json.dumps({"brnrd_url": "https://board.test", "token": "tok"}))
     with (root / "loom/config.toml").open("a") as stream:
-        stream.write(f'relay_state = "{state}"\nbody = "fake/haiku"\n')
+        stream.write('body = "fake/haiku"\n')
     now = [1000.0]
     fake = Cloud()
     assembled = []

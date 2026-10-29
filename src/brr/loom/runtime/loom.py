@@ -90,6 +90,29 @@ def _commit_identity(room: Path) -> tuple[str, str]:
 _FORGE_TOKEN_VARS = ("GH_TOKEN", "GITHUB_TOKEN", "GH_ENTERPRISE_TOKEN", "GITHUB_ENTERPRISE_TOKEN")
 
 
+# Repo deletion through the body's gh: ``gh repo delete`` and ``gh api`` with
+# DELETE on ``repos/<owner>/<repo>`` itself. It guards this wrapper only; the
+# minted token can still delete through any other client (threads/forge-auth).
+_REFUSE_REPO_DELETE = r"""refuse=
+if [ "$1" = repo ] && [ "$2" = delete ]; then refuse=1; fi
+if [ "$1" = api ]; then
+  delete= repo= prev=
+  for a in "$@"; do
+    case "$prev" in -X|--method) case "$a" in [Dd][Ee][Ll][Ee][Tt][Ee]) delete=1;; esac;; esac
+    case "$a" in -X[Dd][Ee][Ll][Ee][Tt][Ee]|--method=[Dd][Ee][Ll][Ee][Tt][Ee]) delete=1;; esac
+    r=${a%%\?*}; r=${r#/}; r=${r%/}
+    case "$r" in repos/*/*/*) ;; repos/?*/?*) repo=1;; esac
+    prev=$a
+  done
+  if [ -n "$delete" ] && [ -n "$repo" ]; then refuse=1; fi
+fi
+if [ -n "$refuse" ]; then
+  echo 'gh: brnrd refuses to delete a repository; a person deletes it on github.com' >&2
+  exit 1
+fi
+"""
+
+
 def _forge_env(room: Path, env: dict[str, str]) -> None:
     """Keep a configured forge identity isolated even when a shell bypasses the shim."""
     from .config import ConfigError, load_config, resolve_secret, secret_shell
@@ -109,9 +132,11 @@ def _forge_env(room: Path, env: dict[str, str]) -> None:
     if mode == "auto" and spec:
         # Login profiles can put real gh ahead of our refreshing shim. An
         # exported token survives that PATH change; absent one, the empty
-        # room config makes gh fail closed.
+        # room config makes gh fail closed. It is resolved once, so the App
+        # verb is asked for most of an hour, not the 10 min its cache keeps.
+        from .gates import MIN_LIFE_ENV
         try:
-            env["GH_TOKEN"] = resolve_secret(spec)
+            env["GH_TOKEN"] = resolve_secret(spec, env={**os.environ, MIN_LIFE_ENV: "3000"})
         except ConfigError:
             _log(Home(room.parent.parent), "forge_token unavailable at body start; gh remains signed out")
         path = env.get("PATH", os.defpath)
@@ -131,6 +156,7 @@ def _forge_env(room: Path, env: dict[str, str]) -> None:
         # calls the real gh rather than recursing through this shim.
         script = (
             "#!/bin/sh\n"
+            + _REFUSE_REPO_DELETE +
             f"GH_TOKEN=$(PATH={shlex.quote(path)} sh -c {shlex.quote(snippet)} 2>/dev/null) || "
             "{ echo 'gh: forge_token source failed' >&2; exit 1; }\n"
             "[ -n \"$GH_TOKEN\" ] || { echo 'gh: forge_token source gave nothing' >&2; exit 1; }\n"
@@ -2074,6 +2100,41 @@ def _idle(home: Home, young: float | None = None) -> bool:
     return True
 
 
+def _migrate_gates(home: Home) -> None:
+    """Before the first tick (a tick reads one config snapshot): bring a gate
+    left in the daemon's account home into this one (gates.py). A refusal
+    keeps the old config, which still works, and the next start retries."""
+    from . import gates
+    from .config import load_config
+    try:
+        if not gates.legacy(home.root, load_config(home.root)):
+            return
+        data = gates.migrate(home.root)
+    except Exception as exc:
+        _log(home, f"migrate:gates: not moved, the old gate stays in use: {type(exc).__name__}: {exc}")
+        return
+    append(home, Fact(kind="home.migrated", by=f"loom:{home.install_id()}",
+                      data={"want": "gates", **data}))
+    _log(home, f"migrate:gates: {data}")
+
+
+def _converge_forge_token(home: Home) -> None:
+    """Before the first tick, after the gate migration: an unset forge_token
+    gets the person's gh, and gh becomes the App's verb once the home holds a
+    cloud gate (gates.converge). A failure keeps the config as it was."""
+    from . import gates
+    try:
+        data = gates.converge(home.root)
+    except Exception as exc:
+        _log(home, f"converge:forge_token: unchanged: {type(exc).__name__}: {exc}")
+        return
+    if not data:
+        return
+    append(home, Fact(kind="home.migrated", by=f"loom:{home.install_id()}",
+                      data={"want": "forge_token", **data}))
+    _log(home, f"converge:forge_token: {data}")
+
+
 def _read_usage(home, usage) -> None:
     for shell in usage.shells(home):
         usage.reading(home, shell)
@@ -2104,6 +2165,8 @@ def run(root: Path | str, *, adapter: str = "fake", core: str = "haiku",
             record_start(home, read_facts(home))
         except Exception:
             _log(home, traceback.format_exc().rstrip())
+        _migrate_gates(home)
+        _converge_forge_token(home)
         from .config import ConfigError, load_config, tick_config
         from . import usage
         config = load_config(home.root)

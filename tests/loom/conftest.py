@@ -19,6 +19,22 @@ def subprocess_tree(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def isolate_gh_login(monkeypatch, tmp_path_factory):
+    """No test loom sees this machine's gh login: a loom start sets an unset
+    forge_token to ``gh auth token`` when gh answers (gates.converge). An
+    empty GH_CONFIG_DIR is not enough on macOS, where gh reads the keychain,
+    so a signed-out gh goes first on PATH. A test that wants a signed-in gh
+    puts its own fake ahead of it."""
+    bin_dir = tmp_path_factory.mktemp("gh-signed-out")
+    gh = bin_dir / "gh"
+    gh.write_text("#!/bin/sh\necho 'gh: not logged in (test)' >&2\nexit 4\n")
+    gh.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}{os.environ.get('PATH', os.defpath)}")
+    for name in ("GH_TOKEN", "GITHUB_TOKEN", "GH_ENTERPRISE_TOKEN", "GITHUB_ENTERPRISE_TOKEN"):
+        monkeypatch.delenv(name, raising=False)
+
+
+@pytest.fixture(autouse=True)
 def isolate_hosting_body(monkeypatch):
     """A test starts as an operator, without the resident hosting pytest.
 

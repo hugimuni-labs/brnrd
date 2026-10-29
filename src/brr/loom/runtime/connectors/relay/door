@@ -7,8 +7,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent))
 from common import cloud, settings
 
-config, _ = settings()
-state = cloud._load_state_from_dir(Path(config.relay_state))
+_, _, gate = settings()
+state = cloud._load_state_from_dir(gate)
 # The server mints the bot's own code and hands it ours when the link is used.
 door = cloud._request(state['brnrd_url'], 'POST', '/v1/daemons/door', token=state['token'],
                       json=dict(code=sys.argv[1]), retry=False)

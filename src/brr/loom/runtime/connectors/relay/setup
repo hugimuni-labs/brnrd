@@ -4,7 +4,8 @@
 The handshake is ``brnrd account connect``'s own (``cloud.start_pair`` /
 ``cloud.await_pair``), bound to the home's self repo. Its state lands in
 ``<home>/loom/gates/``, and ``relay_state`` is set to ``<home>/loom`` so the
-relay's in/out read it. A home that already has ``relay_state`` is left alone.
+relay's in/out read it. A home already connected (``gates.state_dir``: a
+``relay_state``, or a gate migrated into ``loom/gates``) is left alone.
 """
 import os
 import socket
@@ -12,11 +13,12 @@ import sys
 from pathlib import Path
 
 from brr.gates import cloud
+from brr.loom.runtime import gates as home_gates
 from brr.loom.runtime.config import load_config, seed_config, set_value
 from brr.loom.runtime.setup_channel import qr_code
 
 home = Path(os.environ['BRNRD_CONFIG']).parent.parent
-if load_config(home).relay_state:
+if home_gates.state_dir(home, load_config(home)) is not None:
     sys.exit(0)
 url = os.environ.get('BRNRD_URL', 'https://brnrd.dev').rstrip('/')
 self_brr = home / 'self' / '.brr'

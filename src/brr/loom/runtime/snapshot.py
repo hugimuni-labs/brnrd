@@ -359,7 +359,9 @@ class Publisher:
         self.failing: tuple[Exception, object] | None = None
 
     def step(self, config, router) -> None:
-        if not config.relay_state:
+        from .gates import state_dir
+        gate = state_dir(self.home.root, config)
+        if gate is None:
             return
         now = clock()
         if self.assembled is None or now - self.assembled >= ASSEMBLE_EVERY:
@@ -370,16 +372,16 @@ class Publisher:
             if digest(doc) != self.sum:
                 self.doc, self.sum, self.changed = doc, digest(doc), now
         if self.doc is not None and not (self.worker and self.worker.is_alive()):
-            self._push(config, now)
+            self._push(gate, now)
         if self.failing is not None:
             raise self.failing[0].with_traceback(self.failing[1])
 
-    def _push(self, config, now) -> None:
+    def _push(self, gate: Path, now) -> None:
         settled = self.sum != self.sent and now - self.changed >= DEBOUNCE
         if self.attempted is None or settled or now - self.attempted >= IDLE:
             self.attempted, self.sent = now, self.sum
             doc = dict(self.doc, at=_iso(time.time()))
-            self.worker = threading.Thread(target=self._put, args=(Path(config.relay_state), doc),
+            self.worker = threading.Thread(target=self._put, args=(gate, doc),
                                            name="loom-snapshot", daemon=True)
             self.worker.start()
 

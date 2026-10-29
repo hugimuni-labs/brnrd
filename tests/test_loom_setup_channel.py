@@ -152,6 +152,14 @@ def test_relay_setup_signs_in_and_writes_the_gate_the_relay_reads(tmp_path):
     again = subprocess.run([str(Path(setup_channel.__file__).parent / 'connectors/relay/setup')],
                            env=env, capture_output=True, text=True, timeout=60)
     assert again.returncode == 0 and again.stdout == ''
+    # So is a home whose gate was migrated into loom/gates with no relay_state line.
+    config = tmp_path / 'loom' / 'config.toml'
+    config.write_text('\n'.join(line for line in config.read_text().splitlines()
+                                if not line.startswith('relay_state')) + '\n')
+    assert load_config(tmp_path).relay_state is None
+    migrated = subprocess.run([str(Path(setup_channel.__file__).parent / 'connectors/relay/setup')],
+                              env=env, capture_output=True, text=True, timeout=60)
+    assert migrated.returncode == 0 and migrated.stdout == ''
 
 
 def test_first_setup_can_create_the_default_home(tmp_path, monkeypatch):
