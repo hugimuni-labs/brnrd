@@ -191,11 +191,9 @@ def migrate(home_root: Path | str, *, verify=None) -> dict:
 
 
 def _verify(state: Path) -> None:
-    from brr.gates import cloud
-    gate = cloud._load_state_from_dir(state)
-    if not gate.get("brnrd_url") or not gate.get("token"):
-        raise RuntimeError(f"copied gate in {state / 'gates'} has no URL or token")
-    cloud._request(gate["brnrd_url"], "GET", "/v1/daemons/loom", token=gate["token"], timeout=20)
+    """The copied gate mints a forge token: the one act the move must not break.
+    (``GET /v1/daemons/loom`` was the check once; the cloud only has PUT there.)"""
+    forge_token(state, margin=float("inf"))
 
 
 def _inside(path: Path, root: Path) -> bool:
