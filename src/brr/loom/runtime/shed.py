@@ -85,14 +85,9 @@ def heads(room: Path) -> dict[str, str]:
     return found
 
 
-def wrote(room: Path, since: float) -> bool:
-    """This strand wrote a fact since ``since`` that acted: a letter, a wish, a
-    left that moved, a PR. Read from the tail of its own ledger files."""
-    return bool(acts(room, since))
-
-
 def acts(room: Path, since: float) -> list[str]:
-    """The kinds of the acting facts this strand wrote since ``since``, oldest first."""
+    """The kinds of the facts this strand wrote since ``since`` that acted: a
+    letter, a wish, a left that moved, a PR. Read from the tail of its own ledger files."""
     strand = Path(room).name
     found: list[str] = []
     try:
