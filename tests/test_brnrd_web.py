@@ -719,6 +719,18 @@ def test_connect_context_names_the_computer_that_asked(client, monkeypatch):
     assert body["requester"]["os_user"].startswith("eve") and len(body["requester"]["os_user"]) == 100
 
 
+def test_connect_context_says_a_loom_pair_approves_a_computer(client, monkeypatch):
+    """A loom pairs its self repo (``local/self-<hash>``); the page approves
+    the computer and never shows that name. Only the word ``loom`` counts."""
+    _account_and_repo(client)
+    _login_web(client, monkeypatch)
+    loom = client.post("/v1/accounts/pair", json={"repo_full_name": "local/self-e40c7d", "forge": "local", "kind": "loom"}).json()
+    assert client.get(f"/v1/connect/{loom['pair_code']}").json()["kind"] == "loom"
+    other = client.post("/v1/accounts/pair", json={"repo_full_name": "Gurio/laptop", "kind": "daemon"}).json()
+    assert client.get(f"/v1/connect/{other['pair_code']}").json()["kind"] == ""
+    assert client.get("/v1/connect/BR-NOPE").json()["kind"] == ""
+
+
 def test_connect_context_reports_suggested_repo_from_pair_capabilities(client, monkeypatch):
     """2026-08-06: a daemon pairing from inside a git checkout reports its
     own repo (`gates.cloud._repo_capabilities`) on the initial

@@ -30,6 +30,7 @@ from brnrd.routers.config_approval import decide_core as decide_config_change
 from brnrd.routers.pairing import (
     approve_core,
     initiator_proof_ok,
+    pair_kind,
     pair_requester,
     pair_suggested_forge,
     pair_suggested_repo_full_name,
@@ -446,6 +447,7 @@ def connect_context_api(code: str, request: Request, db: Session = Depends(get_d
             "repos": [{"id": repo.id, "repo_full_name": repo.repo_full_name} for repo in repos],
             "suggested_repo_full_name": suggested,
             "suggested_forge": suggested_forge,
+            "kind": pair_kind(pair) if pair is not None else "",
             "requester": pair_requester(pair) if pair is not None else {"hostname": "", "os_user": ""},
         }
     )
