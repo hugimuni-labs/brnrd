@@ -92,7 +92,12 @@ class GitHubChecks:
             runs = json.load(resp).get("check_runs") or []
         # A run with a conclusion is done, even when GitHub left its status in_progress.
         done = [r for r in runs if r.get("status") == "completed" or r.get("conclusion")]
-        if any(r.get("conclusion") not in PASSED for r in done):
+        # A failure that ended before a live run started is being rerun: #2506's
+        # "Backend tests" read red for 5 minutes while its shard reran (2026-10-29).
+        live = [str(r.get("started_at") or "~") for r in runs if r not in done]
+        if any(r.get("conclusion") not in PASSED
+               and not (r.get("completed_at") and any(start > r["completed_at"] for start in live))
+               for r in done):
             return "red"
         if not runs or len(done) < len(runs):
             return "pending"
