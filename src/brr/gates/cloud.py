@@ -463,9 +463,10 @@ def _save_state_to_dir(state_dir: Path, state: dict) -> None:
     """
     token = state.get("token")
     persisted = {k: v for k, v in state.items() if k != "token"}
-    runtime.save_state(state_dir, "cloud", persisted)
+    # Token first: a cloud.json on disk always has its token beside it.
     if token:
         _write_token(state_dir, str(token))
+    runtime.save_state(state_dir, "cloud", persisted)
 
 
 def _load_state(brr_dir: Path) -> dict:

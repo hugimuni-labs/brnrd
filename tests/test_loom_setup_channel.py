@@ -5,12 +5,13 @@ import re
 import shutil
 import socket
 import subprocess
+import time
 from pathlib import Path
 
 import pytest
 
 from brr.loom.runtime import connector, setup_channel
-from brr.loom.runtime.config import load_config
+from brr.loom.runtime.config import load_config, set_value
 from brr.loom.runtime.home import Home
 from brr.loom.runtime.port import _front
 
@@ -160,6 +161,50 @@ def test_relay_setup_signs_in_and_writes_the_gate_the_relay_reads(tmp_path):
     migrated = subprocess.run([str(Path(setup_channel.__file__).parent / 'connectors/relay/setup')],
                               env=env, capture_output=True, text=True, timeout=60)
     assert migrated.returncode == 0 and migrated.stdout == ''
+    # Sasha's home: relay_state still set, cloud.json gone. Not connected: it pairs afresh.
+    set_value(tmp_path, 'relay_state', str(tmp_path / 'loom'))
+    (tmp_path / 'loom/gates/cloud.json').unlink()
+    server = http.server.ThreadingHTTPServer(('127.0.0.1', 0), Pairing)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    env['BRNRD_URL'] = f'http://127.0.0.1:{server.server_port}'
+    try:
+        fresh = subprocess.run([str(Path(setup_channel.__file__).parent / 'connectors/relay/setup')],
+                               env=env, capture_output=True, text=True, timeout=60)
+    finally:
+        server.shutdown()
+    assert fresh.returncode == 0 and 'Traceback' not in fresh.stderr, fresh.stderr
+    assert 'Signed in to brnrd.dev' in fresh.stdout
+    assert cloud._load_state_from_dir(tmp_path / 'loom')['brnrd_url'] == env['BRNRD_URL']
+
+
+def test_a_door_with_no_gate_says_so_and_setup_shows_the_plain_code(tmp_path):
+    """relay_state set and no cloud.json: the door exits with a line, not a KeyError."""
+    home = home_at(tmp_path)
+    set_value(tmp_path, 'relay_state', str(tmp_path / 'loom'))
+    folder = Path(setup_channel.__file__).parent / 'connectors/relay'
+    env = connector.environment(home, 'cloud')
+    done = subprocess.run([str(folder / 'door'), 'BR-1'], env=env, capture_output=True, text=True, timeout=60)
+    assert done.returncode != 0 and 'Traceback' not in done.stderr, done.stderr
+    assert setup_channel._door(folder, env, 'BR-1') is None
+
+
+def test_the_body_step_reads_every_fuel_at_once_and_names_a_slow_one(tmp_path):
+    """Two readers taking 0.4 s each finish in about 0.4 s; one that hangs is SLOW."""
+    import threading
+    hang = threading.Event()
+
+    def read(root, shell):
+        if shell == 'stuck':
+            hang.wait(5)
+        time.sleep(0.4)
+        return [{'name': 'session', 'left_pct': 50}]
+    began = time.monotonic()
+    got = setup_channel._read_fuel(tmp_path, ['claude', 'codex', 'stuck'], read, timeout=1.0)
+    took = time.monotonic() - began
+    hang.set()
+    assert got['claude'] == got['codex'] == [{'name': 'session', 'left_pct': 50}]
+    assert got['stuck'] is setup_channel.SLOW
+    assert took < 1.5
 
 
 def test_first_setup_can_create_the_default_home(tmp_path, monkeypatch):
