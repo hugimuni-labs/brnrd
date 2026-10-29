@@ -24,7 +24,7 @@ from sqlalchemy.orm import Session
 
 from brnrd import publish_scope, schemas
 from brnrd.auth import get_db
-from brnrd.models import Account, Daemon, LoomPart, Repo
+from brnrd.models import Account, BoardConsent, Daemon, LoomPart, Repo
 
 from ._session import _account_id, _json_body
 from .daemons import LOOM_DAEMON_NAME
@@ -216,7 +216,7 @@ def loom_consent(request: Request, db: Session = Depends(get_db)) -> JSONRespons
     repo, daemon = looms[0]
     if publish_scope.lane_permitted(db, repo_id=repo.id, lane=BOARD_LANE):
         state = "granted"
-    elif repo.publish_consent_at is None:
+    elif db.get(BoardConsent, repo.id) is None:
         state = "ask"
     else:
         state = "declined"
@@ -248,6 +248,7 @@ async def loom_consent_answer(request: Request, db: Session = Depends(get_db)) -
         tokens = sorted(lanes - {"corpus"}) + sorted(slices)
         layers = publish_scope.normalize_publish_layers(",".join(tokens) or None)
         publish_scope.purge_removed_scope(db, repo=repo, new_publish_layers=layers)
-        repo.publish_layers, repo.publish_consent_at, repo.updated_at = layers, now, now
+        repo.publish_layers, repo.updated_at = layers, now
+        db.merge(BoardConsent(repo_id=repo.id, answered_at=now))
     db.commit()
     return JSONResponse({"state": "granted" if send else "declined"})

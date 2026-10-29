@@ -63,3 +63,17 @@ test('granted with no board yet waits for the push instead of falling back', asy
 		await B.close();
 	}
 });
+
+test('an answer brnrd.dev did not take says so and stays on the prompt', async () => {
+	const B = await open({ parts: {}, consent: { state: 'ask' }, ready: '[data-consent="ask"]' });
+	try {
+		await B.page.route('**/v1/loom/consent', (r) =>
+			r.request().method() === 'POST' ? r.fulfill({ status: 500, body: '{}' }) : r.continue()
+		);
+		await B.page.locator('button.yes').click();
+		await B.page.locator('[role="alert"]').waitFor();
+		assert.equal(await B.page.locator('[data-consent="ask"]').count(), 1);
+	} finally {
+		await B.close();
+	}
+});

@@ -29,8 +29,17 @@ export async function open({
 		requests = [];
 	page.on('pageerror', (e) => errors.push(e.message));
 	page.on('request', (r) => requests.push(new URL(r.url()).pathname));
-	await page.goto(base);
-	await page.waitForSelector(ready, { timeout: 60_000 });
+	try {
+		await page.goto(base);
+		await page.waitForSelector(ready, { timeout: 60_000 });
+	} catch (e) {
+		// a page that never got ready must not leave its browser and servers holding the test process open
+		await browser.close();
+		await vite.close();
+		loom.server.closeAllConnections?.();
+		loom.server.close();
+		throw e;
+	}
 	return {
 		page,
 		loom,

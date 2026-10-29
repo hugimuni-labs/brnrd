@@ -8,12 +8,14 @@
 		lastSeen = null,
 		slow = false,
 		busy = false,
+		failed = false,
 		answer
 	}: {
 		step: 'ask' | 'declined' | 'waiting';
 		lastSeen?: string | null;
 		slow?: boolean;
 		busy?: boolean;
+		failed?: boolean;
 		answer: (send: boolean) => void;
 	} = $props();
 
@@ -60,7 +62,11 @@
 				>Send my board after all</button
 			>
 		</div>
-	{:else}
+	{/if}
+	{#if failed && step !== 'waiting'}
+		<p class="failed" role="alert">brnrd.dev did not take the answer. Try again in a moment.</p>
+	{/if}
+	{#if step === 'waiting'}
 		<h1>Waiting for your loom's first push…</h1>
 		<p>
 			Your loom sends the board within a minute of the yes; this page turns into it when it lands.

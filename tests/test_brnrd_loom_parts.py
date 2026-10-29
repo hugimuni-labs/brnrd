@@ -262,9 +262,11 @@ def test_consent_is_none_without_a_loom_and_401_signed_out(client):
 
 
 def test_a_new_loom_is_asked_and_a_yes_lets_its_board_in(client):
-    from brnrd.models import Repo
+    from brnrd.models import BoardConsent, Repo
 
     session, relay, repo_id = _loom_without_consent(client)
+    # installs before the withheld status read the refusal by its text, so the 451 keeps it
+    assert _push(client, relay).json()["detail"] == "this repo's publish scope withholds the activity lane"
     _signed_in(client, session)
     got = client.get("/v1/loom/consent").json()
     assert got["state"] == "ask" and got["repo"] == "Gurio/demo" and got["last_seen_at"]
@@ -275,7 +277,7 @@ def test_a_new_loom_is_asked_and_a_yes_lets_its_board_in(client):
     assert client.get("/v1/loom/consent").json()["state"] == "granted"
     with client.app.state.SessionLocal() as db:
         repo = db.get(Repo, repo_id)
-        assert repo.publish_layers == "activity" and repo.publish_consent_at is not None
+        assert repo.publish_layers == "activity" and db.get(BoardConsent, repo_id) is not None
     _signed_in(client, None)
     assert _push(client, relay).status_code == 200
     _signed_in(client, session)

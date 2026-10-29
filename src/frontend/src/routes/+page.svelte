@@ -35,6 +35,7 @@
 	let lastSeen = $state<string | null>(null);
 	let slow = $state(false);
 	let busy = $state(false);
+	let failed = $state(false);
 	let gone = false;
 	let timers: ReturnType<typeof setTimeout>[] = [];
 	const STEPS: Record<string, Step> = { ask: 'ask', declined: 'declined', granted: 'waiting' };
@@ -71,13 +72,14 @@
 			.catch(() => null);
 	const answer = async (send: boolean) => {
 		busy = true;
+		failed = false;
 		const r = await fetch(`${BASE}/consent`, {
 			method: 'POST',
 			headers: { 'content-type': 'application/json' },
 			body: JSON.stringify({ send })
 		}).catch(() => null);
 		busy = false;
-		if (!r?.ok) return;
+		if (!r?.ok) return void (failed = true);
 		if (send) wait();
 		else mode = 'declined';
 	};
@@ -132,7 +134,7 @@
 {:else if mode === 'board'}
 	<Board {get} />
 {:else if mode === 'ask' || mode === 'declined' || mode === 'waiting'}
-	<BoardConsent step={mode} {lastSeen} {slow} {busy} {answer} />
+	<BoardConsent step={mode} {lastSeen} {slow} {busy} {failed} {answer} />
 {:else if mode === 'home'}
 	<div data-home class="contents"><LoomHome /></div>
 {/if}

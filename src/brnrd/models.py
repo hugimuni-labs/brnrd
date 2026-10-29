@@ -158,10 +158,6 @@ class Repo(Base):
     # enforced server-side at the `PUT /v1/daemons/*` publish seam, not only
     # hidden in the connect UI.
     publish_layers: Mapped[str | None] = mapped_column(String(255), nullable=True)
-    # When the person last answered the board prompt on brnrd.dev (yes or no).
-    # ``None`` = never asked: `brnrd account connect` records scope ``none``,
-    # so without this an unasked loom and one whose person said no look alike.
-    publish_consent_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     # brnrd-bot's own marker-collaborator state (#874, rescoped 2026-07-29).
     # ``None`` = never determined — no bot token configured, never checked
     # yet, or the last check was ambiguous (see
@@ -343,6 +339,20 @@ class Daemon(Base):
         info=_publish_store("activity", "repo"),
     )
     loom_updated_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+
+class BoardConsent(Base):
+    """When a repo's person last answered the board prompt on brnrd.dev (yes or no); no row = never asked.
+
+    `brnrd account connect` records scope ``none``, so without this an unasked loom and one whose person said no
+    look alike. Its own table, made by ``create_all`` with no foreign key, never a startup ``ALTER`` on ``repos``:
+    every push reads ``repos``, and an ``ALTER`` there holds ACCESS EXCLUSIVE across live requests (the #2523 outage).
+    """
+
+    __tablename__ = "board_consents"
+
+    repo_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    answered_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
 
 
 class LoomPart(Base):
