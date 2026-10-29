@@ -200,21 +200,27 @@ def _thread(facts, strand: str) -> str:
                  if f.kind == "lease" and f.data.get("strand") == strand), "")
 
 
+def holders(facts) -> set[str]:
+    """Strands that hold a thread: one fold of the ledger, shared by a pass's rooms."""
+    from .project import fold
+    return {strand for strand, _ in fold(facts).holder.values()}
+
+
 def room_kept(home, facts, strand: str, now: float, force: bool = False,
-              settled: set[str] = frozenset()) -> str:
+              settled: set[str] = frozenset(), holding: set[str] | None = None) -> str:
     """Why ``rooms/<strand>`` stays, or empty when it may go. Cheapest checks first.
 
     ``force`` is a body's word that the room's work is settled: age, loose
-    files and leftovers no longer keep it.
+    files and leftovers no longer keep it. ``holding`` is ``holders(facts)``,
+    passed in by a pass over every room: the fold reads the whole ledger.
     """
     from .loom import body_alive
-    from .project import fold
     room = home.room(strand)
     leases = [f for f in facts if f.kind == "lease" and f.data.get("strand") == strand]
     if not leases:
         return "no lease names it"
     gen = max(int(f.data.get("gen") or 0) for f in leases)
-    if any(s == strand for s, _ in fold(facts).holder.values()):
+    if strand in (holders(facts) if holding is None else holding):
         return "it holds its thread"
     released = next((f for f in facts if f.kind == "released" and f.data.get("strand") == strand
                      and int(f.data.get("gen") or 0) == gen), None)
@@ -418,6 +424,7 @@ class Reaper:
         working = busy(rooms)
         latest = latest_strands(facts)
         settled = settled_threads(home, facts)
+        holding = holders(facts)
         gone, kept, settle = 0, {}, {}
         cloned, freed, held = 0, 0, {}
         for room in sorted(rooms.iterdir()):
@@ -427,7 +434,7 @@ class Reaper:
                 shutil.rmtree(room, ignore_errors=True)
                 continue
             try:
-                why = room_kept(home, facts, room.name, now, settled=settled)
+                why = room_kept(home, facts, room.name, now, settled=settled, holding=holding)
             except Exception as exc:
                 why = f"inspection failed: {type(exc).__name__}: {exc}"
             if not why:
