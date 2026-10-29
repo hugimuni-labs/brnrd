@@ -112,12 +112,19 @@ def pair(home, kind, name, person, *, timeout=180, out=print, qr=None):
                     result = subprocess.run([str(folder / 'out'), str(reply)], env=env,
                                             capture_output=True, text=True, timeout=60)
                 if result.returncode != 0:
-                    raise ValueError('Pairing reply failed or may have sent; channel was not enabled')
-                # A zero exit is a receipt only with the same output grammar.
-                receipt = json.loads(result.stdout)
-                if (not isinstance(receipt, dict) or not isinstance(receipt.get('ids'), list) or
-                        any(not isinstance(i, (str, int)) or isinstance(i, bool) for i in receipt['ids'])):
-                    raise ValueError('Pairing out returned no ids receipt')
+                    # The heard code is the proof: it came from this chat, so
+                    # the channel is enabled either way. Only the answer
+                    # failed; say why (the connector's last stderr line is the
+                    # server's own reason) and go on.
+                    why = (result.stderr.strip().splitlines() or [f'{kind}/out exited {result.returncode}'])[-1]
+                    sent = 'was not sent' if result.returncode == 3 else 'may or may not have been sent'
+                    out(f"Your code arrived, so this chat is paired, but the 'Paired ✓' answer {sent}: {why}")
+                else:
+                    # A zero exit is a receipt only with the same output grammar.
+                    receipt = json.loads(result.stdout)
+                    if (not isinstance(receipt, dict) or not isinstance(receipt.get('ids'), list) or
+                            any(not isinstance(i, (str, int)) or isinstance(i, bool) for i in receipt['ids'])):
+                        raise ValueError('Pairing out returned no ids receipt')
                 path.unlink()
                 if path.with_suffix('.d').exists():
                     shutil.rmtree(path.with_suffix('.d'))
