@@ -132,6 +132,10 @@ _PUBLISH_LANES: dict[str, Callable[..., None]] = {}
 
 _PUBLISH_OFF = "none"
 
+# The status brnrd.dev answers a push whose lane the repo's consent withholds: its own code, so a loom tells the
+# person's missing yes from any other refusal by status alone (451: unavailable for a legal reason, here consent).
+PUBLISH_WITHHELD_STATUS = 451
+
 # Raw ``publish.layers`` values already warned about, so a standing typo costs
 # one line at startup rather than one every ``_DASHBOARD_PUBLISH_INTERVAL_S``.
 # A guard that fires constantly stops being read.

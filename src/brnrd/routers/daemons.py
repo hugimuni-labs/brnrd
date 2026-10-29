@@ -16,6 +16,8 @@ from typing import Any, Callable
 import anyio
 import httpx
 from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request, Response, status
+
+from brr.gates.cloud_publisher import PUBLISH_WITHHELD_STATUS
 from sqlalchemy import delete, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
@@ -722,7 +724,7 @@ def put_loom(doc: dict[str, Any] = Body(...), principal: Principal = Depends(req
     daemon.last_seen_at = now
     db.commit()
     if not permitted:
-        raise HTTPException(status_code=403, detail="this repo's publish scope withholds the activity lane")
+        raise HTTPException(status_code=PUBLISH_WITHHELD_STATUS, detail="this repo's publish scope withholds the activity lane")
     return schemas.LoomOut(loom_updated_at=now)
 
 
@@ -766,7 +768,7 @@ async def put_loom_parts(request: Request, principal: Principal = Depends(requir
         # A refusal also drops the copy, as the snapshot does.
         db.execute(delete(LoomPart).where(LoomPart.daemon_id == daemon.id))
         db.commit()
-        raise HTTPException(status_code=403, detail="this repo's publish scope withholds the activity lane")
+        raise HTTPException(status_code=PUBLISH_WITHHELD_STATUS, detail="this repo's publish scope withholds the activity lane")
     held = {row.key: row for row in db.execute(select(LoomPart).where(LoomPart.daemon_id == daemon.id)).scalars()}
     for key in set(held) - keys:
         db.delete(held.pop(key))

@@ -26,8 +26,9 @@ def _door(folder, env, code):
     if not (folder / 'door').is_file():
         return None
     try:
+        # Its stderr is kept: a broken door falls back to the plain code, never a traceback.
         result = subprocess.run([str(folder / 'door'), code], env=env, stdout=subprocess.PIPE,
-                                text=True, timeout=30)
+                                stderr=subprocess.PIPE, text=True, timeout=30)
         door = json.loads(result.stdout) if result.returncode == 0 else None
     except (OSError, subprocess.SubprocessError, ValueError):
         return None
@@ -293,6 +294,31 @@ def _person_id(name):
     return slug or 'me'
 
 
+SLOW = object()
+FUEL_TIMEOUT = 3.0
+
+
+def _read_fuel(root, shells, read, timeout=FUEL_TIMEOUT):
+    """Every shell's fuel read at once, ``{shell: windows | None | SLOW}``:
+    the menu waits for the slowest up to ``timeout``, never their sum. A
+    reader still out is SLOW; its daemon thread never holds setup's exit."""
+    import threading
+    found, threads = {}, []
+    for shell in shells:
+        def one(shell=shell):
+            try:
+                found[shell] = read(root, shell)
+            except Exception:
+                found[shell] = None
+        thread = threading.Thread(target=one, daemon=True)
+        thread.start()
+        threads.append(thread)
+    end = time.monotonic() + timeout
+    for thread in threads:
+        thread.join(max(0.0, end - time.monotonic()))
+    return {shell: found.get(shell, SLOW) for shell in shells}
+
+
 def _choose_body(home):
     """The harness brnrd thinks with: every one setup knows, found or not, with its fuel; asked when two are found."""
     from .adapters import body_label, parse_body
@@ -305,12 +331,18 @@ def _choose_body(home):
     known = _defaults()
     if current and parse_body(current)[0] not in {shell for shell, _core in known}:
         known.append((parse_body(current)[0], ''))
+    installed = [shell for shell, _core in known if shutil.which(shell)]
+    if installed:
+        print(f"    {style.dim('· checking ' + ', '.join(installed) + ' …')}", flush=True)
+    readings = _read_fuel(home.root, installed, _windows)
     for shell, core in known:
         if not shutil.which(shell):
             print(f"    {style.dim('·')} {shell}: {style.dim('not installed')}")
             continue
-        windows = _windows(home.root, shell)
-        if windows is None:
+        windows = readings.get(shell)
+        if windows is SLOW:
+            fuel, windows = style.dim("found, couldn't check its fuel"), None
+        elif windows is None:
             fuel = style.dim('found, fuel unknown')
         else:
             fuel = ' · '.join(f"{w['name']} {w['left_pct']:g}%" for w in windows) + ' left'

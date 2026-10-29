@@ -109,7 +109,7 @@ def test_consent_off_withholds_and_drops_the_parts(client):
     _signed_in(client, session)
     assert client.get("/v1/loom/index").status_code == 404
     _signed_in(client, None)
-    assert _push(client, relay).status_code == 403
+    assert _push(client, relay).status_code == 451
     _signed_in(client, session)
     assert client.get("/v1/loom/index").status_code == 404
 
@@ -206,6 +206,7 @@ def test_the_loom_pusher_raises_a_refused_push(client, monkeypatch, tmp_path):
     monkeypatch.setattr(cloud, "_load_state_from_dir", lambda d: {"brnrd_url": "http://x", "token": "t"})
     monkeypatch.setattr(cloud._SESSION, "request",
                         lambda *a, **k: SimpleNamespace(status_code=403, text="withheld", json=dict))
+    # a 403 that is not the consent refusal stays a plain failure
     board = SimpleNamespace(parts={"index": {}}, hashes={"index": "h"}, changed=threading.Condition())
     pusher = Pusher(board)
     config = SimpleNamespace(relay_state=str(tmp_path))
@@ -216,3 +217,131 @@ def test_the_loom_pusher_raises_a_refused_push(client, monkeypatch, tmp_path):
     pusher.worker.join(5)
     with pytest.raises(RuntimeError, match="403"):
         pusher.step(config)
+
+
+def test_the_loom_pusher_names_a_withheld_board(monkeypatch, tmp_path):
+    import threading
+    from types import SimpleNamespace
+
+    from brr.gates import cloud
+    from brr.loom.runtime.board import BoardWithheld, Pusher
+
+    detail = '{"detail":"this repo\'s publish scope withholds the activity lane"}'
+    monkeypatch.setattr(cloud, "_load_state_from_dir", lambda d: {"brnrd_url": "http://x", "token": "t"})
+    monkeypatch.setattr(cloud._SESSION, "request",
+                        lambda *a, **k: SimpleNamespace(status_code=451, text=detail, json=dict))
+    board = SimpleNamespace(parts={"index": {}}, hashes={"index": "h"}, changed=threading.Condition())
+    pusher = Pusher(board)
+    config = SimpleNamespace(relay_state=str(tmp_path))
+    try:
+        pusher.step(config)
+    except RuntimeError:
+        pass
+    pusher.worker.join(5)
+    with pytest.raises(BoardWithheld, match="said yes"):
+        pusher.step(config)
+
+
+def _loom_without_consent(client):
+    """A loom connected as `brnrd account connect` does it: no scope sent, so `none`, and one refused push."""
+    headers, session = _account(client)
+    repo_id = _repo(client, headers, publish_layers=None)
+    relay = _relay_token(client, headers, repo_id)
+    assert _push(client, relay).status_code == 451
+    return session, relay, repo_id
+
+
+def test_consent_is_none_without_a_loom_and_401_signed_out(client):
+    _, session = _account(client)
+    _signed_in(client, None)
+    assert client.get("/v1/loom/consent").status_code == 401
+    assert client.post("/v1/loom/consent", json={"send": True}).status_code == 401
+    _signed_in(client, session)
+    assert client.get("/v1/loom/consent").json() == {"state": "none"}
+    assert client.post("/v1/loom/consent", json={"send": True}).status_code == 404
+
+
+def test_a_new_loom_is_asked_and_a_yes_lets_its_board_in(client):
+    from brnrd.models import BoardConsent, Repo
+
+    session, relay, repo_id = _loom_without_consent(client)
+    # installs before the withheld status read the refusal by its text, so the 451 keeps it
+    assert _push(client, relay).json()["detail"] == "this repo's publish scope withholds the activity lane"
+    _signed_in(client, session)
+    got = client.get("/v1/loom/consent").json()
+    assert got["state"] == "ask" and got["repo"] == "Gurio/demo" and got["last_seen_at"]
+    assert client.get("/v1/loom/index").status_code == 404
+    assert client.post("/v1/loom/consent", json={"send": "yes"}).status_code == 400
+
+    assert client.post("/v1/loom/consent", json={"send": True}).json() == {"state": "granted"}
+    assert client.get("/v1/loom/consent").json()["state"] == "granted"
+    with client.app.state.SessionLocal() as db:
+        repo = db.get(Repo, repo_id)
+        assert repo.publish_layers == "activity" and db.get(BoardConsent, repo_id) is not None
+    _signed_in(client, None)
+    assert _push(client, relay).status_code == 200
+    _signed_in(client, session)
+    assert client.get("/v1/loom/index").json() == PARTS["index"]
+
+
+def test_a_no_is_remembered_and_drops_the_copy_but_keeps_other_lanes(client):
+    from brnrd.models import Repo
+
+    headers, session = _account(client)
+    repo_id = _repo(client, headers, publish_layers="activity,quota,authored")
+    relay = _relay_token(client, headers, repo_id)
+    assert _push(client, relay).status_code == 200
+    _signed_in(client, session)
+    assert client.get("/v1/loom/consent").json()["state"] == "granted"
+
+    assert client.post("/v1/loom/consent", json={"send": False}).json() == {"state": "declined"}
+    assert client.get("/v1/loom/consent").json()["state"] == "declined"
+    assert client.get("/v1/loom/index").status_code == 404
+    with client.app.state.SessionLocal() as db:
+        assert db.get(Repo, repo_id).publish_layers == "quota,authored"
+    _signed_in(client, None)
+    assert _push(client, relay).status_code == 451
+
+    _signed_in(client, session)
+    client.post("/v1/loom/consent", json={"send": True})
+    with client.app.state.SessionLocal() as db:
+        assert db.get(Repo, repo_id).publish_layers == "activity,quota,authored"
+
+
+def test_consent_is_scoped_to_the_signed_in_account(client):
+    session, _, _ = _loom_without_consent(client)
+    _, other = _account(client, login="sasha")
+    _signed_in(client, other)
+    assert client.get("/v1/loom/consent").json() == {"state": "none"}
+    assert client.post("/v1/loom/consent", json={"send": True}).status_code == 404
+    _signed_in(client, session)
+    assert client.get("/v1/loom/consent").json()["state"] == "ask"
+
+
+def test_the_pusher_names_a_withheld_board_until_a_yes_on_brnrd_dev_clears_it(client, monkeypatch, tmp_path):
+    """Against the real app: `account connect`'s scope `none` refuses with the withheld status, the pusher raises the
+    named condition (the health guard tells it once), and the person's yes lets the next push land and clears it."""
+    import threading
+    from types import SimpleNamespace
+
+    from brr.gates import cloud
+    from brr.loom.runtime.board import BoardWithheld, Pusher
+
+    session, relay, _ = _loom_without_consent(client)
+    token = relay["Authorization"].split(" ", 1)[1]
+    monkeypatch.setattr(cloud, "_load_state_from_dir", lambda d: {"brnrd_url": "http://testserver", "token": token})
+
+    def request(method, url, *, data, headers, timeout):
+        _signed_in(client, None)
+        return client.request(method, url.removeprefix("http://testserver"), content=data, headers=headers)
+
+    monkeypatch.setattr(cloud._SESSION, "request", request)
+    hashes = {k: f"h-{k}" for k in PARTS}
+    pusher = Pusher(SimpleNamespace(parts=dict(PARTS), hashes=hashes, changed=threading.Condition()))
+    pusher._put(tmp_path, dict(PARTS), hashes)  # the worker's body, run here so no thread races the asserts
+    assert isinstance(pusher.failing[0], BoardWithheld) and "board withheld" in str(pusher.failing[0])
+
+    _signed_in(client, session)
+    assert client.post("/v1/loom/consent", json={"send": True}).status_code == 200
+    pusher._put(tmp_path, dict(PARTS), hashes)
+    assert pusher.failing is None and pusher.sent == hashes

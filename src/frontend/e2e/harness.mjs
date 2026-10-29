@@ -8,8 +8,13 @@ import { partsServer } from './parts-server.mjs';
 
 const root = fileURLToPath(new URL('..', import.meta.url));
 
-export async function open({ parts = fixture(), viewport = { width: 1440, height: 900 } } = {}) {
-	const loom = await partsServer(parts);
+export async function open({
+	parts = fixture(),
+	viewport = { width: 1440, height: 900 },
+	consent = null,
+	ready = '.brd .column.threadcol'
+} = {}) {
+	const loom = await partsServer(parts, 0, consent);
 	process.env.BRNRD_DEV_TARGET = `http://127.0.0.1:${loom.port}`;
 	const vite = await createServer({
 		root,
@@ -24,8 +29,17 @@ export async function open({ parts = fixture(), viewport = { width: 1440, height
 		requests = [];
 	page.on('pageerror', (e) => errors.push(e.message));
 	page.on('request', (r) => requests.push(new URL(r.url()).pathname));
-	await page.goto(base);
-	await page.waitForSelector('.brd .column.threadcol', { timeout: 60_000 });
+	try {
+		await page.goto(base);
+		await page.waitForSelector(ready, { timeout: 60_000 });
+	} catch (e) {
+		// a page that never got ready must not leave its browser and servers holding the test process open
+		await browser.close();
+		await vite.close();
+		loom.server.closeAllConnections?.();
+		loom.server.close();
+		throw e;
+	}
 	return {
 		page,
 		loom,

@@ -36,6 +36,13 @@ DEBOUNCE = 10
 IDLE = 60
 clock = time.monotonic
 
+
+def withheld(exc: BaseException) -> bool:
+    """brnrd.dev refused the lane because the repo's publish consent withholds it (the default for a fresh connect,
+    until the person says yes there): a state only that person changes, told by status code, never by the text."""
+    from brr.gates.cloud_publisher import PUBLISH_WITHHELD_STATUS
+    return getattr(exc, "status_code", None) == PUBLISH_WITHHELD_STATUS
+
 _TEXTS: dict[str, str] = {}
 
 
@@ -395,4 +402,6 @@ class Publisher:
                            json=doc, retry=False)
             self.failing = None
         except Exception as exc:
-            self.failing = (exc, exc.__traceback__)
+            # Withheld is the board's condition, said once by the parts pusher (board.BoardWithheld); this push
+            # keeps its idle pace and raises nothing, so one missing yes is not a second degraded step.
+            self.failing = None if withheld(exc) else (exc, exc.__traceback__)
