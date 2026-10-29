@@ -1522,3 +1522,23 @@ def deregister(payload: schemas.DaemonDeregister, principal: Principal = Depends
         daemon.last_seen_at = datetime.now(timezone.utc)
         db.commit()
     return {"ok": True}
+
+
+@router.post("/revoke")
+def revoke(principal: Principal = Depends(require_daemon), db: Session = Depends(get_db)):
+    """Retire the calling token: the server half of a disconnect.
+
+    ``deregister`` only marks a daemon offline and its token still works, so
+    a machine that is wiped or given away left a live credential on the
+    account with no verb to end it short of deleting the account. This
+    revokes the token itself and takes every daemon registered under it
+    offline. The rows stay: activity and repo links point at them by FK.
+    """
+    token = principal.token
+    daemons = db.execute(select(Daemon).where(Daemon.token_id == token.id)).scalars().all()
+    for daemon in daemons:
+        daemon.online = False
+        daemon.last_seen_at = datetime.now(timezone.utc)
+    token.revoked = True
+    db.commit()
+    return {"ok": True, "daemons": [d.daemon_name for d in daemons]}

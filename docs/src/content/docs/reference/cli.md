@@ -26,7 +26,7 @@ This page reflects the public command tree printed by the installed CLI on
 | `brnrd gate bind <repo> <gate>` | Bind a repo-local gate. |
 | `brnrd gate list [--json]` | Show gates configured here. |
 | `brnrd account connect [url]` | Pair with brnrd, prepare account home + external knowledge, create/adopt their private GitHub remotes, then install and start the native user service; `--local-memory` explicitly skips remote linking. Also accepts `--daemon-name`, `--no-service`, `--defaults`, and Linux linger controls. |
-| `brnrd account disconnect` | Remove the local managed-gate identity while keeping the account home and its durable memory. |
+| `brnrd account disconnect` | Revoke this machine's token on brnrd.dev and remove the local gate identity (loom home and repo), keeping the account home and its durable memory. See [Leaving brnrd](../../guides/leaving/). |
 | `brnrd account add <repo>` | Add a repo to the connected account home. |
 | `brnrd account relabel <old> <new>` | Follow a repo that changed address (e.g. renamed org), carrying its memory to the new label; supports `--dry-run` and `--yes`. |
 | `brnrd account status [--json]` | Show the resolved home and its repos. |

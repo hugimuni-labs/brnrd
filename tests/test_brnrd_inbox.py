@@ -2067,3 +2067,22 @@ def test_response_without_platform_receipt_keeps_legacy_ack(env):
     assert response.status_code == 200, response.text
     assert response.json() == {"event_id": event_id, "forwarded": True, "message_id": None}
     assert len(forwarder.items) == 1
+
+
+def test_revoke_retires_the_token_and_takes_its_daemon_offline(env):
+    """A wiped machine's daemon token must stop working, not just look offline."""
+    _, client, _ = env
+    acc = _account(client)
+    rid = _repo(client, acc)
+    dmn = _connect(client, acc, rid)
+    assert client.post("/v1/daemons/register", json={"daemon_name": "imac"}, headers=dmn).status_code == 200
+
+    gone = client.post("/v1/daemons/revoke", headers=dmn)
+    assert gone.status_code == 200, gone.text
+    assert gone.json() == {"ok": True, "daemons": ["imac"]}
+
+    # The same token is now refused everywhere, revoke included.
+    assert client.get("/v1/daemons/whoami", headers=dmn).status_code == 401
+    assert client.post("/v1/daemons/revoke", headers=dmn).status_code == 401
+    # An account key cannot revoke a daemon token by calling the daemon route.
+    assert client.post("/v1/daemons/revoke", headers=acc).status_code == 403

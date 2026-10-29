@@ -293,3 +293,58 @@ def test_account_security_filename_matches_config_module():
     from brr import config as conf
 
     assert account.SECURITY_CONFIG_FILENAME == conf.SECURITY_CONFIG_FILENAME
+
+
+def test_disconnect_reaches_an_extra_gate_dir_such_as_the_loom_homes(tmp_path):
+    loom_gate = tmp_path / "home" / "loom"
+    cloud._save_state_to_dir(loom_gate, {"brnrd_url": "http://brnrd", "token": "bd_loom"})
+
+    assert cloud.disconnect(None, state_dirs=(loom_gate,)) is True
+    assert not cloud._token_path(loom_gate).exists()
+    assert not cloud.runtime.state_path(loom_gate, "cloud").exists()
+
+
+def test_revoke_calls_brnrd_and_reads_401_as_already_revoked(tmp_path, monkeypatch):
+    gate = tmp_path / "gate"
+    cloud._save_state_to_dir(gate, {"brnrd_url": "http://brnrd", "token": "bd_x"})
+    calls = []
+
+    def answered(base, method, path, **kw):
+        calls.append((method, path, kw["token"]))
+        return {"ok": True, "daemons": ["imac"]}
+
+    monkeypatch.setattr(cloud, "_request", answered)
+    assert cloud.revoke(gate) == ["imac"]
+    assert calls == [("POST", "/v1/daemons/revoke", "bd_x")]
+
+    def refused(*a, **kw):
+        raise cloud.BrnrdAuthError("401")
+
+    monkeypatch.setattr(cloud, "_request", refused)
+    assert cloud.revoke(gate) == []
+
+    def down(*a, **kw):
+        raise cloud.CloudUnavailableError("down")
+
+    monkeypatch.setattr(cloud, "_request", down)
+    assert cloud.revoke(gate) is None
+    assert cloud.revoke(tmp_path / "nothing-here") is None
+
+
+def test_account_disconnect_revokes_and_clears_the_loom_homes_gate(tmp_path, monkeypatch, capsys):
+    from argparse import Namespace
+
+    from brr import cli
+
+    home = tmp_path / "brnrd"
+    (home / "loom").mkdir(parents=True)
+    (home / "loom" / "config.toml").write_text("")
+    cloud._save_state_to_dir(home / "loom", {"brnrd_url": "http://brnrd", "token": "bd_loom"})
+    monkeypatch.setattr(cli, "_maybe_brr_dir", lambda: None)
+    monkeypatch.setattr(cloud, "revoke", lambda state_dir: ["iMac.local"])
+
+    cli.cmd_brnrd_disconnect(Namespace(home=str(home)))
+
+    out = capsys.readouterr().out
+    assert "Disconnected" in out and "took iMac.local offline" in out
+    assert not cloud._token_path(home / "loom").exists()
