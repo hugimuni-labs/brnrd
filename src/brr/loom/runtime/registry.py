@@ -127,7 +127,8 @@ def admit(fact: Fact) -> None:
     """Refuse a fact of a closed resource the registry has anything against.
 
     A wish is born for someone: the fact that creates one (its id is the
-    wish) cites a letter in ``says`` or names a ``parent`` wish; one a
+    wish) cites a letter in ``says``, names a ``parent`` wish, or is
+    written by the person themselves (``person:…``, as setup does); one a
     resident makes of a person (an ask) names the wish it unblocks, so it
     always has a ``parent``. Any other
     ``wish`` fact is a touch, id ``wish:…``; one with neither shape would be
@@ -141,7 +142,9 @@ def admit(fact: Fact) -> None:
     found = problems(fact)
     if fact.kind == "wish" and not found:
         if fact.id == fact.data["wish"]:
-            if not fact.data["says"] and not fact.data.get("parent"):
+            # A person writing at their own terminal (setup) is the citation:
+            # the fact is signed by them.
+            if not fact.data["says"] and not fact.data.get("parent") and not fact.by.startswith("person:"):
                 found.append("a new wish needs --say <letter> or --parent <wish>")
             elif fact.data["from"] == "resident" and not fact.data.get("parent"):
                 found.append("an ask needs the wish it unblocks: ask --for <wish>")

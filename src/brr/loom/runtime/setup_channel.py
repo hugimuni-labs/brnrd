@@ -234,6 +234,49 @@ def _channel_name(home, kind):
     return next(n for n in (kind, *(f'{kind}-{i}' for i in range(2, 100))) if n not in taken)
 
 
+ONBOARDING_WISH = 'brnrd knows the person it works for'
+
+
+def onboarding_asks(home, person):
+    """``core/onboarding.md``'s list, as asks on the home thread: what brnrd
+    asks a new person, carried like any ask and answered in chat.
+
+    Each ``- `` line is one ask under one wish, in the file's order. The list
+    is the self's to edit; a line already asked is never asked twice. Returns
+    the ask ids written. Signed by the person running setup: the list is
+    theirs, put in at their own terminal.
+    """
+    from .ledger import append, read_facts
+    from .verbs_wishes import wish_fact
+    from .wishes import wishes
+    listed = home.root / 'self/core/onboarding.md'
+    lines = [line[2:].strip() for line in listed.read_text().splitlines()
+             if line.startswith('- ') and line[2:].strip()] if listed.is_file() else []
+    if not lines:
+        return []
+    by, thread = f'person:{person}', home.main_thread()
+    facts = read_facts(home)
+    found = wishes(facts)
+    parent = next((w.id for w in found.values() if (w.thread, w.line) == (thread, ONBOARDING_WISH)), None)
+    if parent is None:
+        # Nobody said it: a derived wish, the one the asks unblock.
+        fact = append(home, wish_fact(facts, by=by, ident='new', line=ONBOARDING_WISH,
+                                      thread=thread, sender='person'))
+        parent = fact.data['wish']
+        facts = read_facts(home)
+        found = wishes(facts)
+    asked = {w.line for w in found.values() if w.parent == parent and w.sender == 'resident'}
+    written = []
+    for line in lines:
+        if line in asked:
+            continue
+        fact = append(home, wish_fact(facts, by=by, ident='new', line=line, thread=thread,
+                                      sender='resident', parent=parent))
+        facts = read_facts(home)
+        written.append(fact.data['wish'])
+    return written
+
+
 def _person_id(name):
     """A people/ folder name from the OS login."""
     slug = re.sub(r'[^a-z0-9._-]+', '-', name.strip().lower()).strip('-._')
@@ -320,13 +363,14 @@ def main(argv=None):
         if args.person or len(people) == 1:
             person = args.person or people[0]
         else:
-            # An internal id, never shown: brnrd asks the name itself in its
-            # first conversation (the seed's inbox onboarding row).
+            # An internal key, never asked: brnrd asks the name itself in its
+            # first conversation (core/onboarding.md, seeded as asks).
             import getpass
             person = _person_id(getpass.getuser())
         # A letter lands only on a thread on the self's main: seed it before pairing.
         if init_self(home.root, person=person).startswith('initialized '):
             _ok(IDENTITY_NOTE)
+        onboarding_asks(home, person)
         _step(f'Connect {CHOICES.get(kind, kind).split(",")[0]}')
         paired = pair(home, kind, name, person, timeout=args.timeout)
         if paired and args.wait > 0:
