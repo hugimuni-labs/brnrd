@@ -30,7 +30,7 @@ from pathlib import Path
 from brr.loom.runtime.fakebody import Ctx
 ctx = Ctx(Path(sys.argv[1]))
 letters = ctx.owed()
-Path({str(ready)!r}).write_text(str(os.getpid()))
+ctx.handoff({str(ready)!r}, str(os.getpid()))
 deadline = time.monotonic() + 20
 while not Path({str(resume)!r}).exists():
     assert time.monotonic() < deadline
@@ -85,7 +85,7 @@ from pathlib import Path
 from brr.loom.runtime.fakebody import Ctx
 ctx = Ctx(Path(sys.argv[1]))
 letters = ctx.owed()
-Path({str(ready)!r}).write_text(str(os.getpid()))
+ctx.handoff({str(ready)!r}, str(os.getpid()))
 while not Path({str(resume)!r}).exists():
     time.sleep(0.03)
 for letter in letters:
@@ -150,13 +150,13 @@ text = json.loads(view.raw)["hookSpecificOutput"]["additionalContext"]
 next_row = text.split(" · next: ")[1].split("\\n")[0]
 assert len(next_row) == 60 and next_row.startswith("Second"), next_row
 assert ctx.jack("post").raw == ""
-Path({str(ready)!r}).write_text(view.raw)
+ctx.handoff({str(ready)!r}, view.raw)
 view = ctx.jack("post")
 while not view.letters:
     view = ctx.jack("post")
     assert time.monotonic() < deadline
     time.sleep(0.03)
-Path({str(complete)!r}).write_text(view.raw)
+ctx.handoff({str(complete)!r}, view.raw)
 for later in view.letters:
     ctx.send("thread:work", note="followup read", re=later.id)
 wish(two, "--result", "pr:https://example.com/2", "--line", "Second done", "--deliver")
@@ -165,7 +165,7 @@ assert " · next: " not in view.raw, view.raw
 while ctx.jack("post").raw:
     assert time.monotonic() < deadline
     time.sleep(0.03)
-Path({str(finished)!r}).write_text("all boundary assertions reached")
+ctx.handoff({str(finished)!r}, "all boundary assertions reached")
 """)
     inject_letter(root, to='thread:work', body='begin')
     loom = Loom(root)
