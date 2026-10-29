@@ -37,7 +37,9 @@ def isolate_hosting_body(monkeypatch):
         entry for entry in path.split(os.pathsep) if not room_bin(entry)))
     for name in tuple(os.environ):
         # BRNRD_LOOM_SOURCE is the suite's own (tests/conftest.py); BRNRD_ROOT likewise (entry shim): without it a test loom follows this checkout.
-        if name.startswith("BRNRD_") and name not in ("BRNRD_LOOM_SOURCE", "BRNRD_ROOT"):
+        # LOOM_* are the wake recipe's inputs: a body's LOOM_BUDGET_BYTES=32000 let a 30 kB letter fit.
+        if (name.startswith("BRNRD_") and name not in ("BRNRD_LOOM_SOURCE", "BRNRD_ROOT")
+                or name.startswith("LOOM_")):
             monkeypatch.delenv(name)
 
 

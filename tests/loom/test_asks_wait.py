@@ -118,6 +118,24 @@ def test_an_ask_under_a_settled_opener_waits_on_the_operator_and_mails_nobody(le
     assert turns(home)["leaf"] == ("yours", ["operator"])
 
 
+def test_an_ask_that_waits_on_the_person_is_mailed_to_their_direct_channel(ledger):
+    # Typing an ask is sending it (requests R3), and a retry never mails twice.
+    home, seat = ledger
+    (home.root / "loom/config.toml").write_text('connectors = ["mine=fake"]\n')
+    (home.root / "self/people/ada").mkdir(parents=True)
+    (home.root / "self/people/ada/channels.toml").write_text('channels = ["mine:42"]\n')
+    _wish, mid = child(home, seat, "mid", "s-aaaa-mid")
+    wish, leaf = child(home, mid, "leaf", "s-aaaa-leaf")
+    command(home, seat, "settle", "mid", "--why", "split done")
+    ask = command(home, leaf, "ask", "Keep going?", "--for", wish, "--rec", "yes")
+    sent, = mail(leaf, ask)
+    assert "to: channel:mine/42" in sent
+    assert f"ask {ask} from thread:leaf: Keep going?" in sent and "rec: yes" in sent
+    assert f"Reply to this message to answer &{ask}." in sent
+    assert command(home, leaf, "ask", "Keep going?", "--for", wish) == ask
+    assert len(mail(leaf, ask)) == 1
+
+
 def test_the_chain_reaches_a_person_and_survives_a_loop():
     def ask(ident, thread, parent):
         return Wish(ident, sender="resident", thread=thread, parent=parent, line="x")

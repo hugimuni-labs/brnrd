@@ -373,15 +373,15 @@ def thread_for_message(facts, channel, message_id):
 
 
 def route_bare(facts, chat, reply_thread=None, fallback='inbox'):
-    """A reply's thread, else the last confirmed speaker, regardless of lease."""
+    """A reply's thread, else the home thread: never the last thread that spoke.
+
+    His rule (5474, 5482): any thread may write him, but only a reply-to carries
+    his answer back there; every other letter of his is the inbox's to place.
+    """
     try:
         _platform, chat_id = channel_parts(f'channel:{chat}')
     except ValueError:
         return f'thread:{fallback}'
-    if chat_id is None:
+    if chat_id is None or not reply_thread:
         return f'thread:{fallback}'
-    if reply_thread:
-        return f'thread:{reply_thread}'
-    spoken = [thread for data, _letter, thread in _speech(facts, f'channel:{chat}', 'speech')
-              if data.get('state') == 'sent']
-    return f'thread:{spoken[-1]}' if spoken else f'thread:{fallback}'
+    return f'thread:{reply_thread}'

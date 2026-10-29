@@ -131,6 +131,8 @@ def _send(argv: list[str]) -> int:
     parser.add_argument("--says", action=_Wish, help='"quote" or <letter id>:"quote"; never refused')
     parser.add_argument("--answered", action=_Wish, nargs=0, help="this send's words are the receipt")
     parser.add_argument("--chatter", action="store_true", help="cites the --re letter as no wish")
+    parser.add_argument("--for", dest="ask_for", metavar="W-ID",
+                        help="a question to a person files an ask under this wish")
     parser.add_argument("--chatter-of", dest="chatter_of", default=None, help=argparse.SUPPRESS)
     parser.add_argument("--reopen", metavar="TEXT")
     parser.add_argument("--at", help="YYYY-MM-DDTHH:MM:SSZ, +<n>m, +<n>h, or +<n>d")
@@ -163,7 +165,7 @@ def _send(argv: list[str]) -> int:
             re=args.re, note=args.note, clean=args.clean, kind=args.kind,
             refs=tuple(args.ref or ()), body_choice=args.body_choice, repo_sources=args.repo, at=args.at,
             wish=args.wish, budget=None if args.budget is None else parse_tokens(args.budget),
-            chatter=chatter,
+            chatter=chatter, ask_for=args.ask_for,
             echo=echo, reopen=args.reopen is not None,
         )
     except (PortError, SelfError, ValueError, OSError) as exc:

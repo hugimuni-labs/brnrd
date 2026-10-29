@@ -479,7 +479,8 @@ def steers_line(found: dict[str, Wish], thread: str, letter: str) -> str:
     named = " · ".join(f'{w.id} "{_short(w.line, 40)}"' for w in rows[:STEERS])
     more = f" · +{len(rows) - STEERS} more: wishes --thread {thread}" if len(rows) > STEERS else ""
     return (f"steers? {named}{more} · or new — send --re {letter} --wish <w-id> "
-            '[--says "…"] | --wish new:"<line>" | --chatter')
+            '[--says "…"] | --wish new:"<line>" | --chatter'
+            f" · top? wish <w-id> --top {letter} | no change")
 
 
 def steers_refusal(found: dict[str, Wish], thread: str | None) -> str:
