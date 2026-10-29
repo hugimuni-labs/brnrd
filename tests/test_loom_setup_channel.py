@@ -301,7 +301,7 @@ def test_setup_turns_the_onboarding_list_into_asks_the_first_wake_shows(tmp_path
     assert not [f for f in read_facts(home) if f.kind == 'wish' and not f.by.startswith('loom:')]
     # They wait on the person, and the home thread's next body wakes with them.
     heads = waits_on(found, main_snapshot(home))
-    assert {heads[w.id] for w in asks} == {'person:loom'}
+    assert {heads[w.id] for w in asks} == {'operator'}
     wake = wake_wishes(read_facts(home), home.main_thread())
     assert 'What should I call you?' in wake and 'What do you want help with first?' in wake
     # The list is the self's: a line added later is asked, none twice.
