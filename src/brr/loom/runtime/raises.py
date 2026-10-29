@@ -69,6 +69,7 @@ def capture(facts, *, by: str, thread: str | None, main: str, body: str, links, 
                 "send: a question to a person is an ask under the wish it unblocks: "
                 + (f"name one: {named}" if rows else "name it with --for <w-id>")
                 + ", or --chatter if it asks nothing")
+        parent = rows[0].id
     line = " ".join(asked)
     return wish_fact(facts, by=by, ident="new", line=line[:160], thread=thread,
                      sender="resident", parent=parent)
