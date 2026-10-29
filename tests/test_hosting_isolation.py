@@ -38,8 +38,9 @@ def test_a_root_level_test_cannot_reach_the_hosting_body_s_home(tmp_path):
     user = tmp_path / "user"
     home = _real_home(user)
     room = home / "rooms" / "s-real"
+    # PYTEST_SHARD: CI's shard would split the probe's three tests too.
     env = {
-        **os.environ,
+        **{k: v for k, v in os.environ.items() if k != "PYTEST_SHARD"},
         "HOME": str(user),
         "XDG_STATE_HOME": str(user / ".local" / "state"),
         "BRNRD_HOME": str(home),
