@@ -48,6 +48,7 @@ TABLE = (
     Row(STARTABLE, "gauge empty", "parked", ("park",)),
     Row(STARTABLE, "gauge not empty", "running", ("prepare", "shown", "spawn", "started")),
     Row(LIVE, "not alive", "ended", FINISH),
+    Row(("running",), "held dry, woken on another body", "running", ("let_go",)),
     Row(("running",), "alive, open", "running", ()),
     Row(("running",), "alive, closed", "leaving", ("leaving",)),
     Row(("leaving", "unidentified"), "alive, reopened", "running", ("stayed",)),
@@ -88,6 +89,7 @@ COMMANDS = {step.name: step for step in (
     Step("stopped",      "record",   "body.stopped",      False),
     Step("unidentified", "record",   "body.unidentified", True),
     Step("signal",       "signal",   None,                True),
+    Step("let_go",       "let_go",   None,                True),
     Step("collect",      "collect",  None,                True),
     Step("drain",        "drain",    None,                True),
     Step("exit",         "record",   "body.exited",       False),
@@ -115,6 +117,7 @@ class Observation:
     failure: str = ""
     woken: str = ""
     fenced: bool = False
+    held: bool = False
 
 
 @dataclass(frozen=True)
@@ -183,6 +186,7 @@ OBSERVED = {
     "fenced": lambda s, o: o.fenced,
     "failure": lambda s, o: bool(o.failure),
     "woken on another body": lambda s, o: bool(o.woken),
+    "held dry, woken on another body": lambda s, o: o.alive and o.held and bool(o.woken),
     "gauge unknown, before until": lambda s, o: not o.force and o.gauge == "unknown" and o.now < s.until,
     "gauge refreshing": lambda s, o: o.gauge == "refreshing",
     "gauge empty": lambda s, o: o.gauge == "empty",
@@ -236,7 +240,7 @@ def exit_cause(facts: list[Fact], o: Observation, *, owed: bool) -> str:
     from .project import fold
     if fact_for(facts, "body.stopped", o.strand, o.gen):
         return "stopped"
-    if fact_for(fold(facts).accepted, "molt", o.strand, o.gen):
+    if fact_for(fold(facts).accepted, "molt", o.strand, o.gen) or o.woken:
         return "molted"
     if o.closed:
         return "settled"

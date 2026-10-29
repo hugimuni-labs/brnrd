@@ -173,7 +173,7 @@ def room_wants(home: Home, strand: str, gen: int, parent: str | None, facts: lis
 def port_want(room: Path, wait: str | None) -> Want:
     """``port/{in,out}`` exist, ``wait`` is the thread's, and no last-body file is left."""
     port = room / "port"
-    stale = ("jack-state.json", "policy", "core.md")
+    stale = ("jack-state.json", "policy", "core.md", "in/hold")
 
     def holds() -> bool:
         if not ((port / "in").is_dir() and (port / "out").is_dir()):
