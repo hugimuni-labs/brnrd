@@ -184,7 +184,7 @@ def test_bad_out_receipt_never_enrols_person(tmp_path, receipt):
 
 
 @pytest.mark.parametrize('code, says', [(3, 'was not sent'), (1, 'may or may not have been sent')])
-def test_a_failed_answer_says_the_code_arrived_and_why(tmp_path, code, says):
+def test_a_heard_code_pairs_even_when_the_answer_fails_and_says_why(tmp_path, code, says):
     home = home_at(tmp_path)
     folder = tmp_path / 'loom/connectors/fake'
     folder.mkdir(parents=True)
@@ -194,17 +194,18 @@ def test_a_failed_answer_says_the_code_arrived_and_why(tmp_path, code, says):
                        "print('relay: event not found for this account', file=sys.stderr)\n"
                        f'sys.exit({code})\n')
     program.chmod(0o755)
+    said = []
     def send_code(line):
+        said.append(line)
         if code_in(line):
             drop = Path(connector.environment(home, 'desk')['BRNRD_STATE']) / 'in'
             (drop / 'code.md').write_text(_front(dict(kind='letter', id='code',
                         to='42', **{'from': '42'}), '/start ' + code_in(line)))
-    with pytest.raises(ValueError) as failed:
-        setup_channel.pair(home, 'fake', 'desk', 'ada', out=send_code)
-    assert str(failed.value).startswith('Your code arrived')
-    assert says in str(failed.value) and 'event not found for this account' in str(failed.value)
-    assert load_config(tmp_path).connectors == ()
-    assert not (tmp_path / 'self/people/ada/channels.toml').exists()
+    assert setup_channel.pair(home, 'fake', 'desk', 'ada', out=send_code) == 'desk:42'
+    warning = next(line for line in said if line.startswith('Your code arrived'))
+    assert says in warning and 'event not found for this account' in warning
+    assert load_config(tmp_path).connectors == ('desk=fake',)
+    assert (tmp_path / 'self/people/ada/channels.toml').read_text() == 'channels = ["desk:42"]\n'
 
 
 def test_home_folder_pairs_ingests_and_sends_native_ids(tmp_path):
