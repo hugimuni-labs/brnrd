@@ -12,6 +12,7 @@
 | wanted, parked | gauge empty | parked | park |
 | wanted, parked | gauge not empty | running | prepare, shown, spawn, started |
 | running, leaving, stopping, unidentified | not alive | ended | collect, drain, exit, end, drain, drained, release |
+| running | held dry, woken on another body | running | let_go |
 | running | alive, open | running | none |
 | running | alive, closed | leaving | leaving |
 | leaving, unidentified | alive, reopened | running | stayed |

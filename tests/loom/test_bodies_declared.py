@@ -138,7 +138,7 @@ class MemoryBody:
                     self.add("port.drained")
             elif name == "release":
                 self.add("released", thread="work")
-            elif name not in {"prepare", "boundary", "collect", "drain"}:
+            elif name not in {"prepare", "boundary", "collect", "drain", "let_go"}:
                 raise AssertionError(name)
             self.check_prefix(o)
         # Rule 6 applies to lock-holding states; starts have no lock to lose.
@@ -172,10 +172,12 @@ def test_seeded_sequences_check_ledger_prefixes_and_reach_every_row():
             fenced = rng.random() < 0.15
             gauge = rng.choice(["ok", "ok", "unknown", "refreshing", "empty"])
             failure = "spawn failed" if state in STARTABLE and not body.alive and rng.random() < 0.1 else ""
-            woken = "other/core" if state == "parked" and rng.random() < 0.1 else ""
+            # A live body asleep in its stop hook is woken the same way.
+            held = state == "running" and body.alive and rng.random() < 0.1
+            woken = "other/core" if (state == "parked" or held) and rng.random() < 0.1 else ""
             o = Observation(body.strand, body.gen, body.alive, closed, gauge, body.now,
                             proven=rng.choice([True, False]), until=body.now + 3,
-                            stop_grace=1, failure=failure, woken=woken, fenced=fenced)
+                            stop_grace=1, failure=failure, woken=woken, fenced=fenced, held=held)
             body.step(o, crash_at_end=not body.alive and rng.random() < 0.2,
                       crash_at_exit=not body.alive and rng.random() < 0.2)
     assert coverage == set(range(len(TABLE))), {i: TABLE[i] for i in set(range(len(TABLE))) - coverage}
@@ -185,7 +187,7 @@ def test_table_rendering_matches_checked_in_page():
     from pathlib import Path
     page = Path(__file__).resolve().parents[2] / "src/brr/loom/runtime/bodies.md"
     assert render_table() == page.read_text().strip()
-    assert len(TABLE) == 23
+    assert len(TABLE) == 24
 
 
 def test_an_unlisted_pair_logs_and_raises(caplog):
