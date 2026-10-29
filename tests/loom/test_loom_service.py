@@ -7,6 +7,8 @@ machine's service manager.
 from __future__ import annotations
 
 import functools
+import types
+import time
 
 import plistlib
 import re
@@ -374,7 +376,15 @@ def test_cli_service_lifecycle_at_subprocess_boundary(tmp_path, monkeypatch, cap
         return _ok(command)
 
     monkeypatch.setattr(subprocess, "run", manager)
-    monkeypatch.setattr(service.time, "sleep", lambda seconds: events.append(("sleep", seconds)))
+    # service's own `time` only: patching `service.time.sleep` patched the module every
+    # caller shares, and install's gh probe (communicate(timeout=)) slept into events on CI
+    clock = types.ModuleType("time")
+    clock.__dict__.update(time.__dict__)
+    clock.sleep = lambda seconds: events.append(("sleep", seconds))
+    monkeypatch.setattr(service, "time", clock)
+    # the reinstall's PATH drops the conftest's signed-out gh, and a CI runner's /usr/bin/gh is real
+    from brr.loom.runtime import gates
+    monkeypatch.setattr(gates, "converge", functools.partial(gates.converge, gh=lambda: False))
     monkeypatch.setenv("PATH", "/initial/bin:/usr/bin")
     main(["loom", "install", "--home", str(home)])
     assert f"pid: {os.getpid()}" in capsys.readouterr().out
