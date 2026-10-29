@@ -122,6 +122,11 @@ def test_the_stop_holds_once_on_a_rank_word_and_the_band_is_news_on_change(body)
     assert not [line for line in render(home).splitlines() if line.startswith("top? ")]
     # The band is said at a post when a flavour changes, and not when only its age does.
     command(home, seat, "send", "--to", TO, "Merge #12?")
+    # Every letter settled, so the band is the only thing a post could say.
+    import re
+    for ident in re.search(r"owed (.*) -->", render(home))[1].split():
+        command(home, seat, "send", "--re", ident, "--to", "thread:work", "--note", "read")
+    _ingest(home)
     render(home)
     jack.execute("post", seat, "{}")
     assert "asks: " not in jack.execute("post", seat, "{}")
