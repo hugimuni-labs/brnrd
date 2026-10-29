@@ -427,3 +427,17 @@ def test_cli_send_self(tmp_path: Path) -> None:
         check=False,
     )
     assert unknown.returncode == 2
+
+
+def test_uncommitted_edits_are_named_with_the_way_on(tmp_path: Path) -> None:
+    bare = published(tmp_path)
+    left = room(bare, tmp_path / "a", "strand/a")
+    write(left, "memory/scars/a.md", "a-base\nfrom-a\n")
+    commit(left, "scar a")
+    write(left, "memory/scars/a.md", "a-base\nfrom-a\nnot yet committed\n")
+    with pytest.raises(SendError) as refused:
+        send_to_self(left)
+    text = str(refused.value)
+    assert "memory/scars/a.md" in text and "commit -am" in text
+    commit(left, "more a")
+    assert send_to_self(left).status == "merged"

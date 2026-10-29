@@ -120,6 +120,18 @@ def send_to_self(room: str | Path, widening: str | None = None) -> Outcome:
     probe = _git(room_path, "rev-parse", "--is-inside-work-tree", check=False)
     if probe.returncode != 0 or probe.stdout.strip() != "true":
         raise SendError(f"not a git work tree: {room_path}")
+    if not _rebasing(room_path):
+        dirty = _git(room_path, "status", "--porcelain", "--untracked-files=no", check=False).stdout
+        paths = [line[3:] for line in dirty.splitlines() if line.strip()]
+        if paths:
+            # git's own "cannot rebase: You have unstaged changes" names no
+            # file and no way on; send-self lands commits, never edits.
+            raise SendError(
+                "send-self lands commits, and these edits are not committed:\n"
+                + "".join(f"  {path}\n" for path in paths)
+                + "commit them first, then send-self again:\n"
+                f"  git -C {room_path} commit -am \"<what changed>\""
+            )
 
     last = ""
     for _attempt in range(_RACE_LIMIT):
