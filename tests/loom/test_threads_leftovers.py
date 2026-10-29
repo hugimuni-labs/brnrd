@@ -199,3 +199,42 @@ def test_thread_opened_between_reads_of_main_waits_a_tick(tmp_path, monkeypatch)
     assert 'old' in before and 'new' not in before
     after = {row['thread'] for row in threads_mod.thread_table(home, read_facts(home))}
     assert after == before | {'new'}
+
+
+def test_a_linked_worktree_or_a_link_is_never_counted_or_fetched_into(rooms, tmp_path):
+    from brr.loom.runtime.leftovers import leftovers
+    home, room, _ = rooms
+    # A person's repo with its own branches; the room holds a worktree of it and a link to it.
+    _, person = _source(tmp_path / 'person')
+    for name in ('one', 'two'):
+        git(person, 'checkout', '-q', '-b', name)
+        _note(person, name)
+    git(person, 'checkout', '-q', 'main')
+    shutil.rmtree(room / 'widget')
+    git(person, 'worktree', 'add', '-q', '-b', 'room-work', str(room / 'widget'))
+    (room / 'kb').symlink_to(person)
+    left = leftovers(home, '0001-work')
+    assert [(item.path.name, item.commits, item.error) for item in left] == [
+        ('widget', (), f'a linked worktree of {person.resolve() / ".git"}')]
+    assert git(person, 'for-each-ref', 'refs/leftovers').stdout == ''
+
+
+def test_a_loom_read_of_an_https_source_carries_the_homes_token_to_that_host_only(tmp_path):
+    from brr.loom.runtime.publish import read_command
+    root = tmp_path / 'home'
+    (root / 'loom').mkdir(parents=True)
+    source = 'https://forge.example/o/private.git'
+    assert read_command(root, source, ['fetch']) == (['fetch'], None)
+    (root / 'loom' / 'config.toml').write_text('forge_token = "env: TEST_FORGE_TOKEN"\n')
+    assert read_command(root, '/a/local/source', ['fetch']) == (['fetch'], None)
+
+    def fill(host, monkeypatch=pytest.MonkeyPatch()):
+        monkeypatch.setenv('TEST_FORGE_TOKEN', 'the-token')
+        args, env = read_command(root, source, ['credential', 'fill'])
+        monkeypatch.undo()
+        env['GIT_TERMINAL_PROMPT'] = '0'
+        return subprocess.run(['git', *args], input=f'protocol=https\nhost={host}\n\n', env=env,
+                              capture_output=True, text=True, cwd=tmp_path).stdout
+
+    assert 'password=the-token' in fill('forge.example')
+    assert 'the-token' not in fill('elsewhere.example')
