@@ -581,6 +581,10 @@ class Parts:
             self.stop.wait(TICK)
 
 
+class BoardWithheld(RuntimeError):
+    """The cloud refused the board for want of the person's yes (``PUBLISH_WITHHELD_STATUS``): only they give it."""
+
+
 class Pusher:
     """The parts whose hash moved, PUT to the cloud (``/v1/daemons/loom/parts``), at most once per ``EVERY`` s.
 
@@ -642,10 +646,17 @@ class Pusher:
             for body in self.batches(held, hashes):
                 resp = cloud._SESSION.request("PUT", url, data=body, headers=headers, timeout=60)
                 if not 200 <= resp.status_code < 300:
-                    raise RuntimeError(f"PUT /v1/daemons/loom/parts -> {resp.status_code}: {resp.text[:200]}")
+                    err = RuntimeError(f"PUT /v1/daemons/loom/parts -> {resp.status_code}: {resp.text[:200]}")
+                    err.status_code = resp.status_code  # type: ignore[attr-defined]
+                    raise err
                 self.sent = dict(resp.json().get("hashes") or {})
             self.failing = None
         except Exception as exc:
+            from .snapshot import withheld
+            if withheld(exc):
+                # One named condition for the missing yes, raised until the first 2xx clears it, at RETRY pace.
+                exc = BoardWithheld("board withheld: the person has not said yes to showing it on brnrd.dev;"
+                                    " they answer there, signed in")
             self.failing = (exc, exc.__traceback__)
 
 

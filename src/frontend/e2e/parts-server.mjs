@@ -2,6 +2,7 @@
 // <name>.json files (a thread's slash is `__`), /v1/loom/events as an SSE stream that names the index hash,
 // POST /v1/loom/letters kept in memory. `node e2e/parts-server.mjs <dir> <port>`. Given an object ({ name: json }, as
 // fixture.mjs makes) instead of a directory, `set(parts)` swaps it and sends the new index hash to every open stream.
+// `consent` (the cloud's /v1/loom/consent state) is absent unless given, as on a loopback loom; a POST moves it.
 import { createServer } from 'node:http';
 import { readFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
@@ -17,8 +18,9 @@ export function cut(part, q, most = 200) {
 	return { ...part, letters: part.letters.slice(start, end), more: start > 0 };
 }
 
-export function partsServer(dir, port = 0) {
+export function partsServer(dir, port = 0, consent = null) {
 	const sent = [],
+		answers = [],
 		streams = new Set();
 	let mem = typeof dir === 'string' ? null : dir;
 	const read = (name) => {
@@ -48,6 +50,23 @@ export function partsServer(dir, port = 0) {
 			});
 			return;
 		}
+		if (path === 'consent' && consent) {
+			if (req.method === 'POST') {
+				let body = '';
+				req.on('data', (c) => (body += c));
+				req.on('end', () => {
+					const { send } = JSON.parse(body || '{}');
+					answers.push(send);
+					consent = { ...consent, state: send ? 'granted' : 'declined' };
+					res.writeHead(200, { 'content-type': 'application/json' });
+					res.end(JSON.stringify({ state: consent.state }));
+				});
+				return;
+			}
+			res.writeHead(200, { 'content-type': 'application/json' });
+			res.end(JSON.stringify(consent));
+			return;
+		}
 		if (path === 'events') {
 			res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-store' });
 			ping(res);
@@ -69,7 +88,9 @@ export function partsServer(dir, port = 0) {
 		);
 	});
 	return new Promise((ok) =>
-		server.listen(port, '127.0.0.1', () => ok({ server, sent, set, port: server.address().port }))
+		server.listen(port, '127.0.0.1', () =>
+			ok({ server, sent, answers, set, port: server.address().port })
+		)
 	);
 }
 

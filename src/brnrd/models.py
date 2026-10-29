@@ -341,6 +341,20 @@ class Daemon(Base):
     loom_updated_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
 
+class BoardConsent(Base):
+    """When a repo's person last answered the board prompt on brnrd.dev (yes or no); no row = never asked.
+
+    `brnrd account connect` records scope ``none``, so without this an unasked loom and one whose person said no
+    look alike. Its own table, made by ``create_all`` with no foreign key, never a startup ``ALTER`` on ``repos``:
+    every push reads ``repos``, and an ``ALTER`` there holds ACCESS EXCLUSIVE across live requests (the #2523 outage).
+    """
+
+    __tablename__ = "board_consents"
+
+    repo_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    answered_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
+
+
 class LoomPart(Base):
     """One board part a loom pushed (`PUT /v1/daemons/loom/parts`): ``index``,
     ``thread/<id>`` or ``beads``, gzip JSON, with the loom's own hash of it.
