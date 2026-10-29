@@ -37,7 +37,7 @@ from .port import (
     fact_from_port, fact_from_taint, letter_attachments, letter_replies,
     parse_boundary, parse_frontmatter, render_boundary,
 )
-from .project import projection_cache, fold, generation, is_notice, reply_channels, sender_threads
+from .project import cached_projection, projection_cache, fold, generation, is_notice, reply_channels, sender_threads
 from .owners import active_owners, letters_for, letter_owners
 from .lifecycle import main_snapshot
 from .timers import observe_due
@@ -584,7 +584,8 @@ def _prepare(home: Home, strand: str, thread: str, gen: int,
         room / "port" / "in" / "boundary.md",
         render_boundary(strand, gen, thread, letters, shown, threads,
                         fuel=fuel, channels=reply_channels(facts, home),
-                        opened=thread_table(home, facts), forge=_forge(home), plan=_plan(home, thread, facts),
+                        opened=thread_table(home, facts, f"thread:{thread}"), forge=_forge(home),
+                        plan=_plan(home, thread, facts),
                         replies={f.letter.id: f.reply_to for f in active_owners(facts, main_snapshot(home))},
                         attachments=attachments, reply_context=reply_context,
                         repaired=_repaired(facts, strand, gen),
@@ -943,7 +944,10 @@ def _plan(home: Home, thread: str, facts: list[Fact]) -> str:
     if plan is None and main.get(thread, {}).get("plan_rows") is None:
         # Neither wishes nor a Plan: the thread is not asked for one.
         return ""
-    unanswered = unanswered_by_thread(facts, main).get(thread, ())
+    from .lifecycle import snapshot_ref
+    ref = snapshot_ref(home, main)
+    unanswered = (unanswered_by_thread(facts, main) if ref is None else cached_projection(
+        facts, "unanswered-by-thread", ref, lambda rows: unanswered_by_thread(rows, main))).get(thread, ())
     parts = [f"plan {plan['done']}/{plan['total']}"] if plan else []
     if unanswered:
         parts.append("unanswered: " + ", ".join(unanswered))
@@ -1463,15 +1467,17 @@ def _repaired(facts, strand, gen) -> str:
     return ""
 
 
-def _boundary(home, facts, strand, gen, context):
+def boundary_text(home, facts, strand, gen, context) -> str:
+    """The boundary a held body reads this tick, rendered from the ledger and home."""
     from .threads import thread_table
     main, state = main_snapshot(home), fold(facts)
     owed = letters_for(facts, main, context.thread)
-    text = render_boundary(
+    return render_boundary(
         strand, gen, context.thread, owed,
         state.shown.get(strand, set()), sender_threads(facts), context.fuel,
         context.why or None, reply_channels(facts, home),
-        opened=thread_table(home, facts), forge=_forge(home), plan=_plan(home, context.thread, facts),
+        opened=thread_table(home, facts, f"thread:{context.thread}"), forge=_forge(home),
+        plan=_plan(home, context.thread, facts),
         replies={f.letter.id: f.reply_to for f in active_owners(facts, main)},
         attachments=letter_attachments(home.root, facts),
         reply_context=_reply_context(facts, context.thread, owed, home.room(strand)),
@@ -1483,6 +1489,10 @@ def _boundary(home, facts, strand, gen, context):
         left=_left(facts, context.thread, strand),
         **_budget(home, context.thread, facts),
     )
+
+
+def _boundary(home, facts, strand, gen, context):
+    text = boundary_text(home, facts, strand, gen, context)
     path = home.room(strand) / "port/in/boundary.md"
     if not path.is_file() or path.read_text() != text:
         atomic_write(path, text)

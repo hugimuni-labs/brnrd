@@ -272,6 +272,7 @@ class LedgerView(list):
             'attachments': ('source', 'blob', 'letter'),
             'reply-context': ('source', 'letter'),
             'letters-by-sender': ('letter',),
+            'letter-index': ('letter',),
             'wishes': ('wish', 'wish.read', 'wish.result', 'wish.verdict', 'wish.left', 'letter'),
         }
         if name == 'body-state':

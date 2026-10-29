@@ -332,6 +332,12 @@ def readme_at(home: Home, thread: str, blob: str, ref: str) -> dict:
     return _READMES[key]
 
 
+def snapshot_ref(home: Home, main: dict) -> str | None:
+    """The commit ``main`` was pinned from, while it is the pinned snapshot; else None."""
+    cached = _MAIN_SNAPSHOTS.get(home.root / "self")
+    return cached[0] if cached and cached[1] is main else None
+
+
 def main_snapshot(home: Home, tree: tuple[str, dict[str, str]] | None = None) -> dict[str, dict]:
     """Pin main once; both inventory and README fields come from that tree.
 

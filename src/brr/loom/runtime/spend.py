@@ -208,14 +208,10 @@ def allocation(facts, thread: str, opener: str, writers: dict[str, str], default
     """
     if not opener.startswith("thread:"):
         return None
-    key = (id(facts), thread, len(facts), opener, default)
-    if key not in _ALLOCATED:
-        _ALLOCATED.clear()
-        _ALLOCATED[key] = _allocation(facts, thread, opener, writers, default)
-    return _ALLOCATED[key]
-
-
-_ALLOCATED: dict[tuple, int] = {}
+    from .project import cached_projection
+    # One entry per thread: every held body asks for its own each tick.
+    return cached_projection(facts, "allocation", (thread, opener, tuple(sorted(writers.items())), default),
+                             lambda rows: _allocation(rows, thread, opener, writers, default))
 
 
 def _allocation(facts, thread, opener, writers, default) -> int:

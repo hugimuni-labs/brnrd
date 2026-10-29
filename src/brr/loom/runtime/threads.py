@@ -72,12 +72,15 @@ def _table_inputs(facts, main):
     return state, ownership, axes, owed, activity, boundary, pending_bodies(state.accepted), unanswered
 
 
-def thread_table(home: Home, facts: list) -> list[dict]:
+def thread_table(home: Home, facts: list, opened_by: str | None = None) -> list[dict]:
     """Read main and the ledger; never ask a body to declare its state.
 
     A recent boundary is a shown fact or the jack's existing state-file mtime.
     There is no explicit 'waiting' fact: a live body with nothing owed, or a
     stop block, is the nearest derivable holding value.
+
+    ``opened_by`` keeps only the open rows a boundary shows: the children of
+    that opener. A held body renders one each tick, not the whole table.
     """
     from .loom import body_alive
     repo = home.root / 'self'
@@ -87,7 +90,7 @@ def thread_table(home: Home, facts: list) -> list[dict]:
     tip, blobs = main_tree(repo) if versioned else (None, {})
     main = main_snapshot(home, (tip, blobs) if versioned else None)
     state, ownership, axes, owed, activity, boundary, pending, unanswered = cached_projection(
-        facts, "thread-table", repr(main), lambda rows: _table_inputs(rows, main))
+        facts, "thread-table", tip if versioned else repr(main), lambda rows: _table_inputs(rows, main))
     if not versioned or _MAIN.get(repo, (None, None))[0] != tip:
         names = (list(blobs) if versioned
                  else [p.relative_to(repo).as_posix() for p in (repo / 'threads').glob('*/README.md')])
@@ -124,6 +127,13 @@ def thread_table(home: Home, facts: list) -> list[dict]:
             snapshot.append((thread, data, _body_choice(text), (repo / path).stat().st_mtime, ''))
         _MAIN[repo] = (tip, snapshot)
         _ROWS[repo] = kept
+    def shown(opener, status):
+        return opened_by is None or (opener == opened_by and status not in {'settled', 'retired'})
+
+    picked = [row for row in _MAIN[repo][1] if shown(row[1].get('opened-by') or '—', row[1]['status'])]
+    if not picked and (opened_by is not None and not any(
+            fate.owner == 'operator' and (fate.thread or '—') == opened_by for fate in ownership.values())):
+        return []
     now, rows = time.time(), []
     from .wishes import plan_word, told as fold_wishes
     told = fold_wishes(facts)
@@ -136,7 +146,7 @@ def thread_table(home: Home, facts: list) -> list[dict]:
     from .wishes import _short, progress
     parked = {wish.thread: _short(read['reading'].removeprefix('waiting:').strip(), 60)
               for wish, read in sorted(live(told), key=lambda row: row[1]['at'])}
-    for thread, data, choice, created, date in _MAIN[repo][1]:
+    for thread, data, choice, created, date in picked:
         why = '—'
         if opened_for(data):
             why = '; '.join(opened_for_line(ident, told.get(ident)) for ident in opened_for(data))
@@ -191,7 +201,7 @@ def thread_table(home: Home, facts: list) -> list[dict]:
                      'waits': parked.get(thread, ''),
                      'headline': _short((progress(told, thread) or {}).get('next') or '', 60)})
     for ident, fate in ownership.items():
-        if fate.owner == 'operator':
+        if fate.owner == 'operator' and shown(fate.thread or '—', 'open'):
             rows.append({'thread': 'operator', 'seat': '—', 'now': ident + ': ' + fate.reason,
                          'owed': 1, 'unanswered': 0, 'opened-by': fate.thread or '—', 'opened-for': '—',
                          'plan': '—',

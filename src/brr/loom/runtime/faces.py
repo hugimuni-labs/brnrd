@@ -88,7 +88,9 @@ def triggers(facts, strand: str, gen: int, thread: str, now: datetime | None = N
     if ended is not None and ended.data.get("code") not in (0, None):
         found.append({"kind": "failed", "fact": ended.id, "at": began,
                       "token": f"exit {ended.data['code']}"})
-    letters, seen, outs = letter_index(kind_facts(facts, "letter")), set(), [began]
+    from .project import cached_projection
+    letters = cached_projection(facts, "letter-index", (), lambda rows: letter_index(kind_facts(rows, "letter")))
+    seen, outs = set(), [began]
     wished = {w.id: w.thread for w in told(facts).values()} if kind_facts(facts, "wish.result") else {}
     for fact in _met(facts, strand):
         if fact.kind == "shown" and fact.data.get("strand") == strand:
@@ -132,15 +134,30 @@ def propose(facts, strand: str, gen: int, thread: str, now: datetime | None = No
     trigger = _standing(facts, strand, gen, thread, now)
     if trigger is None:
         return None
+    from .project import cached_projection
+    last = cached_projection(facts, "last-said", (), _last_said)
+    said = [at for at in (last.get(("face", strand, gen)), last.get(("word", strand))) if at is not None]
+    if said and max(said) >= trigger["at"]:
+        return None
+    return {"face": PROPOSED[trigger["kind"]], "token": trigger["token"], "fact": trigger["fact"]}
+
+
+def _last_said(facts) -> dict[tuple, datetime]:
+    """When each body last chose a face, and each strand last wrote a letter or note."""
+    last: dict[tuple, datetime] = {}
     for fact in kind_facts(facts, "face", "letter", "note"):
         if fact.kind == "face":
-            mine = (fact.data.get("strand"), fact.data.get("gen")) == (strand, gen)
+            keys = [("face", fact.data.get("strand"), fact.data.get("gen"))]
         else:
             # A note settles a letter: it is the body's next word as much as a letter is.
-            mine = fact.data.get("from") == strand or fact.by == f"strand:{strand}"
-        if mine and _at(fact) >= trigger["at"]:
-            return None
-    return {"face": PROPOSED[trigger["kind"]], "token": trigger["token"], "fact": trigger["fact"]}
+            keys = [("word", fact.data.get("from"))]
+            if str(fact.by).startswith("strand:"):
+                keys.append(("word", str(fact.by).removeprefix("strand:")))
+        at = _at(fact)
+        for key in keys:
+            if key not in last or at > last[key]:
+                last[key] = at
+    return last
 
 
 def proposal_line(proposal: dict | None) -> str:
