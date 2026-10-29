@@ -99,14 +99,19 @@ def test_a_move_names_squashed_pull_requests_and_not_a_branch_s_own_commits(worl
          "loom/other")
     (world.upstream / "loom.py").write_text("v2\n")
     _git(world.upstream, "commit", "-qam", "loom: drop the alias (#8)")
+    # A revert names the reverted pull request inside its quotes: only its own (#N) lands.
+    (world.upstream / "loom.py").write_text("v1\n")
+    _git(world.upstream, "commit", "-qam", 'Revert "loom: drop the alias (#8)" (#11)')
+    (world.upstream / "loom.py").write_text("v2\n")
+    _git(world.upstream, "commit", "-qam", 'Revert "Revert "loom: drop the alias (#8)" (#11)"')
     _git(world.upstream, "push", "-q", "origin", "main")
     world.tip = _git(world.upstream, "rev-parse", "HEAD")
     _run(world.root, lambda: world.execs)
     assert _git(world.source, "rev-parse", "HEAD") == world.tip
     _run(world.root, lambda: [f for f in read_facts(Home(world.root)) if f.kind == "loom.moved"])
     [moved] = [f for f in read_facts(Home(world.root)) if f.kind == "loom.moved"]
-    assert moved.data["merges"] == ["#7", "#10", "#8"]
-    assert update.moved_text(moved) == f"loom moved {world.old[:8]} → {world.tip[:8]}, loaded #7, #10, #8"
+    assert moved.data["merges"] == ["#7", "#10", "#8", "#11"]
+    assert update.moved_text(moved) == f"loom moved {world.old[:8]} → {world.tip[:8]}, loaded #7, #10, #8, #11"
 
 
 def test_a_green_tip_fast_forwards_re_execs_and_the_next_start_says_what_loaded(world):
