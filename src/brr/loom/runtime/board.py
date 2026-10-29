@@ -598,6 +598,7 @@ class Pusher:
         self.attempted: float | None = None
         self.worker: threading.Thread | None = None
         self.failing: tuple[Exception, object] | None = None
+        self.withheld = False
 
     def step(self, config) -> None:
         if not config.relay_state:
@@ -606,7 +607,7 @@ class Pusher:
             held, hashes = self.parts.parts, self.parts.hashes
         now = time.monotonic()
         busy = self.worker is not None and self.worker.is_alive()
-        wait = self.RETRY if self.failing else self.EVERY
+        wait = self.RETRY if self.failing or self.withheld else self.EVERY
         if hashes and hashes != self.sent and not busy and (self.attempted is None or now - self.attempted >= wait):
             self.attempted = now
             self.worker = threading.Thread(target=self._put, args=(Path(config.relay_state), held, hashes),
@@ -642,10 +643,17 @@ class Pusher:
             for body in self.batches(held, hashes):
                 resp = cloud._SESSION.request("PUT", url, data=body, headers=headers, timeout=60)
                 if not 200 <= resp.status_code < 300:
-                    raise RuntimeError(f"PUT /v1/daemons/loom/parts -> {resp.status_code}: {resp.text[:200]}")
+                    err = RuntimeError(f"PUT /v1/daemons/loom/parts -> {resp.status_code}: {resp.text[:200]}")
+                    err.status_code = resp.status_code  # type: ignore[attr-defined]
+                    raise err
                 self.sent = dict(resp.json().get("hashes") or {})
-            self.failing = None
+            self.failing, self.withheld = None, False
         except Exception as exc:
+            from .snapshot import withheld
+            if withheld(exc):
+                # Not consented is a state, not a failure: retry at RETRY pace, raise nothing.
+                self.failing, self.withheld = None, True
+                return
             self.failing = (exc, exc.__traceback__)
 
 

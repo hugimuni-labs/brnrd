@@ -216,3 +216,40 @@ def test_the_loom_pusher_raises_a_refused_push(client, monkeypatch, tmp_path):
     pusher.worker.join(5)
     with pytest.raises(RuntimeError, match="403"):
         pusher.step(config)
+
+
+def test_the_loom_pusher_holds_a_withheld_lane_quietly(client, monkeypatch, tmp_path):
+    """Consent off is the default for a fresh repo: the pusher raises nothing and retries at RETRY pace."""
+    import threading
+    from types import SimpleNamespace
+
+    from brnrd import publish_scope
+    from brnrd.models import Repo
+    from brr.gates import cloud
+    from brr.loom.runtime.board import Pusher
+
+    headers, _session = _account(client)
+    repo_id = _repo(client, headers)
+    relay = _relay_token(client, headers, repo_id)
+    with client.app.state.SessionLocal() as db:
+        repo = db.get(Repo, repo_id)
+        publish_scope.purge_removed_scope(db, repo=repo, new_publish_layers="quota")
+        repo.publish_layers = "quota"
+        db.commit()
+    token = relay["Authorization"].split(" ", 1)[1]
+    monkeypatch.setattr(cloud, "_load_state_from_dir", lambda d: {"brnrd_url": "http://testserver", "token": token})
+
+    def request(method, url, *, data, headers, timeout):
+        _signed_in(client, None)
+        return client.request(method, url.removeprefix("http://testserver"), content=data, headers=headers)
+
+    monkeypatch.setattr(cloud._SESSION, "request", request)
+    board = SimpleNamespace(parts=dict(PARTS), hashes={k: f"h-{k}" for k in PARTS}, changed=threading.Condition())
+    pusher = Pusher(board)
+    pusher.EVERY = 0
+    config = SimpleNamespace(relay_state=str(tmp_path))
+    pusher.step(config)
+    pusher.worker.join(5)
+    pusher.step(config)  # would raise the 403 before
+    assert pusher.withheld and pusher.failing is None
+    assert not pusher.worker.is_alive() and pusher.attempted is not None

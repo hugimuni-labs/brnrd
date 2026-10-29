@@ -36,6 +36,14 @@ DEBOUNCE = 10
 IDLE = 60
 clock = time.monotonic
 
+
+def withheld(exc: BaseException) -> bool:
+    """brnrd.dev refused the lane because the repo's publish scope has not
+    consented to it. That is the default for a repo that never recorded a
+    consent, so it is a state the person chose (or has not chosen yet), not
+    a failure: the loom keeps trying at its idle pace and says nothing more."""
+    return getattr(exc, "status_code", None) == 403 and "withholds" in str(exc)
+
 _TEXTS: dict[str, str] = {}
 
 
@@ -357,6 +365,7 @@ class Publisher:
         self.assembled = self.changed = self.attempted = None
         self.worker: threading.Thread | None = None
         self.failing: tuple[Exception, object] | None = None
+        self.withheld = False
 
     def step(self, config, router) -> None:
         from .gates import state_dir
@@ -393,6 +402,12 @@ class Publisher:
                 raise RuntimeError("cloud state has no URL or token")
             cloud._request(state["brnrd_url"], "PUT", "/v1/daemons/loom", token=state["token"],
                            json=doc, retry=False)
-            self.failing = None
+            self.failing, self.withheld = None, False
         except Exception as exc:
+            if withheld(exc):
+                if not self.withheld:
+                    self.log(self.home, "board: brnrd.dev withholds the activity lane (no publish consent "
+                             "recorded for this repo); the board stays local until it is allowed on the dashboard")
+                self.failing, self.withheld = None, True
+                return
             self.failing = (exc, exc.__traceback__)

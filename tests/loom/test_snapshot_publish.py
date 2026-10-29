@@ -37,13 +37,18 @@ class Cloud:
     """Stands in for ``cloud._request``; ``fail`` makes every call raise."""
 
     def __init__(self):
-        self.calls, self.fail = [], False
+        self.calls, self.fail, self.withhold = [], False, False
 
     def __call__(self, base_url, method, path, *, token=None, json=None, retry=True, **_):
         self.calls.append({"url": base_url, "method": method, "path": path,
                            "token": token, "doc": json, "retry": retry})
         if self.fail:
             raise RuntimeError("board unreachable")
+        if self.withhold:
+            err = RuntimeError('brnrd PUT /v1/daemons/loom -> 403: '
+                               '{"detail":"this repo\'s publish scope withholds the activity lane"}')
+            err.status_code = 403
+            raise err
         return {}
 
 
@@ -221,6 +226,26 @@ def test_a_failing_board_is_one_streak_and_the_loop_keeps_going(board):
     board.now[0] += snapshot.IDLE
     wait_until(lambda: len(publisher()) == 2, 10, board.dump)
     assert log.read_text().count("degraded: publisher") == 2
+    assert board.thread.is_alive()
+
+
+def test_a_withheld_lane_is_a_state_said_once_not_a_degraded_streak(board):
+    # A repo with no recorded publish consent withholds the activity lane by
+    # default: every fresh install starts here, so it must not read as broken.
+    board.cloud.withhold = True
+    board.start()
+    for count in (1, 2, 3):
+        wait_until(lambda: len(board.cloud.calls) == count, 10, board.dump)
+        steps(board)
+        board.now[0] += snapshot.IDLE
+    degraded = [f for f in read_facts(Home(board.root))
+                if f.kind == "loom.degraded" and f.data["step"] == "publisher"]
+    assert degraded == []
+    log = (board.root / "loom/loom.log").read_text()
+    assert log.count("withholds the activity lane") == 1 and "degraded: publisher" not in log
+    # Consent given later is picked up at the idle pace.
+    board.cloud.withhold = False
+    wait_until(lambda: len(board.cloud.calls) == 4, 10, board.dump)
     assert board.thread.is_alive()
 
 
