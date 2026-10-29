@@ -201,13 +201,20 @@ def wishes(facts: Iterable[Fact]) -> dict[str, Wish]:
     for letter in letters.values():
         if letter.data.get("wish") and _person(letter):
             named[str(letter.data["wish"])] = max(named.get(str(letter.data["wish"]), ""), letter.at)
+    starts = [f for f in ordered if f.kind == "loom.started"]
+    start = starts[-1].data if starts else None
     for wish in found.values():
+        for result in wish.results:
+            if not result["delivered"] and start and start.get("commit"):
+                from .receipts import held_merge
+                # Merged and in the code the loom runs: delivered, until a rollback.
+                if (merge := held_merge(result, start)):
+                    result.update(delivered=True, held=merge)
         wish.heard_at = max([named.get(wish.id, ""), *(s["at"] for s in wish.stamps
                              if any(i in letters and _person(letters[i]) for i in s["letters"]))])
         if wish.sender == "person":
             wish.said_at = min((letters[s.letter].at for s in wish.says
                                 if s.letter in letters and _person(letters[s.letter])), default="")
-
         def own_say(say):
             letter = letters.get(say.letter)
             if letter is None:

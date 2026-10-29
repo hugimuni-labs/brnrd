@@ -85,7 +85,7 @@ REGISTRY = (
     _kind("molt",              "letter",  "strand gen why fresh?",                            "strand",      "global"),
     _kind("attempt.ended",     "attempt", "thread strand gen ids cause code dispositions evidence", "loom",  "global",  once=True),
     _kind("port.drained",      "port",    "thread strand gen",                                "loom",        "global",  once=True),
-    _kind("loom.started",      "loom",    "install pid commit? loaded",                       "loom",        "global"),
+    _kind("loom.started",      "loom",    "install pid commit? loaded merges?",               "loom",        "global"),
     _kind("loom.degraded",     "loom",    "install step error where since episode? dips?",    "loom",        "machine"),
     _kind("loom.recovered",    "loom",    "install step since count last episode? told? grade? up?", "loom",        "machine"),
     _kind("loom.moved",        "loom",    "install from to merges started",                   "loom",        "global"),
