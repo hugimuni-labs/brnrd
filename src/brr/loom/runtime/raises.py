@@ -9,6 +9,7 @@ raise (design.md §4, §5 of threads/requests in the self).
 
 from __future__ import annotations
 
+import re
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -92,20 +93,34 @@ def last_raise(facts, room: Path, ask: str) -> datetime | None:
     return max(times, default=None)
 
 
-def moved(facts, wish, since: datetime) -> bool:
-    """A person wrote, or the ask or its parent was restated (rec, line, steer), after ``since``.
+PR = re.compile(r"(?:/pull/|#)(\d+)\b")
 
-    R4's band adds the PR facts; a body's own read or left never counts.
-    """
+
+def prs(wish) -> set[str]:
+    """The pull requests an ask names in its line or rec, by number."""
+    return set(PR.findall(f"{wish.line} {wish.rec}"))
+
+
+def move(facts, wish, since: datetime) -> str:
+    """What moved the ask after ``since``, or "": a person wrote, the ask or its
+    parent was restated (rec, line, steer), or a pull request it names moved.
+    A body's own read or left never counts."""
     from .wishes import _person
+    named = prs(wish)
     for f in facts:
         if datetime.fromisoformat(f.at) <= since:
             continue
         if f.kind == "letter" and _person(f):
-            return True
+            return "a letter of theirs"
         if f.kind == "wish" and f.data.get("wish") in (wish.id, wish.parent):
-            return True
-    return False
+            return "restated"
+        if f.kind in ("pr.opened", "pr.merged") and str(f.data.get("number")) in named:
+            return f"#{f.data.get('number')} {f.kind.partition('.')[2]}"
+    return ""
+
+
+def moved(facts, wish, since: datetime) -> bool:
+    return bool(move(facts, wish, since))
 
 
 def refuse(facts, room: Path, links, now: datetime | None = None) -> None:

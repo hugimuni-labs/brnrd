@@ -86,7 +86,8 @@ def parse_boundary(text: str) -> Boundary:
             current = None
             continue
         if not line.strip() or line.startswith(("status:", "owed:", "opened:", "budget:", "repaired:", "degraded:", "library:", "moved:",
-                                                "face? ", "left? ", "gone: ", "idle: ")):
+                                                "face? ", "left? ", "gone: ", "idle: ",
+                                                "asks: ", "asks? ", "top? ", "done: ")):
             current = None
             continue
         match = _ITEM.match(line)
@@ -275,7 +276,8 @@ def render_boundary(strand: str, gen: int, thread: str, letters: list[Fact],
                     reply_context: dict[str, str] | None = None,
                     budget: str = "", over: str = "", repaired: str = "",
                     degraded: str = "", face: str = "", left: str = "", moved: str = "",
-                    library: str = "", forge: str = "") -> str:
+                    library: str = "", forge: str = "", band: str = "", top: str = "",
+                    done: str = "") -> str:
     """Shown letters keep their first line, reply context and attachments when compacted.
 
     ``budget`` sits before the plan: the jack compares what follows `` · plan ``,
@@ -292,6 +294,13 @@ def render_boundary(strand: str, gen: int, thread: str, letters: list[Fact],
     if left:
         # What the stop will ask for; never after `` · plan``, so it wakes nobody.
         lines.insert(2, left)
+    if top:
+        lines.insert(2, top)
+    if band:
+        # The open asks (requests R4): the jack says it again only when a flavour changes.
+        lines.insert(2, band)
+    if done:
+        lines.insert(2, done)
     if moved:
         # Its own line too: the jack shows a new one once, at the next post.
         lines.insert(2, moved)
@@ -1092,7 +1101,8 @@ def fact_from_port(fm: dict[str, str], strand: str, gen: int | None,
     if kind == "left-asked":
         # The jack refused a stop on these wishes; once asked, the next stop passes.
         return Fact(kind="left.asked", by=f"strand:{strand}", id=fact_id,
-                    data={"strand": strand, "gen": gen, "wishes": fm.get("wishes", "").split()})
+                    data={"strand": strand, "gen": gen, "wishes": fm.get("wishes", "").split(),
+                          **({"letters": fm["letters"].split()} if fm.get("letters") else {})})
     if kind == "molt":
         if not fm.get("why"):
             raise PortError(f"molt {fact_id} has no why")
