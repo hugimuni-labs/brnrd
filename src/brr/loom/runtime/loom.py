@@ -27,6 +27,7 @@ from .adapters import body_label, resolve
 from .bodies import COMMANDS, TABLE, Observation, decide, fact_for, row_for, state_of
 from .faces import propose, proposal_line
 from .health import Health, degraded_line
+from .roomsense import room_line
 from .library import problem_line
 from .since import since_gone
 from .update import Updater, moved_line
@@ -635,7 +636,7 @@ def _prepare(home: Home, strand: str, thread: str, gen: int,
                         replies={f.letter.id: f.reply_to for f in active_owners(facts, main_snapshot(home))},
                         attachments=attachments, reply_context=reply_context,
                         repaired=_repaired(facts, strand, gen),
-                        degraded=degraded_line(facts, home.install_id()),
+                        degraded=degraded_line(facts, home.install_id()), room=room_line(facts),
                         library=problem_line(facts, home.install_id()),
                         moved=moved_line(facts, strand, gen, home.install_id()),
                         face=proposal_line(propose(facts, strand, gen, thread)),
@@ -1628,7 +1629,7 @@ def _render_boundary(home, facts, strand, gen, context):
         attachments=letter_attachments(home.root, facts),
         reply_context=_reply_context(facts, context.thread, owed, home.room(strand)),
         repaired=_repaired(facts, strand, gen),
-        degraded=degraded_line(facts, home.install_id()),
+        degraded=degraded_line(facts, home.install_id()), room=room_line(facts),
         library=problem_line(facts, home.install_id()),
         moved=moved_line(facts, strand, gen, home.install_id()),
         face=proposal_line(propose(facts, strand, gen, context.thread)),
