@@ -42,8 +42,6 @@ def run_startup_migrations(engine: Engine) -> None:
             _migrate_terms_acceptances(conn)
         if _table_exists(conn, "pair_requests"):
             _migrate_pair_requests(conn)
-        if _table_exists(conn, "tokens"):
-            conn.execute(text("ALTER TABLE tokens ADD COLUMN IF NOT EXISTS loom_seen_at TIMESTAMP"))
 
 
 def _table_exists(conn: Connection, table_name: str) -> bool:
