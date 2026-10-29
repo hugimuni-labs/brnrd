@@ -87,6 +87,28 @@ def _run(root, until, timeout=10):
     assert not looming.errors
 
 
+def test_a_move_names_squashed_pull_requests_and_not_a_branch_s_own_commits(world):
+    # A squash lands as one parent titled "<title> (#N)"; a branch's commit with
+    # a "(#N)" of its own is not a landing on main.
+    _git(world.upstream, "switch", "-qc", "loom/other")
+    (world.upstream / "other.py").write_text("x\n")
+    _git(world.upstream, "add", "-A")
+    _git(world.upstream, "commit", "-qm", "cherry-picked fix (#9)")
+    _git(world.upstream, "switch", "-q", "main")
+    _git(world.upstream, "merge", "-q", "--no-ff", "-m", "Merge pull request #10 from o/loom/other",
+         "loom/other")
+    (world.upstream / "loom.py").write_text("v2\n")
+    _git(world.upstream, "commit", "-qam", "loom: drop the alias (#8)")
+    _git(world.upstream, "push", "-q", "origin", "main")
+    world.tip = _git(world.upstream, "rev-parse", "HEAD")
+    _run(world.root, lambda: world.execs)
+    assert _git(world.source, "rev-parse", "HEAD") == world.tip
+    _run(world.root, lambda: [f for f in read_facts(Home(world.root)) if f.kind == "loom.moved"])
+    [moved] = [f for f in read_facts(Home(world.root)) if f.kind == "loom.moved"]
+    assert moved.data["merges"] == ["#7", "#10", "#8"]
+    assert update.moved_text(moved) == f"loom moved {world.old[:8]} → {world.tip[:8]}, loaded #7, #10, #8"
+
+
 def test_a_green_tip_fast_forwards_re_execs_and_the_next_start_says_what_loaded(world):
     _run(world.root, lambda: world.execs)
     assert _git(world.source, "rev-parse", "HEAD") == world.tip

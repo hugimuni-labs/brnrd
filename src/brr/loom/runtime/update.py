@@ -42,6 +42,15 @@ PASSED = {"success", "neutral", "skipped"}
 #: the longest wait was 8 min, under 15 s 1 min.
 PATIENCE = ((0, None), (600, 60), (1800, 15))
 _MERGE = re.compile(r"^Merge pull request #(\d+)")
+#: GitHub's squash and rebase-squash title: the pull request's title, then `` (#N)``.
+_SQUASH = re.compile(r"\(#(\d+)\)$")
+
+
+def pull_of(subject: str) -> int | None:
+    """The pull request a commit on main lands, by the subject GitHub writes:
+    ``Merge pull request #N …`` for a merge commit, ``… (#N)`` for a squash."""
+    m = _MERGE.match(subject) or _SQUASH.search(subject.rstrip())
+    return int(m.group(1)) if m else None
 
 
 class Refused(Exception):
@@ -251,9 +260,10 @@ class Updater:
 
 
 def merges(root: Path, old: str, new: str) -> list[str]:
-    """``#N`` of each pull request merged between two commits, oldest first."""
-    proc = git(root, "log", "--merges", "--reverse", "--format=%s", f"{old}..{new}", check=False)
-    return [f"#{m.group(1)}" for line in proc.stdout.splitlines() if (m := _MERGE.match(line))]
+    """``#N`` of each pull request landed between two commits, oldest first,
+    merged or squashed. Main's own line only: a branch's commits are not landings."""
+    proc = git(root, "log", "--first-parent", "--reverse", "--format=%s", f"{old}..{new}", check=False)
+    return [f"#{n}" for line in proc.stdout.splitlines() if (n := pull_of(line)) is not None]
 
 
 def moved_text(fact) -> str:

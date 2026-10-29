@@ -255,3 +255,26 @@ def test_a_start_does_not_list_a_merge_naming_another_pull_request(tmp_path: Pat
         assert _shipped(root) == ["widget#7 opened"]
     finally:
         _kill(read_facts(Home(root)))
+
+
+def test_a_start_lists_a_squash_of_its_own_repo(tmp_path: Path) -> None:
+    root, room, checkout, bare = _open(tmp_path)
+    try:
+        _note(checkout, room, "fix.txt", "fixed\n")
+        assert _verb(room, "widget").returncode == 0
+        head = _tip(checkout, "HEAD")
+        _pull(bare, 7, head)
+        assert _verb(room, "widget", "--pr", "7").returncode == 0
+        # Squashed on the forge: one parent, GitHub's "<title> (#N)", no head kept.
+        _merge(bare, head, "an unrelated fix (#70)", squash=True)
+        squash = _merge(bare, head, "fix the widget (#7)", squash=True)
+        source = tmp_path / "loom-src"
+        git(None, "clone", "--quiet", str(bare), str(source))
+        home = Home(root)
+        record_start(home, read_facts(home), root=source)
+        started = _kinds(root, "loom.started")[-1].data
+        assert started["loaded"] == ["widget#7"]
+        assert started["merges"] == {"widget#7": squash}
+        assert _shipped(root) == ["widget#7 merged, loaded"]
+    finally:
+        _kill(read_facts(Home(root)))
