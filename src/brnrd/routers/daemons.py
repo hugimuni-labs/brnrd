@@ -32,7 +32,7 @@ from .. import (
 )
 from ..activity_records import ACTIVITY_STALE_TTL
 from ..auth import Principal, get_db, require_daemon
-from ..models import Account, ActivityRecord, Daemon, DaemonRepo, LoomPart, Event, GitHubInstallation, GitHubInstalledRepo, Repo
+from ..models import Account, ActivityRecord, Daemon, DaemonRepo, LoomPart, Event, GitHubInstallation, GitHubInstalledRepo, Repo, Token
 from ..platforms import github_app as github_app_client
 
 router = APIRouter(prefix="/v1/daemons", tags=["daemons"])
@@ -189,6 +189,40 @@ def _inbox_scope(
         if since_seq > 0:
             since_seq = inbox_service.clamp_since_many(db, repo_ids, since_seq)
     return repo_ids, repo_labels, since_seq
+
+
+#: A token that polled within this reads as a live consumer; matches the
+#: webhook's `_DAEMON_ONLINE_AFTER`, the window a parked long-poll re-polls in.
+_CONSUMER_LIVE_AFTER = timedelta(minutes=2)
+
+
+def _claim_inbox(session_factory, principal: Principal) -> Token | None:
+    """Stamp this token's poll; return a newer live daemon token, if any.
+
+    One account, one consumer: every poller sees every event, so an old
+    daemon left running answers a Telegram /start before the new loom does
+    (yellowcat, 2026-10-29). The newest paired token still polling wins.
+    """
+    now = datetime.now(timezone.utc)
+    with session_factory() as db:
+        mine = db.get(Token, principal.token.id)
+        if mine is None:
+            return None
+        mine.polled_at = now
+        db.commit()
+        newer = db.execute(
+            select(Token).where(
+                Token.account_id == mine.account_id,
+                Token.kind == Token.KIND_DAEMON,
+                Token.revoked.is_(False),
+                Token.id != mine.id,
+                Token.created_at > mine.created_at,
+                Token.polled_at >= now - _CONSUMER_LIVE_AFTER,
+            ).order_by(Token.created_at.desc()).limit(1)
+        ).scalar_one_or_none()
+        if newer is not None:
+            db.expunge(newer)
+        return newer
 
 
 def _touch_daemon_from_factory(session_factory, principal: Principal) -> None:
@@ -1103,6 +1137,20 @@ async def inbox(request: Request, since: int | None = Query(default=None), wait:
         principal,
         since_seq,
     )
+    newer = await anyio.to_thread.run_sync(
+        _claim_inbox,
+        request.app.state.SessionLocal,
+        principal,
+    )
+    if newer is not None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                f"a newer brnrd paired with this account on {newer.created_at:%Y-%m-%d %H:%M} UTC "
+                "and now receives its messages; this one no longer does. If this is an old "
+                "daemon, stop it here with `brnrd daemon uninstall`."
+            ),
+        )
     max_wait = settings.inbox_long_poll_max_s if wait is None else max(0.0, min(wait, settings.inbox_long_poll_max_s))
     # Touch on arrival as well as on return: a daemon parked in a long-poll is
     # listening, and the webhook's 2-minute liveness read must see it so. A

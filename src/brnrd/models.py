@@ -190,6 +190,10 @@ class Token(Base):
     revoked: Mapped[bool] = mapped_column(Boolean, default=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
     expires_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    # A daemon token's last inbox poll. Per token, not per Daemon row: an old
+    # daemon and a loom both register as "daemon" and trade one row between
+    # them, so only the token tells the two pollers apart.
+    polled_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
 
 class Daemon(Base):
