@@ -1,5 +1,7 @@
 """A machine condition that flaps is one episode: told once, silent per dip, cleared once."""
 
+import sys
+
 import pytest
 
 from brr.loom.runtime import health, reap
@@ -29,6 +31,7 @@ def disk(tmp_path, monkeypatch):
     clock, free = Clock(), {"bytes": 20 * GB}
     monkeypatch.setattr(health, "time", clock)
     monkeypatch.setattr(reap, "floor", lambda _path: (free["bytes"], 12 * GB))
+    monkeypatch.setattr(reap, "space", lambda _path: (free["bytes"], free["bytes"], 228 * GB))
     reaper = Reaper(home, lambda *_: None)
 
     def guard(health_):
@@ -202,9 +205,42 @@ def test_the_disk_floor_is_the_homes_setting(tmp_path, monkeypatch):
     root = tmp_path / "home"
     write_thread(root, "inbox", "Brnrd", "inbox")
     monkeypatch.setattr(reap.shutil, "disk_usage", lambda _p: SimpleNamespace(total=228 * GB, free=11 * GB))
+    monkeypatch.setattr(reap, "important", lambda _p: None)
     assert reap.floor(root) == (11 * GB, int(228 * GB * 0.05))
     (root / "loom").mkdir(exist_ok=True)
     (root / "loom/config.toml").write_text("disk_floor_pct = 2\n")
     assert reap.floor(root) == (11 * GB, reap.FLOOR_BYTES)   # 2% of 228 GB is under 5 GiB
     (root / "loom/config.toml").write_text("disk_floor_pct = 4\n")
     assert reap.floor(root)[1] == int(228 * GB * 0.04)
+
+
+def test_the_floor_reads_purgeable_space_as_free_and_the_dip_says_both(tmp_path, monkeypatch):
+    # 10-29: statvfs read 14381 MB while macOS would hand an important write 20050 MB.
+    from types import SimpleNamespace
+
+    root = tmp_path / "home"
+    write_thread(root, "inbox", "Brnrd", "inbox")
+    reaper = Reaper(Home(root), lambda *_: None)
+    reading = {"plain": 11 * GB, "important": 17 * GB}
+    monkeypatch.setattr(reap.shutil, "disk_usage",
+                        lambda _p: SimpleNamespace(total=228 * GB, free=reading["plain"]))
+    monkeypatch.setattr(reap, "important", lambda _p: reading["important"])
+    assert reap.floor(root)[0] == 17 * GB
+    reaper.disk()   # 11 GB by statvfs is under the 11.4 GB floor; with purgeable it is not
+    assert not reaper.below
+
+    reading.update(plain=10 * GB, important=11 * GB)
+    with pytest.raises(reap.DiskFloor) as dip:
+        reaper.disk()
+    assert str(dip.value) == ("11264 MB free on the home's volume (10240 MB before macOS purges),"
+                              f" under the floor of {int(228 * GB * 0.05) >> 20} MB")
+
+    monkeypatch.setattr(reap, "important", lambda _p: None)   # off macOS: statvfs alone, one number
+    with pytest.raises(reap.DiskFloor) as dip:
+        reaper.disk()
+    assert "purges" not in str(dip.value)
+
+
+@pytest.mark.skipif(sys.platform != "darwin", reason="the purgeable reading is macOS's")
+def test_important_reads_this_volume_on_macos(tmp_path):
+    assert reap.important(tmp_path) > 0
