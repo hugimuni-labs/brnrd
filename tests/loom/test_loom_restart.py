@@ -171,10 +171,12 @@ ctx.handoff({str(finished)!r}, "all boundary assertions reached")
     loom = Loom(root)
     loom.start()
     try:
-        wait_until(ready.exists, 12, loom.dump)
+        # Hang guards, as long as the body's own 30 s deadline: eight copies at
+        # once on an eight-core machine take more than 12 s to reach plan 1/2.
+        wait_until(ready.exists, 30, loom.dump)
         assert 'plan 1/2' in ready.read_text()
         later = inject_letter(root, to='thread:work', body='a later ask')
-        wait_until(complete.exists, 8, loom.dump)
+        wait_until(complete.exists, 30, loom.dump)
         text = json.loads(complete.read_text())['hookSpecificOutput']['additionalContext']
         assert later in text and 'letters without a row' not in text, text
         wait_until(finished.exists, 30, loom.dump)
