@@ -56,7 +56,7 @@ if own == 'worker' and any(l.body.startswith('Keep this work') for l in letters)
         path = clone / ('threads/worker/README.md' if {edits} == 1 else f'memory/moves/dirty-{{n}}.md')
         path.write_text(path.read_text() + '\\nUnsaved memory\\n' if path.exists() else 'Unsaved memory\\n')
         paths.append(str(path.relative_to(clone)))
-    Path({str(ready)!r}).write_text(json.dumps({{'pid': os.getpid(), 'room': str(ctx.room),
+    ctx.handoff({str(ready)!r}, json.dumps({{'pid': os.getpid(), 'room': str(ctx.room),
                                                'hashes': hashes, 'paths': paths}}))
     while True:
         time.sleep(.03)
@@ -65,7 +65,7 @@ if own == 'author' and any(l.body == 'begin' for l in letters):
     for l in letters:
         ctx.send('thread:author', note='dispatched', re=l.id)
     ctx.send('thread:worker', 'Keep this work', cite=l.id)
-    Path({str(dispatched)!r}).write_text(str(os.getpid()))
+    ctx.handoff({str(dispatched)!r}, str(os.getpid()))
     sys.exit(0)
 # A letter shown in the wake is cut to its first line at the next boundary.
 # Wait until the loom has done that, then read the whole text where a body
@@ -112,7 +112,7 @@ if {commits}:
 else:
     assert 'Commits on ' not in text
 ctx.send('thread:worker', note='recovered failed room', re=bounce.id)
-Path({str(recovered)!r}).write_text(json.dumps({{'body': text, 'reader': own, 'pid': os.getpid()}}))
+ctx.handoff({str(recovered)!r}, json.dumps({{'body': text, 'reader': own, 'pid': os.getpid()}}))
 ''')
     inject_letter(root, to='thread:author', body='begin')
     loom = Loom(root)

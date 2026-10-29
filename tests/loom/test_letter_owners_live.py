@@ -118,7 +118,7 @@ while time.monotonic() < deadline:
     seen = ctx.jack('post').letters
     notices = [l for l in seen if 'was refused' in l.body or 'was not sent' in l.body]
     if notices:
-        Path({str(ready)!r}).write_text(notices[0].body)
+        ctx.handoff({str(ready)!r}, notices[0].body)
         while not Path({str(resume)!r}).exists():
             time.sleep(.02)
         ctx.send('thread:work', note='handled refusal', re=ask.id)
@@ -278,7 +278,7 @@ else:
                 time.sleep(.03)
             assert proposals[0].id in owed()
             ctx.send('thread:top', note='considered new proposal', re=proposals[0].id)
-            Path({str(accepted)!r}).write_text(answer.id)
+            ctx.handoff({str(accepted)!r}, answer.id)
             sys.exit(0)
         time.sleep(.03)
     raise SystemExit('no worker reply')

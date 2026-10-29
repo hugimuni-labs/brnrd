@@ -11,6 +11,7 @@ import sys
 import time
 from pathlib import Path
 
+from .home import atomic_write
 from .port import _HEADER, LetterView, parse_boundary
 
 CALLS = 15
@@ -62,6 +63,11 @@ class Ctx:
         # Wakes are the self's recipe, not the port wire format. The jack
         # delivers the same full owed list at start, whatever that recipe is.
         return self.jack("start").letters
+
+    def handoff(self, path: str | Path, text: str) -> None:
+        # A test polls these files for existence and then reads them, so a plain
+        # write_text (create, then write) can be read empty in between.
+        atomic_write(Path(path), text)
 
     def jack(self, event: str, payload: dict | None = None) -> JackView:
         proc = subprocess.run(

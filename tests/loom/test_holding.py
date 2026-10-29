@@ -36,7 +36,7 @@ while True:
     # Let the loom record our last answer before asking to stop.
     while ctx.jack("post").letters:
         time.sleep(0.03)
-    Path({str(waiting)!r}).write_text(str(os.getpid()))
+    ctx.handoff({str(waiting)!r}, str(os.getpid()))
     if not follow.exists():
         # Keep the flock until the follow-up is already in the ledger. Writing
         # waiting and then calling stop made jack's wait the whole window.
@@ -48,7 +48,7 @@ while True:
     if not view.letters:
         # Owing nothing past its wait, a worker is held, never let go; the
         # fake ends here so a later letter has a body to start.
-        Path({str(kept)!r}).write_text(json.loads(view.raw)["reason"])
+        ctx.handoff({str(kept)!r}, json.loads(view.raw)["reason"])
         break
     letters = view.letters
 ''')
@@ -107,8 +107,8 @@ ctx.owed()
 # Wait for the shown receipt to reach the boundary; no answer is made.
 time.sleep(0.3)
 assert ctx.jack("stop").kind == "block"
-Path({str(blocked)!r}).write_text("one\\n")
-Path({str(waiting)!r}).write_text(str(os.getpid()))
+ctx.handoff({str(blocked)!r}, "one\\n")
+ctx.handoff({str(waiting)!r}, str(os.getpid()))
 holds = 0
 while True:
     view = ctx.jack("stop")
@@ -117,7 +117,7 @@ while True:
     assert json.loads(view.raw)["reason"].startswith("cache keepalive, nothing new arrived: stop")
     holds += 1
     # Replace, never truncate: the test polls this file and must not read ''.
-    Path({str(root / "holds.tmp")!r}).write_text(str(holds))
+    ctx.handoff({str(root / "holds.tmp")!r}, str(holds))
     os.replace({str(root / "holds.tmp")!r}, {str(root / "holds")!r})
 ''')
     run.chmod(0o755)

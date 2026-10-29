@@ -70,7 +70,7 @@ elif "carry on" not in ctx.wake():
     # The note lands through the port; a merge stamped before it would lapse at once.
     while not any(f.kind == "note" and f.by == me.by for f in read_facts(home_of_room(ctx.room))):
         time.sleep(0.05)
-    Path({str(taken)!r}).write_text("1")
+    ctx.handoff({str(taken)!r}, "1")
     for _ in range(300):
         # The body meets a proposal the way it meets a letter: at a post boundary.
         raw = ctx.jack("post").raw
