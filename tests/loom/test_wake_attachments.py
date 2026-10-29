@@ -125,8 +125,10 @@ def test_loom_part_points_at_wishes(home, jack):
     assert "what is left on a wish lives on it: `wish <w-id> --left" in part
     assert "the stop asks for it once a wish moved" in part
     assert "Stamp what someone wants with `send --wish`" in part
-    if jack == "hold":
-        # The rest the loom keeps: a typed park, then stop; never a sleep loop.
-        from brr.loom.runtime.waits import GRAMMAR
-        assert f'--read "waiting: …" --wait <{GRAMMAR}>`, then stop' in part
-        assert "Stopping is resting, not ending" in part and "A sleep or poll loop is never the wait" in part
+    # The rest the loom keeps rides in the core, once: a typed park, then stop; never a sleep loop.
+    from brr.loom.runtime.waits import GRAMMAR
+    core = (room / "port/core.md").read_text()
+    assert f'--read "waiting: <what>" --wait <{GRAMMAR}>`' in core
+    assert core.count("Stopping is resting, not ending") == 1 and "A sleep or poll loop is never the wait" in core
+    assert core.index("## memory/stance.md") < core.index("## loom briefing")
+    assert "Stopping is resting" not in part and "poll loop" not in part

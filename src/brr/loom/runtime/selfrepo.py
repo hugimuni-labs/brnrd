@@ -789,11 +789,19 @@ def default_loom_part(clone: Path, thread: str) -> str:
     return "\n".join(lines) + "\n"
 
 
+def insert_briefing(prompt: str, briefing: str) -> str:
+    """After the core: before the thread README, else first."""
+    start = prompt.find("## threads/")
+    if start < 0:
+        return briefing + prompt
+    return prompt[:start] + briefing + prompt[start:]
+
+
 def run_wake(room_dir: Path, thread: str, owed: Path | None = None, *,
              loom_part: Path | None = None, repos: Path | None = None,
              core: Path | None = None, stdout=None, stderr=None,
              recipe: Path | None = None) -> int:
-    """Run the self recipe and add its thread wishes within the wake budget.
+    """Run the self recipe and add the loom briefing and thread wishes within the wake budget.
 
     With ``core``, a recipe that knows ``LOOM_CORE`` writes the core there and
     leaves it out of stdout; one that does not leaves the file unwritten.
@@ -834,10 +842,14 @@ def run_wake(room_dir: Path, thread: str, owed: Path | None = None, *,
             from .wishes import told, waits_on
             found = told(facts)
             section += render(queues(found, waits_on(found, main_snapshot(home))))
-    # Reserve the section before the recipe fits its tree/README to the budget.
-    if section:
-        limit = int(env.get("LOOM_BUDGET_BYTES") or 24000)
-        env["LOOM_BUDGET_BYTES"] = str(max(0, limit - len(section.encode("utf-8"))))
+    from .briefing import section as briefing_section
+    briefing = briefing_section()
+    # Reserve what the loom adds before the recipe fits its tree/README to the budget.
+    limit = int(env.get("LOOM_BUDGET_BYTES") or 24000)
+    env["LOOM_BUDGET_BYTES"] = str(max(0, limit - len((section + briefing).encode("utf-8"))))
+    if core is not None:
+        # Absent after the run means the recipe kept the core in stdout.
+        Path(core).unlink(missing_ok=True)
     owed_file = None
     part_file = None
     try:
@@ -858,6 +870,12 @@ def run_wake(room_dir: Path, thread: str, owed: Path | None = None, *,
         proc = subprocess.run([*argv, thread, owed_arg], cwd=clone, env=env,
                               stdout=subprocess.PIPE, stderr=stderr, timeout=60)
         output = proc.stdout.decode("utf-8")
+        if proc.returncode == 0:
+            if core is not None and Path(core).is_file():
+                with open(core, "a", encoding="utf-8") as handle:
+                    handle.write(briefing)
+            else:
+                output = insert_briefing(output, briefing)
         if proc.returncode == 0 and section:
             output = insert_wishes(output, section)
         (stdout or sys.stdout).write(output)

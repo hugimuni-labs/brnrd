@@ -565,7 +565,6 @@ def _prepare(home: Home, strand: str, thread: str, gen: int,
     from .reap import kept_line
     gone += kept_line(home, thread, threads)
     forge = forge_threads(home.root / "self")
-    from .waits import GRAMMAR
     part = gone + _handover(facts, thread, gen, threads, home) + inherited + (
         f"you are strand {strand} on thread {thread}"
         + (f" ({forge}/{thread})" if forge else "") + "; letters arrive at your tool "
@@ -580,16 +579,11 @@ def _prepare(home: Home, strand: str, thread: str, gen: int,
         "last lines say how (core/loom/README.md, Notices). Stamp what someone wants with "
         "`send --wish`; open a thread only for one: `send --to thread:<new> --wish <w-id>` or "
         "`--wish new:\"<line>\"`. A `face?` line: `face take` wears it, `face <face>` another, "
-        "silence lets it lapse. "
-        + ("call `$BRNRD_JACK --event start` now, `$BRNRD_JACK --event post` between "
+        "silence lets it lapse."
+        # Resting and waiting are the loom briefing's, in the core (briefing.py).
+        + (" call `$BRNRD_JACK --event start` now, `$BRNRD_JACK --event post` between "
            "steps and `$BRNRD_JACK --event stop` before ending; read each returned boundary\n"
-           if jack == "hand" else
-           "Stopping is resting, not ending: the jack holds you at no cost and the next letter "
-           "wakes you here. Waiting on CI, a PR, a command, a person or a time, park it: "
-           f"`wish <w-id> --read \"waiting: …\" --wait <{GRAMMAR}>`, then stop; the loom's letter "
-           "wakes you when it comes true. A sleep or poll loop is never the wait: no letter "
-           "lands inside it. Before you stop with wishes open, end each as a result "
-           "(`wish <w-id> --result`), an `ask`, a park or `settle`\n")
+           if jack == "hand" else "\n")
     ) + _loom_line(home, facts)
     atomic_write(part_path, part)
     if repos is None:
