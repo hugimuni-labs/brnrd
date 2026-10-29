@@ -85,9 +85,11 @@ def parse_boundary(text: str) -> Boundary:
             settled = line.partition(":")[2].strip()
             current = None
             continue
-        if not line.strip() or line.startswith(("status:", "owed:", "opened:", "budget:", "repaired:", "degraded:", "library:", "moved:",
-                                                "face? ", "left? ", "gone: ", "idle: ",
-                                                "asks: ", "asks? ", "top? ", "done: ")):
+        # Only a "- " line is a letter. Any other line is the loom telling the
+        # body something: a jack still running the code from before a move
+        # meets kinds it never knew (moved: crashed one at a0552d77), so it
+        # skips them instead of listing them.
+        if not line.startswith("- "):
             current = None
             continue
         match = _ITEM.match(line)
