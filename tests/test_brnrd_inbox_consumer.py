@@ -1,4 +1,4 @@
-"""One account, one inbox consumer: the newest paired token still polling."""
+"""One account, one inbox consumer: a live loom refuses an old daemon's poll."""
 
 from __future__ import annotations
 
@@ -41,8 +41,11 @@ def _paired(client, headers, repo_id):
     return {"Authorization": f"Bearer {paired['daemon_token']}"}
 
 
-def _poll(client, auth):
-    return client.get("/v1/daemons/inbox", params={"since": 0, "wait": 0}, headers=auth)
+def _poll(client, auth, consumer=None):
+    params = {"since": 0, "wait": 0}
+    if consumer:
+        params["consumer"] = consumer
+    return client.get("/v1/daemons/inbox", params=params, headers=auth)
 
 
 def _setup(client):
@@ -54,44 +57,51 @@ def _setup(client):
     )
     assert r.status_code == 201, r.text
     repo_id = r.json()["repo_id"]
-    old = _paired(client, headers, repo_id)
-    _age_tokens(client, timedelta(hours=1))
-    new = _paired(client, headers, repo_id)
-    return old, new
+    return _paired(client, headers, repo_id), _paired(client, headers, repo_id)
 
 
-def _age_tokens(client, by, *, field="created_at"):
-    with client.app.state.SessionLocal() as db:
-        for token in db.execute(select(Token).where(Token.kind == Token.KIND_DAEMON)).scalars():
-            value = getattr(token, field)
-            if value is not None:
-                setattr(token, field, value - by)
-        db.commit()
+def test_an_old_daemon_is_refused_while_a_loom_polls(client):
+    daemon, loom = _setup(client)
+    assert _poll(client, daemon).status_code == 200
+    assert _poll(client, loom, "loom").status_code == 200
 
-
-def test_an_old_daemon_is_refused_once_a_newer_pairing_polls(client):
-    old, new = _setup(client)
-    assert _poll(client, old).status_code == 200
-    assert _poll(client, new).status_code == 200
-
-    refused = _poll(client, old)
+    refused = _poll(client, daemon)
     assert refused.status_code == 409, refused.text
     assert "brnrd daemon uninstall" in refused.json()["detail"]
-    assert _poll(client, new).status_code == 200
+    assert _poll(client, loom, "loom").status_code == 200
 
 
-def test_a_newer_pairing_that_never_polls_takes_nothing(client):
-    old, _new = _setup(client)
-    assert _poll(client, old).status_code == 200
-    assert _poll(client, old).status_code == 200
+def test_a_daemon_alone_on_its_account_keeps_its_inbox(client):
+    daemon, _unused = _setup(client)
+    assert _poll(client, daemon).status_code == 200
+    assert _poll(client, daemon).status_code == 200
 
 
-def test_a_newer_pairing_gone_quiet_hands_the_inbox_back(client):
-    old, new = _setup(client)
-    assert _poll(client, new).status_code == 200
+def test_two_looms_on_one_account_are_never_refused(client):
+    # Two machines (or a test install signed in as the same person): the
+    # inbox lease decides which polls, and the cloud never cuts a loom off.
+    older, newer = _setup(client)
+    assert _poll(client, newer, "loom").status_code == 200
+    assert _poll(client, older, "loom").status_code == 200
+    assert _poll(client, newer, "loom").status_code == 200
+
+
+def test_a_loom_gone_quiet_hands_the_inbox_back(client):
+    daemon, loom = _setup(client)
+    assert _poll(client, loom, "loom").status_code == 200
     with client.app.state.SessionLocal() as db:
         for token in db.execute(select(Token).where(Token.kind == Token.KIND_DAEMON)).scalars():
-            if token.polled_at is not None:
-                token.polled_at = datetime.now(timezone.utc) - timedelta(minutes=5)
+            if token.loom_seen_at is not None:
+                token.loom_seen_at = datetime.now(timezone.utc) - timedelta(minutes=5)
         db.commit()
-    assert _poll(client, old).status_code == 200
+    assert _poll(client, daemon).status_code == 200
+
+
+def test_a_loom_without_the_consumer_tag_counts_by_its_snapshot(client):
+    # A 0.6.26 loom polls without ?consumer=loom but PUTs its snapshot every minute.
+    daemon, loom = _setup(client)
+    assert client.put("/v1/daemons/loom", json={"v": 1, "threads": [], "log": []}, headers=loom).status_code in (200, 403)
+    assert _poll(client, loom).status_code == 200
+    refused = _poll(client, daemon)
+    assert refused.status_code == 409, refused.text
+    assert "paired" in refused.json()["detail"]
