@@ -6,6 +6,8 @@ account-scoped store out of the developer's real home.
 """
 
 import os
+from pathlib import Path
+
 import pytest
 
 from brr import gitops
@@ -83,8 +85,54 @@ def _hermetic_git_env(tmp_path_factory, monkeypatch):
     yield
 
 
+# Set by the suite itself, before or after the strip below: the repo-root
+# conftest.py at import, ``_isolate_account_state`` per test.
+SUITE_OWN_ENV = ("BRNRD_LIMIT_FREE_REPOS", "BRNRD_LOOM_SOURCE", "BRNRD_ROOT")
+
+
+def hosting_env(name: str) -> bool:
+    """A variable the host of this pytest set: a body, a loom, a daemon run."""
+    return (name.startswith(("BRNRD_", "BRR_", "LOOM_"))
+            and name not in SUITE_OWN_ENV)
+
+
 @pytest.fixture(autouse=True)
-def _isolate_account_state(tmp_path_factory, monkeypatch):
+def _isolate_hosting_body(tmp_path_factory, monkeypatch):
+    """A test starts as an operator on an empty machine, never as the body
+    that runs pytest.
+
+    A body runs this suite inside its room: ``BRNRD_ROOM`` names the room and
+    so the real loom home (``<home>/rooms/<strand>``), ``BRNRD_HOME`` or the
+    installed service name it outright, ``~/brnrd`` and the launchd/systemd
+    unit under ``HOME`` name it without any variable, and the room's
+    ``port/bin`` on PATH carries a gh shim that injects the room's forge
+    credentials. Unstripped, a test that resolves "the home" resolves that
+    one, and a disconnect-shaped call deletes its relay token: Sasha's
+    resident ran the suite and lost ``loom/gates/cloud.json`` (2026-10-29,
+    test-isolation). ``LOOM_*`` are the wake recipe's inputs: a body's
+    ``LOOM_BUDGET_BYTES=32000`` let a 30 kB letter fit.
+
+    Stripped by prefix, not by a list of names: the next home-resolving
+    variable is one nobody listed. ``HOME`` goes to an empty per-test dir.
+    Tests that need a body, a home or a user dir set them explicitly.
+    """
+    def room_bin(entry):
+        path = Path(entry).resolve()
+        return (path.name == "bin" and path.parent.name == "port"
+                and path.parent.parent.parent.name == "rooms")
+
+    path = os.environ.get("PATH", os.defpath)
+    monkeypatch.setenv("PATH", os.pathsep.join(
+        entry for entry in path.split(os.pathsep) if not room_bin(entry)))
+    for name in tuple(os.environ):
+        if hosting_env(name):
+            monkeypatch.delenv(name)
+    monkeypatch.setenv("HOME", str(tmp_path_factory.mktemp("home")))
+    yield
+
+
+@pytest.fixture(autouse=True)
+def _isolate_account_state(_isolate_hosting_body, tmp_path_factory, monkeypatch):
     """Redirect ``XDG_STATE_HOME`` at a per-test temp dir.
 
     The account context auto-creates a local-first store under
