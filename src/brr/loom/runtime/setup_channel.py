@@ -234,24 +234,8 @@ def _channel_name(home, kind):
     return next(n for n in (kind, *(f'{kind}-{i}' for i in range(2, 100))) if n not in taken)
 
 
-def _full_name():
-    """The OS account's display name: macOS ``id -F``, else the passwd comment."""
-    import getpass
-    try:
-        name = subprocess.run(['id', '-F'], capture_output=True, text=True, timeout=5).stdout.strip()
-    except (OSError, subprocess.SubprocessError):
-        name = ''
-    if not name:
-        try:
-            import pwd
-            name = pwd.getpwuid(os.getuid()).pw_gecos.split(',')[0].strip()
-        except (ImportError, KeyError):
-            name = ''
-    return name or getpass.getuser()
-
-
 def _person_id(name):
-    """A people/ folder name from what a person wants to be called."""
+    """A people/ folder name from the OS login."""
     slug = re.sub(r'[^a-z0-9._-]+', '-', name.strip().lower()).strip('-._')
     return slug or 'me'
 
@@ -336,10 +320,10 @@ def main(argv=None):
         if args.person or len(people) == 1:
             person = args.person or people[0]
         else:
-            _step('What should brnrd call you?')
-            called = _ask('Your name:', _full_name())
-            person = _person_id(called)
-            _ok(f'brnrd will call you {called}')
+            # An internal id, never shown: brnrd asks the name itself in its
+            # first conversation (the seed's inbox onboarding row).
+            import getpass
+            person = _person_id(getpass.getuser())
         # A letter lands only on a thread on the self's main: seed it before pairing.
         if init_self(home.root, person=person).startswith('initialized '):
             _ok(IDENTITY_NOTE)
