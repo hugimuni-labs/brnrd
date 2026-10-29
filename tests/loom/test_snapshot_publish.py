@@ -37,13 +37,18 @@ class Cloud:
     """Stands in for ``cloud._request``; ``fail`` makes every call raise."""
 
     def __init__(self):
-        self.calls, self.fail = [], False
+        self.calls, self.fail, self.withhold = [], False, False
 
     def __call__(self, base_url, method, path, *, token=None, json=None, retry=True, **_):
         self.calls.append({"url": base_url, "method": method, "path": path,
                            "token": token, "doc": json, "retry": retry})
         if self.fail:
             raise RuntimeError("board unreachable")
+        if self.withhold:
+            err = RuntimeError('brnrd PUT /v1/daemons/loom -> 451: '
+                               '{"detail":"this repo\'s publish scope withholds the activity lane"}')
+            err.status_code = 451
+            raise err
         return {}
 
 
@@ -198,6 +203,23 @@ def test_an_unchanged_snapshot_is_re_put_once_a_minute(board):
     steps(board)
     first, second = (c["doc"] for c in board.cloud.calls)
     assert len(board.cloud.calls) == 2 and snapshot.digest(first) == snapshot.digest(second)
+
+
+def test_a_withheld_snapshot_is_no_degraded_step_and_keeps_its_idle_pace(board):
+    # Every fresh connect starts withheld; the board's parts pusher names that once (board.BoardWithheld), so the
+    # snapshot push is no second condition for the same missing yes, and a yes is picked up without a restart.
+    board.cloud.withhold = True
+    board.start()
+    for count in (1, 2, 3):
+        wait_until(lambda: len(board.cloud.calls) == count, 10, board.dump)
+        steps(board)
+        board.now[0] += snapshot.IDLE
+    degraded = [f for f in read_facts(Home(board.root))
+                if f.kind == "loom.degraded" and f.data["step"] == "publisher"]
+    assert degraded == []
+    board.cloud.withhold = False
+    wait_until(lambda: len(board.cloud.calls) == 4, 10, board.dump)
+    assert board.thread.is_alive()
 
 
 def test_a_failing_board_is_one_streak_and_the_loop_keeps_going(board):

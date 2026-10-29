@@ -120,7 +120,7 @@ def test_put_rejects_oversized_doc(client):
 def test_put_respects_activity_consent(client):
     headers, session = _account(client)
     relay = _relay_token(client, headers, _repo(client, headers, publish_layers="quota"))
-    assert client.put("/v1/daemons/loom", json=SNAPSHOT, headers=relay).status_code == 403
+    assert client.put("/v1/daemons/loom", json=SNAPSHOT, headers=relay).status_code == 451
     _signed_in(client, session)
     assert client.get("/v1/dashboard/loom").status_code == 404
 

@@ -8,8 +8,13 @@ import { partsServer } from './parts-server.mjs';
 
 const root = fileURLToPath(new URL('..', import.meta.url));
 
-export async function open({ parts = fixture(), viewport = { width: 1440, height: 900 } } = {}) {
-	const loom = await partsServer(parts);
+export async function open({
+	parts = fixture(),
+	viewport = { width: 1440, height: 900 },
+	consent = null,
+	ready = '.brd .column.threadcol'
+} = {}) {
+	const loom = await partsServer(parts, 0, consent);
 	process.env.BRNRD_DEV_TARGET = `http://127.0.0.1:${loom.port}`;
 	const vite = await createServer({
 		root,
@@ -25,7 +30,7 @@ export async function open({ parts = fixture(), viewport = { width: 1440, height
 	page.on('pageerror', (e) => errors.push(e.message));
 	page.on('request', (r) => requests.push(new URL(r.url()).pathname));
 	await page.goto(base);
-	await page.waitForSelector('.brd .column.threadcol', { timeout: 60_000 });
+	await page.waitForSelector(ready, { timeout: 60_000 });
 	return {
 		page,
 		loom,

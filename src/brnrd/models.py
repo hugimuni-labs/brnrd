@@ -158,6 +158,10 @@ class Repo(Base):
     # enforced server-side at the `PUT /v1/daemons/*` publish seam, not only
     # hidden in the connect UI.
     publish_layers: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    # When the person last answered the board prompt on brnrd.dev (yes or no).
+    # ``None`` = never asked: `brnrd account connect` records scope ``none``,
+    # so without this an unasked loom and one whose person said no look alike.
+    publish_consent_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     # brnrd-bot's own marker-collaborator state (#874, rescoped 2026-07-29).
     # ``None`` = never determined — no bot token configured, never checked
     # yet, or the last check was ambiguous (see

@@ -2,7 +2,8 @@
 
 The same contract the loom's loopback serves (``brr.loom.runtime.board.handler``),
 so one SPA reads either: GET ``/v1/loom/{index,beads,thread/<id>}`` with ETag,
-GET ``/v1/loom/events`` (SSE of the index hash), POST ``/v1/loom/letters``.
+GET ``/v1/loom/events`` (SSE of the index hash), POST ``/v1/loom/letters``. GET/POST ``/v1/loom/consent``
+is the board prompt: whether the account's loom may send its board here, asked once on brnrd.dev.
 The parts come from ``PUT /v1/daemons/loom/parts``; every read is scoped to the
 session's account, and the account's loom is the daemon whose index moved last.
 """
@@ -13,6 +14,7 @@ import asyncio
 import gzip
 import json
 import time
+from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import JSONResponse, Response, StreamingResponse
@@ -20,11 +22,12 @@ from pydantic import ValidationError
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from brnrd import schemas
+from brnrd import publish_scope, schemas
 from brnrd.auth import get_db
-from brnrd.models import Account, LoomPart
+from brnrd.models import Account, Daemon, LoomPart, Repo
 
 from ._session import _account_id, _json_body
+from .daemons import LOOM_DAEMON_NAME
 from .dashboard import enqueue_loom_letter
 
 router = APIRouter(prefix="/v1/loom", tags=["loom"])
@@ -170,3 +173,81 @@ async def loom_letter(request: Request, db: Session = Depends(get_db)) -> JSONRe
     if isinstance(queued, JSONResponse):
         return JSONResponse({"error": json.loads(queued.body)["detail"]}, status_code=queued.status_code)
     return JSONResponse({"id": f"event:{queued.event_id}", "thread": MAIN_THREAD})
+
+
+#: The one publish lane a loom's board rides (`PUT /v1/daemons/loom{,/parts}`).
+BOARD_LANE = "activity"
+
+
+def _loom_repos(db: Session, account_id: str) -> list[tuple[Repo, Daemon]]:
+    """The account's loom repos with their loom daemon, the last seen first.
+
+    A loom's first push makes its daemon row even when the push is refused, so a
+    loom that never got a yes is found here too.
+    """
+    rows = db.execute(
+        select(Repo, Daemon)
+        .join(Daemon, Daemon.repo_id == Repo.id)
+        .where(Repo.account_id == account_id, Daemon.daemon_name == LOOM_DAEMON_NAME)
+        .order_by(Daemon.last_seen_at.desc())
+    ).all()
+    return [(repo, daemon) for repo, daemon in rows]
+
+
+def _iso(at: datetime | None) -> str | None:
+    if at is None:
+        return None
+    return (at if at.tzinfo else at.replace(tzinfo=timezone.utc)).isoformat().replace("+00:00", "Z")
+
+
+@router.get("/consent")
+def loom_consent(request: Request, db: Session = Depends(get_db)) -> JSONResponse:
+    """``{state}``: ``none`` (no loom), ``ask`` (never answered), ``declined``, or ``granted``.
+
+    Granted is read from the scope itself, so a repo whose person ticked the lane
+    before this prompt existed is not asked again.
+    """
+    account_id = _account_id(request, db)
+    if account_id is None:
+        return JSONResponse({"error": "unauthenticated"}, status_code=401)
+    looms = _loom_repos(db, account_id)
+    if not looms:
+        return JSONResponse({"state": "none"})
+    repo, daemon = looms[0]
+    if publish_scope.lane_permitted(db, repo_id=repo.id, lane=BOARD_LANE):
+        state = "granted"
+    elif repo.publish_consent_at is None:
+        state = "ask"
+    else:
+        state = "declined"
+    return JSONResponse({"state": state, "repo": repo.repo_full_name, "last_seen_at": _iso(daemon.last_seen_at)})
+
+
+@router.post("/consent")
+async def loom_consent_answer(request: Request, db: Session = Depends(get_db)) -> JSONResponse:
+    """``{send: bool}`` for every loom repo of the account: add or drop the board lane, stamp the answer.
+
+    A no also deletes the copy held here, through the same purge a settings
+    withdrawal runs, in the same commit as the scope.
+    """
+    account_id = _account_id(request, db)
+    if account_id is None:
+        return JSONResponse({"error": "unauthenticated"}, status_code=401)
+    data = await _json_body(request)
+    send = data.get("send")
+    if not isinstance(send, bool):
+        return JSONResponse({"error": "send: true or false"}, status_code=400)
+    looms = _loom_repos(db, account_id)
+    if not looms:
+        return JSONResponse({"error": "no loom on this account"}, status_code=404)
+    now = datetime.now(timezone.utc)
+    for repo in {repo.id: repo for repo, _ in looms}.values():
+        lanes, slices = publish_scope._repo_scopes(repo.publish_layers)
+        lanes = set(lanes) | {BOARD_LANE} if send else set(lanes) - {BOARD_LANE}
+        # The slices stand for the corpus lane; a bare "corpus" token would widen a partial consent to every slice.
+        tokens = sorted(lanes - {"corpus"}) + sorted(slices)
+        layers = publish_scope.normalize_publish_layers(",".join(tokens) or None)
+        publish_scope.purge_removed_scope(db, repo=repo, new_publish_layers=layers)
+        repo.publish_layers, repo.publish_consent_at, repo.updated_at = layers, now, now
+    db.commit()
+    return JSONResponse({"state": "granted" if send else "declined"})

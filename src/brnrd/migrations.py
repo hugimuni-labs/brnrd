@@ -381,6 +381,8 @@ def _migrate_repos(conn: Connection) -> None:
     # connected before this column existed carries no consent to enforce,
     # so it keeps its current (daemon-config-only) behaviour untouched.
     conn.execute(text("ALTER TABLE repos ADD COLUMN IF NOT EXISTS publish_layers VARCHAR(255)"))
+    # The board prompt's answer time (models.Repo.publish_consent_at); NULL = never asked.
+    conn.execute(text("ALTER TABLE repos ADD COLUMN IF NOT EXISTS publish_consent_at TIMESTAMP"))
     # brnrd-bot marker-collaborator state (#874, rescoped) — see
     # models.Repo.github_bot_collaborator. NULL on existing rows means
     # "never checked", not "not a collaborator".
