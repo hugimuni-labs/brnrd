@@ -85,14 +85,15 @@ def heads(room: Path) -> dict[str, str]:
     return found
 
 
-def wrote(room: Path, since: float) -> bool:
-    """This strand wrote a fact since ``since`` that acted: a letter, a wish, a
-    left that moved, a PR. Read from the tail of its own ledger files."""
+def acts(room: Path, since: float) -> list[str]:
+    """The kinds of the facts this strand wrote since ``since`` that acted: a
+    letter, a wish, a left that moved, a PR. Read from the tail of its own ledger files."""
     strand = Path(room).name
+    found: list[str] = []
     try:
         files = list((home_of_room(room).root / "ledger" / "facts").glob(f"*/{strand}.jsonl"))
     except (OSError, ValueError):
-        return False
+        return found
     for path in files:
         with path.open("rb") as handle:
             handle.seek(max(path.stat().st_size - 200_000, 0))
@@ -107,9 +108,10 @@ def wrote(room: Path, since: float) -> bool:
                 break
             data = fact.get("data") or {}
             if (fact.get("by") == f"strand:{strand}" and fact.get("kind") not in SETTLING
-                    and not (fact.get("kind") == "wish.left" and data.get("same"))):
-                return True
-    return False
+                    and not (fact.get("kind") == "wish.left" and data.get("same"))
+                    and fact.get("kind") not in found):
+                found.insert(0, str(fact.get("kind")))
+    return found
 
 
 def pace(room: Path) -> float:
@@ -200,6 +202,13 @@ def readme_hash(room: Path, thread: str) -> str:
         return hashlib.sha256(_readme(room, thread).read_bytes()).hexdigest()
     except (OSError, ValueError):
         return ""
+
+
+def readme_mtime(room: Path, thread: str) -> float:
+    try:
+        return _readme(room, thread).stat().st_mtime
+    except (OSError, ValueError):
+        return time.time()
 
 
 _WISH = re.compile(r"\bw-[0-9a-z]{12}\b")

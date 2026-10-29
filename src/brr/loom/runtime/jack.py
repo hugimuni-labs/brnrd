@@ -397,10 +397,21 @@ def _turn(room: Path, stdin_text: str) -> None:
     if not state.get("turn_open"):
         return
     heads = shed.heads(room)
-    acted = heads != state.get("heads") or shed.wrote(room, float(state.get("turn_at") or 0))
+    moved = [name for name, head in heads.items() if head != (state.get("heads") or {}).get(name)]
+    did = [*shed.acts(room, float(state.get("turn_at") or 0)), *(f"{name} HEAD" for name in moved)]
+    acted = bool(did)
     boot, now = shed.contexts(stdin_text, state.get("boot"))
+    # Acts since the README last changed, letters aside (routing is not state).
+    readme = shed.readme_hash(room, os.environ.get("BRNRD_THREAD") or "")
+    if readme != state.get("readme_seen"):
+        # Rewritten this turn: only the acts written after it are left behind.
+        thread = os.environ.get("BRNRD_THREAD") or ""
+        did, kept = shed.acts(room, shed.readme_mtime(room, thread)), []
+    else:
+        kept = state.get("readme_acts") or []
+    unread = [*kept, *(x for x in did if x != "letter" and x not in kept)]
     _set_state(room, turns=[*(state.get("turns") or []), [acted, now]], heads=heads,
-               boot=boot or state.get("boot"), turn_open=False)
+               boot=boot or state.get("boot"), turn_open=False, readme_seen=readme, readme_acts=unread)
 
 
 def _opened(room: Path) -> None:
@@ -602,9 +613,10 @@ def execute(event: str, room: Path, stdin_text: str) -> str:
         _set_state(room, stop_blocks=0, boundary_at=time.time(), held_at=None, turn_open=True)
         (room / "port" / DISPLACED).unlink(missing_ok=True)
     elif event == "start":
-        from .shed import heads
+        from .shed import heads, readme_hash
         _set_state(room, boundary_at=time.time(), turn_open=True, turn_at=time.time(),
-                   heads=_shed(room, heads, room, default={}))
+                   heads=_shed(room, heads, room, default={}),
+                   readme_seen=_shed(room, readme_hash, room, os.environ.get("BRNRD_THREAD") or ""))
     text = _boundary_text(room)
     parsed = parse_boundary(text)
     opened = [[line.split()[1], line.split()[2], _ageless(line.rpartition(" · owed ")[2])]
@@ -742,7 +754,8 @@ def _stop_block(room: Path, text: str, plan: str) -> str:
         due, record = _shed(room, ask, room, state, os.environ.get("BRNRD_THREAD") or "", default=("", {}))
         if record:
             _set_state(room, **record)
-        sections = [due] if due else []
+        sections = [due or _readme_miss(room, state)]
+        sections = [section for section in sections if section]
     count = int(state.get("stop_blocks") or 0)
     seen = "\n\n".join(sections)
     if (count >= 3) if _hand() else (count and seen == state.get("stop_said")):
@@ -778,6 +791,22 @@ Restate each one's whole list:
 TOP = """a letter of theirs says an order word and no wish was put on top for it: {line}
 - brnrd runtime wish <w-id> --top <letter>   (the wish it puts first)
 - or stop again: the order did not change"""
+
+README = """before resting: since threads/{thread}/README.md last changed this body did {did}. Any end can
+come while it rests, and the README is what its successor boots into. Rewrite it to the current state
+(a decision with its why, `## Now`, a done row cut to its receipt; never a log line) and land it with
+`brnrd runtime send-self --room .`; or stop again: it still is."""
+
+
+def _readme_miss(room: Path, state: dict) -> str:
+    """At a resting stop, once per README version that acts left behind (handover design §3)."""
+    did = state.get("readme_acts") or []
+    thread = os.environ.get("BRNRD_THREAD") or ""
+    if not did or not thread:
+        return ""
+    _set_state(room, readme_acts=[])
+    return README.format(did=", ".join(did), thread=thread)
+
 
 # Long enough for the loom to render a fact written just before the stop.
 LEFT_GRACE = 3.0
