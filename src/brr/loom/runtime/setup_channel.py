@@ -112,7 +112,12 @@ def pair(home, kind, name, person, *, timeout=180, out=print, qr=None):
                     result = subprocess.run([str(folder / 'out'), str(reply)], env=env,
                                             capture_output=True, text=True, timeout=60)
                 if result.returncode != 0:
-                    raise ValueError('Pairing reply failed or may have sent; channel was not enabled')
+                    # Your code arrived; only the answer failed. Say why: the
+                    # connector's last stderr line is the server's own reason.
+                    why = (result.stderr.strip().splitlines() or [f'{kind}/out exited {result.returncode}'])[-1]
+                    sent = 'was not sent' if result.returncode == 3 else 'may or may not have been sent'
+                    raise ValueError(f"Your code arrived, but the 'Paired ✓' answer {sent}: {why}. "
+                                     'The channel was not enabled; run brnrd again to retry.')
                 # A zero exit is a receipt only with the same output grammar.
                 receipt = json.loads(result.stdout)
                 if (not isinstance(receipt, dict) or not isinstance(receipt.get('ids'), list) or

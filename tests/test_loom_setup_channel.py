@@ -183,6 +183,30 @@ def test_bad_out_receipt_never_enrols_person(tmp_path, receipt):
     assert not (tmp_path / 'self/people/ada/channels.toml').exists()
 
 
+@pytest.mark.parametrize('code, says', [(3, 'was not sent'), (1, 'may or may not have been sent')])
+def test_a_failed_answer_says_the_code_arrived_and_why(tmp_path, code, says):
+    home = home_at(tmp_path)
+    folder = tmp_path / 'loom/connectors/fake'
+    folder.mkdir(parents=True)
+    (folder / 'carries').write_text('')
+    program = folder / 'out'
+    program.write_text('#!/usr/bin/env python3\nimport sys\n'
+                       "print('relay: event not found for this account', file=sys.stderr)\n"
+                       f'sys.exit({code})\n')
+    program.chmod(0o755)
+    def send_code(line):
+        if code_in(line):
+            drop = Path(connector.environment(home, 'desk')['BRNRD_STATE']) / 'in'
+            (drop / 'code.md').write_text(_front(dict(kind='letter', id='code',
+                        to='42', **{'from': '42'}), '/start ' + code_in(line)))
+    with pytest.raises(ValueError) as failed:
+        setup_channel.pair(home, 'fake', 'desk', 'ada', out=send_code)
+    assert str(failed.value).startswith('Your code arrived')
+    assert says in str(failed.value) and 'event not found for this account' in str(failed.value)
+    assert load_config(tmp_path).connectors == ()
+    assert not (tmp_path / 'self/people/ada/channels.toml').exists()
+
+
 def test_home_folder_pairs_ingests_and_sends_native_ids(tmp_path):
     from brr.daemon2.leases import LocalLeaseAuthority
     from brr.loom.runtime import speak
