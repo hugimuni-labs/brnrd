@@ -402,7 +402,10 @@ def build_parser() -> argparse.ArgumentParser:
     p.set_defaults(func=cmd_brnrd_connect)
 
     p = account_sub.add_parser(
-        "disconnect", help="unlink this daemon from brnrd")
+        "disconnect",
+        help="unlink this daemon (and the loom home, if any) from brnrd and revoke its token there")
+    p.add_argument("--home", default=None,
+                   help="also disconnect this loom home's gate (e.g. ~/brnrd); never implied")
     p.set_defaults(func=cmd_brnrd_disconnect)
 
     p = account_sub.add_parser(
@@ -7785,17 +7788,57 @@ def _connect_finish_setup(repo_root: Path, brr_dir: Path, *, defaults: bool) -> 
         )
 
 
+def _loom_gate_dir(flag: str | None) -> Path | None:
+    """The cloud-gate directory (``relay_state``) of the loom home named by ``--home``.
+
+    Only an explicit ``--home``: this feeds a delete, and an implied home
+    (BRNRD_HOME, ~/brnrd) once let a test run wipe a live install's gate.
+    """
+    from .loom.runtime.config import ConfigError, load_config
+    from .loom.runtime.home import resolve_home
+
+    if flag is None:
+        return None
+    try:
+        home, _how = resolve_home(flag)
+    except SystemExit:
+        return None
+    try:
+        relay_state = load_config(home).relay_state
+    except (ConfigError, OSError):
+        relay_state = None
+    return Path(relay_state) if relay_state else home / "loom"
+
+
 def cmd_brnrd_disconnect(args):
     from .gates import cloud
 
-    removed = cloud.disconnect(_brr_dir())
-    if removed:
-        print(
-            "[brnrd] Disconnected this daemon from brnrd. "
-            "Local home, knowledge, and repo registration were kept."
-        )
-    else:
+    brr_dir = _maybe_brr_dir()
+    extra = tuple(d for d in (_loom_gate_dir(getattr(args, "home", None)),) if d is not None)
+    revoked: list[str] = []
+    unrevoked = False
+    for state_dir in cloud.gate_dirs(brr_dir, *extra):
+        if cloud.runtime.state_path(state_dir, "cloud").exists():
+            names = cloud.revoke(state_dir)
+            if names is None:
+                unrevoked = True
+            else:
+                revoked += names
+    removed = cloud.disconnect(brr_dir, state_dirs=extra)
+    if not removed:
         print("[brnrd] This daemon is not connected to brnrd.")
+        return
+    print(
+        "[brnrd] Disconnected this daemon from brnrd. "
+        "Local home, knowledge, and repo registration were kept."
+    )
+    if revoked:
+        print(f"[brnrd] brnrd revoked its token and took {', '.join(revoked)} offline.")
+    if unrevoked:
+        print(
+            "[brnrd] brnrd did not confirm the token was revoked; it may still be live there. "
+            "Deleting the account on the brnrd.dev dashboard revokes every token."
+        )
 
 
 def _fmt_ts(epoch: float) -> str:

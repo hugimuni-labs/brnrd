@@ -59,6 +59,7 @@ export default defineConfig({
             { label: 'Models & quota', slug: 'guides/models' },
             { label: 'No always-on machine? Use a VPS', slug: 'guides/vps-install' },
             { label: 'Troubleshooting', slug: 'guides/troubleshooting' },
+            { label: 'Leaving brnrd', slug: 'guides/leaving' },
           ],
         },
         { label: 'Security & privacy', slug: 'security' },

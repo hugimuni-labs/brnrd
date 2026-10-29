@@ -903,18 +903,43 @@ def connect(brr_dir: Path, *, brnrd_url: str, daemon_name: str = _DEFAULT_DAEMON
     return state
 
 
-def disconnect(brr_dir: Path) -> bool:
+def revoke(state_dir: Path) -> list[str] | None:
+    """Ask brnrd to retire this gate's token; the daemon names it took offline.
+
+    None when there is no token here or brnrd did not answer: the local
+    files go either way, and the caller says the token may still be live.
+    """
+    state = _load_state_from_dir(state_dir)
+    if not state.get("token") or not state.get("brnrd_url"):
+        return None
+    try:
+        result = _request(state["brnrd_url"], "POST", "/v1/daemons/revoke",
+                          token=state["token"], retry=False)
+    except BrnrdAuthError:
+        return []  # already revoked: another directory held the same token
+    except RuntimeError:
+        return None
+    return [str(name) for name in result.get("daemons") or []]
+
+
+def gate_dirs(brr_dir: Path | None, *extra: Path) -> list[Path]:
+    """Every directory that may hold this machine's cloud-gate identity."""
+    dirs = [*extra] + ([_state_dir(brr_dir), brr_dir] if brr_dir is not None else [])
+    return list(dict.fromkeys(dirs))
+
+
+def disconnect(brr_dir: Path | None, *, state_dirs: tuple[Path, ...] = ()) -> bool:
     """Remove this daemon's local managed-gate identity.
 
     The account home, its repo registry, knowledge, and resident memory are
     deliberately not removed: disconnect severs the transport, not the
     durable work. Check both the account-owned state directory and the legacy
     repo-local one so the command also repairs installations that have not
-    completed the gate-state migration.
+    completed the gate-state migration. ``state_dirs`` adds others, such as
+    a loom home's gate directory.
     """
-    state_dirs = {_state_dir(brr_dir), brr_dir}
     removed = False
-    for state_dir in state_dirs:
+    for state_dir in gate_dirs(brr_dir, *state_dirs):
         for path in (
             runtime.state_path(state_dir, "cloud"),
             runtime.health_path(state_dir, "cloud"),
