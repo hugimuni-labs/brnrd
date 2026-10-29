@@ -829,6 +829,9 @@ def _spawn(room: Path, argv: list[str], shell: str, thread: str) -> tuple[subpro
     return proc, log
 
 
+FORCE_LOCK_WAIT = 30.0
+
+
 def _start(home: Home, strand: str, thread: str, gen: int,
            bodies: dict[str, Body], facts: list[Fact], choice=None, *, force=False,
            repos: list[tuple[str, str]] | None = None, reader=None) -> list[Fact]:
@@ -836,10 +839,17 @@ def _start(home: Home, strand: str, thread: str, gen: int,
     room = home.room(strand)
     room.mkdir(parents=True, exist_ok=True)
     with (room / ".starting").open("a") as lock:
-        try:
-            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except BlockingIOError:
-            return facts
+        # The loop only tries: its next tick comes. An operator's force waits
+        # out the loop's own pass over the same paced start, then rechecks below.
+        deadline = time.monotonic() + (FORCE_LOCK_WAIT if force else 0)
+        while True:
+            try:
+                fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except BlockingIOError:
+                if time.monotonic() >= deadline:
+                    return facts
+                time.sleep(0.05)
         # Still refresh under the start lock: another caller may have moved
         # the lease. The loop reader preserves unchanged fact identities.
         current = reader.refresh(home) if reader is not None else read_facts(home)
