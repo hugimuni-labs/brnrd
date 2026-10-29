@@ -1,12 +1,15 @@
 """A recorded reset is visible and an operator can start that debt anyway."""
+import fcntl
 import json
 import sys
+import threading
 import time
 
 from brr.loom.runtime.check import violations
 from brr.loom.runtime.ledger import inject_letter
 from brr.loom.runtime.lifecycle import main_snapshot
 from brr.loom.runtime.owners import letter_owners
+from brr.loom.runtime.project import fold
 from brr.loom.runtime.selfrepo import git
 from brr.loom.runtime.verbs_threads import _threads
 from _step import Loom, wait_until, write_thread, kill_bodies
@@ -54,7 +57,20 @@ print(json.dumps({{'windows': [{{'name': 'week', 'left_pct': 0,
         assert 'operator' in row['control'] and 'threads --force work' in row['control']
         assert not letter_owners(loom.facts(), main_snapshot(loom.home))[ident].done
         assert not any(f.kind == 'attempt.ended' for f in loom.facts())
+        # The live loop takes the same start lock on its own pass over the paced
+        # start; force waits it out instead of reporting the start as taken.
+        strand = fold(loom.facts()).holder['work'][0]
+        locked = threading.Event()
+        def loop_pass():
+            with (loom.home.room(strand) / '.starting').open('a') as lock:
+                fcntl.flock(lock, fcntl.LOCK_EX)
+                locked.set()
+                time.sleep(1)
+        holder = threading.Thread(target=loop_pass)
+        holder.start()
+        locked.wait(5)
         assert _threads(['--home', str(root), '--force', 'work']) == 0
+        holder.join()
         wait_until(lambda: letter_owners(loom.facts(), main_snapshot(loom.home))[ident].done,
                    15, loom.dump)
         assert any(f.kind == 'note' and f.data.get('why') == 'forced start completed work'

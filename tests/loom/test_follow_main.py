@@ -87,6 +87,33 @@ def _run(root, until, timeout=10):
     assert not looming.errors
 
 
+def test_a_move_names_squashed_pull_requests_and_not_a_branch_s_own_commits(world):
+    # A squash lands as one parent titled "<title> (#N)"; a branch's commit with
+    # a "(#N)" of its own is not a landing on main.
+    _git(world.upstream, "switch", "-qc", "loom/other")
+    (world.upstream / "other.py").write_text("x\n")
+    _git(world.upstream, "add", "-A")
+    _git(world.upstream, "commit", "-qm", "cherry-picked fix (#9)")
+    _git(world.upstream, "switch", "-q", "main")
+    _git(world.upstream, "merge", "-q", "--no-ff", "-m", "Merge pull request #10 from o/loom/other",
+         "loom/other")
+    (world.upstream / "loom.py").write_text("v2\n")
+    _git(world.upstream, "commit", "-qam", "loom: drop the alias (#8)")
+    # A revert names the reverted pull request inside its quotes: only its own (#N) lands.
+    (world.upstream / "loom.py").write_text("v1\n")
+    _git(world.upstream, "commit", "-qam", 'Revert "loom: drop the alias (#8)" (#11)')
+    (world.upstream / "loom.py").write_text("v2\n")
+    _git(world.upstream, "commit", "-qam", 'Revert "Revert "loom: drop the alias (#8)" (#11)"')
+    _git(world.upstream, "push", "-q", "origin", "main")
+    world.tip = _git(world.upstream, "rev-parse", "HEAD")
+    _run(world.root, lambda: world.execs)
+    assert _git(world.source, "rev-parse", "HEAD") == world.tip
+    _run(world.root, lambda: [f for f in read_facts(Home(world.root)) if f.kind == "loom.moved"])
+    [moved] = [f for f in read_facts(Home(world.root)) if f.kind == "loom.moved"]
+    assert moved.data["merges"] == ["#7", "#10", "#8", "#11"]
+    assert update.moved_text(moved) == f"loom moved {world.old[:8]} → {world.tip[:8]}, loaded #7, #10, #8, #11"
+
+
 def test_a_green_tip_fast_forwards_re_execs_and_the_next_start_says_what_loaded(world):
     _run(world.root, lambda: world.execs)
     assert _git(world.source, "rev-parse", "HEAD") == world.tip
@@ -231,6 +258,25 @@ def test_a_run_with_a_conclusion_is_done_though_its_status_says_in_progress(monk
     assert checks.verdict(url, "abc") == "pending"
     runs.append({"status": "in_progress", "conclusion": "failure"})
     assert checks.verdict(url, "abc") == "red"
+
+
+def test_a_failure_older_than_a_live_run_is_a_rerun_and_reads_pending(monkeypatch):
+    # #2506 on 2026-10-29: attempt 1's "Backend tests" failed at 01:42, the shard reran from 01:44.
+    import io
+    runs = [{"name": "Backend tests", "status": "completed", "conclusion": "failure",
+             "started_at": "2026-10-29T01:42:00Z", "completed_at": "2026-10-29T01:42:03Z"},
+            {"name": "Backend shard 3/3", "status": "in_progress", "conclusion": None,
+             "started_at": "2026-10-29T01:44:05Z", "completed_at": None}]
+    monkeypatch.setattr(update.urllib.request, "urlopen",
+                        lambda req, timeout: io.BytesIO(json.dumps({"check_runs": runs}).encode()))
+    checks = update.GitHubChecks("t")
+    monkeypatch.setattr(checks, "_token", lambda: "t")
+    url = "https://github.com/o/r.git"
+    assert checks.verdict(url, "abc") == "pending"
+    runs[1]["started_at"] = "2026-10-29T01:40:00Z"  # still running from before the failure: fail fast
+    assert checks.verdict(url, "abc") == "red"
+    runs[1]["started_at"] = None  # queued, not started: newer than any failure
+    assert checks.verdict(url, "abc") == "pending"
 
 
 def _at(minutes):

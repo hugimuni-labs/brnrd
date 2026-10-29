@@ -1,5 +1,4 @@
 <script lang="ts">
-	import { onMount } from 'svelte';
 	import { resolve } from '$app/paths';
 	import { DOCS_URL, GITHUB_REPO } from '$lib/publicStats';
 	import { isComplete as legalNoticeIsComplete } from '$lib/legalNotice';
@@ -24,13 +23,19 @@
 	let loginContext = $state<LoginContext | null>(null);
 	const legalNoticeReady = legalNoticeIsComplete();
 
-	onMount(async () => {
-		const [doors, login] = await Promise.all([
-			fetchDoorStatus(),
-			fetchLoginContext(null).catch(() => null)
-		]);
-		doorStatuses = doors;
-		loginContext = login;
+	// `/` draws this page while it is still probing for a board (routes/+page.svelte), so its fetches wait for
+	// `live`: a reader whose board answers never touches the app's endpoints.
+	let { live = true }: { live?: boolean } = $props();
+	let fetched = false;
+	$effect(() => {
+		if (!live || fetched) return;
+		fetched = true;
+		Promise.all([fetchDoorStatus(), fetchLoginContext(null).catch(() => null)]).then(
+			([doors, login]) => {
+				doorStatuses = doors;
+				loginContext = login;
+			}
+		);
 	});
 
 	let signinHref = $derived(resolveSigninHref(loginContext, resolve('/login')));

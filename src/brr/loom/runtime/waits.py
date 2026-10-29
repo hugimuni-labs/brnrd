@@ -14,8 +14,8 @@ Conditions, one row each in ``KINDS``, resolve on any terminal outcome:
 
 - ``pr:<owner>/<repo>#<n>``: merged or closed.
 - ``ci:<owner>/<repo>@<sha>``: every check run concluded, green or red.
-- ``wish:<w-id>``: delivered, accepted or dropped since the park, or a letter
-  answers or cites it (how a person answers an ask).
+- ``wish:<w-id>``: delivered, accepted, dropped or answered since the park, or
+  a person's letter cites it. A body's own &ref is progress, never an outcome.
 - ``letter:<id>``: a letter replies to it.
 - ``at:<instant>``: the clock passes it.
 - ``file:<path>``: the path holds something. A body that starts a long command
@@ -47,7 +47,7 @@ EVERY = 60
 #: Seconds between polls of every open pull request a thread claimed (``loom/prs.json``).
 PRS_EVERY = 300
 #: Wish states a ``wish:`` wait resolves on.
-SETTLED = {"delivered", "accepted", "dropped"}
+SETTLED = {"delivered", "accepted", "dropped", "expired", "answered"}
 
 _PR = re.compile(r"^pr:(?:([\w.-]+/[\w.-]+))?#(\d+)$")
 _CI = re.compile(r"^ci:(?:([\w.-]+/[\w.-]+))?@([0-9a-f]{7,40})$")
@@ -161,7 +161,8 @@ def forge_wants(found: dict) -> set[str]:
             if str(read["wait"].get("on", "")).startswith(("pr:", "ci:"))}
 
 
-def _answers(facts, target: str, since: str, replied: str | None = None) -> str | None:
+def _answers(facts, target: str, since: str, replied: str | None = None,
+             citer=lambda letter: True) -> str | None:
     """A letter that replies to ``target`` at or after ``replied`` (default ``since``), or cites it after ``since``.
 
     Only the reply index reaches back past ``since``: the citation scan walks
@@ -177,7 +178,7 @@ def _answers(facts, target: str, since: str, replied: str | None = None) -> str 
     for letter in reversed(kind_facts(facts, "letter")):
         if letter.at < since:
             break
-        if letter.data.get("re") == target or target in (letter.data.get("links") or ()):
+        if letter.data.get("re") == target or (target in (letter.data.get("links") or ()) and citer(letter)):
             return str(letter.data.get("id") or letter.id)
     return None
 
@@ -210,7 +211,8 @@ def outcome(wish, read, facts, found: dict, forge: dict, now: datetime) -> str |
         target = found.get(on[5:])
         if target is not None and target.state in SETTLED and target.state != wait.get("was"):
             return f"{target.id} is {target.state}"
-        answer = _answers(facts, on[5:], read["at"])
+        from .wishes import _person
+        answer = _answers(facts, on[5:], read["at"], citer=_person)
         if answer is not None:
             return f"{on[5:]} was answered by {answer}"
     elif on.startswith("letter:"):

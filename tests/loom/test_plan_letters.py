@@ -35,7 +35,7 @@ while True:
     if second:
         text = boundary.read_text()
         assert 'letters without a row' not in text and ' · plan ' not in text, text
-        Path({str(arrived)!r}).write_text(json.dumps({{'unplanned': second.id, 'planned': first.id}}))
+        ctx.handoff({str(arrived)!r}, json.dumps({{'unplanned': second.id, 'planned': first.id}}))
         break
     assert time.monotonic() < deadline
     time.sleep(.03)

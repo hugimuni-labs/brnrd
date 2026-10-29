@@ -17,6 +17,7 @@ from .pack_relay import PackRelayStore
 from .page_views import PageViewMiddleware
 from .routers import accounts, billing, config_approval, daemons, dev, github_app, pairing, render, stats, webhooks
 from .routers import dashboard as dashboard_router
+from .routers import loom as loom_router
 from .routers import machines as machines_router
 from .routers import repo_actions as repo_actions_router
 from .routers import web_auth as web_auth_router
@@ -169,7 +170,7 @@ def create_app(
     ]
     if settings.enable_dev_endpoints:
         routers.append(dev.router)
-    routers += [dashboard_router.router, machines_router.router, repo_actions_router.router, web_auth_router.router]
+    routers += [dashboard_router.router, loom_router.router, machines_router.router, repo_actions_router.router, web_auth_router.router]
     for router in routers:
         app.include_router(router)
 

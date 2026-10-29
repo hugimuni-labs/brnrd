@@ -108,7 +108,7 @@ def test_landed_seat_edit_and_molt_switch_the_successors_body(tmp_path):
     from test_lifecycle import bodies
     root = tmp_path / "home"
     init_self(root, person="test")
-    write_thread(root, "work", "Work", "work", wait="0")
+    write_thread(root, "work", "Work\n\n## Now", "work", wait="0")
     bodies(root, '''import sys
 from pathlib import Path
 from brr.loom.runtime.fakebody import Ctx

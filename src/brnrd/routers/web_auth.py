@@ -24,13 +24,13 @@ from sqlalchemy.orm import Session
 
 from brnrd import ids, oauth, terms
 from brnrd.auth import get_db
-from brnrd.models import Account, ConfigChangeRequest, PairRequest, Repo, TermsAcceptance
+from brnrd.models import Account, ConfigChangeRequest, GitHubInstallation, PairRequest, Repo, TermsAcceptance
 from brnrd.routers.accounts import SESSION_TTL, account_for_github_identity, issue_session_token
 from brnrd.routers.config_approval import decide_core as decide_config_change
-from brnrd.routers.github_app import sync_app_installations_for_account
 from brnrd.routers.pairing import (
     approve_core,
     initiator_proof_ok,
+    pair_kind,
     pair_requester,
     pair_suggested_forge,
     pair_suggested_repo_full_name,
@@ -48,6 +48,7 @@ from ._session import (
     _repos,
     _resolve_or_create_repo_for_pair,
     _safe_next,
+    _start_login_installation_sync,
     _terms_status,
 )
 
@@ -304,9 +305,15 @@ def github_login_start(request: Request, next: str = "/"):
     return resp
 
 
+# A first login has no installation rows, and the page it lands on would show
+# none: the callback waits on the sync that long, and no longer.
+LOGIN_FIRST_SYNC_WAIT_S = 2.0
+
+
 @router.get("/auth/github/callback")
 def github_login_callback(request: Request, code: str | None = None, state: str | None = None, db: Session = Depends(get_db)):
     s = request.app.state.settings
+    t0 = time.monotonic()
     expected_state = request.cookies.get(s.oauth_state_cookie)
     verifier = request.cookies.get(s.oauth_pkce_cookie)
     next_url = _safe_next(request.cookies.get(s.oauth_next_cookie, "/"))
@@ -334,20 +341,18 @@ def github_login_callback(request: Request, code: str | None = None, state: str 
             severity="error",
             status_code=502,
         )
+    t_oauth = time.monotonic()
     account = account_for_github_identity(db, identity)
+    t_account = time.monotonic()
     if identity.access_token and s.github_app_id and s.github_app_private_key_b64:
-        try:
-            sync_app_installations_for_account(
-                db,
-                s,
-                account.id,
-                user_access_token=identity.access_token,
-            )
-        except Exception as exc:
-            # Installation discovery is a convenience of login, not an
-            # authentication prerequisite.  The setup callback and manual
-            # refresh remain available if GitHub's installation view fails.
-            print(f"[brnrd] github login installation sync failed: {exc}")
+        # Installation discovery is a convenience of login, not an
+        # authentication prerequisite, so the redirect does not wait on it,
+        # except briefly on a first login (LOGIN_FIRST_SYNC_WAIT_S).
+        first = db.query(GitHubInstallation.id).filter(GitHubInstallation.account_id == account.id).first() is None
+        sync = _start_login_installation_sync(request, account.id, identity.access_token)
+        if first and sync is not None:
+            sync.join(timeout=LOGIN_FIRST_SYNC_WAIT_S)
+    t_sync = time.monotonic()
     raw = issue_session_token(db, account)
     # Authentication does not gate on the hosted-execution beta terms (#664).
     # Those terms apply "when HugiMuni SAS operates brnrd-hosted compute for
@@ -369,6 +374,13 @@ def github_login_callback(request: Request, code: str | None = None, state: str 
     resp = RedirectResponse(url=next_url, status_code=303)
     resp.set_cookie(s.session_cookie, raw, httponly=True, samesite="lax", secure=_cookie_secure(request), max_age=int(SESSION_TTL.total_seconds()))
     _clear_oauth_cookies(resp, request)
+    t_end = time.monotonic()
+    print(
+        f"[brnrd] github login callback account={account.id} ms"
+        f" oauth={(t_oauth - t0) * 1000:.0f} account={(t_account - t_oauth) * 1000:.0f}"
+        f" sync_wait={(t_sync - t_account) * 1000:.0f} session={(t_end - t_sync) * 1000:.0f}"
+        f" total={(t_end - t0) * 1000:.0f}"
+    )
     return resp
 
 
@@ -435,6 +447,7 @@ def connect_context_api(code: str, request: Request, db: Session = Depends(get_d
             "repos": [{"id": repo.id, "repo_full_name": repo.repo_full_name} for repo in repos],
             "suggested_repo_full_name": suggested,
             "suggested_forge": suggested_forge,
+            "kind": pair_kind(pair) if pair is not None else "",
             "requester": pair_requester(pair) if pair is not None else {"hostname": "", "os_user": ""},
         }
     )

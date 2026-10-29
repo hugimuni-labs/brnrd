@@ -16,7 +16,7 @@ from brr.pause import read_paused_record
 from .home import atomic_write, home_of_room, mint
 from .pausing import describe
 from .waits import GRAMMAR
-from .port import Boundary, parse_boundary
+from .port import Boundary, answered, parse_boundary
 
 _HEADER_LINE = re.compile(r"<!-- port (\S+) gen (\d+) · owed[^>]*-->")
 _ITEM_LINE = re.compile(r"^- (\S+) · from \S+ · reply \S+")
@@ -115,6 +115,8 @@ def _ageless(line: str) -> str:
 def _slot(key: str) -> str:
     if key.startswith("opened: "):
         return " ".join(key.split()[:2])
+    if key.startswith("asks: "):
+        return "asks:"
     return "idle:" if key.startswith("idle: ") else key
 
 
@@ -157,7 +159,7 @@ def _news(text: str, state: dict, plan_changed: bool) -> tuple[str, list[str], l
             continue
         status = unit[0].startswith("status:")
         key = ("status: · plan " + unit[0].partition(" · plan ")[2] if status
-               else _ageless(unit[0]) if unit[0].startswith("opened: ") else "\n".join(unit))
+               else _ageless(unit[0]) if unit[0].startswith(("opened: ", "asks: ")) else "\n".join(unit))
         said.append(key)
         if (plan_changed if status else key not in before):
             body.extend(unit)
@@ -361,40 +363,60 @@ def _note_tool(room: Path, stdin_text: str) -> None:
     )
 
 
-# Every tool call re-reads the whole context. One body held ~180k for 441
-# calls in a day, most of a five-hour window, and could not see it.
-WEIGHT_STEP = 50_000
-
-
-def _weight(room: Path, stdin_text: str, state: dict) -> str:
-    """Once per 50k band: this body's context against what it booted with."""
+def _shed(room: Path, fn, *args, default=None):
+    """A shed step that fails says nothing: logged apart, since jack-errors.log
+    taints the strand, and a broken tally must not end a held body."""
     try:
-        path = Path(json.loads(stdin_text).get("transcript_path") or "")
-        size = path.stat().st_size
-        with path.open("rb") as handle:
-            head = handle.read(400_000).decode(errors="replace").splitlines()
-            handle.seek(max(size - 200_000, 0))
-            tail = handle.read().decode(errors="replace").splitlines()
-    except (OSError, ValueError, AttributeError, TypeError):
-        return ""
-    boot, now = _context(head), _context(reversed(tail))
-    band = now // WEIGHT_STEP
-    if band < 2 or band == state.get("weight_band"):
-        return ""
-    _set_state(room, weight_band=band)
-    return (f"context: {now // 1000}k tokens, re-read on every call; this body booted at "
-            f"{boot // 1000}k. Molt at the next handover point.")
-
-
-def _context(lines) -> int:
-    for line in lines:
+        return fn(*args)
+    except Exception:
         try:
-            usage = json.loads(line)["message"]["usage"]
-        except (ValueError, KeyError, TypeError):
-            continue
-        return sum(int(usage.get(key) or 0) for key in
-                   ("input_tokens", "cache_read_input_tokens", "cache_creation_input_tokens"))
-    return 0
+            with (room / "port" / "shed-errors.log").open("a") as handle:
+                handle.write(traceback.format_exc())
+        except OSError:
+            pass
+        return default
+
+
+def _shed_news(room: Path, stdin_text: str, state: dict) -> str:
+    """The shed numbers once two of the three bars are crossed, said when they change."""
+    from . import shed
+    from .config import load_config
+    if not state.get("turns"):
+        return ""
+    said = shed.news(state, int(load_config(home_of_room(room).root).shed_excess), shed.pace(room))
+    if not said or said == state.get("shed_said"):
+        return ""
+    _set_state(room, shed_said=said)
+    return said
+
+
+def _turn(room: Path, stdin_text: str) -> None:
+    """At a stop: the turn that ends here, ``[acted, context]``, joins the tally."""
+    from . import shed
+    state = _state(room)
+    if not state.get("turn_open"):
+        return
+    heads = shed.heads(room)
+    moved = [name for name, head in heads.items() if head != (state.get("heads") or {}).get(name)]
+    did = [*shed.acts(room, float(state.get("turn_at") or 0)), *(f"{name} HEAD" for name in moved)]
+    acted = bool(did)
+    boot, now = shed.contexts(stdin_text, state.get("boot"))
+    # Acts since the README last changed, letters aside (routing is not state).
+    readme = shed.readme_hash(room, os.environ.get("BRNRD_THREAD") or "")
+    if readme != state.get("readme_seen"):
+        # Rewritten this turn: only the acts written after it are left behind.
+        thread = os.environ.get("BRNRD_THREAD") or ""
+        did, kept = shed.acts(room, shed.readme_mtime(room, thread)), []
+    else:
+        kept = state.get("readme_acts") or []
+    unread = [*kept, *(x for x in did if x != "letter" and x not in kept)]
+    _set_state(room, turns=[*(state.get("turns") or []), [acted, now]], heads=heads,
+               boot=boot or state.get("boot"), turn_open=False, readme_seen=readme, readme_acts=unread)
+
+
+def _opened(room: Path) -> None:
+    """A stop that returns work opens the next turn."""
+    _set_state(room, turn_open=True, turn_at=time.time())
 
 
 # A delegate's report in a letter head; the whole report stays in the room.
@@ -588,10 +610,13 @@ def execute(event: str, room: Path, stdin_text: str) -> str:
                                                  "additionalContext": guarded}}) if guarded else ""
         # A call begun before this is not the body's current one (pausing.py):
         # a background call returns at once, so a boundary always follows it.
-        _set_state(room, stop_blocks=0, boundary_at=time.time(), held_at=None)
+        _set_state(room, stop_blocks=0, boundary_at=time.time(), held_at=None, turn_open=True)
         (room / "port" / DISPLACED).unlink(missing_ok=True)
     elif event == "start":
-        _set_state(room, boundary_at=time.time())
+        from .shed import heads, readme_hash
+        _set_state(room, boundary_at=time.time(), turn_open=True, turn_at=time.time(),
+                   heads=_shed(room, heads, room, default={}),
+                   readme_seen=_shed(room, readme_hash, room, os.environ.get("BRNRD_THREAD") or ""))
     text = _boundary_text(room)
     parsed = parse_boundary(text)
     opened = [[line.split()[1], line.split()[2], _ageless(line.rpartition(" · owed ")[2])]
@@ -600,6 +625,7 @@ def execute(event: str, room: Path, stdin_text: str) -> str:
                  if line.startswith("status:")), "")
     face = next((line for line in text.splitlines() if line.startswith("face? ")), "")
     moved = next((line for line in text.splitlines() if line.startswith("moved: ")), "")
+    band = _ageless(next((line for line in text.splitlines() if line.startswith("asks: ")), ""))
     if event == "start":
         broken = _guards(room)[1]
         if broken:
@@ -610,7 +636,7 @@ def execute(event: str, room: Path, stdin_text: str) -> str:
             return ""
         if parsed.ids:
             _shown(room, parsed)
-        _set_state(room, opened=opened, plan=plan, face=face, moved=moved,
+        _set_state(room, opened=opened, plan=plan, face=face, moved=moved, band=band,
                    **dict(zip(("said", "told"), _news(text, {}, True)[1:])))
         return text if text.endswith("\n") else text + "\n"
     if event == "post":
@@ -622,7 +648,9 @@ def execute(event: str, room: Path, stdin_text: str) -> str:
         face_changed = bool(face) and face != state.get("face", "")
         # The loom's code moved under a seated body: said once, at the next post.
         moved_changed = bool(moved) and moved != state.get("moved", "")
-        weight = _weight(room, stdin_text, state)
+        # An ask turning moved or stale is the cue to raise or drop it (requests R4).
+        band_changed = bool(band) and band != state.get("band", "")
+        weight = _shed(room, _shed_news, room, stdin_text, state, default="")
         paused = describe(read_paused_record(room / "port"))
         hook = _hook_event(stdin_text)
         # Past its allocation a strand is told at every boundary, not once.
@@ -636,12 +664,12 @@ def execute(event: str, room: Path, stdin_text: str) -> str:
         news, said, told = _news(text, state, plan_changed)
         _set_state(room, said=said, told=told)
         if not parsed.ids and not settled_changed and not opened_changed and not plan_changed \
-                and not face_changed and not moved_changed:
+                and not face_changed and not moved_changed and not band_changed:
             news = ""
         if not news:
             if parsed.ids:
                 _shown(room, parsed)
-            _set_state(room, opened=opened, plan=plan, face=face, moved=moved)
+            _set_state(room, opened=opened, plan=plan, face=face, moved=moved, band=band)
             if parsed.settled is not None:
                 _set_state(room, settled=parsed.settled)
             if not weight and not paused and not over and not guarded and not left:
@@ -663,33 +691,16 @@ def execute(event: str, room: Path, stdin_text: str) -> str:
             _set_state(room, settled=parsed.settled)
         if parsed.ids:
             _shown(room, parsed)
-        _set_state(room, opened=opened, plan=plan, face=face, moved=moved)
+        _set_state(room, opened=opened, plan=plan, face=face, moved=moved, band=band)
         return _json({"hookSpecificOutput": {
             "hookEventName": hook, "additionalContext": text}})
     if _state(room).get("molted") or parsed.settled is not None:
         return ""
-    refused = _stop_block(room, text, plan)
-    if refused:
-        return refused
-    return _poll(room, stdin_text)
-
-
-def answered(room: Path) -> set[str]:
-    """Letter ids a reply or note in this room's port/out already answers.
-
-    The loom drains port/out on its tick; until it does, the boundary still
-    names those letters as owed, and a slow loom made a stop re-show letters
-    the body had answered for minutes (stop-list)."""
-    from .port import PortError, parse_frontmatter
-    found = set()
-    for path in (room / "port" / "out").glob("*.md"):
-        try:
-            fields = parse_frontmatter(path.read_text())
-        except (PortError, OSError):
-            continue
-        if fields.get("kind") in {"letter", "note"} and fields.get("re"):
-            found.add(fields["re"])
-    return found
+    _shed(room, _turn, room, stdin_text)
+    out = _stop_block(room, text, plan) or _poll(room, stdin_text)
+    if out:
+        _opened(room)
+    return out
 
 
 def _letter_miss(room: Path, parsed: Boundary, done: set[str]) -> str:
@@ -701,7 +712,7 @@ def _letter_miss(room: Path, parsed: Boundary, done: set[str]) -> str:
         rows.append(f"- {letter.id}: brnrd runtime send --re {letter.id} --to thread:{thread} --note \"<what you did>\""
                     if letter.reply == "-" else
                     f"- {letter.id}: brnrd runtime send --re {letter.id} --to {letter.reply} \"<answer>\"")
-    return "owed letters, each with its reply (a reply already in port/out counts):\n" + "\n".join(rows) if rows else ""
+    return "owed letters, each with its reply (a reply or --note already sent counts, drained or not):\n" + "\n".join(rows) if rows else ""
 
 
 STOP = "the stop holds on {n}; do each, then stop. This list comes back whole at every stop until it is empty."
@@ -723,23 +734,33 @@ def _stop_block(room: Path, text: str, plan: str) -> str:
         return ""
     text, lefts = _settled_render(room, text)
     parsed = parse_boundary(text)
+    top = next((line for line in text.splitlines() if line.startswith("top? ")), "")
+    tops = re.findall(r"(\S+) says \"", top)
     if parsed.settled is not None:
         return ""
     sections = [
         _letter_miss(room, parsed, answered(room)),
         _left(room, True).rstrip("\n"),
         LEFT.format(named=" · ".join(f"{ident} ({why})" for ident, why in lefts)) if lefts else "",
+        TOP.format(line=top) if top else "",
         _end_miss(room, plan),
         _guard_miss(room),
         _kept_miss(room),
     ]
     sections = [section for section in sections if section]
     state = _state(room)
+    if not sections:
+        from .shed import ask
+        due, record = _shed(room, ask, room, state, os.environ.get("BRNRD_THREAD") or "", default=("", {}))
+        if record:
+            _set_state(room, **record)
+        sections = [due or _readme_miss(room, state)]
+        sections = [section for section in sections if section]
     count = int(state.get("stop_blocks") or 0)
     seen = "\n\n".join(sections)
     if (count >= 3) if _hand() else (count and seen == state.get("stop_said")):
         # Stopped again with nothing done since the same list: let it through.
-        _asked(room, parsed, [ident for ident, _ in lefts])
+        _asked(room, parsed, [ident for ident, _ in lefts], tops)
         return ""
     known = _known_miss(room)
     if not sections and not known:
@@ -767,6 +788,26 @@ Restate each one's whole list:
 - brnrd runtime wish <w-id> --left "<step>" --left "<step>"   (--left same when nothing moved)
 - or a park: wish <w-id> --read "waiting: <on what>"; a delivery: --result <kind>:<ref> --line "<what>" --deliver"""
 
+TOP = """a letter of theirs says an order word and no wish was put on top for it: {line}
+- brnrd runtime wish <w-id> --top <letter>   (the wish it puts first)
+- or stop again: the order did not change"""
+
+README = """before resting: since threads/{thread}/README.md last changed this body did {did}. Any end can
+come while it rests, and the README is what its successor boots into. Rewrite it to the current state
+(a decision with its why, `## Now`, a done row cut to its receipt; never a log line) and land it with
+`brnrd runtime send-self --room .`; or stop again: it still is."""
+
+
+def _readme_miss(room: Path, state: dict) -> str:
+    """At a resting stop, once per README version that acts left behind (handover design §3)."""
+    did = state.get("readme_acts") or []
+    thread = os.environ.get("BRNRD_THREAD") or ""
+    if not did or not thread:
+        return ""
+    _set_state(room, readme_acts=[])
+    return README.format(did=", ".join(did), thread=thread)
+
+
 # Long enough for the loom to render a fact written just before the stop.
 LEFT_GRACE = 3.0
 
@@ -792,10 +833,10 @@ def _settled_render(room: Path, text: str) -> tuple[str, list[tuple[str, str]]]:
                   if ident not in pending]
 
 
-def _asked(room: Path, parsed: Boundary, owed: list[str]) -> None:
-    """A stop let through with lefts still owed: a ``left.asked`` fact through the
-    port, after which the line drops them and the wake shows them stale."""
-    if not owed:
+def _asked(room: Path, parsed: Boundary, owed: list[str], tops: list[str] = ()) -> None:
+    """A stop let through with lefts or rank words still owed: a ``left.asked`` fact
+    through the port, after which the lines drop them and the wake shows them stale."""
+    if not owed and not tops:
         return
     stem = mint(5)
     atomic_write(room / "port" / "out" / f"asked-{stem}.md", (
@@ -803,7 +844,8 @@ def _asked(room: Path, parsed: Boundary, owed: list[str]) -> None:
         "kind: left-asked\n"
         f"id: {parsed.strand or room.name}/{stem}\n"
         f"wishes: {' '.join(owed)}\n"
-        "---\n"))
+        + (f"letters: {' '.join(tops)}\n" if tops else "")
+        + "---\n"))
 
 
 def _rendered_before_ledger(room: Path) -> bool:

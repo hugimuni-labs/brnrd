@@ -41,9 +41,12 @@ export default defineConfig({
 			// deployed in the same release would break every client-only route's
 			// bootstrap shell (backend keeps looking for 'index.html'). See
 			// /tmp/brnrd-unfurl.md for the precise two-file fix this needs.
+			// The board takes a newer build while it is open (Board.svelte, `updated`); 60 s is board.html's cadence.
+			version: { pollInterval: 60_000 },
+			// The loom builds into a fresh dir and swaps it in only once the build succeeds (brr loom/runtime/spabuild.py).
 			adapter: adapter({
-				pages: 'build',
-				assets: 'build',
+				pages: process.env.BRNRD_SPA_OUT || 'build',
+				assets: process.env.BRNRD_SPA_OUT || 'build',
 				fallback: '200.html',
 				precompress: false,
 				strict: true

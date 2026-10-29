@@ -6,6 +6,8 @@ machine's service manager.
 
 from __future__ import annotations
 
+import functools
+
 import plistlib
 import re
 import subprocess
@@ -874,6 +876,10 @@ def test_cli_install_writes_the_pick_once_and_a_hand_edit_wins(tmp_path, machine
     seed_config(home)
     template = (home / "loom" / "config.toml").read_text()
     monkeypatch.setattr(service, "_fuel", lambda h, shell: "session 91% week 76%" if shell == "claude" else None)
+    # gh signed out, said here: under xdist the conftest's signed-out gh once lost to a
+    # signed-in one, and converge (rightly) wrote forge_token into the template
+    from brr.loom.runtime import gates
+    monkeypatch.setattr(gates, "converge", functools.partial(gates.converge, gh=lambda: False))
     assert _brnrd("loom", "install", "--home", str(home)) == 0
     assert (home / "loom" / "config.toml").read_text() == template
     path = home / "loom" / "preferences.toml"

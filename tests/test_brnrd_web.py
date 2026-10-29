@@ -537,20 +537,32 @@ def test_github_callback_surfaces_provider_failure(client, monkeypatch):
     assert "provider down" in r.text
 
 
-def test_github_callback_discovers_only_the_authenticated_users_installations(
+def test_github_callback_redirects_before_installation_discovery_finishes(
     monkeypatch,
 ):
+    """The callback hands the user token to a background sync and redirects
+    at once: discovery is GitHub round trips per installation and repo, and
+    a login waited on all of them."""
+    import threading
+
     client = _make_client(
         github_app_id="123",
         github_app_private_key_b64="cHJpdmF0ZSBrZXk=",
     )
     synced = []
+    release = threading.Event()
+    done = threading.Event()
+
+    def slow_sync(db, settings, account_id, *, user_access_token=None):
+        release.wait(timeout=5)
+        synced.append((account_id, user_access_token, threading.current_thread()))
+        done.set()
+
     monkeypatch.setattr(
-        "brnrd.routers.web_auth.sync_app_installations_for_account",
-        lambda db, settings, account_id, *, user_access_token=None: synced.append(
-            (account_id, user_access_token)
-        ),
+        "brnrd.routers._session.sync_app_installations_for_account", slow_sync
     )
+    # A first login waits on the sync, but only up to this cap.
+    monkeypatch.setattr("brnrd.routers.web_auth.LOGIN_FIRST_SYNC_WAIT_S", 0.05)
 
     _start, callback, _seen = _login_web(
         client,
@@ -564,8 +576,93 @@ def test_github_callback_discovers_only_the_authenticated_users_installations(
     )
 
     assert callback.status_code == 303
+    assert synced == []
+    release.set()
+    assert done.wait(timeout=5), "login installation sync never ran"
     assert len(synced) == 1
     assert synced[0][1] == "ghu_login"
+    assert synced[0][2] is not threading.current_thread()
+
+
+def _login_with_token(client, monkeypatch):
+    return _login_web(
+        client,
+        monkeypatch,
+        identity=GitHubIdentity(
+            github_id=_GITHUB_ID,
+            login=_LOGIN,
+            email=_EMAIL,
+            access_token="ghu_login",
+        ),
+    )[1]
+
+
+def test_github_callback_first_login_waits_for_its_installations(monkeypatch):
+    """With no installation rows yet, the page the login lands on would show
+    none: the callback waits on the sync (capped) so the first view has them."""
+    import threading
+
+    client = _make_client(
+        github_app_id="123",
+        github_app_private_key_b64="cHJpdmF0ZSBrZXk=",
+    )
+    synced = []
+
+    def sync(db, settings, account_id, *, user_access_token=None):
+        threading.Event().wait(0.2)
+        synced.append(account_id)
+
+    monkeypatch.setattr("brnrd.routers._session.sync_app_installations_for_account", sync)
+    monkeypatch.setattr("brnrd.routers.web_auth.LOGIN_FIRST_SYNC_WAIT_S", 5.0)
+
+    callback = _login_with_token(client, monkeypatch)
+
+    assert callback.status_code == 303
+    assert len(synced) == 1
+
+
+def test_github_callback_returning_login_does_not_wait_for_sync(monkeypatch):
+    import threading
+    import time
+
+    from brnrd.models import GitHubInstallation
+
+    client = _make_client(
+        github_app_id="123",
+        github_app_private_key_b64="cHJpdmF0ZSBrZXk=",
+    )
+    release = threading.Event()
+    done = threading.Event()
+
+    def bind(db, settings, account_id, *, user_access_token=None):
+        db.add(GitHubInstallation(id="ghi_1", account_id=account_id, installation_id="1"))
+        done.set()
+
+    def slow(db, settings, account_id, *, user_access_token=None):
+        release.wait(timeout=10)
+
+    monkeypatch.setattr("brnrd.routers._session.sync_app_installations_for_account", bind)
+    monkeypatch.setattr("brnrd.routers.web_auth.LOGIN_FIRST_SYNC_WAIT_S", 10.0)
+    assert _login_with_token(client, monkeypatch).status_code == 303
+    assert done.wait(timeout=5)
+    # The first sync's thread leaves the single-flight set just after commit.
+    deadline = time.monotonic() + 5
+    while time.monotonic() < deadline:
+        from brnrd.routers import _session
+
+        with _session._GITHUB_BACKGROUND_SYNC_LOCK:
+            if not _session._GITHUB_BACKGROUND_SYNC_IN_PROGRESS:
+                break
+        time.sleep(0.01)
+
+    monkeypatch.setattr("brnrd.routers._session.sync_app_installations_for_account", slow)
+    began = time.monotonic()
+    callback = _login_with_token(client, monkeypatch)
+    elapsed = time.monotonic() - began
+    release.set()
+
+    assert callback.status_code == 303
+    assert elapsed < 3.0
 
 
 def test_connect_page_is_spa_owned(client):
@@ -620,6 +717,18 @@ def test_connect_context_names_the_computer_that_asked(client, monkeypatch):
     assert body["requester"]["hostname"] == "eves-laptop"
     # Stored trimmed and capped: it is a label on a page, not a payload.
     assert body["requester"]["os_user"].startswith("eve") and len(body["requester"]["os_user"]) == 100
+
+
+def test_connect_context_says_a_loom_pair_approves_a_computer(client, monkeypatch):
+    """A loom pairs its self repo (``local/self-<hash>``); the page approves
+    the computer and never shows that name. Only the word ``loom`` counts."""
+    _account_and_repo(client)
+    _login_web(client, monkeypatch)
+    loom = client.post("/v1/accounts/pair", json={"repo_full_name": "local/self-e40c7d", "forge": "local", "kind": "loom"}).json()
+    assert client.get(f"/v1/connect/{loom['pair_code']}").json()["kind"] == "loom"
+    other = client.post("/v1/accounts/pair", json={"repo_full_name": "Gurio/laptop", "kind": "daemon"}).json()
+    assert client.get(f"/v1/connect/{other['pair_code']}").json()["kind"] == ""
+    assert client.get("/v1/connect/BR-NOPE").json()["kind"] == ""
 
 
 def test_connect_context_reports_suggested_repo_from_pair_capabilities(client, monkeypatch):

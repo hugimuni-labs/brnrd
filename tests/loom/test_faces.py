@@ -22,7 +22,7 @@ def test_a_face_is_the_face_itself_and_the_wordmark_never_moves(raw):
 def test_a_fact_proposes_the_body_decides_a_lapse_keeps_the_last_and_a_successor_wakes_faceless(tmp_path):
     root = tmp_path / "home"
     init_self(root, person="test")
-    write_thread(root, "work", "Work", "work", wait="0")
+    write_thread(root, "work", "Work\n\n## Now", "work", wait="0")
     write_thread(root, "other", "Other", "other", wait="0")
     letter = inject_letter(root, to="thread:work", body="first ask")
     seen, woke, taken = root / "seen.json", root / "woke.json", root / "taken"
@@ -70,7 +70,7 @@ elif "carry on" not in ctx.wake():
     # The note lands through the port; a merge stamped before it would lapse at once.
     while not any(f.kind == "note" and f.by == me.by for f in read_facts(home_of_room(ctx.room))):
         time.sleep(0.05)
-    Path({str(taken)!r}).write_text("1")
+    ctx.handoff({str(taken)!r}, "1")
     for _ in range(300):
         # The body meets a proposal the way it meets a letter: at a post boundary.
         raw = ctx.jack("post").raw

@@ -4,7 +4,8 @@
 state, calls and steps, wishes, presence, fuel, every other part's hash), one ``thread/<id>`` per
 thread (its newest letters and its strands' tool tape) and ``beads`` (each item's parent and a label,
 so a client walks chains itself). ``Parts`` recomputes them on its own thread whenever the ledger or
-a room's trace moves; ``serve`` is the loopback shell over it on 127.0.0.1 (config ``board_port``).
+a room's trace moves; ``serve`` is the loopback shell over it on 127.0.0.1 (config ``board_port``), which also
+serves the SvelteKit build, so the board needs no cloud hop and no dev server.
 The cloud PUT of parts stays off until brnrd.dev stores them.
 """
 
@@ -14,6 +15,8 @@ import gzip
 import hashlib
 from collections import Counter
 import json
+import mimetypes
+import os
 import re
 import threading
 import time
@@ -32,6 +35,7 @@ from .project import fold, is_notice, projection_cache, sender_threads
 from .snapshot import _iso, assemble
 from .wishes import Say, receipt, told as told_of, waits_on, wishes
 from . import tooltrace
+from brr import emotes
 
 TICK = 0.25  # seconds between stats of the ledger and the rooms; a still home costs a few stats
 TOOLS = 120  # tool lines kept per strand
@@ -189,7 +193,7 @@ def board_state(t: dict, calls: list[dict], left: int = 0, end: tuple | None = N
             "why": f"no body, {left} open wish{'es' if left > 1 else ''} ({ended}): wake or settle", **shown}
 
 
-DONE = {"delivered", "accepted", "dropped", "declined"}
+DONE = {"delivered", "accepted", "dropped", "declined", "expired", "answered"}
 
 
 def thread_marks(threads: list[dict], told: dict, unanswered: dict[str, tuple[str, ...]]) -> dict[str, dict]:
@@ -391,6 +395,10 @@ def digest(part) -> str:
     return hashlib.sha256(json.dumps(part, sort_keys=True, separators=(",", ":")).encode()).hexdigest()[:16]
 
 
+# The rail's face per strand state, the frames a working or resting strand plays (board.html read these off board.py).
+FACES = {s: list(emotes.for_telemetry(s).frames) for s in ("idle", "running")}
+
+
 def compute(home: Home, facts, config, tools: dict, live: dict, person: str | None = None,
             typed: dict | None = None) -> dict[str, dict]:
     """Every part by name: ``index``, ``thread/<id>`` per thread, ``beads``. The index carries the others' hashes."""
@@ -418,7 +426,7 @@ def compute(home: Home, facts, config, tools: dict, live: dict, person: str | No
     hashes = {name: digest(part) for name, part in parts.items()}
     index = {"v": 1, **{k: v for k, v in snap.items() if k not in {"at", "log"}}, "wishes": counts,
              "unthreaded": [row for name, rows in wished.items() if name not in known for row in rows],
-             **_as(home, person), "parts": hashes}
+             **_as(home, person), "parts": hashes, "faces": FACES}
     parts["index"] = index
     return parts
 
@@ -573,6 +581,74 @@ class Parts:
             self.stop.wait(TICK)
 
 
+class Pusher:
+    """The parts whose hash moved, PUT to the cloud (``/v1/daemons/loom/parts``), at most once per ``EVERY`` s.
+
+    The PUT runs on its own thread, one at a time; the cloud answers the hashes it holds, so a restart or a lost
+    push resends exactly what it lacks. Batches stay under ``BATCH`` gzip bytes, the index in the last one, so a
+    reader the new index wakes finds the threads it names. Until a push succeeds again, each step raises the
+    last failure for the loop's guard.
+    """
+
+    EVERY, RETRY, BATCH = 3.0, 60.0, 3_000_000
+
+    def __init__(self, parts: Parts):
+        self.parts = parts
+        self.sent: dict[str, str] = {}
+        self.attempted: float | None = None
+        self.worker: threading.Thread | None = None
+        self.failing: tuple[Exception, object] | None = None
+
+    def step(self, config) -> None:
+        if not config.relay_state:
+            return
+        with self.parts.changed:
+            held, hashes = self.parts.parts, self.parts.hashes
+        now = time.monotonic()
+        busy = self.worker is not None and self.worker.is_alive()
+        wait = self.RETRY if self.failing else self.EVERY
+        if hashes and hashes != self.sent and not busy and (self.attempted is None or now - self.attempted >= wait):
+            self.attempted = now
+            self.worker = threading.Thread(target=self._put, args=(Path(config.relay_state), held, hashes),
+                                           name="loom-parts", daemon=True)
+            self.worker.start()
+        if self.failing is not None:
+            raise self.failing[0].with_traceback(self.failing[1])
+
+    def batches(self, held: dict, hashes: dict) -> list[bytes]:
+        """The gzip bodies of one push: every changed part once, the index last."""
+        keys = sorted(hashes)
+        moved = sorted((k for k in keys if self.sent.get(k) != hashes[k]), key=lambda k: k == "index")
+        bodies, batch, size = [], {}, 0
+        for key in moved:
+            one = len(gzip.compress(json.dumps(held[key], separators=(",", ":")).encode(), 1))
+            if batch and size + one > self.BATCH:
+                bodies.append(batch)
+                batch, size = {}, 0
+            batch[key], size = {"hash": hashes[key], "part": held[key]}, size + one
+        bodies.append(batch)
+        return [gzip.compress(json.dumps({"keys": keys, "parts": b}, separators=(",", ":")).encode(), 6)
+                for b in bodies]
+
+    def _put(self, state_dir: Path, held: dict, hashes: dict) -> None:
+        from brr.gates import cloud
+        try:
+            state = cloud._load_state_from_dir(state_dir)
+            if not state.get("brnrd_url") or not state.get("token"):
+                raise RuntimeError("cloud state has no URL or token")
+            url = state["brnrd_url"].rstrip("/") + "/v1/daemons/loom/parts"
+            headers = {"Authorization": f"Bearer {state['token']}", "Content-Type": "application/json",
+                       "Content-Encoding": "gzip"}
+            for body in self.batches(held, hashes):
+                resp = cloud._SESSION.request("PUT", url, data=body, headers=headers, timeout=60)
+                if not 200 <= resp.status_code < 300:
+                    raise RuntimeError(f"PUT /v1/daemons/loom/parts -> {resp.status_code}: {resp.text[:200]}")
+                self.sent = dict(resp.json().get("hashes") or {})
+            self.failing = None
+        except Exception as exc:
+            self.failing = (exc, exc.__traceback__)
+
+
 def person_channel(home: Home, person: str | None) -> tuple[str, str]:
     """``(instance, user)``: the person's first direct channel on an enabled connector, from people/*/channels.toml."""
     return person_of(home, person)[1:]
@@ -592,7 +668,35 @@ def person_of(home: Home, person: str | None) -> tuple[str, str, str]:
     raise LookupError("no person with a direct channel on an enabled connector")
 
 
-def handler(parts: Parts, port: int):
+def spa_root() -> Path | None:
+    """The SvelteKit build the loopback serves: ``BRNRD_FRONTEND_DIR`` (as the cloud's ``brnrd.spa``), else the
+    checkout's ``src/frontend/build``; ``None`` until ``npm run build`` has written one. Read per request, so a
+    rebuild lands without a re-exec."""
+    configured = os.environ.get("BRNRD_FRONTEND_DIR")
+    root = Path(configured).expanduser() if configured else Path(__file__).resolve().parents[3] / "frontend" / "build"
+    return root.resolve() if root.is_dir() else None
+
+
+def spa_file(root: Path, url_path: str) -> Path | None:
+    """What a GET of ``url_path`` reads from the build: the file, its prerendered ``<path>.html`` or ``<path>/index.html``,
+    else the ``200.html`` shell (the client router owns the path), but never the shell under ``_app/``, where every
+    URL is the build's own and a missing chunk must 404 for SvelteKit's stale-build recovery. Nothing outside ``root``."""
+    rel = url_path.lstrip("/")
+    candidate = (root / rel).resolve()
+    if candidate.is_relative_to(root):
+        if candidate.is_file():
+            return candidate
+        if candidate != root and (sibling := candidate.with_name(candidate.name + ".html")).is_file():
+            return sibling
+        if (child := candidate / "index.html").is_file():
+            return child
+    if rel == "_app" or rel.startswith("_app/"):
+        return None
+    shell = root / "200.html"
+    return shell if shell.is_file() else None
+
+
+def handler(parts: Parts, port: int, spa=spa_root):
     hosts = {f"127.0.0.1:{port}", f"localhost:{port}"}
     origins = {f"http://{host}" for host in hosts}
 
@@ -640,7 +744,31 @@ def handler(parts: Parts, port: int):
                     cut = window(part)
                     return self._json(cut, digest(cut))
                 return self._json(part, hashes[path])
+            if not url.path.startswith("/v1/"):
+                return self._file(url.path)
             self.send_error(HTTPStatus.NOT_FOUND)
+
+        def _file(self, url_path: str):
+            root = spa()
+            found = spa_file(root, url_path) if root else None
+            if found is None:
+                self.send_error(HTTPStatus.NOT_FOUND, "no SPA build" if root is None else None)
+                return
+            raw = found.read_bytes()
+            kind = {".js": "text/javascript", ".mjs": "text/javascript", ".css": "text/css", ".html": "text/html",
+                    ".json": "application/json", ".svg": "image/svg+xml", ".woff2": "font/woff2"}.get(found.suffix)
+            kind = kind or mimetypes.guess_type(found.name)[0] or "application/octet-stream"
+            self.send_response(HTTPStatus.OK)
+            self.send_header("Content-Type", kind + ("; charset=utf-8" if kind.startswith("text/") else ""))
+            # hashed chunks never change under one name; every page points at one build's chunks, so it revalidates
+            immutable = url_path.startswith("/_app/immutable/")
+            self.send_header("Cache-Control", "public, max-age=31536000, immutable" if immutable else "no-cache")
+            if len(raw) > 4096 and kind != "font/woff2" and "gzip" in (self.headers.get("Accept-Encoding") or ""):
+                raw = gzip.compress(raw, 5)
+                self.send_header("Content-Encoding", "gzip")
+            self.send_header("Content-Length", str(len(raw)))
+            self.end_headers()
+            self.wfile.write(raw)
 
         def do_POST(self):
             # A write needs our own Host (DNS rebinding), our own Origin when a browser sends one, and a
@@ -694,11 +822,12 @@ def handler(parts: Parts, port: int):
     return Handler
 
 
-def serve(parts: Parts, port: int) -> ThreadingHTTPServer:
-    """The loopback shell: GET ``/v1/loom/{index,thread/<id>,beads,events}``, POST ``/v1/loom/letters``, on 127.0.0.1."""
-    server = ThreadingHTTPServer(("127.0.0.1", port), handler(parts, port))
+def serve(parts: Parts, port: int, spa=spa_root) -> ThreadingHTTPServer:
+    """The loopback shell: GET ``/v1/loom/{index,thread/<id>,beads,events}``, POST ``/v1/loom/letters``, and every
+    other GET outside ``/v1/`` from the SPA build ``spa()`` names (its ``/`` is the board), on 127.0.0.1."""
+    server = ThreadingHTTPServer(("127.0.0.1", port), handler(parts, port, spa))
     server.daemon_threads = True
     if port == 0:  # a test's free port: the Host check needs the bound one
-        server.RequestHandlerClass = handler(parts, server.server_address[1])
+        server.RequestHandlerClass = handler(parts, server.server_address[1], spa)
     threading.Thread(target=server.serve_forever, name="board-http", daemon=True).start()
     return server

@@ -4,7 +4,7 @@ import { getContext, setContext } from 'svelte';
 import { SvelteSet } from 'svelte/reactivity';
 import { BASE, getJSON, Store, type Beads } from '../parts.ts';
 import type { Letter, Model } from '../types.ts';
-import { normalize, resolveRef, timeline, type Timeline } from '../bead.ts';
+import { normalize, panelIds, resolveRef, timeline, type Timeline } from '../bead.ts';
 import { armedVerdict, correctDraft, verdictLetter } from '../calls.ts';
 import { refTokens } from '../text.ts';
 
@@ -27,7 +27,9 @@ export class Board {
 	grown = new SvelteSet<string>();
 	cunfold = $state(false);
 	hovered = $state<string | null>(null);
+	// the selected letter and the column it was pressed in (the same letter sits in the inbox and its thread)
 	sel = $state<string | null>(null);
+	selCol = $state<string | null>(null);
 	// the bead sheet
 	beadId = $state<string | null>(null);
 	beadHist = $state<string[]>([]);
@@ -37,8 +39,14 @@ export class Board {
 	armed = $state<string | null>(null);
 	force = $state(false);
 	sendError = $state('');
+	// a newer build is out (SvelteKit's version poll); the page takes it unless the box holds a draft in hand
+	newer = $state(false);
+	writing = $state(false);
 	typedBy = '';
 	now = $state(Date.now());
+	// the loom clock: when the index last came back whole (board.html read the snapshot's `at`; the index part drops
+	// `at` so its hash moves only with the board)
+	heard = $state('');
 
 	constructor(get: (path: string) => Promise<unknown> = getJSON) {
 		this.store = new Store(get);
@@ -79,9 +87,28 @@ export class Board {
 					this.pending = this.pending.filter((p) => !have.has(p.id));
 				if (this.beads && !this.store.beads) this.beads = await this.store.loadBeads();
 			}
+			// eslint-disable-next-line svelte/prefer-svelte-reactivity -- a temporary, not state
+			this.heard = new Date().toISOString();
 			this.error = '';
 		} catch (e) {
 			this.error = String(e);
+		}
+	}
+
+	// Scrolled to the top: the 200 letters before the oldest held. One load per thread at a time; true when any came.
+	loading = new SvelteSet<string>();
+	async older(thread: string): Promise<boolean> {
+		if (this.loading.has(thread)) return false;
+		this.loading.add(thread);
+		try {
+			if (!(await this.store.older(thread))) return false;
+			this.model = this.store.model();
+			return true;
+		} catch (e) {
+			this.error = String(e);
+			return false;
+		} finally {
+			this.loading.delete(thread);
 		}
 	}
 
@@ -137,6 +164,16 @@ export class Board {
 		this.beadId = null;
 		this.beadHist = [];
 	}
+	select(id: string | null, col: string | null = null) {
+		this.sel = id;
+		this.selCol = id ? col : null;
+		if (id && !this.beads) this.store.loadBeads().then((x) => (this.beads ??= x));
+	}
+	// What the selection links to (Links.svelte draws the lines); the item alone until the beads are in.
+	linked = $derived<ReadonlySet<string>>(panelIds(this.beads || {}, this.sel));
+	isSel(id: string, col: string) {
+		return this.sel === id && this.selCol === col;
+	}
 	// Show a bead on the board: its letter or wish row scrolled into the middle of its column, or the thread's column.
 	locate(id: string) {
 		const q = id.startsWith('thread:')
@@ -144,7 +181,8 @@ export class Board {
 			: `[data-letter="${CSS.escape(id)}"],[data-wish="${CSS.escape(id)}"]`;
 		const el = document.querySelector(q);
 		el?.scrollIntoView({ block: 'center', inline: 'nearest', behavior: 'smooth' });
-		if (el?.matches('[data-letter]')) this.sel = id;
+		if (el?.matches('[data-letter]'))
+			this.select(id, el.closest<HTMLElement>('[data-column]')?.dataset.column ?? null);
 	}
 	timeline = $derived.by((): Timeline | null =>
 		this.beadId && this.beads ? timeline(this.beads, this.model, this.beadId) : null

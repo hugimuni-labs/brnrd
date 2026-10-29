@@ -37,11 +37,11 @@ def _freeze(data: dict) -> dict:
 
 
 # The loom's own file, not a strand's. One writer: the router, except a
-# strand's loom still records that strand's exit.
+# strand's loom still records that strand's exit and a person asks for a machine.
 _LOOM_KINDS = {
     "lease", "released", "attention", "router", "router.renewed",
     "speech", "speech.part", "thread.closed", "attempt.ended", "port.drained", "letter.disposed", "letter.due",
-    "loom.started", "home.migrated", "loom.degraded", "loom.recovered", "loom.moved", "lease.fenced", "self.healed",
+    "loom.started", "home.migrated", "loom.degraded", "loom.recovered", "loom.moved", "loom.pruned", "lease.fenced", "lease.handed", "machines.prefer", "self.healed",
     "library.problem", "library.cleared",
 }
 
@@ -272,7 +272,8 @@ class LedgerView(list):
             'attachments': ('source', 'blob', 'letter'),
             'reply-context': ('source', 'letter'),
             'letters-by-sender': ('letter',),
-            'wishes': ('wish', 'wish.read', 'wish.result', 'wish.verdict', 'wish.left', 'letter'),
+            'wishes': ('wish', 'wish.read', 'wish.result', 'wish.verdict', 'wish.left', 'wish.top', 'wish.pick',
+                       'letter', 'lease'),
         }
         if name == 'body-state':
             revision = len(self.by_body[inputs[:2]])

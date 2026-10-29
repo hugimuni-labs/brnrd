@@ -15,7 +15,7 @@ from brr.daemon2.facts import Fact
 from brr.daemon2.leases import Lease, LocalLeaseAuthority
 
 from .config import LoomConfig, granting_window, load_config, loom_clock
-from .home import Home, home_thread, is_channel, mint
+from .home import HOME_THREAD, Home, is_channel, mint
 from .ledger import LedgerConflict, LedgerReader, LedgerView, kind_facts
 from .project import (
     fold, holder, is_notice, reply_channels, sender_threads,
@@ -100,6 +100,33 @@ def gate_for(home: Home, config: LoomConfig):
     return GitLeaseAuthority(repo, remote, git, margin=max(config.margin, 1.0),
                              strict=config.lease_mode == "strict")
 
+
+
+def heir_of(home: Home, facts, letters, thread: str, gen: int) -> str | None:
+    """The strand whose room the next body of ``thread`` starts from, or None for main.
+
+    A molt hands its room on unless it was fresh. Any other end hands it on
+    too (handover): a displaced or crashed body's unlanded work sat in a room
+    the next fresh clone never saw. Only the thread's own last body hands on,
+    only if it ran (a wake that failed, e.g. a home over budget, left nothing
+    worth keeping and a room the repair never reached), and only while its
+    room is on this disk.
+    """
+    molts = {f.id: f for f in fold(facts).accepted if f.kind == "molt"}
+    for letter in reversed(letters):
+        molt = molts.get(letter.data.get("molt"))
+        # A molt marker on a letter to another thread would graft a foreign room.
+        if (molt is not None and molt.data.get("strand") == letter.data.get("from")
+                and molt.data.get("gen") == letter.data.get("gen")
+                and sender_threads(facts).get(letter.data.get("from")) == thread):
+            return None if molt.data.get("fresh", False) else letter.data["from"]
+    last = next((f for f in reversed(facts) if f.kind == "lease"
+                 and str(f.data.get("thread")) == thread
+                 and int(f.data.get("gen") or 0) == gen - 1), None)
+    strand = str(last.data.get("strand") or "") if last is not None else ""
+    ran = strand and any(f.kind == "body.started" and f.data.get("strand") == strand
+                         and int(f.data.get("gen") or 0) == gen - 1 for f in facts)
+    return strand if ran and (home.room(strand) / "self" / ".git").exists() else None
 
 class Router:
     def __init__(self, home: Home, config: LoomConfig | None = None):
@@ -231,7 +258,7 @@ class Router:
             if renewed is None or not self.gate.authorize(renewed):
                 return self._fence(facts, "lost" if renewed is None else "expired")
             self.gate_lease = renewed
-            return facts
+            return self._handover(facts)
         row = self.authority._read(self.authority._paths("router")[0])
         self.gate_lease = self.gate.acquire("inbox", self.home.install_id(), ttl,
                                             floor=int(row["gen"]) + 1)
@@ -254,8 +281,31 @@ class Router:
             "count": 1, "last": streak.data.get("error", ""),
         }, streak.id.replace("loom.degraded:", "loom.recovered:", 1))
 
-    def _fence(self, facts: list[Fact], why: str) -> list[Fact]:
-        gen = self.gate_lease.gen if self.gate_lease else 0
+    def _handover(self, facts: list[Fact]) -> list[Fact]:
+        """The newest ``machines.prefer`` names another install and this one
+        has not handed for it: step down, then release inbox to that install.
+
+        ``lease.handed`` is written before the release so its ledger rides
+        the push; it is what ``_fenced`` reads, so the seated bodies leave
+        without a degraded streak.
+        """
+        prefers = kind_facts(facts, "machines.prefer")
+        if not prefers:
+            return facts
+        prefer = prefers[-1]
+        to, install = prefer.data.get("install"), self.home.install_id()
+        handed = f"lease.handed:{prefer.id}"
+        if not to or to == install or any(f.id == handed for f in kind_facts(facts, "lease.handed")):
+            return facts
+        lease = self.gate_lease
+        self._step_down()
+        facts = self._keep(facts, "lease.handed", {
+            "install": install, "gen": lease.gen, "prefer": prefer.id, "to": to,
+        }, handed)
+        self.gate.release(lease, preferred=to, ttl=self.gate_ttl)
+        return facts
+
+    def _step_down(self) -> None:
         self.gate_lease = None
         self._gate_at = None
         if self.lease is not None:
@@ -263,6 +313,10 @@ class Router:
         self.lease = None
         self.granting = False
         self.caught_up = False
+
+    def _fence(self, facts: list[Fact], why: str) -> list[Fact]:
+        gen = self.gate_lease.gen if self.gate_lease else 0
+        self._step_down()
         install = self.home.install_id()
         facts = self._keep(facts, "lease.fenced", {
             "install": install, "gen": gen, "why": why,
@@ -420,17 +474,9 @@ class Router:
                 "install": home.install_id(), "router_gen": self.lease.gen,
                 "shell": choice[0], "core": choice[1], "repos": declared,
             }
-            molts = {f.id: f for f in fold(facts).accepted if f.kind == "molt"}
-            for letter in reversed(letters):
-                molt = molts.get(letter.data.get("molt"))
-                # Only this thread's own last body may hand its room on: a molt
-                # marker on a letter to another thread would graft a foreign room.
-                if (molt is not None and molt.data.get("strand") == letter.data.get("from")
-                        and molt.data.get("gen") == letter.data.get("gen")
-                        and sender_threads(facts).get(letter.data.get("from")) == thread):
-                    if not molt.data.get("fresh", False):
-                        data["parent"] = letter.data["from"]
-                    break
+            parent = heir_of(home, facts, letters, thread, gen)
+            if parent:
+                data["parent"] = parent
             try:
                 stored = _record(home, "lease", data, f"lease:{thread}:{gen}")
             except LedgerConflict:
@@ -531,7 +577,7 @@ class Router:
         """
         from .loom import _log
         from .selfrepo import SelfError, heal_home_thread
-        if home_thread(known) in known:
+        if HOME_THREAD in known:
             return True
         if not any(f.action == "unroutable" for f in active_owners(facts, main_snapshot(self.home))):
             return False
@@ -545,10 +591,10 @@ class Router:
             _log(self.home, f"home thread missing from main and not restored ({exc}); "
                             "letters are held: run `brnrd setup` again")
             return False
-        self._keep(facts, "self.healed", {"thread": home_thread(()), "commit": sha},
+        self._keep(facts, "self.healed", {"thread": HOME_THREAD, "commit": sha},
                    f"self.healed:{sha}")
-        _log(self.home, f"home thread {home_thread(())} was missing from main; restored at {sha}")
-        known.add(home_thread(()))
+        _log(self.home, f"home thread {HOME_THREAD} was missing from main; restored at {sha}")
+        known.add(HOME_THREAD)
         return True
 
     def _unrouted(self, facts: list[Fact], known: set[str]) -> list[Fact]:
@@ -563,7 +609,7 @@ class Router:
                 kind, target = "climbed", fate.thread
                 what = f"letter {letter.id} to closed thread {letter.data.get('to', '').removeprefix('thread:')} climbed here"
             else:
-                kind, target = "unroutable", home_thread(known)
+                kind, target = "unroutable", HOME_THREAD
                 target = target if target in known else None
                 what = f"letter {letter.id} addressed to {letter.data.get('to')!r}, which is not a thread on main"
             if not target and not homed:

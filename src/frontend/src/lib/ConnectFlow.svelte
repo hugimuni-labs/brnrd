@@ -9,6 +9,7 @@
 		connectPhase,
 		connectNextUrl,
 		fetchConnectContext,
+		isLoomPair,
 		loginUrlForConnect,
 		missingApprovalProof,
 		needsRepoEnable,
@@ -88,6 +89,10 @@
 	let notice = $derived(context ? statusNotice(context) : null);
 	let suggested = $derived(context?.suggested_repo_full_name || '');
 	let suggestedIsLocal = $derived(context?.suggested_forge === 'local');
+	// A loom pairs its self repo: the person approves this computer, and
+	// the repository is the loom's storage, never shown or picked.
+	let loomPair = $derived(isLoomPair(context));
+	let approvedLoom = $state(false);
 
 	async function loadContext(c: string): Promise<void> {
 		contextError = null;
@@ -164,11 +169,16 @@
 		try {
 			result = await approveConnect(code, useSuggested ? '' : repoId, approveProof);
 			if (result.ok) {
-				try {
-					const repos = await fetchRepos();
-					messengerDoors = repos.messenger_doors ?? null;
-				} catch {
-					messengerDoors = null;
+				// A loom goes on in the terminal that asked; the doors are the
+				// daemon flow's next step, not this one's.
+				approvedLoom = loomPair;
+				if (!approvedLoom) {
+					try {
+						const repos = await fetchRepos();
+						messengerDoors = repos.messenger_doors ?? null;
+					} catch {
+						messengerDoors = null;
+					}
 				}
 				approved = true;
 			}
@@ -318,7 +328,16 @@
 						carries the proof that <em>you</em> are the one who asked to pair.
 					</p>
 				{:else if canApprove(context)}
-					{#if suggested && !showPicker}
+					{#if loomPair}
+						<button
+							type="button"
+							data-testid="approve-computer"
+							class="mt-4 cursor-pointer border border-amber-700 bg-amber-950/40 px-3 py-1.5 font-mono text-[11px] tracking-wide text-amber-100 uppercase hover:border-amber-500 disabled:cursor-not-allowed disabled:border-stone-800 disabled:text-ink-mute"
+							disabled={posting}
+							onclick={() => approve(true)}
+							>{posting ? 'approving…' : 'approve this computer'}</button
+						>
+					{:else if suggested && !showPicker}
 						<!-- Primary path: the pairing already knows its repo. -->
 						<div class="subpanel mt-4 p-4">
 							<p class="font-mono text-[10px] tracking-wide text-amber-200/80 uppercase">
@@ -384,8 +403,14 @@
 			{/if}
 		{:else}
 			<!-- Phase 3: done -->
-			<p class="text-sm text-amber-200">{result?.notice ?? 'This computer is connected.'}</p>
-			<MessengerDoors doors={messengerDoors} heading="continue in another chat" />
+			{#if approvedLoom}
+				<p class="text-sm text-amber-200" data-testid="back-to-terminal">
+					Approved. Go back to your terminal: brnrd goes on there.
+				</p>
+			{:else}
+				<p class="text-sm text-amber-200">{result?.notice ?? 'This computer is connected.'}</p>
+				<MessengerDoors doors={messengerDoors} heading="continue in another chat" />
+			{/if}
 		{/if}
 	</section>
 </div>

@@ -16,6 +16,7 @@ from pathlib import Path
 
 from .config import load_config
 from .home import Home
+from .publish import read_command
 from .selfrepo import SelfError, git, pin_clone
 
 _AUTHOR = re.compile(r"^(.+?) <([^<>]+)>$")
@@ -99,7 +100,8 @@ def _mirror(home: Home, name: str, source: str) -> tuple[Path | None, str | None
     if not path.exists():
         path.parent.mkdir(parents=True, exist_ok=True)
         try:
-            git(path.parent, "clone", "--bare", "--", source, str(path))
+            args, env = read_command(home.root, source, ["clone", "--bare", "--", source, str(path)])
+            git(path.parent, *args, env=env)
         except SelfError:
             if path.exists():
                 shutil.rmtree(path, ignore_errors=True)
@@ -120,7 +122,8 @@ def _mirror(home: Home, name: str, source: str) -> tuple[Path | None, str | None
     if created:
         return path, None
     try:
-        git(path, "fetch", "origin")
+        args, env = read_command(home.root, source, ["fetch", "origin"])
+        git(path, *args, env=env)
     except SelfError:
         return path, "fetch failed"
     return path, None

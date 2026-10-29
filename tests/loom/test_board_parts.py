@@ -68,6 +68,8 @@ def test_a_wish_ships_in_its_thread_part_and_the_index_keeps_counts(parts):
     assert [w["wish"] for w in parts.parts["thread/web"]["wishes"]] == ["w-fast"]
     assert sum(index["wishes"]["web"].values()) == 1 and "docs" not in index["wishes"]
     assert "w-fast" not in json.dumps(index)  # the index carries no wish rows: a moved wish resends one thread
+    assert index["faces"]["running"][0] == index["faces"]["idle"][0] == "brnrd"  # the rail's faces, at rest on the name
+    assert len(index["faces"]["running"]) > 1
 
 
 def test_window_cuts_to_the_newest_and_reaches_back_to_a_target():
@@ -184,3 +186,55 @@ def test_a_board_letter_lands_as_the_persons_own_and_foreign_pages_cannot_send(p
         parts.stop.set()
         server.shutdown()
         server.server_close()
+
+
+def test_loopback_serves_the_spa_build_beside_the_parts(parts, tmp_path):
+    """The loom serves the SvelteKit build itself: ``/`` is the prerendered page whose probe finds the board, a client
+    route gets the 200.html shell, a hashed chunk is immutable, a missing chunk 404s, nothing leaves the build."""
+    build = tmp_path / "build"
+    (build / "_app" / "immutable").mkdir(parents=True)
+    (build / "index.html").write_text("<p>root</p>")
+    (build / "200.html").write_text("<p>shell</p>")
+    (build / "pricing.html").write_text("<p>pricing</p>")
+    (build / "_app" / "version.json").write_text('{"version":"1"}')
+    (build / "_app" / "immutable" / "a.js").write_text("export const a = 1;" * 400)
+    (tmp_path / "secret").write_text("no")
+    parts.step()
+    server = serve(parts, 0, lambda: build)
+    port = server.server_address[1]
+
+    def fetch(path, **headers):
+        conn = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
+        conn.request("GET", path, headers={"Host": f"127.0.0.1:{port}", **headers})
+        resp = conn.getresponse()
+        body = resp.read()
+        if resp.getheader("Content-Encoding") == "gzip":
+            body = gzip.decompress(body)
+        conn.close()
+        return resp.status, resp.getheader("Content-Type") or "", resp.getheader("Cache-Control") or "", body
+
+    try:
+        assert fetch("/") == (200, "text/html; charset=utf-8", "no-cache", b"<p>root</p>")
+        assert fetch("/dashboard/runs?x=1")[3] == b"<p>shell</p>"  # a client route: the router owns it
+        assert fetch("/pricing")[3] == b"<p>pricing</p>"
+        status, kind, cache, body = fetch("/_app/immutable/a.js", **{"Accept-Encoding": "gzip"})
+        assert (status, kind, cache) == (200, "text/javascript; charset=utf-8", "public, max-age=31536000, immutable")
+        assert body.startswith(b"export const a")
+        assert fetch("/_app/version.json")[:3] == (200, "application/json", "no-cache")
+        assert fetch("/_app/immutable/gone.js")[0] == 404  # never the shell: SvelteKit's stale-build recovery
+        assert fetch("/../secret")[3] != b"no" and fetch("/%2e%2e/secret")[3] != b"no"
+        assert fetch("/v1/nope")[0] == 404  # an API path is never the shell
+        assert json.loads(fetch("/v1/loom/index")[3])["parts"]  # the parts still answer beside it
+    finally:
+        parts.stop.set()
+        server.shutdown()
+        server.server_close()
+
+    nothing = serve(parts, 0, lambda: None)  # no `npm run build` yet: a plain 404, the parts unaffected
+    try:
+        conn = http.client.HTTPConnection("127.0.0.1", nothing.server_address[1], timeout=5)
+        conn.request("GET", "/", headers={"Host": f"127.0.0.1:{nothing.server_address[1]}"})
+        assert conn.getresponse().status == 404
+    finally:
+        nothing.shutdown()
+        nothing.server_close()

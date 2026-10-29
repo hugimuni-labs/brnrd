@@ -26,6 +26,8 @@ caps = cloud._repo_capabilities(self_brr)
 body = {k: caps[k] for k in ('repo_full_name', 'git_remote', 'branch', 'default_branch', 'forge')
         if isinstance(caps.get(k), str) and caps[k]}
 body.update(cloud.requester())
+# The page asks to approve this computer; the self repo stays plumbing.
+body['kind'] = 'loom'
 try:
     pair = cloud.start_pair(url, body)
 except Exception as exc:

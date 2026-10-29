@@ -477,7 +477,7 @@ while time.monotonic() < deadline:
         fetched = verb("widget", "--from", "work")
         commit = fetched.stdout.split()[1] if fetched.returncode == 0 else ""
         pushed = verb("widget", "--from", "work", "--commit", commit)
-        Path({str(landed)!r}).write_text(json.dumps({{
+        ctx.handoff({str(landed)!r}, json.dumps({{
             "bounce": letter.body, "fetched": fetched.stdout + fetched.stderr,
             "pushed": pushed.stdout + pushed.stderr, "code": pushed.returncode}}))
         ctx.send("thread:top", note="landed", re=letter.id)

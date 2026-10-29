@@ -9,6 +9,8 @@ import { answered, stack, verdictLetter } from './calls.ts';
 import { inboxCards, ledger, threadWishes } from './ledger.ts';
 import { bar, beats, liveOf, withTools } from './tape.ts';
 import { ancestors, children, moved, Store, type Beads } from './parts.ts';
+import { face, moves, seen } from './rail.ts';
+import { stamps } from './stamps.ts';
 
 const L = (id: string, at: string, o: Partial<Letter> = {}): Letter => ({
 	id,
@@ -326,6 +328,26 @@ test('parts: older letters load by before=, or back to until=', async () => {
 	equal(await store.older('web'), false);
 });
 
+test('parts: a refetched window keeps the history scrolled in before it', async () => {
+	let h = 'h',
+		newest = [L('l3', '3')];
+	const store = new Store(async (p) => {
+		if (p === '/v1/loom/index') return index({ 'thread/web': h }, [T('web')]);
+		if (p === '/v1/loom/thread/web') return part('web', newest, true);
+		return part('web', [L('l1', '1'), L('l2', '2')], false);
+	});
+	await store.sync();
+	await store.older('web');
+	h = 'h2';
+	newest = [L('l3', '3'), L('l4', '4')];
+	ok(await store.sync());
+	deepEqual(
+		store.threads.get('web')!.letters.map((l) => l.id),
+		['l1', 'l2', 'l3', 'l4']
+	);
+	equal(store.threads.get('web')!.more, false);
+});
+
 test('beads: the chain walks up to the source; children hang below oldest first', () => {
 	const b: Beads = {
 		src: [null, null, 'person:arseni', '1', 'ask'],
@@ -343,7 +365,7 @@ test('beads: the chain walks up to the source; children hang below oldest first'
 });
 
 // The bead sheet walks the beads part in the client (no /bead on the loopback): chain up to the source, what hangs below.
-import { kindOf, resolveRef, timeline } from './bead.ts';
+import { kindOf, panelIds, refOf, resolveRef, timeline, trace } from './bead.ts';
 test('a bead timeline walks the parent map up to its source and down to its children', () => {
 	const beads = {
 		'letter:tg:1': [null, null, 'person:ada', '2026-10-27T10:00:00Z', 'make the board'],
@@ -379,4 +401,98 @@ test('inbox wish view: done above, open below, oldest first in each, newest open
 		['w-done1', 'w-done2', 'w-old', 'w-new']
 	);
 	equal(g.open, 2);
+});
+
+test('a selection links to its bead panel: the chain up, the item, what hangs below; nothing beside it', () => {
+	const beads = {
+		ask: [null, 'person', 'person:ada', '2026-10-27T09:00:00Z', 'please'],
+		'w-alpha0000000': ['ask', 'wish', 'alpha', '2026-10-27T09:01:00Z', 'alpha'],
+		note: ['w-alpha0000000', 'link', 's-x', '2026-10-27T09:02:00Z', 'a note'],
+		reply: ['note', 're', 's-y', '2026-10-27T09:03:00Z', 'ok'],
+		sibling: ['ask', 're', 's-x', '2026-10-27T09:04:00Z', 'on it']
+	} as Beads;
+	deepEqual([...panelIds(beads, 'note')].sort(), ['ask', 'note', 'reply', 'w-alpha0000000']);
+	deepEqual([...panelIds(beads, 'gone')], ['gone']);
+	equal(panelIds(beads, null).size, 0);
+});
+
+test('a wish trace: stamps with a ref or a line, a result once, the verdict, beads interleaved by time', () => {
+	const beads = {
+		'w-aaaaaaaaaaaa': [null, 'wish', 'x', '2026-10-27T10:00:00Z', 'the board'],
+		note: ['w-aaaaaaaaaaaa', 'link', 's-x', '2026-10-27T10:03:00Z', 'a note']
+	} as Beads;
+	const w = W('w-aaaaaaaaaaaa', {
+		state: 'accepted',
+		stamps: [
+			{ stamp: 'heard', at: '2026-10-27T10:00:00Z' },
+			{ stamp: 'read', at: '2026-10-27T10:01:00Z' },
+			{ stamp: 'result', at: '2026-10-27T10:02:00Z', ref: 'brnrd#1' },
+			{ stamp: 'delivered', at: '2026-10-27T10:04:00Z', ref: 'abc1234', line: 'out' }
+		],
+		results: [{ ref: 'brnrd#1', at: '2026-10-27T10:02:00Z' }, { ref: 'threads/x/README.md' }],
+		verdict: { as: 'accepted', at: '2026-10-27T10:05:00Z' }
+	});
+	const rows = trace(w, timeline(beads, null, 'w-aaaaaaaaaaaa'));
+	deepEqual(
+		rows.map((r) => (r.t === 'stamp' ? r.k : r.t === 'bead' ? r.bead.id : r.t)),
+		['read', 'granting', 'note', 'delivered', 'verdict', 'result']
+	);
+	const steps = [{ text: 'write the `parser`', wishes: [], receipt: 'abc1234' }];
+	deepEqual(refOf('brnrd#1', beads, steps), {
+		kind: 'url',
+		href: 'https://github.com/hugimuni-labs/brnrd/pull/1',
+		text: 'brnrd#1'
+	});
+	deepEqual(refOf('note', beads, steps), { kind: 'bead', id: 'note', text: 'a note' });
+	deepEqual(refOf('abc1234', beads, steps), {
+		kind: 'step',
+		sha: 'abc1234',
+		text: 'write the parser'
+	});
+	deepEqual(refOf('nope', beads, steps), { kind: 'text', text: 'nope' });
+});
+
+test('the rail logs a moved strand once, the first load moves none, and a working strand plays the running face', () => {
+	const th = (state: string) =>
+		[{ id: 'web', strands: [{ id: 's-old' }, { id: 's-new', state }] }] as Thread[];
+	const at = '2026-10-27T10:21:05.123Z';
+	deepEqual([...moves(null, seen(th('idle')), at).changed], []);
+	const m = moves(seen(th('idle')), seen(th('working')), at);
+	deepEqual([...m.changed], ['s-new']);
+	deepEqual(m.lines, ['10:21:05 web idle→working']);
+	deepEqual(moves(seen(th('working')), seen(th('working')), at).lines, []);
+	deepEqual(moves({}, seen(th('idle')), at).lines, ['10:21:05 web new→idle']);
+	const faces = { running: ['a', 'b'], idle: ['c'] };
+	equal(face(faces, 'working', 3), 'b');
+	equal(face(faces, 'holding', 3), 'c');
+	equal(face(undefined, 'working', 3), 'brnrd');
+});
+
+test('a letter stamps who picked it up first, then its disposition, its send and its wishes in board.html order', () => {
+	const l = L('l1', '2026-10-27T10:00:00Z', {
+		shown: [{ strand: 's-ae66-inbox1', at: '2026-10-27T10:01:00Z' }],
+		chatter: ['s-x'],
+		sent: { state: 'failed', at: '2026-10-27T10:02:00Z' },
+		wishes: [
+			{
+				wish: 'w-abc123',
+				line: 'make it',
+				state: 'read',
+				stamps: [{ stamp: 'read', at: '2026-10-27T10:03:00Z', ref: 'brnrd#1' }]
+			}
+		],
+		wish: 'w-zzz999'
+	});
+	deepEqual(
+		stamps(l).map((s) => [s.cls, s.text]),
+		[
+			['read', 'picked up · inbox1 10-27 10:01'],
+			['heard', 'chatter'],
+			['heard', 'to channel · failed'],
+			['read', 'read · abc123 10-27 10:03'],
+			['heard', 'stamps zzz999']
+		]
+	);
+	equal(stamps(l)[3].title, 'make it\nbrnrd#1');
+	deepEqual(stamps(L('l2', '2026-10-27T10:00:00Z')), []);
 });

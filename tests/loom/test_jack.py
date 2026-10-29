@@ -261,23 +261,6 @@ def test_a_dry_body_does_not_take_a_turn_for_an_owed_letter(tmp_path, monkeypatc
     assert json.loads(jack.execute("stop", room, "{}"))["decision"] == "block"
 
 
-def test_post_says_the_context_weight_once_per_band(tmp_path):
-    room = _room(tmp_path)
-    _write(room, [])
-    transcript = tmp_path / "t.jsonl"
-
-    def call(tokens):
-        with transcript.open("a") as out:
-            out.write(json.dumps({"message": {"usage": {"input_tokens": 1, "cache_read_input_tokens": tokens}}}) + "\n")
-        return execute("post", room, json.dumps({"tool_name": "Bash", "transcript_path": str(transcript)}))
-
-    assert call(40_000) == ""
-    first = json.loads(call(120_000))["hookSpecificOutput"]["additionalContext"]
-    assert first.startswith("context: 120k tokens") and "booted at 40k" in first
-    assert call(130_000) == ""
-    assert "context: 151k" in call(151_000)
-
-
 @pytest.mark.parametrize('shell,cache,override,creation,expected', [
     ('claude', None, None, {'ephemeral_1h_input_tokens': 5000}, 3300),
     ('claude', None, None, {'ephemeral_5m_input_tokens': 5000}, 7110),
@@ -499,6 +482,27 @@ def test_a_reply_waiting_in_port_out_counts_as_answered_at_the_stop(tmp_path, mo
     assert "send --re p-test/abcde" not in held["reason"]
 
 
+@pytest.mark.parametrize("kind", ["letter", "note"])
+def test_a_reply_the_loom_drained_still_counts_while_the_boundary_lags(tmp_path, monkeypatch, kind):
+    # stop-answered: once the loom drained a reply from port/out it left
+    # 'answered', and the boundary listed the letter until the loom rendered again.
+    from brr.loom.runtime.ledger import append
+    from brr.loom.runtime.port import fact_from_port, parse_frontmatter
+    monkeypatch.setenv("BRNRD_STOP_TIMEOUT", "91")
+    room = _room(tmp_path)
+    _write(room, [_letter()])
+    _reply(room, "p-test/abcde")
+    if kind == "note":
+        (room / "port" / "out" / "zzzzz.md").write_text(
+            f"---\nkind: note\nid: {STRAND}/zzzzz\nre: p-test/abcde\nnote: an ack, nothing asked\n---\n")
+    for path in (room / "port" / "out").glob("*.md"):
+        append(Home(tmp_path), fact_from_port(parse_frontmatter(path.read_text()), STRAND, 1, room=room))
+        path.unlink()
+    held = json.loads(execute("stop", room, "{}"))
+    assert held["reason"].startswith("cache keepalive, nothing new arrived")
+    assert "send --re p-test/abcde" not in held["reason"]
+
+
 def test_the_stop_repeats_its_whole_list_after_work_and_lets_an_idle_repeat_through(tmp_path, monkeypatch):
     monkeypatch.setenv("BRNRD_STOP_TIMEOUT", "91")
     room = _room(tmp_path)
@@ -510,3 +514,14 @@ def test_the_stop_repeats_its_whole_list_after_work_and_lets_an_idle_repeat_thro
     assert "send --re p-test/abcde --to thread:tb" in again
     # Nothing done since the same list: the body read it, and is not trapped.
     assert "the stop holds" not in execute("stop", room, "{}")
+
+
+def test_a_patched_jack_clock_stays_out_of_the_shared_time_module(monkeypatch):
+    """Other threads keep the real sleep (tests/loom/conftest.py `_private_jack_clock`)."""
+    import time as shared
+
+    from brr.loom.runtime import jack
+
+    real = shared.sleep
+    monkeypatch.setattr(jack.time, "sleep", lambda s: None)
+    assert shared.sleep is real

@@ -34,7 +34,7 @@ view = ctx.jack("stop")
 held = time.monotonic() - began
 for letter in view.letters:
     ctx.send(f"thread:{{own}}", note="read", re=letter.id)
-Path({str(seen)!r}).write_text(json.dumps({{
+ctx.handoff({str(seen)!r}, json.dumps({{
     "kind": view.kind, "held": held, "room": str(ctx.room),
     "letters": [[letter.id, letter.reply, letter.body] for letter in view.letters]}}))
 ''')

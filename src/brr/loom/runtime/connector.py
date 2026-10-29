@@ -127,6 +127,9 @@ def ingest(home, name, fm, attachments):
         to = (f"thread:{fm['thread']}" if fm.get('thread') else
               route_bare(facts, f'{platform}/{chat}', binding[1] if binding else None,
                          home.main_thread()))
+        # A bare yes in reply to a delivery letter is the agree it asked for.
+        if not fm.get('verdict') and binding and sender.startswith('person:'):
+            fm = dict(fm, **_agree(facts, binding[0], fm['body']))
         # A verdict belongs to the thread that owns its wish, wherever it was given.
         owner = wishes(facts).get(fm.get('wish')) if fm.get('verdict') and sender.startswith('person:') else None
         if owner is not None and home.routable(owner.thread):
@@ -198,7 +201,7 @@ def ingest(home, name, fm, attachments):
     if (source.data.get('verdict') == 'agree' and source.data['from'].startswith('person:')
             and not any(f.id == verdict_id for f in facts)):
         wish = wishes(facts).get(source.data.get('wish'))
-        if wish is not None and wish.state == 'delivered':
+        if wish is not None and wish.state in {'delivered', 'expired'}:
             append(home, Fact(kind='wish.verdict', by=source.data['from'], id=verdict_id,
                               data={'wish': wish.id, 'as': 'accepted', 'evidence': 'word', 'ref': letter_id}))
     if source.data.get('verdict') and source.data['from'].startswith('person:'):
@@ -343,6 +346,18 @@ def _speech(facts, channel, kind):
             yield fact.data, letter, thread
 
 
+AGREE = frozenset({'ok', 'okay', 'yes', 'y', 'accept', 'accepted', 'agree', 'lgtm', 'good', 'done', '+1', '👍', '✅'})
+
+
+def _agree(facts, letter, body) -> dict:
+    """``{verdict, wish}`` when ``body`` is a bare yes to a letter that delivered one wish."""
+    if body.strip().strip('.!').lower() not in AGREE:
+        return {}
+    found = wishes(facts)
+    delivered = [i for i in letter.data.get('links') or () if i in found and found[i].state in {'delivered', 'expired'}]
+    return {'verdict': 'agree', 'wish': delivered[0]} if len(delivered) == 1 else {}
+
+
 def reply_for_message(facts, channel, message_id):
     """The outbound letter and its thread, bound by a trusted same-chat receipt."""
     if message_id not in (None, ''):
@@ -358,15 +373,15 @@ def thread_for_message(facts, channel, message_id):
 
 
 def route_bare(facts, chat, reply_thread=None, fallback='inbox'):
-    """A reply's thread, else the last confirmed speaker, regardless of lease."""
+    """A reply's thread, else the home thread: never the last thread that spoke.
+
+    His rule (5474, 5482): any thread may write him, but only a reply-to carries
+    his answer back there; every other letter of his is the inbox's to place.
+    """
     try:
         _platform, chat_id = channel_parts(f'channel:{chat}')
     except ValueError:
         return f'thread:{fallback}'
-    if chat_id is None:
+    if chat_id is None or not reply_thread:
         return f'thread:{fallback}'
-    if reply_thread:
-        return f'thread:{reply_thread}'
-    spoken = [thread for data, _letter, thread in _speech(facts, f'channel:{chat}', 'speech')
-              if data.get('state') == 'sent']
-    return f'thread:{spoken[-1]}' if spoken else f'thread:{fallback}'
+    return f'thread:{reply_thread}'
