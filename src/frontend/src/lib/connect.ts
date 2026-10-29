@@ -32,6 +32,16 @@ export interface ConnectContext {
 	// sent reads as someone else's computer; self-reported, never proof.
 	// Optional: a backend older than this field omits it.
 	requester?: { hostname: string; os_user: string };
+	// "loom" when a loom paired its self repo: the page approves a computer
+	// and never shows the repository. Optional: older backends omit it.
+	kind?: string;
+}
+
+/** A loom pair approves a computer: no repository panel, no picker, no doors after. */
+export function isLoomPair(
+	context: Pick<ConnectContext, 'kind' | 'suggested_repo_full_name'> | null
+): boolean {
+	return context?.kind === 'loom' && context.suggested_repo_full_name !== '';
 }
 
 /** "eve on eves-laptop", "eves-laptop", or "" when the pairing named no computer. */

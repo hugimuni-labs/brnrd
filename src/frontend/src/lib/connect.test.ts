@@ -3,6 +3,7 @@ import test from 'node:test';
 
 import {
 	requesterLabel,
+	isLoomPair,
 	ConnectAuthError,
 	approvalProofFromHash,
 	approveConnect,
@@ -219,4 +220,13 @@ test('requesterLabel names the computer that asked, or nothing', () => {
 	);
 	assert.equal(requesterLabel({ requester: { hostname: '', os_user: '' } }), '');
 	assert.equal(requesterLabel({}), '');
+});
+
+test('isLoomPair approves a computer only for a loom that named its self repo', () => {
+	assert.equal(isLoomPair({ kind: 'loom', suggested_repo_full_name: 'local/self-e40c7d' }), true);
+	assert.equal(isLoomPair({ kind: '', suggested_repo_full_name: 'local/self-e40c7d' }), false);
+	assert.equal(isLoomPair({ suggested_repo_full_name: 'octo/repo' }), false);
+	// No repo to bind silently: the picker is the only way through.
+	assert.equal(isLoomPair({ kind: 'loom', suggested_repo_full_name: '' }), false);
+	assert.equal(isLoomPair(null), false);
 });

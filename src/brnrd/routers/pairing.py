@@ -55,6 +55,12 @@ def pair_requester(pair: PairRequest) -> dict[str, str]:
     return {k: caps[k].strip() if isinstance(caps.get(k), str) else "" for k in ("hostname", "os_user")}
 
 
+def pair_kind(pair: PairRequest) -> str:
+    """``"loom"`` when a loom paired its self repo, else ``""``. Display-only:
+    the approve page asks for a computer, not a repository."""
+    return "loom" if pair_capabilities(pair).get("kind") == "loom" else ""
+
+
 def pair_suggested_forge(pair: PairRequest) -> str:
     """``"github"`` or ``"local"`` for the suggested repo above, or ``""``
     when there is no suggestion at all. Display-only — `_resolve_or_create_

@@ -83,6 +83,10 @@ class PairStartRequest(BaseModel):
     # computer. Self-reported, so a hint, never proof.
     hostname: str = ""
     os_user: str = ""
+    # "loom" when a loom pairs its self repo: the person approves a
+    # computer, and the repo is the loom's storage, never shown or picked.
+    # Display-only, like `forge`.
+    kind: str = ""
 
 
 class PairStarted(BaseModel):
