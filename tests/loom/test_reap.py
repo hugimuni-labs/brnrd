@@ -316,3 +316,34 @@ def test_a_settled_threads_room_goes_at_release_and_a_reopen_wakes_it_into_a_fre
     clone_room(home.root, "0001-done")
     reaper.reap()
     assert (done / "self" / ".git").exists()
+
+
+def test_a_pass_folds_the_ledger_once_however_many_rooms_it_reads(tmp_path, monkeypatch):
+    """A fold per room made the hourly pass take minutes on a big home, and the tick beside it lost its lease."""
+    import time
+    from brr.loom.runtime import project
+    home = Home(tmp_path / "home", install="0001")
+    init_self(home.root, person="test")
+    strands = [f"0001-old{i}" for i in range(6)]
+    for i, strand in enumerate(strands):
+        _ended(home, f"old{i}", strand, 1)
+    write_thread(home.root, "live", "---\nid: live\nstatus: open\ntense: plan\n---\n# live", "quit-now", wait="0")
+    append(home, Fact(kind="lease", by="router:0001", id="lease:0001-live",
+                      data=dict(thread="live", strand="0001-live", gen=1)))
+    clone_room(home.root, "0001-live")
+
+    facts, now = read_facts(home), time.time()
+    alone = {s: reap.room_kept(home, facts, s, now) for s in [*strands, "0001-live"]}
+    assert alone["0001-live"] == "it holds its thread"
+    assert set(alone[s] for s in strands) == {"released less than 7 days ago"}
+
+    folds = []
+    real = project._fold
+    monkeypatch.setattr(project, "_fold", lambda facts: folds.append(1) or real(facts))
+    seen = {}
+    real_kept = reap.room_kept
+    monkeypatch.setattr(reap, "room_kept", lambda home, facts, strand, now, **kw:
+                        seen.setdefault(strand, real_kept(home, facts, strand, now, **kw)))
+    reap.Reaper(home, lambda *_: None).reap()
+    assert seen == alone
+    assert len(folds) == 1
