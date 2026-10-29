@@ -15,7 +15,7 @@ from sqlalchemy import select  # noqa: E402
 from brnrd import create_app  # noqa: E402
 from brnrd.config import Settings  # noqa: E402
 from brnrd.inbox import CapturingForwarder  # noqa: E402
-from brnrd.models import Token  # noqa: E402
+from brnrd.models import LoomToken  # noqa: E402
 from _helpers import PUBLISH_EVERYTHING, brnrd_account_headers  # noqa: E402
 
 
@@ -90,9 +90,8 @@ def test_a_loom_gone_quiet_hands_the_inbox_back(client):
     daemon, loom = _setup(client)
     assert _poll(client, loom, "loom").status_code == 200
     with client.app.state.SessionLocal() as db:
-        for token in db.execute(select(Token).where(Token.kind == Token.KIND_DAEMON)).scalars():
-            if token.loom_seen_at is not None:
-                token.loom_seen_at = datetime.now(timezone.utc) - timedelta(minutes=5)
+        for seen in db.execute(select(LoomToken)).scalars():
+            seen.seen_at = datetime.now(timezone.utc) - timedelta(minutes=5)
         db.commit()
     assert _poll(client, daemon).status_code == 200
 

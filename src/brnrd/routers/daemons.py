@@ -32,7 +32,7 @@ from .. import (
 )
 from ..activity_records import ACTIVITY_STALE_TTL
 from ..auth import Principal, get_db, require_daemon
-from ..models import Account, ActivityRecord, Daemon, DaemonRepo, LoomPart, Event, GitHubInstallation, GitHubInstalledRepo, Repo, Token
+from ..models import Account, ActivityRecord, Daemon, DaemonRepo, LoomPart, Event, GitHubInstallation, GitHubInstalledRepo, LoomToken, Repo, Token
 from ..platforms import github_app as github_app_client
 
 router = APIRouter(prefix="/v1/daemons", tags=["daemons"])
@@ -211,23 +211,32 @@ def _claim_inbox(session_factory, principal: Principal, consumer: str | None) ->
         if mine is None:
             return None
         if consumer == "loom":
-            mine.loom_seen_at = now
+            _mark_loom(db, mine, now)
             db.commit()
-        if mine.loom_seen_at is not None:
+            return None
+        if db.get(LoomToken, mine.id) is not None:
             return None
         loom_at = db.execute(
-            select(Token.loom_seen_at).where(
-                Token.account_id == mine.account_id,
+            select(LoomToken.seen_at).join(Token, Token.id == LoomToken.token_id).where(
+                LoomToken.account_id == mine.account_id,
                 Token.kind == Token.KIND_DAEMON,
                 Token.revoked.is_(False),
-                Token.id != mine.id,
-                Token.loom_seen_at >= now - _LOOM_LIVE_AFTER,
-            ).order_by(Token.loom_seen_at.desc()).limit(1)
+                LoomToken.token_id != mine.id,
+                LoomToken.seen_at >= now - _LOOM_LIVE_AFTER,
+            ).order_by(LoomToken.seen_at.desc()).limit(1)
         ).scalar_one_or_none()
         if loom_at is None:
             return None
         db.expunge(mine)
         return mine, loom_at
+
+
+def _mark_loom(db: Session, token: Token, now: datetime) -> None:
+    seen = db.get(LoomToken, token.id)
+    if seen is None:
+        db.add(LoomToken(token_id=token.id, account_id=token.account_id, seen_at=now))
+    else:
+        seen.seen_at = now
 
 
 def _touch_daemon_from_factory(session_factory, principal: Principal) -> None:
@@ -758,9 +767,7 @@ def put_loom(doc: dict[str, Any] = Body(...), principal: Principal = Depends(req
     daemon.loom_json = blob if permitted else None
     daemon.loom_updated_at = now
     # A snapshot marks the token a loom, so the inbox never refuses it (_claim_inbox).
-    token = db.get(Token, principal.token.id)
-    if token is not None:
-        token.loom_seen_at = now
+    _mark_loom(db, principal.token, now)
     daemon.online = True
     daemon.last_seen_at = now
     db.commit()

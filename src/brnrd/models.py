@@ -190,11 +190,28 @@ class Token(Base):
     revoked: Mapped[bool] = mapped_column(Boolean, default=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
     expires_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
-    # Last heard acting as a loom: a `?consumer=loom` inbox poll or a PUT
-    # /loom snapshot (every loom since 0.6.26, at least once a minute). Per
-    # token, not per Daemon row: an old daemon and a loom both register as
-    # "daemon" and trade one row, so only the token tells them apart.
-    loom_seen_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+
+class LoomToken(Base):
+    """A daemon token last heard acting as a loom.
+
+    Written on a `?consumer=loom` inbox poll or a PUT /loom snapshot (every
+    loom since 0.6.26, at least once a minute). Per token, not per Daemon
+    row: an old daemon and a loom both register as "daemon" and trade one
+    row, so only the token tells them apart.
+
+    Its own table, never a column on `tokens`: every request's auth session
+    holds `tokens` open for its whole long-poll, so a startup ALTER on it
+    waits on them while holding the migration's other locks, and the
+    long-polls wait on those (brnrd#2523, 2026-10-29: every token lookup
+    hung 30 s). `create_all` adds this table without touching `tokens`;
+    no foreign key, for the same reason.
+    """
+
+    __tablename__ = "loom_tokens"
+    token_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    account_id: Mapped[str] = mapped_column(String(64), index=True)
+    seen_at: Mapped[datetime] = mapped_column(DateTime)
 
 
 class Daemon(Base):
