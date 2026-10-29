@@ -11,6 +11,7 @@ VERBS = {
     "loom": ("verbs_loom", "_loom"),
     "send": ("verbs_loom", "_send"),
     "settle": ("verbs_loom", "_settle"),
+    "shed": ("verbs_loom", "_molt"),
     "molt": ("verbs_loom", "_molt"),
     "jack": ("verbs_loom", "_jack"),
     "resume": ("verbs_loom", "_resume"),
@@ -21,11 +22,14 @@ VERBS = {
     "threads": ("verbs_threads", "_threads"),
     "asks": ("verbs_asks", "_asks"),
     "graph": ("verbs_asks", "_graph"),
+    "face": ("verbs_faces", "_face"),
     "attention": ("verbs_loom", "_attention"),
     "init": ("verbs_self", "cmd_init"),
     "wake": ("verbs_self", "cmd_wake"),
+    "lib": ("verbs_self", "cmd_lib"),
     "send-self": ("verbs_merge", "main"),
     "publish": ("publish", "main"),
+    "reap": ("reap", "main"),
     "merge-driver": ("merge_driver", "main"),
 }
 

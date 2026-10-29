@@ -62,8 +62,9 @@
 
 <main class="mx-auto max-w-3xl px-5 pb-16 sm:px-6" data-testid="loom-thread">
 	<header class="flex items-center justify-between pt-4 pb-3">
-		<a href={resolve('/')} class="font-mono text-[11px] text-ink-quiet hover:text-amber-200"
-			>← threads</a
+		<a
+			href={resolve('/dashboard')}
+			class="font-mono text-[11px] text-ink-quiet hover:text-amber-200">← threads</a
 		>
 		<p class="eyebrow eyebrow--asis">{id}</p>
 	</header>
@@ -78,12 +79,12 @@
 	{:else if read === 'none' || read === 'error'}
 		<p class="subpanel p-4 font-mono text-sm text-stone-300">
 			{read === 'none' ? 'the loom has not published yet.' : 'brnrd did not answer.'}
-			<a href={resolve('/')} class="text-amber-200 underline">home</a>
+			<a href={resolve('/dashboard')} class="text-amber-200 underline">home</a>
 		</p>
 	{:else if !thread}
 		<p class="subpanel p-4 font-mono text-sm text-stone-300">
 			no thread named {id} on the loom.
-			<a href={resolve('/')} class="text-amber-200 underline">threads</a>
+			<a href={resolve('/dashboard')} class="text-amber-200 underline">threads</a>
 		</p>
 	{:else}
 		<section class="panel ignite p-4" style="--ignite-delay: 40ms" data-turn={turn}>

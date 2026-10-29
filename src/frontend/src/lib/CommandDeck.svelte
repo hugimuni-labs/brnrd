@@ -144,7 +144,7 @@
 		</nav>
 		<div class="nav-bottom">
 			<button onclick={onInstruments}>⚙ Instruments</button>
-			<a href={resolve('/repos')}>Manage repos ↗</a>
+			<a href={resolve('/dashboard/repos')}>Manage repos ↗</a>
 			<a href="/logout" rel="external">Sign out</a>
 		</div>
 	</aside>
@@ -241,7 +241,7 @@
 											? 'Waiting for the live report.'
 											: 'Send the next objective through your connected chat. Your resident picks up the project context.'}
 							</p>
-							<a class="primary" href={resolve('/repos')}>Open chat connections ↗</a>
+							<a class="primary" href={resolve('/dashboard/repos')}>Open chat connections ↗</a>
 						{/if}
 					</section>
 
@@ -273,7 +273,8 @@
 							</div>{/if}
 						<div class="world-caption">
 							<span>Every movement comes from a reported action.</span><a
-								href={map ? resolve('/') : resolve('/daily')}>{map ? 'Crew view' : 'Map view'} →</a
+								href={map ? resolve('/dashboard') : resolve('/dashboard/daily')}
+								>{map ? 'Crew view' : 'Map view'} →</a
 							>
 						</div>
 					</section>
@@ -393,8 +394,8 @@
 			<p role="status">{commandReply}</p>
 		</div>
 		<footer class="deck-footer">
-			<span>LOCAL EXECUTION. LASTING MEMORY. REAL RECEIPTS.</span><a href={resolve('/repos')}
-				>Connect a conversation ↗</a
+			<span>LOCAL EXECUTION. LASTING MEMORY. REAL RECEIPTS.</span><a
+				href={resolve('/dashboard/repos')}>Connect a conversation ↗</a
 			>
 		</footer>
 	</main>

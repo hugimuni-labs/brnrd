@@ -13,7 +13,7 @@ from _step import Loom, wait_until, write_thread
 from test_lifecycle import bodies
 
 
-def test_worker_answers_followup_warm_then_exits_and_a_later_letter_starts_it(tmp_path, monkeypatch):
+def test_worker_answers_followup_warm_then_is_held_and_a_later_letter_starts_it(tmp_path, monkeypatch):
     root = tmp_path / "home"
     init_self(root, person="test")
     write_thread(root, "opener", "Opener", "answer-fast", wait="0")
@@ -23,6 +23,7 @@ def test_worker_answers_followup_warm_then_exits_and_a_later_letter_starts_it(tm
     install_fake(monkeypatch, lambda text: replies.append(json.loads(text)))
     waiting = root / "waiting"
     follow = root / "follow"
+    kept = root / "kept"
     bodies(root, f'''import json, os, sys, time
 from pathlib import Path
 from brr.loom.runtime.fakebody import Ctx
@@ -38,12 +39,16 @@ while True:
     Path({str(waiting)!r}).write_text(str(os.getpid()))
     if not follow.exists():
         # Keep the flock until the follow-up is already in the ledger. Writing
-        # waiting and then calling stop made jack's wait the whole window; an
-        # idle worker with an opener leaves when that wait expires.
+        # waiting and then calling stop made jack's wait the whole window.
         while not follow.exists():
             time.sleep(0.03)
     view = ctx.jack("stop")
     if view.kind != "block":
+        break
+    if not view.letters:
+        # Owing nothing past its wait, a worker is held, never let go; the
+        # fake ends here so a later letter has a body to start.
+        Path({str(kept)!r}).write_text(json.loads(view.raw)["reason"])
         break
     letters = view.letters
 ''')
@@ -60,6 +65,7 @@ while True:
         wait_until(lambda: len(replies) == 2 and not mail(root, loom.facts(), "work"), 10, loom.dump)
         assert replies == [{"body": "first", "pid": pid}, {"body": "follow-up", "pid": pid}]
         wait_until(lambda: any(f.kind == "body.exited" for f in loom.facts()), 8, loom.dump)
+        assert kept.read_text().startswith("cache keepalive, nothing new arrived")
         assert not any(f.id.startswith("loom/bounce-") for f in loom.facts())
         inject_letter(root, to="thread:work", body="later")
         wait_until(lambda: len(replies) == 3 and not mail(root, loom.facts(), "work"), 12, loom.dump)
@@ -110,7 +116,9 @@ while True:
         break
     assert json.loads(view.raw)["reason"].startswith("cache keepalive, nothing new arrived: stop")
     holds += 1
-    Path({str(root / "holds")!r}).write_text(str(holds))
+    # Replace, never truncate: the test polls this file and must not read ''.
+    Path({str(root / "holds.tmp")!r}).write_text(str(holds))
+    os.replace({str(root / "holds.tmp")!r}, {str(root / "holds")!r})
 ''')
     run.chmod(0o755)
     usage = folder / "usage"
@@ -159,14 +167,17 @@ print(json.dumps({'windows': [{'name': 'session', 'left_pct': left,
             os.kill(pid, 0)
             assert int((root / "holds").read_text()) == parked
             assert not any(f.kind in {"body.exited", "body.parked"} for f in loom.facts())
-            # The refill: the same body holds again, still owing the ask.
+            # The refill: the same body holds on, still owing the ask. Its cache
+            # went cold while parked, so no keepalive is paid until the ceiling.
             (folder / "low").unlink()
             cached = json.loads(gauge.read_text())
             cached["at"] = time() - 301
             atomic_write(gauge, json.dumps(cached))
             gauge.with_suffix(".lock").write_text(str(time() - 301))
-            wait_until(lambda: int((root / "holds").read_text()) > parked, 10, loom.dump)
+            wait_until(lambda: json.loads(gauge.read_text())["windows"][0]["left_pct"] == 100, 10, loom.dump)
+            clock.sleep(2.5)
             os.kill(pid, 0)
+            assert int((root / "holds").read_text()) == parked
             assert len([f for f in loom.facts() if f.kind == "body.started"]) == 1
             assert [l.data["id"] for l in mail(root, loom.facts(), "work")] == [letter]
             return

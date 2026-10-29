@@ -25,13 +25,20 @@ def cmd_asks(args) -> int:
     from .ledger import read_facts
     from .lifecycle import main_snapshot
     home = _home(args)
-    sys.stdout.write(asks(read_facts(home), main_snapshot(home), args.thread, args.all))
+    sys.stdout.write(asks(read_facts(home), main_snapshot(home), args.thread, args.all,
+                          install=home.install_id()))
     return 0
 
 
 def cmd_graph(args) -> int:
-    from .asks import graph, render_graph
+    from .asks import bead, graph, render_bead, render_graph
     from .ledger import read_facts
+    if args.bead:
+        from .lifecycle import main_snapshot
+        home = _home(args)
+        found = bead(read_facts(home), main_snapshot(home), args.bead)
+        sys.stdout.write(render_bead(found))
+        return 0 if found else 1
     sys.stdout.write(render_graph(graph(read_facts(_home(args))),
                                   "strand" if args.strands else "thread", args.only))
     return 0
@@ -47,6 +54,7 @@ def graph_arguments(parser) -> None:
     _arguments(parser)
     parser.add_argument("only", nargs="?", help="one thread, or with --strands one strand")
     parser.add_argument("--strands", action="store_true", help="strand → threads instead of thread → strands")
+    parser.add_argument("--bead", metavar="ID", help="one letter, wish, strand or thread:<name> and what it hangs from")
 
 
 def add_graph_parser(subparsers) -> None:

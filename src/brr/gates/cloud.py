@@ -792,27 +792,24 @@ def propose_config_change(
         return {"error": str(e)}
 
 
-def connect(brr_dir: Path, *, brnrd_url: str, daemon_name: str = _DEFAULT_DAEMON_NAME, poll_interval_s: float = 2.0, timeout_s: float = 600.0, out: Callable[[str], None] = print) -> dict:
-    # Sent unauthenticated, before any token exists — this is what lets the
-    # approval page lead with "connect <this repo>" instead of a blind
-    # dropdown of everything the account already has enabled (the "enable a
-    # repository" website step this was built to retire). `repo_root` never
-    # leaves this machine: only the fields the server schema accepts.
-    initial_caps = _repo_capabilities(brr_dir)
-    pair_body = {
-        k: v
-        for k, v in {
-            "repo_full_name": initial_caps.get("repo_full_name"),
-            "git_remote": initial_caps.get("git_remote"),
-            "branch": initial_caps.get("branch"),
-            "default_branch": initial_caps.get("default_branch"),
-            "forge": initial_caps.get("forge"),
-        }.items()
-        if isinstance(v, str) and v
-    }
-    pair = _request(brnrd_url, "POST", "/v1/accounts/pair", json=pair_body or None)
-    out(f"[brnrd] Approve this daemon at: {pair['pair_url']}")
-    out(f"[brnrd] Pairing code: {pair['pair_code']}")
+def requester() -> dict[str, str]:
+    """This computer as the approve page names it: ``{hostname, os_user}``, blanks dropped."""
+    import getpass
+    import socket
+    try:
+        user = getpass.getuser()
+    except (OSError, KeyError):
+        user = ""
+    return {k: v for k, v in {"hostname": socket.gethostname(), "os_user": user}.items() if v}
+
+
+def start_pair(brnrd_url: str, pair_body: dict | None) -> dict:
+    """Open a pairing: ``{pair_code, pair_url, poll_secret}``, approved at ``pair_url``."""
+    return _request(brnrd_url, "POST", "/v1/accounts/pair", json=pair_body or None)
+
+
+def await_pair(brnrd_url: str, pair: dict, *, poll_interval_s: float = 2.0, timeout_s: float = 600.0) -> dict:
+    """Poll ``pair`` until it is approved; the status carries ``daemon_token``."""
     deadline = time.monotonic() + timeout_s
     while True:
         try:
@@ -834,13 +831,37 @@ def connect(brr_dir: Path, *, brnrd_url: str, daemon_name: str = _DEFAULT_DAEMON
                 ) from exc
             raise
         if status.get("status") == "paired" and status.get("daemon_token"):
-            break
+            return status
         if time.monotonic() > deadline:
             raise TimeoutError(
                 "account pairing was not approved before the timeout. Approve "
                 f"the pairing link, then re-run `{brnrd_cmd()} account connect`."
             )
         time.sleep(poll_interval_s)
+
+
+def connect(brr_dir: Path, *, brnrd_url: str, daemon_name: str = _DEFAULT_DAEMON_NAME, poll_interval_s: float = 2.0, timeout_s: float = 600.0, out: Callable[[str], None] = print) -> dict:
+    # Sent unauthenticated, before any token exists — this is what lets the
+    # approval page lead with "connect <this repo>" instead of a blind
+    # dropdown of everything the account already has enabled (the "enable a
+    # repository" website step this was built to retire). `repo_root` never
+    # leaves this machine: only the fields the server schema accepts.
+    initial_caps = _repo_capabilities(brr_dir)
+    pair_body = {
+        k: v
+        for k, v in {
+            "repo_full_name": initial_caps.get("repo_full_name"),
+            "git_remote": initial_caps.get("git_remote"),
+            "branch": initial_caps.get("branch"),
+            "default_branch": initial_caps.get("default_branch"),
+            "forge": initial_caps.get("forge"),
+        }.items()
+        if isinstance(v, str) and v
+    }
+    pair = start_pair(brnrd_url, {**pair_body, **requester()})
+    out(f"[brnrd] Approve this daemon at: {pair['pair_url']}")
+    out(f"[brnrd] Pairing code: {pair['pair_code']} (only approve a code you started yourself)")
+    status = await_pair(brnrd_url, pair, poll_interval_s=poll_interval_s, timeout_s=timeout_s)
     state = _load_state(brr_dir)
     account_id = str(status.get("account_id") or "") or None
     # Resolve — and *create* — the destination state dir before deciding the

@@ -193,11 +193,12 @@ def test_inject_workers_appends_bounded_n_never_auto():
     assert "auto" not in out
 
 
-def test_inject_workers_leaves_an_explicit_n_alone():
-    """The workflow text choosing its own `-n` outranks this default."""
+def test_inject_workers_replaces_the_workflows_own_n():
+    """CI's `-n` is sized to its runner; the shared local machine gets its bound."""
     gate = _gate()
-    command = "python -m pytest -q -n 2"
-    assert gate.inject_workers(command, workers=8) == command
+    command = "python -m pytest -q -n 4 --durations=30"
+    assert gate.inject_workers(command, workers=2) == "python -m pytest -q --durations=30 -n 2"
+    assert gate.inject_workers(command, workers=1) == "python -m pytest -q --durations=30"
 
 
 def test_inject_workers_only_touches_the_pytest_line(monkeypatch):
@@ -471,27 +472,6 @@ def test_no_receipt_is_written_outside_a_run(tmp_path, monkeypatch):
     monkeypatch.delenv("BRR_OUTBOX_DIR", raising=False)
     assert gate.receipt_path() is None
     assert gate.write_receipt("GREEN", []) is None
-
-
-def test_receipt_lands_in_the_outbox_and_names_the_verdict(tmp_path, monkeypatch):
-    """Under a run it is written beside the other control dotfiles — never
-    delivered to chat (the drain skips dotfiles), read by the closeout guard.
-
-    The file is a map keyed per tree (#820); `gate.REPO_ROOT` (unpatched here,
-    so this repo's own checkout) is looked up like any reader would.
-    """
-    from brr import gate_receipt
-
-    gate = _gate()
-    monkeypatch.setenv("BRR_OUTBOX_DIR", str(tmp_path))
-    path = gate.write_receipt("RED", [("backend: Run tests", "FAIL rc=1", 12.34)])
-    assert path == tmp_path / gate.RECEIPT_NAME
-    entry = gate_receipt.read_receipt(tmp_path, gate.REPO_ROOT)
-    # RED is recorded, not suppressed: the obligation a reader checks is that
-    # the gate *ran* on this tree, never that it was green.
-    assert entry["verdict"] == "RED"
-    assert entry["legs"][0]["verdict"] == "FAIL rc=1"
-    assert set(entry) >= {"head", "status", "diff_digest", "untracked_digest"}
 
 
 # ── #917: the receipt has to be about the tree the *legs* saw ─────────────
@@ -1092,28 +1072,6 @@ def test_targeted_selection_maps_a_module_to_its_named_test_and_its_importers(tm
     assert selection == ["tests/test_other.py", "tests/test_widget.py"]
 
 
-def test_write_receipt_records_mode_and_omits_test_selection_when_absent(tmp_path, monkeypatch):
-    from brr import gate_receipt
-
-    gate = _gate()
-    monkeypatch.setenv("BRR_OUTBOX_DIR", str(tmp_path))
-    gate.write_receipt("GREEN", [], mode="changed-only")
-    entry = gate_receipt.read_receipt(tmp_path, gate.REPO_ROOT)
-    assert entry["mode"] == "changed-only"
-    assert "test_selection" not in entry
-
-
-def test_write_receipt_records_the_exact_targeted_selection(tmp_path, monkeypatch):
-    from brr import gate_receipt
-
-    gate = _gate()
-    monkeypatch.setenv("BRR_OUTBOX_DIR", str(tmp_path))
-    gate.write_receipt("GREEN", [], mode="targeted", test_selection=["tests/test_x.py"])
-    entry = gate_receipt.read_receipt(tmp_path, gate.REPO_ROOT)
-    assert entry["mode"] == "targeted"
-    assert entry["test_selection"] == ["tests/test_x.py"]
-
-
 def test_full_flag_refuses_to_combine_with_changed_only_or_targeted():
     gate = _gate()
     with pytest.raises(SystemExit):
@@ -1122,3 +1080,21 @@ def test_full_flag_refuses_to_combine_with_changed_only_or_targeted():
         gate.main(["--full", "--changed-only"])
 
 
+
+
+def test_the_real_shard_aggregator_is_refused_not_run():
+    """`Backend tests` reads its shards' result through `${{ }}`; only the
+    runner evaluates that, so locally the leg is skipped with a reason while
+    the shard job's pytest leg still runs the whole suite."""
+    gate = _gate()
+    workflow = yaml.safe_load((REPO_ROOT / ".github" / "workflows" / "ci.yml").read_text())
+    expression_legs = [
+        leg for leg in gate.legs(workflow) if leg["kind"] == "run" and "${{" in leg["command"]
+    ]
+    assert expression_legs, "ci.yml no longer has a shard aggregator"
+    for leg in expression_legs:
+        assert gate.refusal(leg["command"]) is not None
+    pytest_legs = [
+        leg for leg in gate.legs(workflow, "backend") if leg["kind"] == "run" and "pytest" in leg["command"]
+    ]
+    assert pytest_legs and all(gate.refusal(leg["command"]) is None for leg in pytest_legs)

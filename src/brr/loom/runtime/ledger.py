@@ -10,7 +10,7 @@ from collections import defaultdict, OrderedDict
 from datetime import datetime
 from pathlib import Path
 
-from brr.daemon2.facts import Fact, union
+from brr.daemon2.facts import Fact, keep, union
 
 from .home import Home, mint, thread_of
 from .registry import admit, resource_of
@@ -41,7 +41,8 @@ def _freeze(data: dict) -> dict:
 _LOOM_KINDS = {
     "lease", "released", "attention", "router", "router.renewed",
     "speech", "speech.part", "thread.closed", "attempt.ended", "port.drained", "letter.disposed", "letter.due",
-    "loom.started",
+    "loom.started", "loom.degraded", "loom.recovered", "loom.moved", "loom.pruned", "lease.fenced", "self.healed",
+    "library.problem", "library.cleared",
 }
 
 
@@ -61,7 +62,7 @@ def fact_filename(fact: Fact) -> str:
     if ((fact.kind in {"source", "blob", "note"} and fact.by.startswith("loom:"))
             or (fact.kind == "note" and fact.by.startswith("person:"))):
         return "loom.jsonl"
-    if resource_of(fact.kind) == "wish" and fact.by.startswith("person:"):
+    if resource_of(fact.kind) == "wish" and fact.by.startswith(("person:", "loom:")):
         return "loom.jsonl"
     if fact.kind in _LOOM_KINDS:
         return "loom.jsonl"
@@ -135,10 +136,12 @@ class LedgerView(list):
         self.missing = set()
         self.maximum = None
         self.cache = {}
+        self.merged_kinds = {}
         self.semantic_revision = 0
         self.reducer = None
         self.delta = ()
         self.reset = True
+        self.duplicates = []
         self.extend(facts)
 
     def _add(self, fact):
@@ -175,25 +178,44 @@ class LedgerView(list):
         key = fact_order(fact)
         self.maximum = max(self.maximum, key) if self.maximum is not None else key
 
-    def extend(self, facts):
-        added = []
+    def incoming(self, facts) -> tuple[list, bool]:
+        """The batch's new facts in canonical order, and whether they reorder this view.
+
+        Records a displaced duplicate as it goes: call it once per batch.
+        """
+        added, displaced = [], False
         for fact in facts:
             old = self.by_id.get(fact.id)
             if old is not None:
-                if old != fact:
-                    raise ValueError(f'conflicting fact id: {fact.id}')
-                continue
+                if old == fact:
+                    continue
+                # Another install's copy of an ingested source: the lower HLC
+                # stays, and displacing a held copy replays the union.
+                if keep(old, fact) is old:
+                    self.duplicates.append(fact)
+                    continue
+                displaced = True
             added.append(fact)
         if not added:
+            return [], False
+        # union(delta) validates duplicates/cycles within the incoming batch.
+        delta = union(added, duplicates=self.duplicates)
+        return delta, (displaced or any(f.id in self.missing for f in delta)
+                       or self.maximum is not None and any(fact_order(f) <= self.maximum for f in delta))
+
+    def extend(self, facts):
+        self.apply(*self.incoming(facts))
+
+    def apply(self, delta, repair):
+        """Add what ``incoming`` returned, rebuilding this view in place on a reorder."""
+        if not delta:
             self.delta = ()
             return
-        # union(delta) validates duplicates/cycles within the incoming batch.
-        delta = union(added)
-        repair = (any(f.id in self.missing for f in delta)
-                  or self.maximum is not None and any(fact_order(f) <= self.maximum for f in delta))
         if repair:
-            ordered = union(self, delta)
+            duplicates = self.duplicates
+            ordered = union(self, delta, duplicates=duplicates)
             fresh = LedgerView(ordered)
+            fresh.duplicates = duplicates
             prior = self.revision
             self.__dict__.clear()
             self.__dict__.update(fresh.__dict__)
@@ -249,6 +271,9 @@ class LedgerView(list):
             'reply-channels': ('source', 'letter'),
             'attachments': ('source', 'blob', 'letter'),
             'reply-context': ('source', 'letter'),
+            'letters-by-sender': ('letter',),
+            'wishes': ('wish', 'wish.read', 'wish.result', 'wish.verdict', 'wish.left', 'wish.top', 'wish.pick',
+                       'letter', 'lease'),
         }
         if name == 'body-state':
             revision = len(self.by_body[inputs[:2]])
@@ -268,8 +293,23 @@ def kind_facts(facts, *kinds):
     if isinstance(facts, LedgerView):
         if len(kinds) == 1:
             return facts.by_kind[kinds[0]]
-        return sorted((f for kind in kinds for f in facts.by_kind[kind]), key=lambda f: facts.positions[f.id])
+        # Bodies ask for the same merge every tick; re-sort only after one of its kinds grew.
+        counts = tuple(len(facts.by_kind[kind]) for kind in kinds)
+        prior = facts.merged_kinds.get(kinds)
+        if prior is None or prior[0] != counts:
+            prior = facts.merged_kinds[kinds] = (counts, sorted(
+                (f for kind in kinds for f in facts.by_kind[kind]), key=lambda f: facts.positions[f.id]))
+        return prior[1]
     return [f for f in facts if f.kind in kinds]
+
+
+def _names(directory, *, dirs=False):
+    try:
+        with os.scandir(directory) as entries:
+            return [e.name for e in entries
+                    if not e.name.startswith(".") and (e.is_dir() if dirs else e.is_file())]
+    except (FileNotFoundError, NotADirectoryError):
+        return []
 
 
 class LedgerReader:
@@ -277,11 +317,14 @@ class LedgerReader:
 
     Only complete lines advance the offset. Replacement, truncation, and
     same-size edits invalidate a stream; removed files leave the union.
-    Callers receive a fresh list because a tick appends its own observations.
+    ``read`` returns a fresh list because a tick appends its own observations.
+    A view ``refresh`` returned only ever grows at its tail: a reorder builds a
+    new view, so a walker on another thread never sees one half-rebuilt.
     """
 
     def __init__(self):
         self.streams = {}
+        self.listing = (None, [])
         self.ordered = LedgerView()
         self.revision = 0
 
@@ -289,12 +332,29 @@ class LedgerReader:
         return list(self.refresh(home))
 
     def refresh(self, home: Home) -> LedgerView:
-        paths = sorted((home.root / "ledger" / "facts").glob("*/*.jsonl"))
+        # Path.glob plus a Path sort costs more than the stats below; keep the parts order.
+        root = str(home.root / "ledger" / "facts")
+        names = sorted((directory, name) for directory in _names(root, dirs=True)
+                       for name in _names(f"{root}/{directory}") if name.endswith(".jsonl"))
+        if self.listing[0] != (root, names):
+            self.listing = ((root, names), [Path(root, *parts) for parts in names])
+        paths = self.listing[1]
         streams = {}
         changed = set(paths) != set(self.streams)
         repair = bool(set(self.streams) - set(paths))
         additions = []
         for path in paths:
+            prior = self.streams.get(path)
+            if prior is not None:
+                # An unchanged stream costs one stat, not an open: hundreds of streams, every body, every tick.
+                try:
+                    stat = os.stat(prior[2])
+                except FileNotFoundError:
+                    stat = None
+                if stat is not None and prior[0] == (stat.st_dev, stat.st_ino, stat.st_size,
+                                                     stat.st_mtime_ns, stat.st_ctime_ns):
+                    streams[path] = prior
+                    continue
             with path.open("rb") as handle:
                 stat = os.fstat(handle.fileno())
                 stamp = (stat.st_dev, stat.st_ino, stat.st_size, stat.st_mtime_ns,
@@ -315,13 +375,22 @@ class LedgerReader:
                 complete = raw[:raw.rfind(b"\n") + 1]
                 added = [Fact.from_row(json.loads(line))
                          for line in complete.decode().splitlines() if line.strip()]
-                streams[path] = (stamp, offset + len(complete))
+                streams[path] = (stamp, offset + len(complete), str(path))
                 additions.extend(added)
         if changed:
             if repair:
-                self.ordered = LedgerView(union(*(read_file(path) for path in paths)))
+                duplicates = []
+                self.ordered = LedgerView(union(*(read_file(path) for path in paths),
+                                                duplicates=duplicates))
+                self.ordered.duplicates = duplicates
             else:
-                self.ordered.extend(additions)
+                delta, reorder = self.ordered.incoming(additions)
+                if reorder:
+                    duplicates = list(self.ordered.duplicates)
+                    self.ordered = LedgerView(union(self.ordered, delta, duplicates=duplicates))
+                    self.ordered.duplicates = duplicates
+                else:
+                    self.ordered.apply(delta, reorder)
             self.revision += 1
         self.streams = streams
         return self.ordered
@@ -421,6 +490,11 @@ def _heal_tail(path: Path) -> None:
         os.fsync(handle.fileno())
 
 
+# Called with the lock's path when ``append`` finds it held, before it waits:
+# the loom sets it to resume a call it paused that holds the lock (pausing.py).
+ON_CONTENDED = None
+
+
 def append(home: Home, fact: Fact) -> Fact:
     """Append ``fact``. Same id + same content is a no-op; different content raises.
 
@@ -431,7 +505,12 @@ def append(home: Home, fact: Fact) -> Fact:
     directory = home.facts_dir()
     lock_path = directory / ".lock"
     with open(lock_path, "a+") as lock:
-        fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
+        try:
+            fcntl.flock(lock.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            if ON_CONTENDED is not None:
+                ON_CONTENDED(lock_path)
+            fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
         try:
             index = _writer_index(directory)
             old = index.existing.get(fact.id)

@@ -93,14 +93,29 @@ def test_opened_delivery_ignores_age_and_fuel_but_tracks_state_owed_and_removal(
         (room / 'port/in/boundary.md').write_text(text)
         return text
 
-    first = write('idle 7s')
-    assert 'opened: child idle 0m · owed 0' in first
+    # An idle child owing nothing is folded into a count (wake-vision).
+    assert 'opened: child' not in write('idle 7s')
+    assert 'idle: 1 more opened here' in write('idle 7s')
+    first = write('idle 7s', owed=1)
+    assert 'opened: child idle 0m · owed 1' in first
     assert execute('start', room, '{}') == first
     assert execute('post', room, '{}') == ''
-    assert write('idle 59s') == first
+    assert write('idle 59s', owed=1) == first
     assert execute('post', room, '{}') == ''
-    assert 'idle 1m' in write('idle 1m')
+    assert 'idle 1m' in write('idle 1m', owed=1)
     assert execute('post', room, '{}') == ''
+    # A PR's push age ticking is not news; its CI turning is, said once and not as gone.
+    row['prs'] = ['#7 draft pending 2h']
+    assert 'owed 1 · #7 draft pending 2h' in write('idle 1m', owed=1)
+    assert execute('post', room, '{}')
+    row['prs'] = ['#7 draft pending 3h']
+    write('idle 1m', owed=1)
+    assert execute('post', room, '{}') == ''
+    row['prs'] = ['#7 draft green 3h']
+    write('idle 1m', owed=1)
+    said = json.loads(execute('post', room, '{}'))['hookSpecificOutput']['additionalContext']
+    assert '#7 draft green 3h' in said and 'gone:' not in said
+    row['prs'] = []
     holding = write('holding 84%')
     assert 'opened: child holding · owed 0' in holding
     assert execute('post', room, '{}')
@@ -119,10 +134,28 @@ def test_stop_blocks_while_letters_are_owed(tmp_path):
     text = _write(room, [_letter()])
     payload = json.loads(execute("stop", room, "{}"))
     assert payload["decision"] == "block"
-    assert payload["reason"] == text
+    assert payload["reason"].endswith(text)
+    assert '- p-test/abcde: brnrd runtime send --re p-test/abcde --to thread:tb "<answer>"' in payload["reason"]
     state = json.loads((room / "port" / "jack-state.json").read_text())
     assert state["stop_blocks"] == 1
     assert list((room / "port" / "out").glob("*.md"))
+
+
+def test_a_stop_repeats_only_what_was_not_said(tmp_path):
+    # A blocked stop used to re-send the whole boundary the body had just read.
+    room = _room(tmp_path)
+    _write(room, [_letter()])
+    assert "ping-1" in execute("start", room, "{}")
+    reason = json.loads(execute("stop", room, "{}"))["reason"]
+    assert "ping-1" not in reason
+    assert "owed: p-test/abcde (shown before)" in reason
+    newer = Fact(kind="letter", by="strand:s-ab12-bbbbbb", id="p-test/fghij",
+                 data={"id": "p-test/fghij", "to": "thread:ta", "body": "pong-2", "from": "s-ab12-bbbbbb"})
+    _write(room, [_letter(), newer])
+    execute("post", room, "{}")
+    _write(room, [_letter(), newer])
+    reason = json.loads(execute("stop", room, "{}"))["reason"]
+    assert "pong-2" not in reason and "p-test/fghij" in reason
 
 
 def test_three_blocks_then_the_stop_is_allowed(tmp_path, monkeypatch):
@@ -206,7 +239,7 @@ def test_stop_shows_owed_letters_before_reading_wait(tmp_path):
     text = _write(room, [_letter()])
     (room / "port" / "wait").write_text("broken wait")
     payload = json.loads(execute("stop", room, "{}"))
-    assert payload == {"decision": "block", "reason": text}
+    assert payload["decision"] == "block" and payload["reason"].endswith(text)
     assert list((room / "port" / "out").glob("*.md"))
 
 
@@ -226,23 +259,6 @@ def test_a_dry_body_does_not_take_a_turn_for_an_owed_letter(tmp_path, monkeypatc
     monkeypatch.setenv("BRNRD_STOP_TIMEOUT", str(6 * 3600 + 60))
     monkeypatch.setattr(usage, "dry_until", lambda home, shell: usage.time.time() + 60 if next(dry) else None)
     assert json.loads(jack.execute("stop", room, "{}"))["decision"] == "block"
-
-
-def test_post_says_the_context_weight_once_per_band(tmp_path):
-    room = _room(tmp_path)
-    _write(room, [])
-    transcript = tmp_path / "t.jsonl"
-
-    def call(tokens):
-        with transcript.open("a") as out:
-            out.write(json.dumps({"message": {"usage": {"input_tokens": 1, "cache_read_input_tokens": tokens}}}) + "\n")
-        return execute("post", room, json.dumps({"tool_name": "Bash", "transcript_path": str(transcript)}))
-
-    assert call(40_000) == ""
-    first = json.loads(call(120_000))["hookSpecificOutput"]["additionalContext"]
-    assert first.startswith("context: 120k tokens") and "booted at 40k" in first
-    assert call(130_000) == ""
-    assert "context: 151k" in call(151_000)
 
 
 @pytest.mark.parametrize('shell,cache,override,creation,expected', [
@@ -285,26 +301,132 @@ def test_stop_holds_for_the_shells_cache_or_the_hook_ceiling(
     assert now[0] == pytest.approx(expected)
 
 
-def test_post_traces_the_call_without_its_command(tmp_path):
+def test_post_traces_the_call_with_its_command_masked(tmp_path):
     from brr.loom.runtime import tooltrace
     room = _room(tmp_path)
-    secret = "curl -H 'Authorization: Bearer sk-live-SECRET' https://x.test/a?token=SECRET"
+    secret = "curl -H 'Authorization: Bearer sk-live-SECRET' https://u:SECRET@x.test/a?token=SECRET"
     calls = [
         {"tool_name": "Bash", "tool_input": {"command": secret, "description": "Fetch the thing"}},
-        {"tool_name": "Bash", "tool_input": {"command": secret}},
+        {"tool_name": "Bash", "tool_input": {"command": "cat > f <<'EOF'\nSECRET body\nEOF"}},
+        {"tool_name": "Bash", "tool_input": {"command": "echo ghx_0123456789abcdefghij0123456789abcdef"}},
         {"tool_name": "Read", "tool_input": {"file_path": "/Users/x/private/SECRET-dir/notes.md"}},
         {"tool_name": "Grep", "tool_input": {"pattern": "def execute", "path": "/a/SECRET"}},
         {"tool_name": "WebFetch", "tool_input": {"url": "https://x.test/a?token=SECRET", "prompt": "p"}},
+        {"tool_name": "Bash", "tool_input": {"command": "mysql -pSECRETpw db"}},
+        {"tool_name": "Bash", "tool_input": {"command": "sshpass -p SECRET2 ssh h"}},
+        {"tool_name": "Bash", "tool_input": {"command": "curl -u bob:SECRET https://x"}},
+        {"tool_name": "Bash", "tool_input": {"command": "sshpass -p 'SECRET 2' ssh h"}},
+        {"tool_name": "Bash", "tool_input": {"command": "mysql -p'SECRET' db"}},
+        {"tool_name": "Bash", "tool_input": {"command": "curl -u 'bob:SECRET x' https://x"}},
+        {"tool_name": "Bash", "tool_input": {"command": "ssh -p 22 h && mkdir -p a/b && pytest -p no:randomly"}},
     ]
-    for call in calls:
-        execute("post", room, json.dumps(call))
+    for n, call in enumerate(calls):
+        execute("pre", room, json.dumps(dict(call, tool_use_id=f"t{n}")))
+        execute("post", room, json.dumps(dict(call, tool_use_id=f"t{n}", duration_ms=5)))
     text = (room / "port" / "tools.jsonl").read_text()
-    assert "SECRET" not in text and "curl" not in text
+    assert "SECRET" not in text and "0123456789abcdef" not in text
     rows = tooltrace.read(room)
     assert [(r["tool"], r["arg"]) for r in rows] == [
-        ("Bash", "Fetch the thing"), ("Bash", ""), ("Read", "notes.md"),
+        ("Bash", "Fetch the thing"), ("Bash", ""), ("Bash", ""), ("Read", "notes.md"),
         ("Grep", "def execute"), ("WebFetch", "x.test"),
+        *[("Bash", "")] * 7,
     ]
+    assert rows[0]["cmd"].startswith("curl -H 'Authorization: <redacted>")
+    assert "://<redacted>@x.test" in rows[0]["cmd"]
+    assert rows[1]["cmd"] == "cat > f <<'EOF' …"
+    assert rows[2]["cmd"] == "echo <redacted>"
+    assert [r["cmd"] for r in rows[6:]] == [
+        "mysql -p<redacted> db", "sshpass -p <redacted> ssh h", "curl -u bob:<redacted> https://x",
+        "sshpass -p '<redacted>' ssh h", "mysql -p'<redacted>' db", "curl -u 'bob:<redacted>' https://x",
+        "ssh -p 22 h && mkdir -p a/b && pytest -p no:randomly",
+    ]
+    assert all(r["end"] is not None and r["ms"] == 5 for r in rows)
+
+
+def test_an_open_call_is_live_with_its_line_until_its_post(tmp_path, monkeypatch):
+    from brr.loom.runtime import tooltrace
+    room = _room(tmp_path)
+    transcript = tmp_path / "t.jsonl"
+    transcript.write_text("".join(json.dumps(e) + "\n" for e in [
+        {"type": "assistant", "message": {"content": [{"type": "text", "text": "Old line."}]}},
+        {"type": "user", "message": {"content": "x"}},
+        {"type": "assistant", "message": {"content": [
+            {"type": "text", "text": "Running the suite now. It takes a while."}, {"type": "tool_use"}]}},
+    ]))
+    sleep = {"tool_name": "Bash", "tool_use_id": "s1", "transcript_path": str(transcript),
+             "tool_input": {"command": "sleep 90", "description": "Wait"}}
+    execute("pre", room, json.dumps(sleep))
+    execute("pre", room, json.dumps(dict(sleep, tool_use_id="s2", tool_input={"command": "ls"})))
+    execute("post", room, json.dumps(dict(sleep, tool_use_id="s2", tool_input={"command": "ls"})))
+    now = tooltrace.live(room)
+    assert [(c["cmd"], c["end"]) for c in now["open"]] == [("sleep 90", None)]
+    assert now["say"] == "Running the suite now." and now["last_end"] and now["paused"] is None
+    lines = (room / "port" / "tools.jsonl").read_text().splitlines()
+    assert sum('"say"' in line for line in lines) == 1  # written when it changes, not per call
+    execute("post", room, json.dumps(dict(sleep, hook_event_name="PostToolUseFailure")))
+    assert tooltrace.live(room)["open"] == []
+    assert tooltrace.read(room)[0]["failed"] is True
+
+
+def test_a_refused_call_is_written_ended(tmp_path, monkeypatch):
+    from brr.loom.runtime import tooltrace
+    room = _room(tmp_path)
+    from brr.loom.runtime import jack
+    monkeypatch.setattr(jack, "_guard_warnings", lambda *a: ("guard x", True))
+    out = json.loads(execute("pre", room, json.dumps(
+        {"tool_name": "Bash", "tool_use_id": "r1", "tool_input": {"command": "rm -rf x"}})))
+    assert out["hookSpecificOutput"]["permissionDecision"] == "deny"
+    [row] = tooltrace.read(room)
+    assert row["cmd"] == "rm -rf x" and row["end"] is not None and row["failed"] is True
+    assert tooltrace.live(room)["open"] == []
+
+
+def test_lines_without_ids_or_starts_still_read_as_calls(tmp_path):
+    from brr.loom.runtime import tooltrace
+    room = _room(tmp_path)
+    (room / "port" / "tools.jsonl").write_text("".join(json.dumps(r) + "\n" for r in [
+        {"at": 10.0, "tool": "Read", "arg": "old.md"},  # before starts were written
+        {"at": 11.0, "end": 0, "tool": "Bash", "arg": "a"},  # grok/vibe: no id
+        {"at": 12.0, "end": 0, "tool": "Bash", "arg": "b"},
+        {"at": 13.0, "end": 1, "tool": "Bash", "arg": "a"},
+        {"at": 20.0, "end": 1, "id": "lost", "tool": "Grep", "arg": "p", "ms": 4000},
+    ]))
+    rows = tooltrace.read(room)
+    assert [(r["arg"], r["at"], r["end"]) for r in rows] == [
+        ("old.md", 10.0, 10.0), ("a", 11.0, 13.0), ("b", 12.0, None), ("p", 16.0, 20.0)]
+    assert [c["arg"] for c in tooltrace.live(room)["open"]] == ["b"]
+
+
+def test_a_codex_room_reads_its_rollout(tmp_path, monkeypatch):
+    from brr.loom.runtime import tooltrace
+    room = _room(tmp_path)
+    thread = "01a1-codex-thread"
+    (room / "port" / "body.log").write_text(
+        "noise\n" + json.dumps({"type": "thread.started", "thread_id": thread}) + "\n")
+    monkeypatch.setenv("CODEX_HOME", str(tmp_path / "codex"))
+    rollout = tmp_path / "codex/sessions/2026/10/23" / f"rollout-2026-10-23T00-00-00-{thread}.jsonl"
+    rollout.parent.mkdir(parents=True)
+
+    def item(ts, payload):
+        return json.dumps({"timestamp": f"2026-10-23T00:00:{ts:02d}.000Z", "type": "response_item",
+                           "payload": payload}) + "\n"
+    exec_input = "text(await tools.exec_command({cmd:'pytest -q tests/x --token=SECRET',max_output_tokens:9}));"
+    rollout.write_text(
+        item(0, {"type": "message", "role": "assistant", "phase": "commentary",
+                 "content": [{"type": "output_text", "text": "Running the tests. Then publish."}]})
+        + item(1, {"type": "custom_tool_call", "call_id": "c1", "name": "exec", "input": exec_input})
+        + item(31, {"type": "custom_tool_call_output", "call_id": "c1",
+                    "output": [{"type": "input_text", "text": "Script running with cell ID 7\nWall time 30"}]})
+        + item(33, {"type": "function_call", "call_id": "c2", "name": "wait", "arguments": '{"cell_id":"7"}'}))
+    now = tooltrace.live(room)
+    [running] = now["open"]
+    assert running["cmd"] == "pytest -q tests/x --token=<redacted>" and now["say"] == "Running the tests."
+    assert running["at"] == tooltrace._stamp("2026-10-23T00:00:01.000Z")
+    with rollout.open("a") as handle:  # read on from where the last read stopped
+        handle.write(item(50, {"type": "function_call_output", "call_id": "c2", "output": "Script completed"}))
+    assert tooltrace.live(room)["open"] == []
+    [done] = tooltrace.read(room)
+    assert done["end"] - done["at"] == 49
 
 
 def test_tool_trace_never_fails_the_hook_and_rotates(tmp_path, monkeypatch):
@@ -321,3 +443,85 @@ def test_tool_trace_never_fails_the_hook_and_rotates(tmp_path, monkeypatch):
     args = [r["arg"] for r in tooltrace.read(room)]
     assert args[-1] == "step 19" and args == sorted(args, key=lambda a: int(a.split()[1]))
     assert len(tooltrace.read(room, limit=3)) == 3
+
+
+def test_a_post_says_only_what_changed_since_the_last_boundary(tmp_path):
+    """wake-vision: a live post re-sent ~7 KB (every row, every owed letter) on every call."""
+    room = _room(tmp_path)
+    first = _letter("ping-1\nmore")
+    _write(room, [first])
+    assert "ping-1\n  more" in execute("start", room, "{}")
+    _write(room, [first], shown={"p-test/abcde"})
+    # Owed, shown at the wake, nothing new: the post is silent, the stop still holds on it.
+    assert execute("post", room, json.dumps({"tool_name": "Bash"})) == ""
+    second = Fact(kind="letter", by="strand:s-ab12-bbbbbb", id="p-test/fghij",
+                  data={"id": "p-test/fghij", "to": "thread:ta", "body": "pong-2\nwhole", "from": "s-ab12-bbbbbb"})
+    _write(room, [first, second], shown={"p-test/abcde"})
+    said = json.loads(execute("post", room, json.dumps({"tool_name": "Bash"})))["hookSpecificOutput"]["additionalContext"]
+    assert "pong-2\n  whole" in said
+    assert "ping-1" not in said and "status:" not in said
+    assert "owed: p-test/abcde (shown before)" in said
+    assert [letter.id for letter in parse_boundary(said).letters] == ["p-test/fghij"]
+    _write(room, [first, second], shown={"p-test/abcde", "p-test/fghij"})
+    assert execute("post", room, json.dumps({"tool_name": "Bash"})) == ""
+
+
+def _reply(room: Path, re: str) -> None:
+    (room / "port" / "out" / "zzzzz.md").write_text(
+        f"---\nkind: letter\nid: {STRAND}/zzzzz\nto: thread:tb\nfrom: {STRAND}\nre: {re}\n---\nanswered\n")
+
+
+def test_a_reply_waiting_in_port_out_counts_as_answered_at_the_stop(tmp_path, monkeypatch):
+    # The loom drains port/out on its tick; a slow loom kept re-showing answered letters.
+    monkeypatch.setenv("BRNRD_STOP_TIMEOUT", "91")  # ceiling 1s: the hold returns at once
+    room = _room(tmp_path)
+    _write(room, [_letter()])
+    _reply(room, "p-test/abcde")
+    held = json.loads(execute("stop", room, "{}"))
+    assert held["reason"].startswith("cache keepalive, nothing new arrived")
+    assert "send --re p-test/abcde" not in held["reason"]
+
+
+@pytest.mark.parametrize("kind", ["letter", "note"])
+def test_a_reply_the_loom_drained_still_counts_while_the_boundary_lags(tmp_path, monkeypatch, kind):
+    # stop-answered: once the loom drained a reply from port/out it left
+    # 'answered', and the boundary listed the letter until the loom rendered again.
+    from brr.loom.runtime.ledger import append
+    from brr.loom.runtime.port import fact_from_port, parse_frontmatter
+    monkeypatch.setenv("BRNRD_STOP_TIMEOUT", "91")
+    room = _room(tmp_path)
+    _write(room, [_letter()])
+    _reply(room, "p-test/abcde")
+    if kind == "note":
+        (room / "port" / "out" / "zzzzz.md").write_text(
+            f"---\nkind: note\nid: {STRAND}/zzzzz\nre: p-test/abcde\nnote: an ack, nothing asked\n---\n")
+    for path in (room / "port" / "out").glob("*.md"):
+        append(Home(tmp_path), fact_from_port(parse_frontmatter(path.read_text()), STRAND, 1, room=room))
+        path.unlink()
+    held = json.loads(execute("stop", room, "{}"))
+    assert held["reason"].startswith("cache keepalive, nothing new arrived")
+    assert "send --re p-test/abcde" not in held["reason"]
+
+
+def test_the_stop_repeats_its_whole_list_after_work_and_lets_an_idle_repeat_through(tmp_path, monkeypatch):
+    monkeypatch.setenv("BRNRD_STOP_TIMEOUT", "91")
+    room = _room(tmp_path)
+    _write(room, [_letter()])
+    first = json.loads(execute("stop", room, "{}"))["reason"]
+    assert first.startswith("the stop holds on 1 thing")
+    execute("post", room, "{}")
+    again = json.loads(execute("stop", room, "{}"))["reason"]
+    assert "send --re p-test/abcde --to thread:tb" in again
+    # Nothing done since the same list: the body read it, and is not trapped.
+    assert "the stop holds" not in execute("stop", room, "{}")
+
+
+def test_a_patched_jack_clock_stays_out_of_the_shared_time_module(monkeypatch):
+    """Other threads keep the real sleep (tests/loom/conftest.py `_private_jack_clock`)."""
+    import time as shared
+
+    from brr.loom.runtime import jack
+
+    real = shared.sleep
+    monkeypatch.setattr(jack.time, "sleep", lambda s: None)
+    assert shared.sleep is real

@@ -61,7 +61,8 @@ def test_ask_writes_the_wish_and_its_recommendation(ledger):
     ask = command(home, seat, "ask", "Pick a name", "--for", root, "--rec", "Call it loom")
     made = view(home, ask)
     assert (made.sender, made.parent, made.thread, made.line) == ("resident", root, "work", "Pick a name")
-    assert (made.state, made.reading, made.reads[-1]["by"]) == ("read", "Call it loom", "resident")
+    # The rec is the asker's proposal: it never reads as an answer.
+    assert (made.state, made.reading, made.reads, made.rec) == ("heard", "", [], "Call it loom")
     assert made.origin == "said"
     bare = command(home, seat, "ask", "Pick a colour", "--for", root)
     assert view(home, bare).state == "heard"
@@ -115,6 +116,24 @@ def test_an_ask_under_a_settled_opener_waits_on_the_operator_and_mails_nobody(le
     ask = command(home, leaf, "ask", "Keep going?", "--for", wish)
     assert mail(leaf, ask) == []
     assert turns(home)["leaf"] == ("yours", ["operator"])
+
+
+def test_an_ask_that_waits_on_the_person_is_mailed_to_their_direct_channel(ledger):
+    # Typing an ask is sending it (requests R3), and a retry never mails twice.
+    home, seat = ledger
+    (home.root / "loom/config.toml").write_text('connectors = ["mine=fake"]\n')
+    (home.root / "self/people/ada").mkdir(parents=True)
+    (home.root / "self/people/ada/channels.toml").write_text('channels = ["mine:42"]\n')
+    _wish, mid = child(home, seat, "mid", "s-aaaa-mid")
+    wish, leaf = child(home, mid, "leaf", "s-aaaa-leaf")
+    command(home, seat, "settle", "mid", "--why", "split done")
+    ask = command(home, leaf, "ask", "Keep going?", "--for", wish, "--rec", "yes")
+    sent, = mail(leaf, ask)
+    assert "to: channel:mine/42" in sent
+    assert f"ask {ask} from thread:leaf: Keep going?" in sent and "rec: yes" in sent
+    assert f"Reply to this message to answer &{ask}." in sent
+    assert command(home, leaf, "ask", "Keep going?", "--for", wish) == ask
+    assert len(mail(leaf, ask)) == 1
 
 
 def test_the_chain_reaches_a_person_and_survives_a_loop():
@@ -184,4 +203,4 @@ def test_a_retried_ask_finishes_the_one_that_half_happened(ledger):
     assert retry.returncode == 0 and f"reused {ask}" in retry.stderr
     assert mail(mid, ask) == []
     asks = [w for w in wishes(read_facts(home)).values() if w.sender == "resident"]
-    assert [w.id for w in asks] == [ask] and len(asks[0].reads) == 1
+    assert [w.id for w in asks] == [ask] and asks[0].reads == [] and asks[0].stamps == []

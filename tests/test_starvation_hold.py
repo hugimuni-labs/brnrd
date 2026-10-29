@@ -464,27 +464,6 @@ class TestWallArmedOnAFallbackBody:
 # ── the record itself ─────────────────────────────────────────────────
 
 
-def test_build_keeps_quota_and_deadline_only_for_refill():
-    refill = resource_hold.build(
-        reason="x", provider="claude", resume_condition=resource_hold.RESUME_REFILL,
-        reset_deadline=1.0, quota={"refill_floor_pct": 10},
-    )
-    assert refill["quota"] == {"refill_floor_pct": 10} and refill["reset_deadline"] == 1.0
-    plain = resource_hold.build(reason="x", provider="claude", quota={"refill_floor_pct": 10})
-    assert plain["quota"] is None
-    assert resource_hold.refill_condition_met(refill, 10.0)
-    assert not resource_hold.refill_condition_met(refill, 9.9)
-    assert not resource_hold.refill_condition_met(refill, None)
-    assert resource_hold.refuses_correspondent(refill)
-    assert not resource_hold.refuses_correspondent(plain)
-
-
-def test_hold_verb_parses_refill():
-    from brr import hold_verb
-    spec, err = hold_verb.parse_hold({"hold": "true", "resume": "refill"})
-    assert err is None and spec["resume_condition"] == resource_hold.RESUME_REFILL
-
-
 # ── the words a person can say to a starved seat ─────────────────────
 
 

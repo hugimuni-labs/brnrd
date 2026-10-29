@@ -10,7 +10,7 @@ from brr.loom.runtime.home import Home
 from brr.loom.runtime.ledger import append, inject_letter, read_facts, fact_filename
 from brr.loom.runtime.registry import UndeclaredFact
 from brr.loom.runtime.selfrepo import init_self, room, run_wake
-from brr.loom.runtime.wishes import wishes
+from brr.loom.runtime.wishes import Say, wishes
 from test_wake import cli, commit, write_thread
 
 
@@ -101,7 +101,7 @@ def test_says_asks_and_send_stamp(ledger):
                   "--parent", said)
     assert view(home, derived).parent == view(home, ask).parent == said
     assert view(home, derived).derived_unconfirmed
-    assert view(home, said).says == [[letter, 2, 4]]
+    assert view(home, said).says == [Say(letter, 2, 4)]
     assert view(home, said).origin == "said"
     command(home, seat, "wish", derived, "--read", "confirmed", person=True)
     assert not view(home, derived).derived_unconfirmed
@@ -111,10 +111,10 @@ def test_says_asks_and_send_stamp(ledger):
     assert section.splitlines()[0].startswith(ask)
     sent = command(home, seat, "send", "--to", "thread:other", "--re", letter, "--wish", "new:Stamped reply", "A reply")
     stamped = next(w for w in wishes(read_facts(home)).values() if w.line == "Stamped reply")
-    assert stamped.says == [[letter, 0, None]]
+    assert stamped.says == [Say(letter, 0, None)]
     assert (seat / "port/out" / (sent.split("/")[1] + ".md")).exists()
     command(home, seat, "send", "--to", "thread:other", "--re", letter, "--wish", said, "Followup")
-    assert view(home, said).says == [[letter, 2, 4], [letter, 0, None]]
+    assert view(home, said).says == [Say(letter, 2, 4), Say(letter, 0, None)]
     assert "asks (yours)" in command(home, seat, "wishes")
     append(home, Fact(kind="letter", by="strand:s-aaaa-test", id="s-aaaa-test/source", data={
         "id": "s-aaaa-test/source", "from": "s-aaaa-test", "to": "thread:other", "body": "Inference", "gen": 1}))
@@ -224,7 +224,7 @@ def test_wake_caps_rows_with_asks_first(ledger):
     output = StringIO()
     assert run_wake(seat, "work", stdout=output) == 0
     section = output.getvalue().split("## Wishes\n")[1].split("## Notes")[0]
-    lines = section.strip().splitlines()
+    lines = [line for line in section.strip().splitlines() if not line.startswith("  ")]
     assert lines[0].startswith("w-069 ·")
     assert len(lines) == 21
     assert lines[-1] == "+50 more · wishes --thread work"
@@ -239,19 +239,30 @@ def delivered_wish(home, seat, line="Delivered work"):
 
 
 @pytest.mark.parametrize("retire", [False, True])
-def test_settle_refuses_each_delivered_wish_without_changing_state(ledger, retire):
+def test_settle_leaves_each_delivered_wish_delivered_on_the_closed_thread(ledger, retire):
     from brr.loom.runtime.lifecycle import read_thread
 
     home, seat = ledger
     ids = [delivered_wish(home, seat, str(i)) for i in range(2)]
-    said = word(home)
-    before = read_facts(home)
-    error = command(home, seat, "settle", "work", "--word", said, "--why", "Finished",
-                    *(["--retire"] if retire else []), ok=False)
-    assert all(ident in error for ident in ids)
-    assert "--hand-to" in error
+    stamps = [f for f in read_facts(home) if f.kind == "wish"]
+    command(home, seat, "settle", "work", "--why", "Finished", *(["--retire"] if retire else []))
+    assert read_thread(home, "work")["status"] == ("retired" if retire else "settled")
+    # Silence archives the thread, never accepts the wish: no verdict, no move.
+    assert [f for f in read_facts(home) if f.kind == "wish"] == stamps
+    assert not any(f.kind == "wish.verdict" for f in read_facts(home))
+    for ident in ids:
+        assert view(home, ident).state == "delivered"
+        assert view(home, ident).thread == "work"
+
+
+def test_settle_with_work_in_hand_still_needs_the_persons_word(ledger):
+    from brr.loom.runtime.lifecycle import read_thread
+
+    home, seat = ledger
+    delivered_wish(home, seat)
+    heard(home, seat, "Still heard")
+    assert "--word" in command(home, seat, "settle", "work", "--why", "Finished", ok=False)
     assert read_thread(home, "work")["status"] == "open"
-    assert read_facts(home) == before
 
 
 @pytest.mark.parametrize("verdict", [("--accept", "word"), ("--drop", "Cancelled")])

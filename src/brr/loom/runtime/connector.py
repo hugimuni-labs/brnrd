@@ -18,6 +18,7 @@ from .labels import guard_off, is_stranger
 from .ledger import append, read_facts
 from .port import clean_accepts, parse_frontmatter
 from .project import fold, sender_threads
+from .refs import link, miss_words
 from .wishes import wishes
 
 
@@ -57,6 +58,14 @@ class Inputs:
         self.names = instances(home)
 
     def step(self):
+        # Read at every step: a channel paired while the loom runs is heard
+        # without a restart, and one taken away stops being polled.
+        names = instances(self.home)
+        if names != self.names:
+            carries(self.home)
+            for name in [n for n in self.children if self.names.get(n) != names.get(n)]:
+                self._stop(self.children.pop(name)[0])
+            self.names = names
         for name, kind in self.names.items():
             folder = resolve(self.home, kind, "connectors")
             drop = self.home.root / "loom/connectors" / name / "state/in"
@@ -78,13 +87,18 @@ class Inputs:
 
     def close(self):
         for child, _due, _delay in self.children.values():
-            if child is not None and child.poll() is None:
-                child.terminate()
-                try:
-                    child.wait(timeout=2)
-                except subprocess.TimeoutExpired:
-                    child.kill()
-                    child.wait()
+            self._stop(child)
+        self.children.clear()
+
+    @staticmethod
+    def _stop(child):
+        if child is not None and child.poll() is None:
+            child.terminate()
+            try:
+                child.wait(timeout=2)
+            except subprocess.TimeoutExpired:
+                child.kill()
+                child.wait()
 
 
 def addressed(name, fm):
@@ -113,6 +127,13 @@ def ingest(home, name, fm, attachments):
         to = (f"thread:{fm['thread']}" if fm.get('thread') else
               route_bare(facts, f'{platform}/{chat}', binding[1] if binding else None,
                          home.main_thread()))
+        # A bare yes in reply to a delivery letter is the agree it asked for.
+        if not fm.get('verdict') and binding and sender.startswith('person:'):
+            fm = dict(fm, **_agree(facts, binding[0], fm['body']))
+        # A verdict belongs to the thread that owns its wish, wherever it was given.
+        owner = wishes(facts).get(fm.get('wish')) if fm.get('verdict') and sender.startswith('person:') else None
+        if owner is not None and home.routable(owner.thread):
+            to = f'thread:{owner.thread}'
         if not home.routable(to.removeprefix('thread:')):
             to = f'thread:{home.main_thread()}'
         blobs, blob_ids = [], []
@@ -141,6 +162,13 @@ def ingest(home, name, fm, attachments):
             data['blobs_missing'] = [int(n) for n in fm['missing'].split()]
         if clean:
             data.update(clean=fm['kind'], refs=fm['refs'].split())
+        # A ref that names nothing never refuses his letter: it lands without that link.
+        from .lifecycle import main_snapshot
+        links, misses = link(facts, main_snapshot(home), fm['body'])
+        if links:
+            data['links'] = links
+        if misses:
+            data['refs_missing'] = misses
         source = append(home, Fact(kind='source', by=f'loom:{home.install_id()}',
                                    id=source_id, after=tuple(blob_ids), data=data))
     letter_id = source_id.replace('source:', 'letter:', 1)
@@ -151,25 +179,89 @@ def ingest(home, name, fm, attachments):
                       cites=source.id, label=data['label'])
         if binding:
             fields['re'] = str(binding[0].data.get('id') or binding[0].id)
-        for key in ('clean', 'refs', 'wake', 'wish', 'verdict'):
+        for key in ('clean', 'refs', 'links', 'wake', 'wish', 'verdict'):
             if key in data:
                 fields[key] = data[key]
         append(home, Fact(kind='letter', by=f'loom:{home.install_id()}', id=letter_id,
                           after=(source.id,), data=fields))
+    if source.data.get('refs_missing'):
+        from .loom import notice
+        facts = read_facts(home)
+        letter = next(f for f in facts if f.id == letter_id)
+        words = miss_words(source.data['refs_missing'])
+        notice(home, facts, 'ref-unknown', letter_id, f"{letter_id} from {source.data['from']}: {words}",
+               'nothing to look for: those ids do not exist',
+               thread=source.data['to'].removeprefix('thread:'), passive=True)
+        if source.data['from'].startswith('person:'):
+            notice(home, facts, 'ref-told', letter_id, f'Your letter landed; {words}.',
+                   'Check the id and send the ref again if it matters.',
+                   about=letter, channel=source.data['channel'], passive=True)
     # A person's agree on a delivered wish is its acceptance; a correct is the letter.
     verdict_id = f'wish.verdict:{letter_id}'
     if (source.data.get('verdict') == 'agree' and source.data['from'].startswith('person:')
             and not any(f.id == verdict_id for f in facts)):
         wish = wishes(facts).get(source.data.get('wish'))
-        if wish is not None and wish.state == 'delivered':
+        if wish is not None and wish.state in {'delivered', 'expired'}:
             append(home, Fact(kind='wish.verdict', by=source.data['from'], id=verdict_id,
                               data={'wish': wish.id, 'as': 'accepted', 'evidence': 'word', 'ref': letter_id}))
+    if source.data.get('verdict') and source.data['from'].startswith('person:'):
+        heard(home, letter_id, source.data)
     if source.data.get('blobs_missing'):
         from .loom import notice
         notice(home, read_facts(home), 'blobs-missing', source.id,
                f"{name}: gave up on attachment(s) {source.data['blobs_missing']} of {letter_id} after 3 pulls",
                'ask the sender to send the files again if they matter',
                thread=source.data['to'].removeprefix('thread:'))
+
+
+def heard(home, letter_id, data):
+    """A person's verdict is news to its wish's thread and to the inbox; only a correct asks for work.
+
+    An agree is settled by the loom as it lands; each thread it reaches gets a
+    passive notice, shown once and owed by nobody. A correct stays owed on the
+    wish's thread, and the inbox, the center, is told of it the same way.
+    """
+    from .loom import notice
+    facts = read_facts(home)
+    found = wishes(facts).get(data.get('wish'))
+    line = f' "{found.line}"' if found is not None and found.line else ''
+    thread = data['to'].removeprefix('thread:')
+    words = f"verdict: {data['verdict']} on {data['wish']}{line} from {data['from']} ({letter_id})"
+    # A correct is itself the letter owed on its thread; that thread needs no notice of it.
+    targets = {home.main_thread()} | ({thread} if data['verdict'] == 'agree' else set())
+    if data['verdict'] == 'agree':
+        if not any(f.kind == 'note' and f.data.get('re') == letter_id for f in facts):
+            append(home, Fact(kind='note', by=f'loom:{home.install_id()}', id=f'note:verdict:{letter_id}',
+                              data={'re': letter_id, 'body': 'an agree is a notice: no reply owed'}))
+    else:
+        targets.discard(thread)
+    can = 'nothing owed' if data['verdict'] == 'agree' else f'nothing owed here; the letter is owed on thread {thread}'
+    # A settled thread may still hold delivered wishes (silence archives a
+    # thread, never accepts a wish). A letter to a closed thread climbs to its
+    # open ancestor (owners); with none, a correct would wait on nobody, so
+    # the inbox owes it instead.
+    orphan = data['verdict'] == 'correct' and not _open_ancestor(home, thread)
+    if orphan:
+        targets.discard(thread)
+        can = (f'thread {thread} is settled: reopen it with a letter to thread:{thread} '
+               'that carries the correction, or answer the person here')
+    for target in sorted(targets):
+        notice(home, read_facts(home), f'verdict-{target}', letter_id, words, can, thread=target,
+               passive=not orphan)
+
+
+def _open_ancestor(home, thread):
+    """``thread`` itself when open, else the nearest open opener thread, else None."""
+    from .lifecycle import CLOSED, read_thread
+    seen = set()
+    while thread and thread not in seen:
+        seen.add(thread)
+        data = read_thread(home, thread)
+        if not data or data.get('status') not in CLOSED:
+            return thread if data else None
+        opener = str(data.get('opened-by', ''))
+        thread = opener.removeprefix('thread:') if opener.startswith('thread:') else None
+    return None
 
 
 def drain(home, name, drop, failures=None):
@@ -254,6 +346,18 @@ def _speech(facts, channel, kind):
             yield fact.data, letter, thread
 
 
+AGREE = frozenset({'ok', 'okay', 'yes', 'y', 'accept', 'accepted', 'agree', 'lgtm', 'good', 'done', '+1', '👍', '✅'})
+
+
+def _agree(facts, letter, body) -> dict:
+    """``{verdict, wish}`` when ``body`` is a bare yes to a letter that delivered one wish."""
+    if body.strip().strip('.!').lower() not in AGREE:
+        return {}
+    found = wishes(facts)
+    delivered = [i for i in letter.data.get('links') or () if i in found and found[i].state in {'delivered', 'expired'}]
+    return {'verdict': 'agree', 'wish': delivered[0]} if len(delivered) == 1 else {}
+
+
 def reply_for_message(facts, channel, message_id):
     """The outbound letter and its thread, bound by a trusted same-chat receipt."""
     if message_id not in (None, ''):
@@ -268,16 +372,16 @@ def thread_for_message(facts, channel, message_id):
     return binding[1] if binding else None
 
 
-def route_bare(facts, chat, reply_thread=None, fallback='brnrd'):
-    """A reply's thread, else the last confirmed speaker, regardless of lease."""
+def route_bare(facts, chat, reply_thread=None, fallback='inbox'):
+    """A reply's thread, else the home thread: never the last thread that spoke.
+
+    His rule (5474, 5482): any thread may write him, but only a reply-to carries
+    his answer back there; every other letter of his is the inbox's to place.
+    """
     try:
         _platform, chat_id = channel_parts(f'channel:{chat}')
     except ValueError:
         return f'thread:{fallback}'
-    if chat_id is None:
+    if chat_id is None or not reply_thread:
         return f'thread:{fallback}'
-    if reply_thread:
-        return f'thread:{reply_thread}'
-    spoken = [thread for data, _letter, thread in _speech(facts, f'channel:{chat}', 'speech')
-              if data.get('state') == 'sent']
-    return f'thread:{spoken[-1]}' if spoken else f'thread:{fallback}'
+    return f'thread:{reply_thread}'

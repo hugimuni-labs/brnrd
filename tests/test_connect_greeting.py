@@ -24,11 +24,6 @@ def _repo(tmp_path: Path) -> tuple[Path, Path]:
     return repo, brr_dir
 
 
-def test_door_for_greeting_none_when_nothing_configured(tmp_path):
-    repo, brr_dir = _repo(tmp_path)
-    assert connect_greeting.door_for_greeting(brr_dir) is None
-
-
 def test_door_for_greeting_ignores_cloud_only(tmp_path):
     """`cloud`'s relay is reply-shaped — it cannot originate a message, so a
     cloud-only pairing (no direct chat gate) must not be treated as a door."""

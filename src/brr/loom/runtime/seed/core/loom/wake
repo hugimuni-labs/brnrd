@@ -7,13 +7,13 @@ stdout is the prompt. Exit 0 is ok, exit 3 is over budget (stderr says
 what did not fit), anything else is a broken recipe.
 
 LOOM_BUDGET_BYTES defaults to 24000. LOOM_PART is a file, written by the loom.
-When LOOM_CORE names a file, the core (identity and stance) is written there
+When LOOM_CORE names a file, the core (identity, stance and role) is written there
 and left out of stdout: a body that has a system slot carries it there, where
 automated turns and compaction do not wear it down. The budget still counts it.
 The tree is cut from the bottom, and a narrowed wake says how many entries
 were left out. Then the thread's README is cut from its end, and says so: it
 is the one part the waking body can fix, so it never costs a letter. The
-identity, the stance, the notes and the occasion are never cut.
+identity, the stance, the role, the notes and the occasion are never cut.
 """
 
 from __future__ import annotations
@@ -174,12 +174,9 @@ def clip(readme: str, excess: int, limit: int) -> str:
     note = (f"[the wake cut {{}} of this README's {len(data)} bytes from its end to fit the "
             f"{limit}-byte budget; the file is whole on disk: trim it]\n")
     keep = len(data) - excess - len(note.format(len(data)).encode("utf-8"))
-    if keep <= 0:
-        return ""
-    kept = data[:keep].decode("utf-8", "ignore")
+    kept = data[:max(0, keep)].decode("utf-8", "ignore")
     kept = kept[: kept.rfind("\n") + 1] if "\n" in kept else ""
-    if not kept:
-        return ""
+    # A README smaller than the excess is cut whole, not kept whole.
     return kept + note.format(len(data) - len(kept.encode("utf-8")))
 
 
@@ -187,7 +184,11 @@ def core_text(root: Path) -> str:
     """Who wakes, whatever the occasion. Nothing per-wake goes here."""
     identity = read_exact(root / "core" / "identity.md", "core/identity.md")
     stance = read_exact(root / "memory" / "stance.md", "memory/stance.md")
-    return section("core/identity.md", identity) + section("memory/stance.md", stance)
+    text = section("core/identity.md", identity) + section("memory/stance.md", stance)
+    # How a body holds the seat. A self from before it wakes without one.
+    if (root / "core" / "role.md").is_file():
+        text += section("core/role.md", read_exact(root / "core" / "role.md", "core/role.md"))
+    return text
 
 
 def fixed_text(root: Path, thread: str, loom: str, owed: Path, excess: int = 0, limit: int = 0) -> tuple[str, str]:
@@ -291,7 +292,7 @@ def main() -> None:
         die(
             f"over budget: the wake is {total}B, {total - limit}B over its {limit}B budget, "
             f"more than cutting the thread README can give. Largest parts: {largest}. "
-            f"core/identity.md, memory/stance.md and the letters are never cut.",
+            f"core/identity.md, memory/stance.md, core/role.md and the letters are never cut.",
             3,
         )
     out = head + fit_tree(fixed, tree_lines(root, thread), limit) + tail

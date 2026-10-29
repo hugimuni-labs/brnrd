@@ -67,10 +67,15 @@ REGISTRY = (
     _kind("body.stopped",      "body",    "strand gen pid why",                               "loom",        "machine", once=True),
     _kind("body.unidentified", "body",    "strand gen pid why",                               "loom",        "machine"),
     _kind("body.exited",       "body",    "strand gen code why? failure_origin? failure_letters?",                             "loom",        "global",  once=True),
-    _kind("wish",              "wish",    "wish says from line thread parent?",                "strand person", "global"),
-    _kind("wish.read",         "wish",    "wish reading by",                                   "strand person", "global"),
-    _kind("wish.result",       "wish",    "wish kind ref line delivered cmd?",                  "strand",        "global"),
+    _kind("wish",              "wish",    "wish says from line thread parent? rec?",           "strand person", "global"),
+    _kind("wish.read",         "wish",    "wish reading by wait?",                             "strand person", "global"),
+    _kind("wish.result",       "wish",    "wish kind ref line delivered cmd?",                  "strand loom",   "global"),
     _kind("wish.verdict",      "wish",    "wish as evidence ref",                              "strand person", "global"),
+    _kind("wish.left",         "wish",    "wish steps gen same?",                              "strand",        "global"),
+    _kind("wish.top",          "wish",    "wish ref",                                          "strand person", "global"),
+    _kind("wish.pick",         "wish",    "wish why",                                          "strand",        "global"),
+    _kind("left.asked",        "wish",    "strand gen wishes",                                 "strand",        "global"),
+    _kind("thread.reopened",   "wish",    "thread wish was closed? why?",                      "strand",        "global"),
     _kind("pr.opened",         "pr",      "thread repo number url head",                       "strand",        "global"),
     _kind("pr.merged",         "pr",      "thread repo number head merge_commit",              "strand",        "global"),
     # Read by the body's table, owned elsewhere, not enforced here.
@@ -80,7 +85,15 @@ REGISTRY = (
     _kind("molt",              "letter",  "strand gen why fresh?",                            "strand",      "global"),
     _kind("attempt.ended",     "attempt", "thread strand gen ids cause code dispositions evidence", "loom",  "global",  once=True),
     _kind("port.drained",      "port",    "thread strand gen",                                "loom",        "global",  once=True),
-    _kind("loom.started",      "loom",    "install pid commit? loaded merges?",                "loom",        "global"),
+    _kind("loom.started",      "loom",    "install pid commit? loaded merges?",               "loom",        "global"),
+    _kind("loom.degraded",     "loom",    "install step error where since episode? dips?",    "loom",        "machine"),
+    _kind("loom.recovered",    "loom",    "install step since count last episode? told? grade? up?", "loom",        "machine"),
+    _kind("loom.moved",        "loom",    "install from to merges started",                   "loom",        "global"),
+    _kind("loom.pruned",       "loom",    "install ran bytes",                                "loom",        "machine"),
+    _kind("lease.fenced",      "loom",    "install gen why",                                  "loom",        "global"),
+    _kind("self.healed",       "loom",    "thread commit",                                    "loom",        "global",  once=True),
+    _kind("library.problem",   "loom",    "install name problem text since",                  "loom",        "machine"),
+    _kind("library.cleared",   "loom",    "install name problem",                             "loom",        "machine"),
 )
 
 KINDS = {row.kind: row for row in REGISTRY}
@@ -134,5 +147,7 @@ def admit(fact: Fact) -> None:
                 found.append("an ask needs the wish it unblocks: ask --for <wish>")
         elif not fact.id.startswith("wish:"):
             found.append("a wish fact is a birth (id = the wish) or a touch (id wish:…)")
+        if "rec" in fact.data and fact.data["from"] != "resident":
+            found.append("only an ask carries a rec")
     if found:
         raise UndeclaredFact(f"registry refused {fact.id}: " + "; ".join(found))

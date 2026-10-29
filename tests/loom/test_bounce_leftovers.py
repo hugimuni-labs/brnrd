@@ -34,7 +34,7 @@ from brr.loom.runtime.selfrepo import git
 ctx = Ctx(Path(sys.argv[1]))
 own = _own_thread(ctx.wake())
 letters = ctx.owed()
-if own == 'worker' and any(l.body == 'Keep this work' for l in letters):
+if own == 'worker' and any(l.body.startswith('Keep this work') for l in letters):
     clone = ctx.room / 'self'
     memory = clone / 'memory' / 'moves'
     memory.mkdir(parents=True, exist_ok=True)
@@ -64,7 +64,7 @@ assert own in {{'author', 'worker'}}, 'bounce went to the opener instead of the 
 if own == 'author' and any(l.body == 'begin' for l in letters):
     for l in letters:
         ctx.send('thread:author', note='dispatched', re=l.id)
-    ctx.send('thread:worker', 'Keep this work')
+    ctx.send('thread:worker', 'Keep this work', cite=l.id)
     Path({str(dispatched)!r}).write_text(str(os.getpid()))
     sys.exit(0)
 # A letter shown in the wake is cut to its first line at the next boundary.
@@ -82,7 +82,7 @@ for line in rest[1].splitlines()[1:]:
 text = chr(10).join(kept).rstrip()
 if own == 'author':
     atomic_write(Path({str(received)!r}), json.dumps({{'body': text, 'reader': own, 'pid': os.getpid()}}))
-    ctx.send('thread:worker', text)
+    ctx.send('thread:worker', text, re=bounce.id)
     ctx.send('thread:author', note='asked next worker to recover its room', re=bounce.id)
     sys.exit(0)
 assert 'Already landed before failure' not in text

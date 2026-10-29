@@ -1,5 +1,6 @@
 """A shell is a folder; a home's folder wins over the bundled one."""
 
+import os
 from pathlib import Path
 import re
 
@@ -13,6 +14,40 @@ def resolve(home, shell: str, group: str = "bodies") -> Path:
     if not path.is_dir() or (group == "bodies" and not (path / "run").is_file()):
         raise ValueError(f"no {group} folder for {shell!r}")
     return path.resolve()
+
+
+def parse_body(choice) -> tuple[str, str]:
+    """``(shell, core)`` from ``shell/core`` or a bare ``shell``.
+
+    A bare shell has the empty core: the harness's own model choice.
+    """
+    shell, slash, core = str(choice).strip().partition("/")
+    shell, core = shell.strip(), core.strip()
+    if not shell or (slash and not core):
+        raise ValueError(f"body must be shell or shell/core: {choice!r}")
+    return shell, core
+
+
+def body_label(shell: str, core: str) -> str:
+    """``shell/core``, or the bare shell when the harness picks the model."""
+    return f"{shell}/{core}" if core else shell
+
+
+def codex_model() -> str | None:
+    """The person's own codex default: top-level ``model`` in codex's config."""
+    path = Path(os.environ.get("CODEX_HOME") or "~/.codex").expanduser() / "config.toml"
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return None
+    for line in lines:
+        line = line.strip()
+        if line.startswith("["):
+            return None
+        match = re.fullmatch(r'model\s*=\s*"([^"]+)"\s*(#.*)?', line)
+        if match:
+            return match.group(1)
+    return None
 
 
 _SEAT_KEYS = {"body", "repo", "watch"}
@@ -64,23 +99,100 @@ def repo_dirname(source: str) -> str:
     return name
 
 
-def repos(text: str) -> list[tuple[str, str]]:
+def repos(text: str, home=None) -> list[tuple[str, str]]:
     """``repo:`` lines of a seat: ``(directory name, source)`` in seat order.
 
+    A bare name is a library entry with a source (``library/<name>.md``),
+    resolved through ``home``; with no home it is checked as a name only.
     Two lines whose sources name the same directory are refused. ``body:`` and
     ``watch:`` are ignored here.
     """
     found: list[tuple[str, str]] = []
     seen: set[str] = set()
+    shelf = None
     for key, value in _entries(text):
         if key != "repo":
             continue
-        name = repo_dirname(value)
+        if _NAME.fullmatch(value) and value != "self":
+            name = value
+            if home is not None:
+                if shelf is None:
+                    from .library import sources
+                    shelf = sources(home)
+                if name not in shelf:
+                    raise RepoSeatError(f"repo {name!r}: no library/{name}.md with a source on main")
+                value = shelf[name]
+        else:
+            name = repo_dirname(value)
         if name in seen:
             raise RepoSeatError(f"repo name {name!r} is declared twice")
         seen.add(name)
         found.append((name, value))
     return found
+
+
+_ROLE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*")
+
+
+def _preferences(home):
+    """``loom/preferences.toml`` read and checked: only ``model.<role>`` keys."""
+    from .config import ConfigError, read_values
+    path = home.root / "loom" / "preferences.toml"
+    found = read_values(path)
+    for key in found:
+        if not key.startswith("model.") or not _ROLE.fullmatch(key[6:]):
+            raise ConfigError(f"{path}: unknown key {key!r} (known: model.default, model.inbox, model.<thread>)")
+    return path, found
+
+
+def preferred_body(home, thread: str) -> str:
+    """The person's body for ``thread`` from ``loom/preferences.toml``, or "".
+
+    ``model.<thread>`` first, then ``model.inbox`` for the home thread
+    whatever its folder is called, then ``model.default``. A seat's ``body:``
+    still wins over all of them; ``config.toml``'s ``body`` is the fallback.
+    """
+    _path, found = _preferences(home)
+    roles = [thread]
+    if thread == home.main_thread():
+        roles.append("inbox")
+    for role in [*roles, "default"]:
+        if found.get(f"model.{role}"):
+            return str(found[f"model.{role}"])
+    return ""
+
+
+def default_body(home) -> str:
+    """The home's default body: ``model.default``, else ``config.toml``'s ``body``, else ""."""
+    from .config import load_config
+    choice = _preferences(home)[1].get("model.default") or load_config(home.root).body
+    return str(choice).strip() if choice else ""
+
+
+def prefer(home, role: str, body: str | None) -> None:
+    """Set ``model.<role>`` to ``body`` in ``loom/preferences.toml``; None or "" clears it.
+
+    ``role`` is ``default``, ``inbox`` or a thread id; ``body`` is checked as
+    ``shell`` or ``shell/core``. Every other line stays as written.
+    """
+    from .config import _render_value, _set_key
+    from .home import atomic_write
+    if not _ROLE.fullmatch(role):
+        raise ValueError(f"preference role must be default, inbox or a thread id: {role!r}")
+    if body:
+        body = body_label(*parse_body(body))
+    path, _found = _preferences(home)
+    key = f"model.{role}"
+    lines = path.read_text(encoding="utf-8").splitlines() if path.is_file() else []
+    live = [i for i, line in enumerate(lines) if _set_key(line) == key]
+    if body and live:
+        lines[live[0]] = f"{key} = {_render_value(body)}"
+        live = live[1:]
+    elif body:
+        lines.append(f"{key} = {_render_value(body)}")
+    lines = [line for i, line in enumerate(lines) if i not in live]
+    path.parent.mkdir(parents=True, exist_ok=True)
+    atomic_write(path, "\n".join(lines) + "\n" if lines else "")
 
 
 def at_birth(home, thread: str, default: tuple[str, str],
@@ -92,10 +204,7 @@ def at_birth(home, thread: str, default: tuple[str, str],
     for key, value in _entries(text):
         if key == "body":
             choice = value
-    choice = choice or load_config(home.root).body
+    choice = choice or preferred_body(home, thread) or load_config(home.root).body
     if not choice:
         return default
-    shell, slash, core = str(choice).partition("/")
-    if not slash or not core.strip():
-        raise ValueError(f"body must be shell/core: {choice!r}")
-    return shell.strip(), core.strip()
+    return parse_body(choice)

@@ -304,7 +304,7 @@
 			if (cap.id === 'subscription')
 				return { text: 'manage billing', href: '#billing-heading', copyValue: null };
 			if (cap.id === 'terms') return { text: 'reload', href: null, copyValue: null };
-			return { text: 'open repos', href: resolve('/repos'), copyValue: null };
+			return { text: 'open repos', href: resolve('/dashboard/repos'), copyValue: null };
 		}
 		if (kind === 'command') {
 			if (cap.id === 'machine-paired' && pairingCommand) {

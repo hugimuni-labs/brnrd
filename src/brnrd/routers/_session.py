@@ -8,6 +8,7 @@ and repo-action cores are used by both ``dashboard.py`` and ``web_auth.py``.
 from __future__ import annotations
 
 import threading
+import time
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
@@ -88,6 +89,7 @@ __all__ = [
     "_safe_next",
     "_set_repo_publish_layers_core",
     "_start_github_background_refresh",
+    "_start_login_installation_sync",
     "_terms_accept_url",
     "_terms_status",
     "_time_label",
@@ -541,6 +543,46 @@ def _run_github_background_refresh(session_factory, settings, account_id: str) -
     finally:
         with _GITHUB_BACKGROUND_SYNC_LOCK:
             _GITHUB_BACKGROUND_SYNC_IN_PROGRESS.discard(account_id)
+
+
+def _run_login_installation_sync(session_factory, settings, account_id: str, user_access_token: str) -> None:
+    """Daemon-thread body: login-time installation discovery, off the callback.
+
+    The callback used to wait on it: a token mint, a repo listing and a label
+    check per repo, serially, before the redirect. Its own session; failures
+    log and stop, the dashboard's stale-gated refresh tries again.
+    """
+    started = time.monotonic()
+    try:
+        with session_factory() as db:
+            try:
+                sync_app_installations_for_account(db, settings, account_id, user_access_token=user_access_token)
+                db.commit()
+            except Exception as e:
+                print(f"[brnrd] github login installation sync failed: {e}")
+        print(f"[brnrd] github login installation sync account={account_id} ms={(time.monotonic() - started) * 1000:.0f}")
+    finally:
+        with _GITHUB_BACKGROUND_SYNC_LOCK:
+            _GITHUB_BACKGROUND_SYNC_IN_PROGRESS.discard(account_id)
+
+
+def _start_login_installation_sync(request: Request, account_id: str, user_access_token: str) -> threading.Thread | None:
+    """Start the login sync, sharing the dashboard refresh's single-flight set.
+
+    Returns the thread, or None when a sync for the account is already running.
+    """
+    with _GITHUB_BACKGROUND_SYNC_LOCK:
+        if account_id in _GITHUB_BACKGROUND_SYNC_IN_PROGRESS:
+            return None
+        _GITHUB_BACKGROUND_SYNC_IN_PROGRESS.add(account_id)
+    thread = threading.Thread(
+        target=_run_login_installation_sync,
+        args=(request.app.state.SessionLocal, request.app.state.settings, account_id, user_access_token),
+        name=f"github-login-sync-{account_id}",
+        daemon=True,
+    )
+    thread.start()
+    return thread
 
 
 def _start_github_background_refresh(request: Request, account_id: str) -> None:

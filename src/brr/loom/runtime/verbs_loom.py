@@ -41,10 +41,13 @@ def _loom(argv: list[str]) -> int:
     # The service argv carries no --adapter. The home's body is the choice.
     # An explicit --adapter keeps the old hand path (tests pass fake).
     if adapter is None:
+        from .config import fold_config
         from .service import _require_body
+        # A home an appending writer left with a key set twice loads once folded.
+        fold_config(Path(args.home).expanduser().resolve())
         choice = _require_body(Path(args.home).expanduser().resolve())
-        adapter, _, core = choice.partition("/")
-        adapter, core = adapter.strip(), core.strip()
+        from .adapters import parse_body
+        adapter, core = parse_body(choice)
     run_loom(
         args.home, adapter=adapter, core=core, tick=args.tick,
         install=args.install,
@@ -128,10 +131,12 @@ def _send(argv: list[str]) -> int:
     parser.add_argument("--says", action=_Wish, help='"quote" or <letter id>:"quote"; never refused')
     parser.add_argument("--answered", action=_Wish, nargs=0, help="this send's words are the receipt")
     parser.add_argument("--chatter", action="store_true", help="cites the --re letter as no wish")
+    parser.add_argument("--for", dest="ask_for", metavar="W-ID",
+                        help="a question to a person files an ask under this wish")
     parser.add_argument("--chatter-of", dest="chatter_of", default=None, help=argparse.SUPPRESS)
     parser.add_argument("--reopen", metavar="TEXT")
     parser.add_argument("--at", help="YYYY-MM-DDTHH:MM:SSZ, +<n>m, +<n>h, or +<n>d")
-    parser.add_argument("--body", dest="body_choice", metavar="SHELL/CORE")
+    parser.add_argument("--body", dest="body_choice", metavar="SHELL[/CORE]")
     parser.add_argument("--repo", action="append", default=[])
     parser.add_argument("--budget", metavar="TOKENS",
                         help="weighted tokens, e.g. 2m: a new thread's allocation, or the opener's raise")
@@ -160,8 +165,8 @@ def _send(argv: list[str]) -> int:
             re=args.re, note=args.note, clean=args.clean, kind=args.kind,
             refs=tuple(args.ref or ()), body_choice=args.body_choice, repo_sources=args.repo, at=args.at,
             wish=args.wish, budget=None if args.budget is None else parse_tokens(args.budget),
-            chatter=chatter,
-            echo=echo,
+            chatter=chatter, ask_for=args.ask_for,
+            echo=echo, reopen=args.reopen is not None,
         )
     except (PortError, SelfError, ValueError, OSError) as exc:
         sys.stderr.write(f"{exc}\n")
@@ -173,13 +178,22 @@ def _send(argv: list[str]) -> int:
 
 
 def _molt(argv: list[str]) -> int:
-    parser = argparse.ArgumentParser(prog="python -m brr.loom.runtime molt")
+    """``shed``, and ``molt`` for one release: hand the seat on, or decline once."""
+    parser = argparse.ArgumentParser(prog="python -m brr.loom.runtime shed")
     parser.add_argument("--room")
-    parser.add_argument("--why", required=True)
+    parser.add_argument("--why")
+    parser.add_argument("--decline", metavar="REASON")
     parser.add_argument("--fresh", action="store_true")
     args = parser.parse_args(argv)
+    if (args.why is None) == (args.decline is None):
+        parser.error("give --why to shed, or --decline with a reason")
     room = _room(args.room)
     try:
+        if args.decline is not None:
+            from .shed import decline
+            decline(room, args.decline)
+            sys.stdout.write("declined\n")
+            return 0
         fact_id = write_molt(room, args.why, fresh=args.fresh)
     except (PortError, SelfError, ValueError, OSError) as exc:
         sys.stderr.write(f"{exc}\n")
@@ -199,10 +213,13 @@ def _settle(argv: list[str]) -> int:
     parser.add_argument("--word", metavar="LETTER_ID")
     args = parser.parse_args(argv)
     try:
-        settle(_room(args.room), args.thread, args.why, args.retire, args.hand_to, args.word)
+        room = _room(args.room)
+        settle(room, args.thread, args.why, args.retire, args.hand_to, args.word)
     except (PortError, SelfError, ValueError, OSError) as exc:
         sys.stderr.write(f"{exc}\n")
         return 1
+    from .jack import declare
+    declare(room, "settle")
     return 0
 
 

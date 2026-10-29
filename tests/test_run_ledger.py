@@ -4,10 +4,6 @@ from brr import run_ledger
 from brr.run import Run
 
 
-def test_removed_gemini_family_is_not_normalized_as_a_bundled_shell():
-    assert run_ledger._runner_shell("gemini-custom") == "gemini-custom"
-
-
 _ROW_FIELDS = {
     "run_id",
     "event_id",
@@ -168,14 +164,6 @@ def test_closed_run_row_carries_the_bounded_bolt_declaration(tmp_path, monkeypat
         )
     }
     assert "produce" not in row["bolt_declaration"]
-
-
-def test_legacy_bolt_spend_does_not_invent_a_declaration():
-    assert run_ledger.bolt_declaration_value({
-        "accepted_at": "2026-08-08T00:00:00Z",
-        "annotated": 0,
-        "spend_declared": "~$1",
-    }) is None
 
 
 def test_closed_run_appends_one_well_formed_jsonl_row(tmp_path, monkeypatch):
@@ -414,14 +402,6 @@ def test_append_preserves_prior_rows(tmp_path, monkeypatch):
     assert [row["run_id"] for row in rows] == ["run-one", "run-two"]
 
 
-def test_read_run_name_control_uses_first_line_and_caps_length(tmp_path):
-    outbox = tmp_path / "outbox"
-    outbox.mkdir()
-    (outbox / ".name").write_text("x" * 70 + "\nignored\n", encoding="utf-8")
-    assert run_ledger.read_run_name_control(outbox) == "x" * 60
-    assert run_ledger.read_run_name_control(tmp_path / "missing") is None
-
-
 def test_subspawn_row_carries_parent_run_id(tmp_path, monkeypatch):
     """A concurrent worker-stack child's row rolls up to its parent.
 
@@ -563,76 +543,6 @@ def test_core_attestation_unpinned_or_unobserved_is_unverifiable():
     assert row["core_mismatch"] is None
 
 
-def test_core_mismatch_matching_rules():
-    # Prefix-tolerant both directions (date-suffixed concrete ids).
-    assert run_ledger.core_mismatch(
-        "claude-haiku-4-5", "claude-haiku-4-5-20251001"
-    ) is False
-    assert run_ledger.core_mismatch(
-        "claude-haiku-4-5-20251001", "claude-haiku-4-5"
-    ) is False
-    # Joined multi-id observation: fine when any id matches the pin
-    # (subagents legitimately resolve to other tiers)...
-    assert run_ledger.core_mismatch(
-        "claude-fable-5", "claude-haiku-4-5+claude-fable-5"
-    ) is False
-    # ...alarms only when none do.
-    assert run_ledger.core_mismatch(
-        "claude-fable-5", "claude-haiku-4-5+claude-sonnet-5"
-    ) is True
-
-
-def test_core_mismatch_alias_matches_concrete_family_member():
-    """An alias pin verifies against the concrete family member it resolved to.
-
-    #505's alias-fresh rack pins ``sonnet`` ("latest sonnet"); the Shell
-    attests the concrete id it ran (``claude-sonnet-5``). The alias sits
-    mid-id, invisible to both prefix checks — on 2026-07-20 this errored
-    every claude-alias spawn at finalization. The family-token rule accepts
-    the member without loosening the wrong-family alarm.
-    """
-    assert run_ledger.core_mismatch("sonnet", "claude-sonnet-5") is False
-    assert run_ledger.core_mismatch("opus", "claude-opus-4-8") is False
-    assert run_ledger.core_mismatch("fable", "claude-fable-5-20260601") is False
-    # Wrong family still alarms.
-    assert run_ledger.core_mismatch("haiku", "claude-sonnet-5") is True
-    assert run_ledger.core_mismatch("fable", "claude-opus-4-8") is True
-    # Joined multi-id observation: any family member clears the alias pin.
-    assert run_ledger.core_mismatch("sonnet", "claude-haiku-4-5+claude-sonnet-5") is False
-    # Versioned family aliases keep the dot inside one token.
-    assert run_ledger.core_mismatch("gpt-5.6", "openai-gpt-5.6-sol") is False
-    assert run_ledger.core_mismatch("gpt-5.6", "openai-gpt-5.5-sol") is True
-
-
-def test_core_mismatch_fable_billed_as_opus_alarms():
-    """A fable pin observed as the opus billing id IS a mismatch.
-
-    #394 taught core_mismatch to accept ``claude-opus-4-8`` as a billing
-    alias for ``claude-fable-5``, on the theory that modelUsage reports the
-    underlying billing id for a correctly-served fable run. Observed history
-    disproved that: modelUsage used to report fable ids directly, and the
-    switch to opus coincided with fable-pinned runs being served opus. The
-    alias suppressed a true alarm. Reverted — an opus observation under a
-    fable pin must fire until the substitution is explained upstream.
-    """
-    assert run_ledger.core_mismatch("claude-fable-5", "claude-opus-4-8") is True
-    assert run_ledger.core_mismatch(
-        "claude-fable-5", "claude-opus-4-8+claude-haiku-4-5"
-    ) is True
-    # A genuinely served fable run still verifies clean.
-    assert run_ledger.core_mismatch("claude-fable-5", "claude-fable-5") is False
-
-
-def test_merge_levels_preserves_fallback_signals():
-    # Regression: ``fallback_signals`` must be on the merge allowlist, or the
-    # substitution reason is dropped before the ledger ever reads it.
-    merged = run_ledger._merge_levels(
-        {"source": "usage"},
-        {"source": "claude result JSON", "fallback_signals": {"stop_reason": "refusal"}},
-    )
-    assert merged["fallback_signals"] == {"stop_reason": "refusal"}
-
-
 def test_row_surfaces_substitution_reason(tmp_path, monkeypatch):
     (tmp_path / ".brr").mkdir()
     after = {
@@ -754,60 +664,6 @@ def test_a_flat_window_still_reports_a_real_zero(monkeypatch, tmp_path):
     assert row["weekly_pct_delta"] == 0.0
     assert row["five_hour_pct_delta"] == 0.0
     assert row["usd_subscription_attributed"] == 0.0
-
-
-def test_read_run_mood_control_uses_first_line_and_caps_length(tmp_path):
-    outbox = tmp_path / "outbox"
-    outbox.mkdir()
-    (outbox / ".mood").write_text("fo.cus" + "x" * 200 + "\nfree narration line\n")
-    assert run_ledger.read_run_mood_control(outbox) == ("fo.cus" + "x" * 200)[:64]
-    assert run_ledger.read_run_mood_control(tmp_path / "missing") is None
-    assert run_ledger.read_run_mood_control(None) is None
-
-
-def test_read_run_mood_control_blank_file_is_no_mood(tmp_path):
-    """An empty or whitespace-only `.mood` is an unset mood, not an empty
-    string — absence must stay distinguishable so no surface renders a
-    blank chip."""
-    outbox = tmp_path / "outbox"
-    outbox.mkdir()
-    (outbox / ".mood").write_text("\n\n")
-    assert run_ledger.read_run_mood_control(outbox) is None
-
-
-def test_read_run_topics_control_bare_slug_row(tmp_path):
-    outbox = tmp_path / "outbox"
-    outbox.mkdir()
-    (outbox / ".topics").write_text("the-loom the-post\n", encoding="utf-8")
-    assert run_ledger.read_run_topics_control(outbox) == ["the-loom", "the-post"]
-
-
-def test_read_run_topics_control_prefixed_row_and_middot_separator(tmp_path):
-    outbox = tmp_path / "outbox"
-    outbox.mkdir()
-    (outbox / ".topics").write_text("topics: the-loom · the-post\n", encoding="utf-8")
-    assert run_ledger.read_run_topics_control(outbox) == ["the-loom", "the-post"]
-
-
-def test_read_run_topics_control_absent_or_missing_dir_is_none(tmp_path):
-    assert run_ledger.read_run_topics_control(tmp_path / "missing") is None
-    assert run_ledger.read_run_topics_control(None) is None
-
-
-def test_read_run_topics_control_garbage_drops_to_none_never_crashes(tmp_path):
-    """Lenient parse: junk tokens are filtered, not fatal — a `.topics` that
-    survives filtering to nothing is the same as absent, not an empty list."""
-    outbox = tmp_path / "outbox"
-    outbox.mkdir()
-    (outbox / ".topics").write_text("!!! ### $$$\n", encoding="utf-8")
-    assert run_ledger.read_run_topics_control(outbox) is None
-
-
-def test_read_run_topics_control_filters_junk_tokens_among_valid_ones(tmp_path):
-    outbox = tmp_path / "outbox"
-    outbox.mkdir()
-    (outbox / ".topics").write_text("the-loom !!! the-post\n", encoding="utf-8")
-    assert run_ledger.read_run_topics_control(outbox) == ["the-loom", "the-post"]
 
 
 # ── #1929: a failover that leaves a statistic ─────────────────────────

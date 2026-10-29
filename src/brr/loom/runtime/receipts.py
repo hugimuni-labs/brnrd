@@ -50,7 +50,13 @@ class Receipt:
 
 
 def source_root() -> Path:
-    """The checkout the running loom imports, when it runs from one."""
+    """The checkout the running loom imports, when it runs from one.
+
+    ``BRNRD_LOOM_SOURCE`` is test-only: the suite points it away from the
+    checkout under test, so no test loom fetches or moves it.
+    """
+    if override := os.environ.get("BRNRD_LOOM_SOURCE"):
+        return Path(override)
     import brr
     return Path(brr.__file__).resolve().parents[2]
 
@@ -75,13 +81,22 @@ def record_start(home, facts, *, root: Path | None = None) -> Fact:
                 loaded.append(name)
         merges = _merges_held(root, commit, facts, recorded)
         loaded.extend(merges)
-    data = {"install": home.install_id(), "pid": os.getpid(),
-            "loaded": sorted(set(loaded))}
+    install = home.install_id()
+    data = {"install": install, "pid": os.getpid(), "loaded": sorted(set(loaded))}
     if commit:
         data["commit"] = commit
         if merges:
             data["merges"] = merges
-    return append(home, Fact(kind="loom.started", by=f"loom:{home.install_id()}", data=data))
+    before = next((str(f.data["commit"]) for f in reversed(kind_facts(facts, "loom.started"))
+                   if f.data.get("install") == install and f.data.get("commit")), None)
+    started = append(home, Fact(kind="loom.started", by=f"loom:{install}", data=data))
+    if commit and before and before != commit:
+        # Whoever moved it, the updater or a hand: the seated bodies hear it once.
+        from .update import merges as between
+        append(home, Fact(kind="loom.moved", by=f"loom:{install}", id=f"loom.moved:{started.id}", data={
+            "install": install, "from": before, "to": commit,
+            "merges": between(root, before, commit), "started": started.id}))
+    return started
 
 
 @functools.lru_cache(maxsize=8)
@@ -149,10 +164,12 @@ def held_merge(result: dict, start: dict | None, *, root: Path | None = None) ->
                  if pattern.match(subject)), None)
 
 
-def receipts(facts) -> dict[str, list[Receipt]]:
+def receipts(facts, install: str) -> dict[str, list[Receipt]]:
     """Each thread's pull requests in the order first claimed; a later
-    ``pr.opened`` of the same one names its newer head. Read off the
-    ledger's kind index, so a tick's thread table walks no old ledger."""
+    ``pr.opened`` of the same one names its newer head. Loaded is read from
+    ``install``'s latest start: another machine's loom runs its own checkout.
+    Read off the ledger's kind index, so a tick's thread table walks no old
+    ledger."""
     opened, merged, start = {}, {}, None
     for fact in kind_facts(facts, "pr.opened", "pr.merged", "loom.started"):
         if fact.kind in ("pr.opened", "pr.merged"):
@@ -160,8 +177,8 @@ def receipts(facts) -> dict[str, list[Receipt]]:
             key = (str(data.get("thread")), str(data.get("repo")), data.get("number"))
             (opened if fact.kind == "pr.opened" else merged)[key] = data
             opened.setdefault(key, None)
-        elif fact.kind == "loom.started":
-            start = fact.data or {}
+        elif fact.kind == "loom.started" and (fact.data or {}).get("install") == install:
+            start = fact.data
     held = (set(start.get("loaded") or ()) if start and start.get("commit") else None)
     found_merges = (start.get("merges") or {}) if held is not None else {}
     found: dict[str, list[Receipt]] = {}

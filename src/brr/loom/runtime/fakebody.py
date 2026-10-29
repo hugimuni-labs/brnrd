@@ -11,11 +11,17 @@ import sys
 import time
 from pathlib import Path
 
-from .port import LetterView, parse_boundary
+from .port import _HEADER, LetterView, parse_boundary
 
 CALLS = 15
 TOOL_S = 0.2
 _THREAD = re.compile(r"on thread ([A-Za-z0-9._-]+)")
+
+
+def _letters(text: str) -> list[LetterView]:
+    # The jack's own lines (left in room:, guards, pauses) can come with no
+    # port header when nothing is owed; only a headed boundary carries letters.
+    return parse_boundary(text).letters if _HEADER.search(text) else []
 
 
 class JackView:
@@ -30,18 +36,18 @@ class JackView:
             payload = json.loads(text)
         except json.JSONDecodeError:
             self.kind = "text"
-            self.letters = parse_boundary(stdout).letters
+            self.letters = _letters(stdout)
             return
         if "decision" in payload:
             self.kind = "block" if payload.get("decision") == "block" else "allow"
             reason = payload.get("reason") or ""
             if reason.strip():
-                self.letters = parse_boundary(reason).letters
+                self.letters = _letters(reason)
             return
         context = ((payload.get("hookSpecificOutput") or {}).get("additionalContext")) or ""
         self.kind = "post"
         if context.strip():
-            self.letters = parse_boundary(context).letters
+            self.letters = _letters(context)
 
 
 class Ctx:
@@ -67,7 +73,10 @@ class Ctx:
         return JackView(proc.stdout)
 
     def send(self, to: str, body: str = "", *, re: str | None = None,
-             note: str | None = None) -> str:
+             note: str | None = None, cite: str | None = None) -> str:
+        if cite:
+            # A delegation answers no letter, so it names the one it follows as an &ref.
+            body += "\n\n&" + cite
         cmd = [sys.executable, "-m", "brr.loom.runtime", "send",
                "--room", str(self.room), "--to", to]
         if re:
@@ -126,7 +135,8 @@ def answer_pings(ctx: Ctx) -> None:
             if body.startswith("ping-"):
                 if not letter.reply.startswith("thread:"):
                     raise RuntimeError(f"{letter.id} has no reply thread ({letter.reply})")
-                ctx.send(letter.reply, body[::-1], re=letter.id)
+                # The ping is its first line; an &ref under it is not echoed.
+                ctx.send(letter.reply, body.split("\n", 1)[0][::-1], re=letter.id)
             else:
                 ctx.send(f"thread:{own}", note="not a ping", re=letter.id)
             answered.add(letter.id)
@@ -160,7 +170,7 @@ def ping_two(ctx: Ctx) -> None:
         time.sleep(0.05)
     else:
         raise RuntimeError("opener still owed")
-    ctx.send(f"thread:{target}", "ping-1")
+    ctx.send(f"thread:{target}", "ping-1", cite=openers[0].id)
     seen = ctx.jack("stop")
     ctx.trace({"event": "stop", "ids": [letter.id for letter in seen.letters],
                "kind": seen.kind})
@@ -168,7 +178,7 @@ def ping_two(ctx: Ctx) -> None:
         raise SystemExit(3)
     for letter in seen.letters:
         ctx.send(f"thread:{own}", note="seen", re=letter.id)
-    ctx.send(f"thread:{target}", "ping-2")
+    ctx.send(f"thread:{target}", "ping-2", cite=openers[0].id)
     later = ctx.jack("stop")
     if later.kind == "block":
         for letter in later.letters:

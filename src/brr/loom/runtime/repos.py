@@ -8,8 +8,10 @@ mirror, then (once per room) clones ``--shared`` into
 
 from __future__ import annotations
 
+import os
 import re
 import shutil
+import tempfile
 from pathlib import Path
 
 from .config import load_config
@@ -20,7 +22,7 @@ _AUTHOR = re.compile(r"^(.+?) <([^<>]+)>$")
 # Not a remote. git push origin echoes it, which is the refusal a reader sees.
 _PUSH_REFUSAL = "use brnrd publish"
 # The wake's last repo line. Without it a body meets the verb only as a refusal.
-PUBLISH_HINT = ("to send a repo's branch out: `python -m brr.loom.runtime publish <name>`; "
+PUBLISH_HINT = ("to send a repo's branch out: `brnrd runtime publish <name>`; "
                 "git push is refused\n")
 
 
@@ -128,7 +130,7 @@ def _ref(repo: Path, ref: str) -> bool:
     return git(repo, "rev-parse", "--verify", "--quiet", ref, check=False).returncode == 0
 
 
-def _cut_from(dest: Path, thread: str, parent: str | None) -> str:
+def _cut_from(dest: Path, thread: str, parent: str | None, name: str | None = None) -> str:
     """Where ``loom/<thread>`` starts: published branch, parent room, else default."""
     branch = f"loom/{thread}"
     remote = f"refs/remotes/origin/{branch}"
@@ -136,7 +138,7 @@ def _cut_from(dest: Path, thread: str, parent: str | None) -> str:
         git(dest, "checkout", "-B", branch, f"origin/{branch}")
         return f"origin/{branch}"
     if parent:
-        parent_checkout = dest.parent.parent / parent / dest.name
+        parent_checkout = dest.parent.parent / parent / (name or dest.name)
         if (parent_checkout / ".git").exists():
             proc = git(dest, "fetch", str(parent_checkout), branch, check=False)
             if proc.returncode == 0:
@@ -185,13 +187,21 @@ def prepare_repos(home: Home, strand: str, thread: str,
         if dest.exists():
             raise SelfError(f"{dest} exists and is not a clone; refusing to overwrite")
         dest.parent.mkdir(parents=True, exist_ok=True)
-        git(home.root, "clone", "--shared", str(mirror), str(dest))
-        git(dest, "remote", "set-url", "origin", "--", source)
-        pin_clone(dest)
-        # A local source never asks a helper. This push URL is what `git push
-        # origin` hits instead, for every source.
-        git(dest, "remote", "set-url", "--push", "origin", _PUSH_REFUSAL)
-        cut = _cut_from(dest, thread, parent)
+        # Cloned beside and renamed in once cut, so a crash leaves no half
+        # checkout that the next start would refuse to overwrite.
+        tmp = Path(tempfile.mkdtemp(prefix=f".{name}-clone-", dir=dest.parent))
+        try:
+            git(home.root, "clone", "--shared", str(mirror), str(tmp))
+            git(tmp, "remote", "set-url", "origin", "--", source)
+            pin_clone(tmp)
+            # A local source never asks a helper. This push URL is what `git push
+            # origin` hits instead, for every source.
+            git(tmp, "remote", "set-url", "--push", "origin", _PUSH_REFUSAL)
+            cut = _cut_from(tmp, thread, parent, name)
+            os.rename(tmp, dest)
+        except BaseException:
+            shutil.rmtree(tmp, ignore_errors=True)
+            raise
         line = f"repo {name}: {dest} on loom/{thread}, cut from {cut}"
         if failed:
             sha = git(mirror, "rev-parse", "--short", "HEAD").stdout.strip()

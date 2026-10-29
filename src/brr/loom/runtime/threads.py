@@ -4,6 +4,7 @@ import json
 import time
 from datetime import datetime
 
+from .adapters import body_label
 from .home import Home, thread_of
 from .ledger import LedgerView
 from .lifecycle import CLOSED, read_thread, main_snapshot, main_tree, readme_at
@@ -71,20 +72,25 @@ def _table_inputs(facts, main):
     return state, ownership, axes, owed, activity, boundary, pending_bodies(state.accepted), unanswered
 
 
-def thread_table(home: Home, facts: list) -> list[dict]:
+def thread_table(home: Home, facts: list, opened_by: str | None = None) -> list[dict]:
     """Read main and the ledger; never ask a body to declare its state.
 
     A recent boundary is a shown fact or the jack's existing state-file mtime.
     There is no explicit 'waiting' fact: a live body with nothing owed, or a
     stop block, is the nearest derivable holding value.
+
+    ``opened_by`` keeps only the rows whose ``opened-by`` is that value: a
+    boundary prints its thread's children, and reads no other room.
     """
     from .loom import body_alive
-    main = main_snapshot(home)
-    state, ownership, axes, owed, activity, boundary, pending, unanswered = cached_projection(
-        facts, "thread-table", repr(main), lambda rows: _table_inputs(rows, main))
     repo = home.root / 'self'
     versioned = (repo / '.git').exists()
+    # One read of main feeds both the axes and the rows: a thread opened
+    # between two reads would have a row and no axes.
     tip, blobs = main_tree(repo) if versioned else (None, {})
+    main = main_snapshot(home, (tip, blobs) if versioned else None)
+    state, ownership, axes, owed, activity, boundary, pending, unanswered = cached_projection(
+        facts, "thread-table", repr(main), lambda rows: _table_inputs(rows, main))
     if not versioned or _MAIN.get(repo, (None, None))[0] != tip:
         names = (list(blobs) if versioned
                  else [p.relative_to(repo).as_posix() for p in (repo / 'threads').glob('*/README.md')])
@@ -122,15 +128,22 @@ def thread_table(home: Home, facts: list) -> list[dict]:
         _MAIN[repo] = (tip, snapshot)
         _ROWS[repo] = kept
     now, rows = time.time(), []
-    told = None
+    from .wishes import plan_word, told as fold_wishes
+    told = fold_wishes(facts)
+    # A gauge depends on its shell alone: read it once per table, not per row.
+    tanks = {}
     from .receipts import receipts
-    shipped = receipts(facts)
+    shipped = receipts(facts, home.install_id())
+    cards = pr_cards(home)
+    from .waits import live
+    from .wishes import _short, progress
+    parked = {wish.thread: _short(read['reading'].removeprefix('waiting:').strip(), 60)
+              for wish, read in sorted(live(told), key=lambda row: row[1]['at'])}
     for thread, data, choice, created, date in _MAIN[repo][1]:
+        if opened_by is not None and (data.get('opened-by') or '—') != opened_by:
+            continue
         why = '—'
         if opened_for(data):
-            if told is None:
-                from .wishes import wishes
-                told = wishes([f for f in facts if f.kind.startswith('wish') or f.kind == 'letter'])
             why = '; '.join(opened_for_line(ident, told.get(ident)) for ident in opened_for(data))
         count = len(owed.get(thread, ()))
         strand = state.holder.get(thread, ('', 0))[0]
@@ -139,7 +152,7 @@ def thread_table(home: Home, facts: list) -> list[dict]:
         seat = choice or '—'
         if latest and latest.data.get('shell'):
             shell = latest.data['shell']
-            seat = f"{shell}/{latest.data.get('core', '')}"
+            seat = body_label(shell, latest.data.get('core', ''))
         last = activity.get(thread, created)
         if data['status'] in CLOSED:
             count = len(axes[thread]['letters'])
@@ -161,7 +174,9 @@ def thread_table(home: Home, facts: list) -> list[dict]:
             if not count or jack.get('stop_blocks'):
                 value = 'holding'
                 from .usage import fuel
-                tank = fuel(home, shell) if shell else ''
+                if shell not in tanks:
+                    tanks[shell] = fuel(home, shell) if shell else ''
+                tank = tanks[shell]
                 if tank:
                     value += ' ' + tank.removeprefix(f'fuel {shell} ')
             elif now - recent <= 180:
@@ -173,11 +188,15 @@ def thread_table(home: Home, facts: list) -> list[dict]:
             cause = axes[thread]['cause']
             value = 'idle ' + _age(now - last) if cause == 'idle' else cause
         rows.append({'thread': thread, 'seat': seat, 'now': value, 'owed': count, 'unanswered': len(unanswered.get(thread, ())),
-                     'opened-by': data.get('opened-by') or '—', 'opened-for': why, 'plan': data['plan'],
+                     'opened-by': data.get('opened-by') or '—', 'opened-for': why, 'plan': plan_word(told, thread),
                      'status': data['status'], **{k: axes[thread][k] for k in ('owed-by', 'restart', 'control')},
-                     'receipts': '; '.join(r.line() for r in shipped.get(thread, ())) or '—'})
+                     'receipts': '; '.join(r.line() for r in shipped.get(thread, ())) or '—',
+                     'prs': [card for r in shipped.get(thread, ()) if not r.merge_commit
+                             and (card := pr_word(r.number, cards.get(f'{r.repo}#{r.number}'), now))],
+                     'waits': parked.get(thread, ''),
+                     'headline': _short((progress(told, thread) or {}).get('next') or '', 60)})
     for ident, fate in ownership.items():
-        if fate.owner == 'operator':
+        if fate.owner == 'operator' and (opened_by is None or (fate.thread or '—') == opened_by):
             rows.append({'thread': 'operator', 'seat': '—', 'now': ident + ': ' + fate.reason,
                          'owed': 1, 'unanswered': 0, 'opened-by': fate.thread or '—', 'opened-for': '—',
                          'plan': '—',
@@ -185,6 +204,28 @@ def thread_table(home: Home, facts: list) -> list[dict]:
                          'owed-by': 'operator', 'restart': 'operator note',
                          'control': 'operator: attention --note ' + ident + ' --why <reason>'})
     return rows
+
+
+def pr_cards(home: Home) -> dict[str, dict]:
+    """``loom/prs.json``: what the waits watcher last read of each open pull request."""
+    try:
+        return json.loads((home.root / 'loom' / 'prs.json').read_text())
+    except (OSError, ValueError):
+        return {}
+
+
+def pr_word(number: int, card: dict | None, now: float) -> str:
+    """``#2449 draft green 14h``; ``#2449`` alone before the first read, nothing once closed."""
+    if not card:
+        return f'#{number}'
+    if card.get('state') != 'open':
+        return ''
+    word = f"#{number} {'draft' if card.get('draft') else 'ready'} {card.get('ci') or 'pending'}"
+    try:
+        pushed = datetime.fromisoformat(str(card['pushed']).replace('Z', '+00:00')).timestamp()
+    except (KeyError, ValueError):
+        return word
+    return f'{word} {_age(now - pushed)}'
 
 
 def opened_for(data: dict) -> list[str]:

@@ -17,11 +17,19 @@ from .pack_relay import PackRelayStore
 from .page_views import PageViewMiddleware
 from .routers import accounts, billing, config_approval, daemons, dev, github_app, pairing, render, stats, webhooks
 from .routers import dashboard as dashboard_router
+from .routers import loom as loom_router
 from .routers import machines as machines_router
 from .routers import repo_actions as repo_actions_router
 from .routers import web_auth as web_auth_router
 from .security_headers import CSPReportOnlyMiddleware, HSTSMiddleware, csp_report_only_value
-from .spa import backend_namespaces, declared_paths, mount_frontend, resolve_frontend_dir
+from .spa import (
+    backend_namespaces,
+    declared_paths,
+    mount_frontend,
+    mount_installer,
+    resolve_frontend_dir,
+    resolve_installer,
+)
 
 _STATIC_DIR = Path(__file__).with_name("static")
 
@@ -162,7 +170,7 @@ def create_app(
     ]
     if settings.enable_dev_endpoints:
         routers.append(dev.router)
-    routers += [dashboard_router.router, machines_router.router, repo_actions_router.router, web_auth_router.router]
+    routers += [dashboard_router.router, loom_router.router, machines_router.router, repo_actions_router.router, web_auth_router.router]
     for router in routers:
         app.include_router(router)
 
@@ -180,6 +188,10 @@ def create_app(
     @app.get("/healthz")
     def healthz() -> dict:
         return {"status": "ok", "service": "brnrd"}
+
+    installer = resolve_installer(settings.installer_path)
+    if installer is not None:
+        mount_installer(app, installer)
 
     # Last, on purpose: the SvelteKit build is served by this process, not by
     # whatever router happens to sit in front of it (#847). Registration order

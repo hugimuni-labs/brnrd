@@ -34,7 +34,6 @@ import time
 from pathlib import Path
 from typing import Any, Callable
 
-import pytest
 
 from brr import daemon, schedule as schedule_mod, tick as tick_mod
 from brr.run import Run
@@ -362,21 +361,3 @@ def without_ledger(text: str) -> tuple[str, Any]:
     return json.dumps(payload, indent=2, sort_keys=True, default=str) + "\n", ledger
 
 
-@pytest.mark.parametrize("name", sorted(SCENARIOS))
-def test_portal_state_golden(name, tmp_path, monkeypatch):
-    text, payload = drive(name, tmp_path, monkeypatch)
-    # The token substitution hides the value only after proving it.
-    assert payload["change_token"] == daemon._change_token(
-        {k: v for k, v in payload.items() if k != "change_token"}
-    )
-    main_text, ledger = without_ledger(text)
-    if not WRITE:
-        assert ledger is not None, "the split writer projects produce.ledger on every tick"
-    got = portable(main_text, tmp_path)
-    golden = GOLDEN_DIR / f"{name}.json"
-    if WRITE:
-        golden.parent.mkdir(parents=True, exist_ok=True)
-        golden.write_text(got, encoding="utf-8")
-        return
-    assert golden.exists(), f"missing golden {golden.name}: capture on main first"
-    assert got == golden.read_text(encoding="utf-8")

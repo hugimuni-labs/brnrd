@@ -80,7 +80,8 @@ def test_asks_lists_buckets_over_every_thread(loom):
     merge = run("wish", "new", "--room", str(seat), "--say", pr, "--line", "merge #1").strip()
     ask = run("ask", "merge #1? rec: yes", "--room", str(seat), "--for", merge).strip()
     text = run("asks", "--home", str(home.root))
-    assert "in hand\ninbox · s-aaaa-inbx · plan —\nwork · s-aaaa-work · plan —\n" in text
+    # The plan is work's person wishes; the ask is not one of them.
+    assert "in hand\ninbox · s-aaaa-inbx · plan —\nwork · s-aaaa-work · plan 0/1\n" in text
     assert f"yours\n{ask} · heard · merge #1? rec: yes · - · waits on operator\n" in text
     assert "done\n1 · asks --all\n" in text
     rows = run("asks", "--home", str(home.root), "--all", "--thread", "work")
@@ -100,14 +101,22 @@ def test_operator_cli_reads_the_loom_asks(loom):
     assert "in hand\n" in result.stdout
 
 
-def test_a_person_thread_settles_only_on_their_word(loom):
+def test_a_person_thread_with_nothing_in_hand_settles_without_a_word(loom):
     home, seat = loom
+    run("settle", "work", "--room", str(seat), "--why", "Shipped")
+    assert read_thread(home, "work")["status"] == "settled"
+
+
+def test_a_person_thread_with_work_in_hand_settles_only_on_their_word(loom):
+    home, seat = loom
+    asked = inject_letter(home.root, to="thread:work", body="Please: fix it")
+    run("wish", "new", "--room", str(seat), "--line", "Fix it", "--say", asked)
     error = run("settle", "work", "--room", str(seat), "--why", "Shipped", ok=False)
     assert "--word" in error
     other = inject_letter(home.root, to="thread:inbox", body="done")
     assert "--word" in run("settle", "work", "--room", str(seat), "--why", "Shipped",
                            "--word", other, ok=False)
-    mine = send(home, "s-aaaa-inbx", "--to", "thread:work", "done")
+    mine = send(home, "s-aaaa-inbx", "--to", "thread:work", "--re", other, "--chatter", "done")
     assert "--word" in run("settle", "work", "--room", str(seat), "--why", "Shipped",
                            "--word", mine, ok=False)
     assert read_thread(home, "work")["status"] == "open"

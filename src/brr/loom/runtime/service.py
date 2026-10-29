@@ -25,7 +25,8 @@ from pathlib import Path
 
 from brr.daemon_install import linux, macos
 
-from .config import config_path, load_config, seed_config
+from . import entry
+from .config import config_path, fold_config, load_config, set_value
 from .home import found_homes, is_home, resolve_home
 from .threads import _age
 
@@ -53,7 +54,34 @@ def _interpreter() -> str:
 
 
 def _program(home: Path) -> list[str]:
-    return ["-m", "brr.loom.runtime", "loom", "--home", str(home)]
+    """The unit's arguments after the shim (entry.py), which it runs instead of this Python."""
+    return ["runtime", "loom", "--home", str(home)]
+
+
+def _path_env() -> str:
+    """The installing shell's PATH, the shim's directory first and this venv's ``bin`` read
+    through ``current``: a unit that names the venv would outlive it."""
+    venv = {os.path.abspath(entry.prefix() / "bin"), os.path.dirname(_interpreter())}
+    kept = [str(entry.current() / "bin") if os.path.abspath(part) in venv else part
+            for part in os.environ.get("PATH", "").split(os.pathsep) if part]
+    return os.pathsep.join(dict.fromkeys([str(entry.shim().parent), *kept]))
+
+
+def _refuse_prefix() -> None:
+    """Refuse an interpreter whose prefix has no ``bin/python`` for the shim to run,
+    before anything is stopped or written."""
+    target = entry.prefix()
+    if not os.access(target / "bin" / "python", os.X_OK):
+        raise SystemExit(f"loom install: {target} has no bin/python for {entry.shim()} to run; "
+                         "install brnrd into a virtualenv (uv tool, pipx) and run it from there")
+
+
+def _point_entry() -> str:
+    """Write the shim and point ``current`` at this interpreter's prefix: installing is choosing this brnrd."""
+    target = entry.prefix()
+    entry.write_shim()
+    was = entry.point(target)
+    return f"{entry.current()} -> {entry.prefix()}" + (f" (was {was})" if was else "")
 
 
 def _brr_source() -> Path | None:
@@ -116,42 +144,41 @@ def _service_home(flag, *, agents_home=None, system=None) -> tuple[Path, str]:
 
 
 def _body_choice(home: Path) -> str | None:
-    """``body`` from the home's config: None when unset, refused when not shell/core."""
-    choice = load_config(home).body
-    if not isinstance(choice, str) or not choice.strip():
+    """The home's default body: ``model.default`` in ``loom/preferences.toml``, else config ``body``.
+
+    None when neither is set; refused when not a body folder's shell or shell/core.
+    """
+    from .adapters import default_body, parse_body, resolve
+    from .home import Home
+    choice = default_body(Home(home))
+    if not choice:
         return None
-    shell, slash, core = choice.partition("/")
-    if not slash or not shell.strip() or not core.strip():
+    try:
+        resolve(Home(home), parse_body(choice)[0])
+    except ValueError:
         raise SystemExit(
-            f"loom install: body must be shell/core, got {choice!r} in {config_path(home)}"
-        )
+            f"loom install: body must be shell or shell/core, got {choice!r}"
+        ) from None
     return choice.strip()
 
 
-def _codex_model() -> str | None:
-    """The person's own codex default: top-level ``model`` in codex's config."""
-    path = Path(os.environ.get("CODEX_HOME") or "~/.codex").expanduser() / "config.toml"
-    try:
-        lines = path.read_text(encoding="utf-8").splitlines()
-    except OSError:
-        return None
-    for line in lines:
-        line = line.strip()
-        if line.startswith("["):
-            return None
-        match = re.fullmatch(r'model\s*=\s*"([^"]+)"\s*(#.*)?', line)
-        if match:
-            return match.group(1)
-    return None
+def _preferred_default(home: Path) -> bool:
+    from .adapters import _preferences
+    from .home import Home
+    return bool(_preferences(Home(home))[1].get("model.default"))
 
 
-def _defaults() -> list[tuple[str, str | None]]:
-    """The bodies install may pick, in order."""
-    return [("claude", "sonnet"), ("codex", _codex_model())]
+def _defaults() -> list[tuple[str, str]]:
+    """The bodies install may pick, in order; an empty core is the harness's own pick.
+
+    codex's body reads the person's codex model at each run, else runs codex's
+    own default, so codex needs no model named here to be offered.
+    """
+    return [("claude", ""), ("codex", "")]
 
 
-def _fuel(home: Path, shell: str) -> str | None:
-    """``session 91% week 76%`` when the shell's CLI answers with fuel above the floor."""
+def _windows(home: Path, shell: str) -> list[dict] | None:
+    """The shell's quota windows, ``[{name, left_pct}]``; None when its CLI does not answer."""
     if shutil.which(shell) is None:
         return None
     from . import usage
@@ -161,9 +188,14 @@ def _fuel(home: Path, shell: str) -> str | None:
     reading = home / "loom" / "usage" / f"{shell}.json"
     try:
         usage._refresh(reading.resolve(), resolve(Home(home), shell) / "usage")
-        windows = json.loads(reading.read_text())["windows"]
+        return json.loads(reading.read_text())["windows"]
     except (OSError, ValueError, KeyError, TypeError):
         return None
+
+
+def _fuel(home: Path, shell: str) -> str | None:
+    """``session 91% week 76%`` when the shell's CLI answers with fuel above the floor."""
+    windows = _windows(home, shell)
     floor = load_config(home).hold_floor_pct
     if not windows or any(w["left_pct"] <= floor for w in windows):
         return None
@@ -171,26 +203,18 @@ def _fuel(home: Path, shell: str) -> str | None:
 
 
 def _write_body(home: Path, choice: str) -> None:
-    """Set ``body`` in the config, keeping every other line as written."""
-    seed_config(home)
-    path = config_path(home)
-    lines = path.read_text(encoding="utf-8").splitlines()
-    setting = f'body = "{choice}"'
-    for index, line in enumerate(lines):
-        if re.match(r"\s*body\s*=", line):
-            lines[index] = setting
-            break
-    else:
-        lines.append(setting)
-    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    """Set the default body, ``model.default`` in ``loom/preferences.toml``."""
+    from .adapters import prefer
+    from .home import Home
+    prefer(Home(home), "default", choice)
 
 
 def _require_body(home: Path) -> str:
-    """Refuse a login service whose home has no ``shell/core`` body."""
+    """Refuse a login service whose home has no body."""
     choice = _body_choice(home)
     if choice is None:
         raise SystemExit(
-            f"loom install: body is unset in {config_path(home)}; set body to shell/core"
+            f"loom install: body is unset in {config_path(home)}; set body to a shell, e.g. claude"
         )
     return choice
 
@@ -198,26 +222,29 @@ def _require_body(home: Path) -> str:
 def _settle_body(home: Path, *, write: bool = True) -> tuple[str, str]:
     """The body install's service will run, and where it came from.
 
-    Unset: the first default body whose CLI answers with fuel, written to
-    the config so ``loom config`` and the service agree on it.
+    Unset: the first default body whose CLI answers with fuel, written as
+    ``model.default`` so setup, the board and the service agree on it.
     """
+    if write:
+        fold_config(home)
     choice = _body_choice(home)
     if choice is not None:
-        return choice, "from config"
+        return choice, "from preferences" if _preferred_default(home) else "from config"
     tried = []
     for shell, core in _defaults():
-        fuel = _fuel(home, shell) if core else None
+        fuel = _fuel(home, shell)
         if fuel is None:
-            tried.append(shell if core else f"{shell} (no default model)")
+            tried.append(shell)
             continue
-        choice = f"{shell}/{core}"
+        from .adapters import body_label
+        choice = body_label(shell, core)
         if write:
             _write_body(home, choice)
-        where = f"written to {config_path(home)}" if write else "not written: dry run"
+        where = f"written to {home / 'loom' / 'preferences.toml'}" if write else "not written: dry run"
         return choice, f"picked: {shell} has fuel, {fuel}; {where}"
     raise SystemExit(
         f"loom install: body is unset in {config_path(home)} and no CLI answered with fuel "
-        f"({', '.join(tried)}); set body to shell/core with `brnrd loom config edit`"
+        f"({', '.join(tried)}); set body (claude, or shell/core) with `brnrd loom config edit`"
     )
 
 
@@ -421,10 +448,10 @@ def _log_line(home: Path | None) -> str:
 def _body_line(home: Path | None) -> str:
     if home is None:
         return "body: -"
-    choice = load_config(home).body
-    if not isinstance(choice, str) or not choice.strip():
-        return "body: unset"
-    return f"body: {choice.strip()}"
+    from .adapters import default_body
+    from .home import Home
+    choice = default_body(Home(home))
+    return f"body: {choice}" if choice else "body: unset"
 
 
 def _print_status(*, state: str, pid: int | None, home: Path | None) -> None:
@@ -474,6 +501,7 @@ def _install(argv: list[str], *, run, agents_home, sleep, pid_alive, poll_timeou
     from brr import __version__
 
     _refuse_source(args.dev)
+    _refuse_prefix()
     system = _platform(system)
     home, source = _service_home(args.home, agents_home=agents_home, system=system)
     body, picked = _settle_body(home, write=not args.dry_run)
@@ -488,8 +516,10 @@ def _install(argv: list[str], *, run, agents_home, sleep, pid_alive, poll_timeou
         ("home", f"{home} ({source})"),
         ("body", f"{body} ({picked})"),
         ("service", unit_file),
+        ("entry", entry.shim()),
     ]
     if args.dry_run:
+        receipt.append(("current", f"{entry.current()} -> {entry.prefix()} (dry run: not linked)"))
         replaced = "not checked (--no-start)" if args.no_start else _replace(
             home, run=run, system=system, alive=alive, dry_run=True)
         _receipt(receipt + [("replaced", replaced), ("pid", "- (dry run: nothing written or started)")])
@@ -497,6 +527,7 @@ def _install(argv: list[str], *, run, agents_home, sleep, pid_alive, poll_timeou
     replaced = "nothing (--no-start)" if args.no_start else _replace(
         home, run=run, system=system, alive=alive, dry_run=False)
     receipt.append(("replaced", replaced))
+    receipt.append(("current", _point_entry()))
     poll = _poll(poll_timeout, system)
     if system == "Linux":
         code = linux.install(
@@ -506,13 +537,14 @@ def _install(argv: list[str], *, run, agents_home, sleep, pid_alive, poll_timeou
             program_args=_program(home),
             log_directory=_linux_log_dir(),
             kill_mode="process",
-            executable=_interpreter(),
+            executable=str(entry.shim()),
             successor="loom",
             run=run,
             sleep=_sleep(sleep),
             workdir=home,
             delay=poll,
             restart=True,
+            path_env=_path_env(),
         )
         if args.no_start:
             _receipt(receipt + [("pid", "- (not started: --no-start)")])
@@ -533,7 +565,7 @@ def _install(argv: list[str], *, run, agents_home, sleep, pid_alive, poll_timeou
 
     result = macos.install(
         no_start=args.no_start,
-        brr_path=_interpreter(),
+        brr_path=entry.shim(),
         home=_agents(agents_home),
         workdir=home,
         run=_run(run),
@@ -545,6 +577,7 @@ def _install(argv: list[str], *, run, agents_home, sleep, pid_alive, poll_timeou
         abandon_process_group=True,
         confirm=confirm,
         retry_command="`brnrd loom install`",
+        path_env=_path_env(),
     )
     if args.no_start:
         _receipt(receipt + [("pid", "- (not started: --no-start; it loads at next login)")])

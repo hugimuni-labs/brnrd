@@ -13,6 +13,8 @@ from typing import Iterable
 
 from brr.daemon2.facts import Fact
 
+from .wishes import Say, read_says
+
 
 def is_person(letter: Fact) -> bool:
     # data.from, as wishes.own_say reads it: a channel letter's by is loom:<install>.
@@ -46,7 +48,7 @@ def place(body: str, quote: str) -> tuple[int, int] | None:
     return index[start], index[start + len(wanted) - 1] + 1 - index[start]
 
 
-def say_of(letters: dict[str, Fact], raw: str, default: str | None) -> list:
+def say_of(letters: dict[str, Fact], raw: str, default: str | None) -> Say:
     """``quote`` (of ``default``) or ``id:quote`` → a say. Never refuses a quote."""
     ident, quote = None, raw
     for at in sorted((i for i, c in enumerate(raw) if c == ":"), reverse=True):
@@ -58,15 +60,16 @@ def say_of(letters: dict[str, Fact], raw: str, default: str | None) -> list:
     if ident is None:
         raise ValueError(f"--says {raw!r}: no --re letter to quote, and no letter id before a colon")
     span = place(str(letters[ident].data.get("body", "")) if ident in letters else "", quote)
-    return [ident, *span] if span else [ident, 0, None, quote]
+    return Say(ident, *span) if span else Say(ident, 0, None, quote)
 
 
 def disposed(facts: Iterable[Fact], room: Path | None = None) -> set[str]:
     """Letter ids a say or chatter cites: the ledger, and this room's unsent port/out."""
+    from .ledger import kind_facts
     found: set[str] = set()
-    for f in facts:
+    for f in kind_facts(facts, "wish", "letter", "note"):
         if f.kind == "wish":
-            found.update(str(say[0]) for say in f.data.get("says") or ())
+            found.update(say.letter for say in read_says(f.data.get("says")))
         elif f.kind in {"letter", "note"}:
             found.update(f.data.get("chatter") or ())
     out = Path(room) / "port" / "out" if room is not None else None
@@ -104,19 +107,19 @@ def short(ident: str) -> str:
     return ident.rsplit("/", 1)[-1].rsplit(":", 1)[-1]
 
 
-def echo(wish: str, says: list, refs: list[str], letters: dict[str, Fact]) -> str:
+def echo(wish: str, says: list[Say], refs: list[str], letters: dict[str, Fact]) -> str:
     """One line per wish, the shape the board draws: ``w-x ← "quote" (stem) → refs: …``.
 
     A quote the loom could not place is marked ``"…"?``: it cites the whole letter.
     """
     cited = []
     for say in says:
-        ident, off, size = say[0], say[1], say[2]
+        ident = say.letter
         body = str(letters[ident].data.get("body", "")) if ident in letters else ""
-        if len(say) > 3:
-            cited.append(f'"{say[3]}"? ({short(ident)})')
-        elif size is None:
+        if say.quote is not None:
+            cited.append(f'"{say.quote}"? ({short(ident)})')
+        elif say.size is None:
             cited.append(f"({short(ident)})")
         else:
-            cited.append(f'"{body[off:off + size]}" ({short(ident)})')
+            cited.append(f'"{say.text(body)}" ({short(ident)})')
     return f"{wish} ← {', '.join(cited) or '-'} → refs: {', '.join(refs) or '-'}"

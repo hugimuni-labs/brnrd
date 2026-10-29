@@ -7,10 +7,12 @@ The runtime adds the current thread's wish projection to the recipe's output.
 from __future__ import annotations
 
 import os
+import re
 import shutil
 import subprocess
 import sys
 import tempfile
+import time
 from pathlib import Path
 
 from .config import seed_config
@@ -61,6 +63,18 @@ def seed_root() -> Path:
     return Path(__file__).resolve().parent / "seed"
 
 
+def identity_source() -> Path:
+    """The product's character, seeded once as ``core/identity.md``.
+
+    The daemon's inject stack reads the same file, so there is one copy.
+    """
+    return Path(__file__).resolve().parents[2] / "prompts" / "identity-core.md"
+
+
+IDENTITY_NOTE = ("core/identity.md is who brnrd is: the product's character, now this self's. "
+                 "Edit it or replace it; the next wake says the new thing.")
+
+
 def _env_without_pin() -> dict[str, str]:
     env = os.environ.copy()
     for key in _PINNED_GIT:
@@ -87,6 +101,21 @@ def git(cwd: Path, *args: str, check: bool = True, env: dict[str, str] | None = 
         raise SelfError(f"git {' '.join(args)} ({cwd}) -> {proc.returncode}: {detail}")
     return proc
 
+
+# A forge's browse path for a folder on main; an origin elsewhere has no link.
+_FORGES = {"github.com": "tree/main", "gitlab.com": "-/tree/main", "codeberg.org": "src/branch/main"}
+_ORIGIN = re.compile(r"(?:(?:https?|ssh)://)?(?:[^@/]+@)?([^/:@]+)(?::\d+)?[:/]([^/]+)/([^/]+?)(?:\.git)?/?")
+
+
+def forge_threads(self_dir: Path) -> str | None:
+    """The self's threads folder on the forge its origin names, credentials dropped."""
+    if not (self_dir / ".git").exists():
+        return None
+    url = git(self_dir, "remote", "get-url", "origin", check=False).stdout.strip()
+    m = _ORIGIN.fullmatch(url)
+    if not m or m[1].lower() not in _FORGES:
+        return None
+    return f"https://{m[1].lower()}/{m[2]}/{m[3]}/{_FORGES[m[1].lower()]}/threads"
 
 def _segment(value: str, what: str | None = None) -> str | None:
     if (
@@ -223,6 +252,11 @@ def _copy_seed(dest: Path) -> None:
             continue
         target.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(src, target)
+    identity = identity_source()
+    if not identity.is_file():
+        raise SelfError(f"identity missing at {identity}")
+    (dest / "core").mkdir(parents=True, exist_ok=True)
+    shutil.copy2(identity, dest / "core" / "identity.md")
     for rel in _EXECUTABLES:
         path = dest / rel
         if not path.is_file():
@@ -302,10 +336,14 @@ def init_self(home: Path, person: str | None = None, remote: str | None = None) 
     if (self_dir / ".git").exists():
         seed_config(home)
         return f"self already exists: {self_dir}"
-    if self_dir.exists():
-        raise SelfError(f"{self_dir} exists and is not a git self; refusing to overwrite")
     if person is not None:
         _segment(person, "person")
+    # A pairing that ran before any self left its files here: set them aside,
+    # seed, and put back what the seed does not hold, uncommitted.
+    aside = None
+    if self_dir.exists():
+        aside = Path(tempfile.mkdtemp(prefix="self-", dir=home))
+        self_dir.rename(aside / "self")
     self_dir.mkdir(parents=True)
     try:
         _copy_seed(self_dir)
@@ -337,10 +375,64 @@ def init_self(home: Path, person: str | None = None, remote: str | None = None) 
             git(self_dir, "push", "-u", "origin", "main")
     except Exception:
         shutil.rmtree(self_dir, ignore_errors=True)
+        if aside is not None:
+            (aside / "self").rename(self_dir)
+            shutil.rmtree(aside, ignore_errors=True)
         raise
+    if aside is not None:
+        for src in sorted((aside / "self").rglob("*")):
+            target = self_dir / src.relative_to(aside / "self")
+            if src.is_file() and not target.exists():
+                target.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(src, target)
+        shutil.rmtree(aside, ignore_errors=True)
     seed_config(home)
     sha = git(self_dir, "rev-parse", "--short", "HEAD").stdout.strip()
-    return f"initialized {self_dir} {sha}"
+    return f"initialized {self_dir} {sha}\n{IDENTITY_NOTE}"
+
+
+def heal_home_thread(home: Path) -> str:
+    """Put the seed's home thread README back on the self's ``main``; return the sha.
+
+    The loom's own repair for a self whose home thread was deleted or never
+    landed: letters with no other thread have nowhere to go. It lands through
+    the self's pre-receive like any push, from a scratch clone, so a dirty
+    ``home/self`` worktree is never touched. A home thread already on main is
+    a no-op. Raises ``SelfError`` when there is no self or the push is refused.
+    """
+    from .home import HOME_THREAD
+    from .merge import _push_lock
+
+    self_dir = Path(home).resolve() / "self"
+    if not (self_dir / ".git").exists():
+        raise SelfError(f"no self at {self_dir}")
+    path = f"threads/{HOME_THREAD}/README.md"
+    if git(self_dir, "cat-file", "-e", f"main:{path}", check=False).returncode == 0:
+        return git(self_dir, "rev-parse", "--short", "main").stdout.strip()
+    seed = seed_root() / path
+    scratch = Path(tempfile.mkdtemp(prefix="heal-", dir=self_dir.parent))
+    try:
+        clone = scratch / "self"
+        git(scratch, "clone", "-q", "--branch", "main", str(self_dir), str(clone))
+        target = clone / path
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(seed, target)
+        git(clone, "add", "--", path)
+        _commit(clone, f"Put {HOME_THREAD} back on main.\n\n"
+                "Letters with no thread had nowhere to land; the loom restores the seed's.\n\n"
+                "Loom-Strand: loom\n"
+                "Loom-Label: taint=0; audience=self\n")
+        changed = refresh_index(clone)
+        if changed:
+            git(clone, "add", "--", *changed)
+            _commit(clone, "", amend=True)
+        with _push_lock(clone):
+            push = git(clone, "push", "-q", "origin", "HEAD:main", check=False)
+        if push.returncode != 0:
+            raise SelfError(f"push refused: {(push.stderr or push.stdout).strip()}")
+        return git(clone, "rev-parse", "--short", "HEAD").stdout.strip()
+    finally:
+        shutil.rmtree(scratch, ignore_errors=True)
 
 
 def pin_clone(repo: Path) -> None:
@@ -355,32 +447,319 @@ def pin_clone(repo: Path) -> None:
     git(repo, "config", "credential.helper", "")
 
 
-def room(home: Path, strand: str) -> Path:
+def room(home: Path, strand: str, gen: int | None = None) -> Path:
     """``home/rooms/<strand>/self``, a ``--shared`` clone on ``strand/<strand>``.
 
-    A room that already exists is returned as it stands. A molt keeps its commits.
+    A room that already exists keeps its commits and edits (a molt keeps its
+    commits), once ``heal_room`` has repaired what a crash left (see there).
     The clone has an empty credential helper. Commit identity is the body's
     environment.
     """
+    return ensure_room(home, strand, gen)[0]
+
+
+def ensure_room(home: Path, strand: str, gen: int | None = None):
+    """``room`` and the ``room.repaired`` fact it wrote, or None for a sound room."""
     home = Path(home).resolve()
     strand = _segment(strand, "strand")
     source = home / "self"
     if not (source / ".git").exists():
         raise SelfError(f"no self at {source}; init first")
     dest = home / "rooms" / strand / "self"
-    if (dest / ".git").exists():
-        pin_clone(dest)
-        return dest
-    if dest.exists():
-        raise SelfError(f"{dest} exists and is not a clone; refusing to overwrite")
-    dest.parent.mkdir(parents=True, exist_ok=True)
-    git(home, "clone", "--shared", str(source), str(dest))
-    git(dest, "checkout", "-b", f"strand/{strand}")
-    # The README driver lives on the room that rebases, not on the bare self.
-    from brr.loom.runtime.merge_driver import install_merge_driver
-    install_merge_driver(dest)
+    report = None
+    if (dest / ".git").exists() or dest.exists():
+        report = heal_room(home, strand)
+    if not (dest / ".git").exists():
+        _create_room(source, dest, strand)
+    if report is not None and report.get("aside"):
+        _recover_branch(Path(report["aside"]), dest, strand, report)
     pin_clone(dest)
-    return dest
+    fact = _record_repair(home, strand, gen, report) if report else None
+    return dest, fact
+
+
+def _create_room(source: Path, dest: Path, strand: str) -> None:
+    """Clone beside ``dest`` and rename it in once it is whole.
+
+    A crash before the rename leaves only a ``.self-clone-<pid>-*`` sibling,
+    which the next creation removes once its pid is dead: ``dest`` is either
+    absent or a finished clone on its strand branch.
+    """
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    for stale in dest.parent.glob(".self-clone-*"):
+        pid = stale.name.split("-")[2]
+        if not (pid.isdigit() and _pid_alive(int(pid))):
+            shutil.rmtree(stale, ignore_errors=True)
+    tmp = Path(tempfile.mkdtemp(prefix=f".self-clone-{os.getpid()}-", dir=dest.parent))
+    try:
+        git(dest.parent, "clone", "--shared", str(source), str(tmp))
+        git(tmp, "checkout", "-b", f"strand/{strand}")
+        # The README driver lives on the room that rebases, not on the bare self.
+        from brr.loom.runtime.merge_driver import install_merge_driver
+        install_merge_driver(tmp)
+        pin_clone(tmp)
+        os.rename(tmp, dest)
+    except BaseException:
+        shutil.rmtree(tmp, ignore_errors=True)
+        raise
+
+
+def _pid_alive(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
+
+
+# A loom git call times out at 60 s; a lock older than that with no body in the
+# room has no holder left.
+STALE_LOCK_SECONDS = 60
+
+
+def heal_room(home: Path, strand: str) -> dict | None:
+    """Repair what a crash left in an existing room, or move the room aside.
+
+    Repairs are lossless by construction: a dead ``index.lock`` goes, an
+    unreadable or empty index (while HEAD has a tree) is rebuilt from HEAD
+    with the work tree untouched, and a tracked file that is missing, or empty
+    where HEAD has content, is written back from HEAD. A file with content is
+    never touched, nor is any ref. A room whose HEAD or tree cannot be read,
+    or a ``dest`` with no ``.git``, is renamed to ``self.broken-<stamp>`` (kept,
+    never deleted) for ``ensure_room`` to reclone. A live lock (a body in the
+    room, or younger than any loom git call) leaves everything as it stands.
+    Before the first change it reads the crash site (``_crash_site``): the
+    strand branch's sha and what in the work tree differs from it.
+    Returns None when nothing was repaired, else ``{"found": [...], "done": [...],
+    "aside": path | None, "head": sha | None, "dirty": [...] | None, "dirty_count": n}``.
+    """
+    room_dir = Path(home) / "rooms" / strand
+    dest = room_dir / "self"
+    # A broken .git must fail, not send discovery up to some enclosing repo.
+    env = dict(_env_without_pin(), GIT_DIR=str(dest / ".git"), GIT_WORK_TREE=str(dest))
+
+    def hgit(*args, **kw):
+        return git(dest, *args, check=False, env=env, **kw)
+
+    found: list[str] = []
+    done: list[str] = []
+    crash: dict = {}
+
+    def site() -> None:
+        if not crash:
+            crash.update(_crash_site(dest, strand))
+
+    def report(**kw) -> dict:
+        site()
+        return {"found": found, "done": done, "aside": None, **crash, **kw}
+
+    def aside(why: str) -> dict:
+        site()
+        found.append(why)
+        stamp = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())
+        target = room_dir / f"self.broken-{stamp}"
+        n = 1
+        while target.exists():
+            n += 1
+            target = room_dir / f"self.broken-{stamp}-{n}"
+        os.rename(dest, target)
+        done.append(f"moved the room aside to {target.name} and recloned from self")
+        return report(aside=str(target))
+
+    if not (dest / ".git").exists():
+        return aside("the room has no .git (a clone that never finished)")
+    lock = dest / ".git" / "index.lock"
+    if lock.exists():
+        from .loom import body_alive
+        age = time.time() - lock.stat().st_mtime
+        if body_alive(room_dir) or age < STALE_LOCK_SECONDS:
+            return None  # Someone may still be writing: touch nothing.
+        site()
+        lock.unlink()
+        found.append(f"a stale index.lock ({age:.0f}s old, no body in the room)")
+        done.append("removed index.lock")
+    head = hgit("rev-parse", "--verify", "-q", "HEAD^{tree}")
+    if head.returncode != 0:
+        return aside("HEAD has no readable commit")
+    tree = hgit("ls-tree", "-r", "-z", "--long", "HEAD")
+    if tree.returncode != 0:
+        return aside(f"HEAD's tree is unreadable: {tree.stderr.strip()}")
+    entries = []
+    for row in tree.stdout.split("\0"):
+        if not row:
+            continue
+        meta, path = row.split("\t", 1)
+        mode, kind, _sha, size = meta.split()
+        if kind == "blob":
+            entries.append((path, mode, int(size) if size.isdigit() else 0))
+    index = hgit("ls-files", "-z")
+    if index.returncode != 0 or (entries and not index.stdout):
+        found.append("an unreadable index" if index.returncode != 0
+                     else f"an empty index while HEAD has {len(entries)} files")
+        site()
+        broken = dest / ".git" / "index"
+        if broken.exists():
+            os.replace(broken, dest / ".git" / "index.broken")
+        if hgit("reset", "-q").returncode != 0:
+            return aside("the index could not be rebuilt from HEAD")
+        done.append("rebuilt the index from HEAD (work tree untouched)")
+    missing, emptied = [], []
+    for path, mode, size in entries:
+        target = dest / path
+        if not os.path.lexists(target):
+            missing.append(path)
+        elif mode != "120000" and size > 0 and target.is_file() and target.stat().st_size == 0:
+            emptied.append(path)
+    if missing or emptied:
+        if missing:
+            found.append(f"{len(missing)} tracked files missing ({_some(missing)})")
+        if emptied:
+            found.append(f"{len(emptied)} tracked files empty where HEAD has content ({_some(emptied)})")
+        paths = missing + emptied
+        site()
+        restore = hgit("restore", "--source=HEAD", "--worktree",
+                       "--pathspec-from-file=-", "--pathspec-file-nul",
+                       input="\0".join(paths) + "\0")
+        if restore.returncode != 0:
+            return aside(f"tracked files could not be restored: {restore.stderr.strip()}")
+        done.append(f"restored {len(paths)} files from HEAD")
+    branch = f"strand/{strand}"
+    if hgit("rev-parse", "--verify", "-q", f"refs/heads/{branch}").returncode:
+        found.append(f"no {branch} branch (a clone that stopped before it)")
+        site()
+        if hgit("checkout", "-q", "-b", branch).returncode:
+            return aside(f"{branch} could not be created")
+        from brr.loom.runtime.merge_driver import install_merge_driver
+        install_merge_driver(dest)
+        done.append(f"created {branch} at HEAD")
+    if not found:
+        return None
+    return report()
+
+
+# The fact keeps this many dirty paths; ``dirty_count`` counts them all.
+DIRTY_KEPT = 200
+
+
+def _crash_site(dest: Path, strand: str) -> dict:
+    """The strand branch's sha and the work tree's differences from it, read only.
+
+    Refs are read as files, so a broken ``HEAD`` doesn't hide them. ``dirty``
+    is ``git status --porcelain`` of the work tree against that commit (or
+    HEAD's, before the branch existed), taken through a stand-in git dir
+    with its own index: the room's index may be what broke, and nothing in
+    the room is written. None when there is no commit to compare with.
+    """
+    gitdir = dest / ".git"
+    head = _read_ref(gitdir, f"refs/heads/strand/{strand}")
+    base = head or _read_ref(gitdir, "HEAD")
+    site = {"head": head, "dirty": None, "dirty_count": 0}
+    if not base or not (gitdir / "objects").is_dir():
+        return site
+    with tempfile.TemporaryDirectory(prefix="loom-site-") as view:
+        view = Path(view)
+        for name in ("objects", "refs", "packed-refs", "info"):
+            if (gitdir / name).exists():
+                (view / name).symlink_to(gitdir / name)
+        (view / "HEAD").write_text(base + "\n")
+        (view / "config").write_text("[core]\n\tbare = false\n")
+        env = dict(_env_without_pin(), GIT_DIR=str(view), GIT_WORK_TREE=str(dest),
+                   GIT_INDEX_FILE=str(view / "index"))
+        if git(dest, "read-tree", base, check=False, env=env).returncode:
+            return site
+        status = git(dest, "status", "--porcelain", "-z", "--no-renames",
+                     "--untracked-files=all", check=False, env=env)
+    if status.returncode:
+        return site
+    dirty = [row for row in status.stdout.split("\0") if row]
+    site.update(dirty=dirty[:DIRTY_KEPT], dirty_count=len(dirty))
+    return site
+
+
+def _read_ref(gitdir: Path, name: str, depth: int = 3) -> str | None:
+    """The sha ``name`` points to, read from loose and packed refs without git."""
+    try:
+        text = (gitdir / name).read_text().strip()
+    except (OSError, UnicodeDecodeError):
+        text = ""
+    if text.startswith("ref: ") and depth:
+        return _read_ref(gitdir, text[5:].strip(), depth - 1)
+    if re.fullmatch(r"[0-9a-f]{40,64}", text):
+        return text
+    try:
+        packed = (gitdir / "packed-refs").read_text().splitlines()
+    except (OSError, UnicodeDecodeError):
+        return None
+    for line in packed:
+        sha, _, ref = line.partition(" ")
+        if ref == name and re.fullmatch(r"[0-9a-f]{40,64}", sha):
+            return sha
+    return None
+
+
+def _some(paths: list[str], n: int = 3) -> str:
+    return ", ".join(paths[:n]) + (f", +{len(paths) - n} more" if len(paths) > n else "")
+
+
+def _recover_branch(old: Path, dest: Path, strand: str, report: dict) -> None:
+    """Carry the strand branch's commits from a room moved aside, if readable.
+
+    The old room is read, never written. When its ``HEAD`` is what broke, git
+    refuses it as a repository, so the fetch reads its refs and objects
+    through a stand-in directory with a sound ``HEAD``.
+    """
+    branch = f"strand/{strand}"
+    gitdir = old / ".git"
+    with tempfile.TemporaryDirectory(prefix="loom-aside-") as view:
+        source = gitdir
+        if (gitdir / "objects").is_dir():
+            source = Path(view)
+            for name in ("objects", "refs", "packed-refs"):
+                if (gitdir / name).exists():
+                    (source / name).symlink_to(gitdir / name)
+            (source / "HEAD").write_text("ref: refs/heads/main\n")
+            (source / "config").write_text("[core]\n\tbare = true\n")
+        fetched = git(dest, "fetch", "-q", "--no-tags", str(source), f"refs/heads/{branch}",
+                      check=False)
+    if fetched.returncode != 0:
+        report["done"].append(f"found no readable {branch} in the old room; it starts at main")
+        return
+    git(dest, "reset", "-q", "--hard", "FETCH_HEAD")
+    sha = git(dest, "rev-parse", "--short", "HEAD").stdout.strip()
+    report["done"].append(f"kept {branch}'s commits ({sha})")
+
+
+def _record_repair(home: Path, strand: str, gen: int | None, report: dict):
+    from brr.daemon2.facts import Fact
+    from .home import Home
+    from .ledger import append
+    loom = Home(home)
+    return append(loom, Fact(kind="room.repaired", by=f"loom:{loom.install_id()}", data={
+        "strand": strand, "gen": gen, "found": report["found"],
+        "done": report["done"], "aside": report.get("aside"),
+        "head": report.get("head"), "dirty": report.get("dirty"),
+        "dirty_count": report.get("dirty_count", 0),
+    }))
+
+
+def repaired_line(fact) -> str:
+    """The boundary's line for a ``room.repaired`` fact."""
+    data = fact.data
+    line = "repaired: room " + "; ".join(data["found"]) + " -> " + "; ".join(data["done"])
+    site = []
+    if data.get("aside"):
+        site.append(f"the old room is at {data['aside']}")
+    if data.get("head"):
+        site.append(f"strand/{data['strand']} was at {data['head'][:12]}")
+    if data.get("dirty") is not None:
+        n = data.get("dirty_count", len(data["dirty"]))
+        paths = [row[3:] for row in data["dirty"]]
+        site.append(f"{n} dirty paths ({_some(paths)})" if n else "no dirty paths")
+    if site:
+        line += " · crash site: " + "; ".join(site)
+    return line.replace("\n", "\\n")
 
 
 def resolve_clone(room_dir: Path) -> Path:
@@ -404,7 +783,7 @@ def default_loom_part(clone: Path, thread: str) -> str:
     lines.append(f"thread: {thread}")
     lines.append(
         "letters arrive at your tool boundaries. "
-        "answer with `python -m brr.loom.runtime send`. "
+        "answer with `brnrd runtime send`. "
         "when you are done, stop; the jack holds you while letters may come."
     )
     return "\n".join(lines) + "\n"
@@ -412,17 +791,23 @@ def default_loom_part(clone: Path, thread: str) -> str:
 
 def run_wake(room_dir: Path, thread: str, owed: Path | None = None, *,
              loom_part: Path | None = None, repos: Path | None = None,
-             core: Path | None = None, stdout=None, stderr=None) -> int:
+             core: Path | None = None, stdout=None, stderr=None,
+             recipe: Path | None = None) -> int:
     """Run the self recipe and add its thread wishes within the wake budget.
 
     With ``core``, a recipe that knows ``LOOM_CORE`` writes the core there and
     leaves it out of stdout; one that does not leaves the file unwritten.
+    ``recipe`` runs another recipe (the packaged one) against the same clone.
     """
     _segment(thread, "thread")
     clone = resolve_clone(room_dir)
-    recipe = clone / "core" / "loom" / "wake"
-    if not os.access(recipe, os.X_OK):
-        raise SelfError(f"{recipe} is not executable")
+    if recipe is not None:
+        argv = [sys.executable, str(recipe)]
+    else:
+        recipe = clone / "core" / "loom" / "wake"
+        if not os.access(recipe, os.X_OK):
+            raise SelfError(f"{recipe} is not executable")
+        argv = [str(recipe)]
     env = _env_without_pin()
     if loom_part is not None:
         env["LOOM_PART"] = str(loom_part)
@@ -439,7 +824,16 @@ def run_wake(room_dir: Path, thread: str, owed: Path | None = None, *,
     except ValueError:
         home = None  # A standalone self clone has no loom ledger.
     if home is not None:
-        section = wake_wishes(read_facts(home), thread)
+        from .lifecycle import main_snapshot
+        rows = main_snapshot(home).get(thread, {}).get("plan_rows") or ()
+        facts = read_facts(home)
+        section = wake_wishes(facts, thread, rows)
+        if thread == home.main_thread():
+            # The center wakes with both queues and Next build, derived, never a prose line.
+            from .queues import queues, render
+            from .wishes import told, waits_on
+            found = told(facts)
+            section += render(queues(found, waits_on(found, main_snapshot(home))))
     # Reserve the section before the recipe fits its tree/README to the budget.
     if section:
         limit = int(env.get("LOOM_BUDGET_BYTES") or 24000)
@@ -461,7 +855,7 @@ def run_wake(room_dir: Path, thread: str, owed: Path | None = None, *,
             handle.close()
             part_file = handle.name
             env["LOOM_PART"] = handle.name
-        proc = subprocess.run([str(recipe), thread, owed_arg], cwd=clone, env=env,
+        proc = subprocess.run([*argv, thread, owed_arg], cwd=clone, env=env,
                               stdout=subprocess.PIPE, stderr=stderr, timeout=60)
         output = proc.stdout.decode("utf-8")
         if proc.returncode == 0 and section:

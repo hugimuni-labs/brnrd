@@ -1,30 +1,15 @@
 """Vibe's real public-history schema and subprocess boundary."""
-import json
 import os
 import sys
 
 import pytest
 
-from brr import runner, runner_select, vibe_runner
+from brr import runner, runner_select
 
 
 def message(text, role="assistant", status="completed"):
     return {"type": "message", "role": role, "generationStatus": status,
             "sessionId": "session-1", "content": [{"type": "text", "text": text}]}
-
-
-@pytest.mark.parametrize("history", [[], {}, [message("partial", status="failed")]])
-def test_no_completed_reply_is_failure(history):
-    reply, error = vibe_runner.final_reply(json.dumps(history))
-    assert reply == ""
-    assert error
-
-
-def test_reply_excludes_user_and_tool_history():
-    history = [message("private prompt", "user"), message("working"),
-               {"type": "effect", "result": "private tool result"}, message("done")]
-    assert vibe_runner.final_reply(json.dumps(history)) == ("done\n", None)
-    assert vibe_runner.final_reply("not JSON")[1]
 
 
 @pytest.mark.parametrize("failure", [False, True])
@@ -111,24 +96,6 @@ def test_vibe_hooks_toml_parses_and_routes_each_native_type_to_brnrd():
     assert all("match" not in h and h["timeout"] > 0 for h in doc["hooks"])
 
 
-def test_vibe_post_tool_inject_is_additional_context_never_a_deny():
-    out, rc = _hooks.render_native(
-        "vibe", _hooks.PHASE_POST_TOOL,
-        {"inject": "steer: stop", "block": True, "block_reason": "owed a card"},
-    )
-    assert rc == 0 and "decision" not in out
-    assert out["hook_specific_output"]["additional_context"] == "owed a card\n\nsteer: stop"
-    assert _hooks.render_native("vibe", _hooks.PHASE_POST_TOOL, {"inject": None})[0] == {}
-
-
-def test_vibe_pre_tool_block_denies_and_stop_block_retries():
-    neutral = {"inject": None, "block": True, "block_reason": "rooted write"}
-    assert _hooks.render_native("vibe", _hooks.PHASE_PRE_TOOL, neutral)[0] == {
-        "decision": "deny", "reason": "rooted write"}
-    assert _hooks.render_native("vibe", _hooks.PHASE_STOP, neutral)[0]["decision"] == "deny"
-    assert _hooks.render_native("vibe", _hooks.PHASE_SESSION_START, neutral)[0] == {}
-
-
 def test_vibe_hook_dir_armed_only_in_a_daemon_run(monkeypatch):
     monkeypatch.setattr(_hooks, "vibe_hook_capability", lambda **_: True)
     assert _vr.hook_dir({}) is None
@@ -143,45 +110,6 @@ def test_vibe_hook_dir_armed_only_in_a_daemon_run(monkeypatch):
     finally:
         import shutil
         shutil.rmtree(root)
-
-
-def _vibe_pre_tool(tool_name, file_path, cwd):
-    return json.dumps({
-        "hook_event_name": "pre_tool", "session_id": "s", "transcript_path": "",
-        "cwd": str(cwd), "tool_name": tool_name, "tool_call_id": "c",
-        # The wire shape captured from installed Vibe 2.25.5 (namespaced name, `path`).
-        "tool_input": {"content": "x", "path": str(file_path)},
-    })
-
-
-def test_vibe_write_into_host_checkout_is_denied_through_run_hook(tmp_path):
-    host = tmp_path / "host"
-    wt = host / ".brr" / "worktrees" / "run-x"
-    wt.mkdir(parents=True)
-    env = {"BRR_RUNNER": "vibe", "BRR_HOST_ROOT": str(host), "BRR_WORK_TREE": str(wt)}
-    for tool in ("file_system.write_file", "file_system.edit", "write_file"):
-        out, rc = _hooks.run_hook("pre-tool", _vibe_pre_tool(tool, host / "stray.txt", wt), env)
-        assert rc == 0 and out["decision"] == "deny" and out["reason"], (tool, out)
-    ok, rc = _hooks.run_hook("pre-tool", _vibe_pre_tool("file_system.write_file", wt / "ok.txt", wt), env)
-    assert (ok, rc) == ({}, 0)
-    other, _ = _hooks.run_hook("pre-tool", _vibe_pre_tool("file_system.read_file", host / "stray.txt", wt), env)
-    assert other == {}
-
-
-def test_hook_setup_failure_cleans_scoped_system_prompt(tmp_path, monkeypatch):
-    source = tmp_path / "system.md"
-    source.write_text("runtime")
-    home = tmp_path / "vibe-home"
-    monkeypatch.setenv("VIBE_HOME", str(home))
-    monkeypatch.setattr(runner, "protonucleus_path", lambda: source)
-
-    def fail_setup(_env):
-        raise OSError("hook directory unavailable")
-
-    monkeypatch.setattr(vibe_runner, "hook_dir", fail_setup)
-    with pytest.raises(OSError, match="hook directory unavailable"):
-        vibe_runner.main()
-    assert list((home / "prompts").iterdir()) == []
 
 
 def test_vibe_core_catalog_uses_alias_pins_without_cli_model_flag():

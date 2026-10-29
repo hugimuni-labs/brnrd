@@ -1,10 +1,51 @@
 #!/usr/bin/env python3
-"""Account pairing stays with the existing browser flow."""
-import os
-from pathlib import Path
-from brr.loom.runtime.config import load_config
+"""Sign this home in to brnrd.dev: an approval link (and its QR code), then the gate written for the relay.
 
-if not load_config(Path(os.environ['BRNRD_CONFIG']).parent.parent).relay_state:
-    raise SystemExit('relay requires relay_state: run `brnrd account connect` for browser '
-                     'pairing, then set relay_state to that account state directory. '
-                     'Connect the chat on brnrd.dev before retrying channel setup.')
+The handshake is ``brnrd account connect``'s own (``cloud.start_pair`` /
+``cloud.await_pair``), bound to the home's self repo. Its state lands in
+``<home>/loom/gates/``, and ``relay_state`` is set to ``<home>/loom`` so the
+relay's in/out read it. A home that already has ``relay_state`` is left alone.
+"""
+import os
+import socket
+import sys
+from pathlib import Path
+
+from brr.gates import cloud
+from brr.loom.runtime.config import load_config, seed_config, set_value
+from brr.loom.runtime.setup_channel import qr_code
+
+home = Path(os.environ['BRNRD_CONFIG']).parent.parent
+if load_config(home).relay_state:
+    sys.exit(0)
+url = os.environ.get('BRNRD_URL', 'https://brnrd.dev').rstrip('/')
+self_brr = home / 'self' / '.brr'
+caps = cloud._repo_capabilities(self_brr)
+body = {k: caps[k] for k in ('repo_full_name', 'git_remote', 'branch', 'default_branch', 'forge')
+        if isinstance(caps.get(k), str) and caps[k]}
+body.update(cloud.requester())
+try:
+    pair = cloud.start_pair(url, body)
+except Exception as exc:
+    sys.exit(f'Could not reach {url}: {exc}')
+print(f"  Open {pair['pair_url']} and sign in to approve this computer"
+      + (", or scan the code below with your phone's camera." if sys.stdout.isatty() else '.'), flush=True)
+picture = qr_code(pair['pair_url']) if sys.stdout.isatty() else ''
+if picture:
+    print(picture, flush=True)
+print(f"  Only approve a code you started yourself: the page shows {pair['pair_code']}"
+      f" for {body.get('os_user', '?')} on {body.get('hostname', '?')}.", flush=True)
+try:
+    status = cloud.await_pair(url, pair, timeout_s=float(os.environ.get('BRNRD_PAIR_TIMEOUT', 600)))
+except TimeoutError:
+    sys.exit('The approval link was not approved in time; nothing was saved. Run brnrd setup again.')
+state = dict(brnrd_url=url, token=status['daemon_token'], account_id=status.get('account_id'),
+             repo_id=status.get('repo_id'), daemon_name=socket.gethostname() or 'loom',
+             capabilities=caps, since=0)
+gates = home / 'loom'
+cloud._save_state_to_dir(gates, state)
+# The publish endpoints bind the token to the Daemon row /register creates.
+cloud._register(self_brr, state)
+seed_config(home)
+set_value(home, 'relay_state', str(gates))
+print(f"  Signed in to brnrd.dev ✓ (account {status.get('account_id')})", flush=True)

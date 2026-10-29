@@ -8,16 +8,17 @@ this one is still granting.
 
 from __future__ import annotations
 
+import time
 from datetime import datetime, timezone
 
 from brr.daemon2.facts import Fact
 from brr.daemon2.leases import Lease, LocalLeaseAuthority
 
 from .config import LoomConfig, granting_window, load_config, loom_clock
-from .home import Home, home_thread, is_channel, mint
+from .home import HOME_THREAD, Home, is_channel, mint
 from .ledger import LedgerConflict, LedgerReader, LedgerView, kind_facts
 from .project import (
-    fold, holder, is_notice, sender_threads,
+    fold, holder, is_notice, reply_channels, sender_threads,
 )
 from .selfrepo import ReadmeError, parse_readme
 from .owners import active_owners, letter_owners, letters_for
@@ -25,6 +26,8 @@ from .lifecycle import main_snapshot
 from .speak import speak
 
 REST_FACE = "b·_·d"
+#: The shortest git inbox lease, whatever ``router_ttl`` says (design §3.1: renew every 30 s).
+GATE_MIN_TTL = 90.0
 
 
 def install_of(strand: str) -> str | None:
@@ -68,6 +71,63 @@ def readme_for(home: Home, thread: str) -> str | None:
 
 
 
+def gate_for(home: Home, config: LoomConfig):
+    """The git inbox lease on ``lease_remote``, or None when it is unset."""
+    remote = config.lease_remote
+    if not remote:
+        return None
+    import subprocess
+
+    from .gitlease import GitLeaseAuthority
+    from .publish import PublishError, remote_command
+
+    repo = home.root / "ledger" / "git"
+    if not (repo / "HEAD").exists():
+        repo.mkdir(parents=True, exist_ok=True)
+        subprocess.run(["git", "init", "--bare", "-q", str(repo)], check=True)
+
+    def git(tail):
+        try:
+            args, env, _lane, _note = remote_command(remote, tail, config.forge_token)
+        except PublishError as exc:
+            return subprocess.CompletedProcess(tail, 128, "", str(exc))
+        try:
+            return subprocess.run(["git", "-C", str(repo), *args], env=env,
+                                  capture_output=True, text=True, timeout=60)
+        except subprocess.TimeoutExpired:
+            return subprocess.CompletedProcess(tail, 128, "", "git timed out")
+
+    return GitLeaseAuthority(repo, remote, git, margin=max(config.margin, 1.0),
+                             strict=config.lease_mode == "strict")
+
+
+
+def heir_of(home: Home, facts, letters, thread: str, gen: int) -> str | None:
+    """The strand whose room the next body of ``thread`` starts from, or None for main.
+
+    A molt hands its room on unless it was fresh. Any other end hands it on
+    too (handover): a displaced or crashed body's unlanded work sat in a room
+    the next fresh clone never saw. Only the thread's own last body hands on,
+    only if it ran (a wake that failed, e.g. a home over budget, left nothing
+    worth keeping and a room the repair never reached), and only while its
+    room is on this disk.
+    """
+    molts = {f.id: f for f in fold(facts).accepted if f.kind == "molt"}
+    for letter in reversed(letters):
+        molt = molts.get(letter.data.get("molt"))
+        # A molt marker on a letter to another thread would graft a foreign room.
+        if (molt is not None and molt.data.get("strand") == letter.data.get("from")
+                and molt.data.get("gen") == letter.data.get("gen")
+                and sender_threads(facts).get(letter.data.get("from")) == thread):
+            return None if molt.data.get("fresh", False) else letter.data["from"]
+    last = next((f for f in reversed(facts) if f.kind == "lease"
+                 and str(f.data.get("thread")) == thread
+                 and int(f.data.get("gen") or 0) == gen - 1), None)
+    strand = str(last.data.get("strand") or "") if last is not None else ""
+    ran = strand and any(f.kind == "body.started" and f.data.get("strand") == strand
+                         and int(f.data.get("gen") or 0) == gen - 1 for f in facts)
+    return strand if ran and (home.room(strand) / "self" / ".git").exists() else None
+
 class Router:
     def __init__(self, home: Home, config: LoomConfig | None = None):
         self.home = home
@@ -83,6 +143,22 @@ class Router:
         self.granting = False
         self.caught_up = False
         self._renew_bucket: int | None = None
+        # With lease_remote set, the git inbox lease decides who routes; the
+        # local lease above follows it at its gen and stays the fence speak
+        # authorizes against.
+        self.gate = gate_for(home, self.config)
+        # Each install's ledger folder rides its lease pushes and is fetched
+        # into ledger/facts/<peer>/ by the others (P2).
+        self.shuttle = None
+        if self.gate is not None:
+            from .shuttle import Shuttle
+            self.shuttle = Shuttle(home, self.gate)
+            self.gate.riders = self.shuttle.riders
+        self.gate_lease: Lease | None = None
+        self._gate_at: float | None = None
+        # A git renew is a network round trip that may stall for tens of
+        # seconds; 30 s, the local default, would fence on one slow push.
+        self.gate_ttl = max(float(self.config.router_ttl), GATE_MIN_TTL)
 
     def _window(self) -> bool:
         if self.lease is None:
@@ -95,6 +171,10 @@ class Router:
     def armed(self) -> bool:
         """Authorize, then refuse the skew window. A false steps down now."""
         if self.lease is None or not self.granting or not self.caught_up:
+            return False
+        if self.gate is not None and (
+                self.gate_lease is None or not self.gate.authorize(self.gate_lease)):
+            self.granting = False
             return False
         if not self.authority.authorize(self.lease):
             self.lease = None
@@ -128,7 +208,111 @@ class Router:
                 return True
         return False
 
+    def _caught_up(self, facts: list[Fact], gen: int) -> bool:
+        """Under the git lease, the previous holder's ledger, at the sha its
+        lease carried, is in this install's folder for it; any earlier router
+        fact (``_prior_visible``) passes for an install that synced an hour
+        ago."""
+        if self.gate is None:
+            return self._prior_visible(facts, gen)
+        holder, sha = self.gate.prior.get("inbox", ("", ""))
+        if self.shuttle.caught_up(holder, sha):
+            return True
+        self.shuttle._beat = None  # fetch now rather than at the next beat
+        self.shuttle.sync(holding=True)
+        return self.shuttle.caught_up(holder, sha)
+
+    def _held_since(self, facts: list[Fact], gen: int) -> bool:
+        """Every router gen from ``gen`` to the current one is this install's.
+
+        A gen with no visible ``router`` fact may have been another
+        install's, so it breaks the run.
+        """
+        mine = self.home.install_id()
+        held: set[int] = set()
+        for fact in kind_facts(facts, "router"):
+            if fact.kind != "router" or fact.data.get("install") != mine:
+                continue
+            try:
+                held.add(int(fact.data["gen"]))
+            except (KeyError, TypeError, ValueError):
+                continue
+        return all(g in held for g in range(gen, self.lease.gen + 1))
+
+    def _gate_tick(self, facts: list[Fact]) -> list[Fact]:
+        """Renew or take the git inbox lease, at most every ``gate_ttl / 3``.
+
+        Losing it releases the local lease at once, so ``speak`` steps down
+        before the next send, and records ``lease.fenced`` and a
+        ``loom.degraded`` streak at step ``lease`` that taking it back closes.
+        """
+        ttl = self.gate_ttl
+        now = self.gate.clock()
+        if self._gate_at is not None and now - self._gate_at < ttl / 3:
+            if self.gate_lease is not None and not self.gate.authorize(self.gate_lease):
+                return self._fence(facts, "expired")
+            return facts
+        self._gate_at = now
+        if self.gate_lease is not None:
+            renewed = self.gate.renew(self.gate_lease, ttl)
+            if renewed is None or not self.gate.authorize(renewed):
+                return self._fence(facts, "lost" if renewed is None else "expired")
+            self.gate_lease = renewed
+            return facts
+        row = self.authority._read(self.authority._paths("router")[0])
+        self.gate_lease = self.gate.acquire("inbox", self.home.install_id(), ttl,
+                                            floor=int(row["gen"]) + 1)
+        if self.gate_lease is not None:
+            facts = self._recovered(facts)
+        return facts
+
+    def _lease_streak(self, facts: list[Fact]) -> Fact | None:
+        from .health import open_streaks
+        return next((f for f in open_streaks(facts, self.home.install_id())
+                     if f.data.get("step") == "lease"), None)
+
+    def _recovered(self, facts: list[Fact]) -> list[Fact]:
+        streak = self._lease_streak(facts)
+        if streak is None:
+            return facts
+        install = self.home.install_id()
+        return self._keep(facts, "loom.recovered", {
+            "install": install, "step": "lease", "since": streak.data["since"],
+            "count": 1, "last": streak.data.get("error", ""),
+        }, streak.id.replace("loom.degraded:", "loom.recovered:", 1))
+
+    def _fence(self, facts: list[Fact], why: str) -> list[Fact]:
+        gen = self.gate_lease.gen if self.gate_lease else 0
+        self.gate_lease = None
+        self._gate_at = None
+        if self.lease is not None:
+            self.authority.release(self.lease)
+        self.lease = None
+        self.granting = False
+        self.caught_up = False
+        install = self.home.install_id()
+        facts = self._keep(facts, "lease.fenced", {
+            "install": install, "gen": gen, "why": why,
+        }, f"lease.fenced:{install}:{gen}:{why}")
+        if self._lease_streak(facts) is None:
+            from .health import _iso
+            since = _iso(time.time())
+            facts = self._keep(facts, "loom.degraded", {
+                "install": install, "step": "lease", "error": f"fenced: inbox gen {gen} {why}",
+                "where": "", "since": since,
+            }, f"loom.degraded:{install}:lease:{since}")
+        return facts
+
     def begin_tick(self, facts: list[Fact]) -> list[Fact]:
+        if self.gate is not None:
+            facts = self._gate_tick(facts)
+            self.shuttle.sync(holding=self.gate_lease is not None)
+            if self.gate_lease is None:
+                return facts
+            if self.lease is None or self.lease.gen != self.gate_lease.gen:
+                return self._acquire(facts, gen=self.gate_lease.gen)
+            if not self.caught_up:
+                self.caught_up = self._caught_up(facts, self.lease.gen)
         if self.lease is None:
             return self._acquire(facts)
         renewed = self.authority.renew(self.lease, self.config.router_ttl)
@@ -142,9 +326,9 @@ class Router:
         self.granting = self.caught_up and self._window()
         return facts
 
-    def _acquire(self, facts: list[Fact]) -> list[Fact]:
+    def _acquire(self, facts: list[Fact], gen: int | None = None) -> list[Fact]:
         acquired = self.authority.acquire(
-            "router", self.home.install_id(), self.config.router_ttl,
+            "router", self.home.install_id(), self.config.router_ttl, gen=gen,
         )
         if acquired is None:
             self.lease = None
@@ -163,7 +347,7 @@ class Router:
                 "gen": acquired.gen,
                 "until": acquired.until,
             }, f"router:{acquired.gen}")
-        self.caught_up = self._prior_visible(facts, acquired.gen)
+        self.caught_up = self._caught_up(facts, acquired.gen)
         self.granting = self.caught_up and self._window()
         return facts
 
@@ -234,7 +418,7 @@ class Router:
                     if letter.data.get("wake") and facts.index(letter) > freed:
                         _wake_letter(home, facts, thread, seated, letter, channel, parked=False)
                 choice = _wake_choice(facts, thread) or seated
-                declared = seat_repos(text)
+                declared = seat_repos(text, home)
                 require_body_author(home)
             except (ValueError, OSError) as exc:
                 if isinstance(exc, RepoSeatError):
@@ -244,7 +428,7 @@ class Router:
                 elif isinstance(exc, AuthorError):
                     hint = "set author in loom/config.toml to Name <email>"
                 else:
-                    hint = "correct its body: shell/core choice"
+                    hint = "correct its body: shell or shell/core choice"
                 notice(home, facts, "body", thread, f"thread {thread}: {exc}",
                        hint, thread=thread)
                 continue
@@ -263,17 +447,9 @@ class Router:
                 "install": home.install_id(), "router_gen": self.lease.gen,
                 "shell": choice[0], "core": choice[1], "repos": declared,
             }
-            molts = {f.id: f for f in fold(facts).accepted if f.kind == "molt"}
-            for letter in reversed(letters):
-                molt = molts.get(letter.data.get("molt"))
-                # Only this thread's own last body may hand its room on: a molt
-                # marker on a letter to another thread would graft a foreign room.
-                if (molt is not None and molt.data.get("strand") == letter.data.get("from")
-                        and molt.data.get("gen") == letter.data.get("gen")
-                        and sender_threads(facts).get(letter.data.get("from")) == thread):
-                    if not molt.data.get("fresh", False):
-                        data["parent"] = letter.data["from"]
-                    break
+            parent = heir_of(home, facts, letters, thread, gen)
+            if parent:
+                data["parent"] = parent
             try:
                 stored = _record(home, "lease", data, f"lease:{thread}:{gen}")
             except LedgerConflict:
@@ -366,9 +542,38 @@ class Router:
         self._keep(facts, "letter.disposed", {"dispositions": dispositions},
                    f"{kind}:{thread}:{letters[-1].id}")
 
+    def _heal_home(self, facts: list[Fact], known: set[str]) -> bool:
+        """Put the home thread back on main when an unroutable letter needs it.
+
+        True when main now holds it. A failure is retried at most once a
+        minute and logged for the operator, who fixes it with ``brnrd setup``.
+        """
+        from .loom import _log
+        from .selfrepo import SelfError, heal_home_thread
+        if HOME_THREAD in known:
+            return True
+        if not any(f.action == "unroutable" for f in active_owners(facts, main_snapshot(self.home))):
+            return False
+        now = self.clock()
+        if now - getattr(self, "_healed_at", float("-inf")) < 60:
+            return False
+        self._healed_at = now
+        try:
+            sha = heal_home_thread(self.home.root)
+        except (SelfError, OSError) as exc:
+            _log(self.home, f"home thread missing from main and not restored ({exc}); "
+                            "letters are held: run `brnrd setup` again")
+            return False
+        self._keep(facts, "self.healed", {"thread": HOME_THREAD, "commit": sha},
+                   f"self.healed:{sha}")
+        _log(self.home, f"home thread {HOME_THREAD} was missing from main; restored at {sha}")
+        known.add(HOME_THREAD)
+        return True
+
     def _unrouted(self, facts: list[Fact], known: set[str]) -> list[Fact]:
         """Materialize the table's climb/invalid-address decision atomically."""
         from .loom import notice
+        homed = self._heal_home(facts, known)
         for fate in active_owners(facts, main_snapshot(self.home)):
             if fate.action not in {"climb", "unroutable"}:
                 continue
@@ -377,16 +582,28 @@ class Router:
                 kind, target = "climbed", fate.thread
                 what = f"letter {letter.id} to closed thread {letter.data.get('to', '').removeprefix('thread:')} climbed here"
             else:
-                kind, target = "unroutable", home_thread(known)
+                kind, target = "unroutable", HOME_THREAD
                 target = target if target in known else None
                 what = f"letter {letter.id} addressed to {letter.data.get('to')!r}, which is not a thread on main"
+            if not target and not homed:
+                # No thread on main can hold it and the loom could not put
+                # one back: the letter waits for the home thread, and its chat
+                # hears so once, with nothing asked of whoever is writing.
+                channel = reply_channels(facts, self.home).get(letter.id)
+                if channel:
+                    notice(self.home, facts, "held", channel, "Got it.",
+                           "I'm still being set up, so I'll hold on to this "
+                           "and answer as soon as I'm ready.",
+                           about=letter, channel=channel)
+                continue
             data = {"id": letter.id, "outcome": "operator", "reason": fate.reason}
+            successor = None
             if target:
                 successor = notice(self.home, facts, kind, letter.id, what,
                                    str(letter.data.get('body') or ''),
                                    thread=target, about=letter, stands=True, draft_only=True)
-                if isinstance(successor, Fact):
-                    data.update(outcome="done", successor=successor.data)
+            if isinstance(successor, Fact):
+                data.update(outcome="done", successor=successor.data)
             self._keep(facts, "letter.disposed", {"dispositions": [data]},
                        f"letter.disposed:{letter.id}")
         return facts
@@ -437,6 +654,10 @@ class Router:
                     }]}, f"letter.disposed:{key}")
 
             fresh = "send a fresh message if it still matters; this one is never sent again"
+            if grant < self.lease.gen and self._held_since(facts, grant):
+                # Every router since the draft was this install: the same
+                # speaker, so the draft is sent under the current gen.
+                grant = self.lease.gen
             if grant != self.lease.gen:
                 if grant < self.lease.gen:
                     tell("stale-speech", "was not sent: it was drafted under router "
@@ -455,7 +676,7 @@ class Router:
                         tell("speech-refused",
                              "was refused: that is not a known person's direct chat", fresh)
                         continue
-                    body = f"{_header(state, fact)}\n\n{body}"
+                    body = f"{_header(state, fact, facts)}\n\n{body}"
                     event_id = _answers_event(state, fact)
                     from .project import reply_channels
                     if event_id and reply_channels(facts).get(fact.data.get("re")) == to:
@@ -481,12 +702,24 @@ class Router:
         return facts
 
 
-def _header(state, letter: Fact) -> str:
-    """The resident's face and thread; strand ids stay in the ledger."""
+def _header(state, letter: Fact, facts: list[Fact] | None = None) -> str:
+    """The face the body decided, its thread, and the fact the loom last proposed on.
+
+    No decided face is the resting one; strand ids stay in the ledger. Faces
+    and proposals read the raw ``facts``: a ``pr.merged`` is never folded in.
+    """
+    from .faces import faces, voice
     strand = letter.by.removeprefix("strand:")
-    thread = next((f.data["thread"] for f in reversed(state.accepted)
-                   if f.kind == "lease" and f.data["strand"] == strand), None)
-    return f"{REST_FACE} ⌁ [ {thread} ]" if thread else f"{REST_FACE} ⌁"
+    lease = next((f for f in reversed(state.accepted)
+                  if f.kind == "lease" and f.data["strand"] == strand), None)
+    if lease is None:
+        return f"{REST_FACE} ⌁"
+    thread, gen = lease.data["thread"], lease.data["gen"]
+    facts = state.accepted if facts is None else facts
+    decided = faces(facts).get(thread, {})
+    face = decided["face"] if decided.get("strand") == strand else REST_FACE
+    said = voice(facts, strand, gen, thread)
+    return f"{face} ⌁ [ {thread} ]" + (f" · {said}" if said else "")
 
 
 def _answers_event(state, letter: Fact) -> str | None:

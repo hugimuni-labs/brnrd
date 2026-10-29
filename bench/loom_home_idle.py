@@ -36,6 +36,7 @@ def main():
                         help='advance fake held bodies, read cached gauges, poll empty connectors')
     parser.add_argument('--extra', type=int, default=0, help='add inert renewal history in the disconnected copy')
     parser.add_argument('--changed-ticks', type=int, default=3, help='measure ticks with one durable renewal append each')
+    parser.add_argument('--profile-out', type=Path, help='also dump the profiled ticks for pstats')
     args = parser.parse_args()
     print(f'tick source: {loom.__file__}')
     with tempfile.TemporaryDirectory(prefix='loom-home-idle-') as temporary:
@@ -128,6 +129,8 @@ def main():
                 for _ in range(args.ticks):
                     tick()
             print(f'{args.ticks} ticks: {time.process_time() - started:.3f}s CPU')
+            if args.profile_out:
+                profile.dump_stats(args.profile_out)
             stats = pstats.Stats(profile).strip_dirs().sort_stats('cumulative')
             stats.print_stats(25)
             stats.print_stats(r'_ingest|observe_due|notice|letter_owners|speak_out|_boundary|thread_table|reading')

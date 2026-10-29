@@ -77,10 +77,11 @@ pid: 4242
   home on this machine (`~/brnrd`, or a home inside a brnrd account), else a
   new `~/brnrd`. When more than one could be meant, install lists them and asks
   for `--home`.
-- **body** is the coding agent the loom runs, as shell/core. Unset, install
-  asks Claude Code, then Codex (with the model in your `~/.codex/config.toml`),
-  for its quota and writes the first one with fuel left. `brnrd loom config
-  edit` changes it.
+- **body** is the coding agent the loom runs: a shell such as `claude`, which
+  uses that agent's own model choice, or shell/core to pin a model
+  (`claude/sonnet`). Unset, install asks Claude Code, then Codex (with the model
+  in your `~/.codex/config.toml`), for its quota and writes the first one with
+  fuel left. `brnrd loom config edit` changes it.
 - **replaced** names the loom install stopped to make way. The service's own
   loom is reloaded; a loom running outside the service is sent SIGTERM, which
   ends only its loop. Bodies are never stopped: they keep their sessions, and
@@ -193,6 +194,29 @@ Both run from a disposable, per-invocation environment. `brnrd loom install`
 or `brnrd daemon install` would pin the background service to a binary path that disappears with it. Use a
 persistent install, then install the service.
 :::
+
+## Follow main (dogfooding)
+
+To run the loom on brnrd's `main` instead of the PyPI release, and have it
+move with `main` by itself:
+
+```bash
+curl -LsSf https://hugimuni-labs.github.io/brnrd/install.sh | sh -s -- --dev
+```
+
+It clones `main` to `~/.brnrd/src` (`BRNRD_DEV_DIR` moves it), installs that
+checkout editable with `uv tool install --editable`, prints `brnrd loom install
+--dev --dry-run`, then runs it for real and ends with `brnrd loom status`. The
+loom follows the checkout without a config line: on a green `main` CI it
+fast-forwards and re-execs at an idle tick.
+
+It warns, without stopping, about what bites later: `PYTHONPATH` set (brnrd
+would run another checkout's code), no `claude` or `codex` on `PATH` (the loom
+needs a body), and `gh` missing or signed out (following `main` reads CI
+through it; run `gh auth login` first). Run it again to update by hand: it
+fast-forwards a clean checkout on `main`, and refuses one with uncommitted
+changes or on another branch, the same rule the loom applies. Keep your own
+edits in another clone.
 
 ## Development install
 

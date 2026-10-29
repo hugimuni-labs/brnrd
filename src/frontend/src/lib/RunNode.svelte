@@ -129,7 +129,7 @@
 	<header class="ignite">
 		<div class="flex items-baseline justify-between gap-3">
 			<a
-				href={resolve('/')}
+				href={resolve('/dashboard')}
 				class="shrink-0 font-mono text-[11px] tracking-wide text-ink-quiet uppercase hover:text-stone-300"
 				>← loom</a
 			>

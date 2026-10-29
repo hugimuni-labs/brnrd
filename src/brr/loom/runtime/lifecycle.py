@@ -15,8 +15,9 @@ CLOSED = {"settled", "retired"}
 DONE_KINDS = ("pr", "issue", "doc", "research", "file", "answer", "post", "action")
 
 
-def parse_plan(text: str) -> list[tuple[bool, str]] | None:
-    """Checklist rows under Plan; None means there is no Plan section."""
+def parse_plan(text: str) -> list[tuple[bool | None, str]] | None:
+    """``- step`` rows under Plan, a ``[ ]``/``[x]`` tick kept but counted by no one
+    (None when the row has no box); None means there is no Plan section."""
     plan = None
     inside = False
     for line in text.splitlines():
@@ -25,9 +26,10 @@ def parse_plan(text: str) -> list[tuple[bool, str]] | None:
             if inside and plan is None:
                 plan = []
         elif inside:
-            row = re.match(r"^\s*- \[([ xX])\] (.+)$", line)
+            row = re.match(r"^\s*- (?:\[([ xX])\] )?(.+)$", line)
             if row:
-                plan.append((row.group(1).lower() == "x", row.group(2)))
+                box = row.group(1)
+                plan.append((None if box is None else box.lower() == "x", row.group(2)))
     return plan
 
 
@@ -62,7 +64,6 @@ def read_thread(home: Home, thread: str, ref: str = "main") -> dict:
         plan = parse_plan(text)
         data["plan_rows"] = plan
         data["done"] = parse_done(text)
-        data["plan"] = f"{sum(done for done, _ in plan)}/{len(plan)}" if plan else "—"
         return data
     except (OSError, ReadmeError):
         return {}
@@ -131,8 +132,8 @@ def open_thread(room: Path, thread: str, sender: str, text: str,
     if _current_label(resolve_clone(room), sender).taint:
         raise PortError("send: a tainted strand cannot open a thread on main; "
                         f"send a clean letter to {home_of_room(room).main_thread()} instead")
-    if body_choice is not None and not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*/[^\s]+", body_choice):
-        raise PortError("send: --body must be shell/core")
+    if body_choice is not None and not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*(/[^\s]+)?", body_choice):
+        raise PortError("send: --body must be shell or shell/core")
     from .adapters import repos
     if any("\n" in source or "\r" in source for source in repo_sources):
         raise PortError("send: --repo must be one seat line")
@@ -183,9 +184,13 @@ def settle(room: Path, thread: str, why: str, retire: bool = False,
     from .wishes import wishes
 
     facts = read_facts(home)
-    if opener != f"thread:{own}":
-        # A person's thread settles on their word, never on silence: the
-        # body judges the reply and cites it; the loom checks who wrote it.
+    mine = [w for w in wishes(facts).values() if w.thread == thread]
+    in_hand = sorted(w.id for w in mine if w.state in {"heard", "read", "granting"})
+    if opener != f"thread:{own}" and in_hand:
+        # A person's thread with work in hand settles on their word, never on
+        # silence: the body judges the reply and cites it; the loom checks who
+        # wrote it. With nothing in hand there is nothing to hear: a delivered
+        # wish keeps its state and still waits on their verdict.
         said = next((f for f in fold(facts).accepted if f.kind == "letter" and f.id == word), None)
         if said is None or not str(said.data.get("from", "")).startswith(("p-", "person:")) \
                 or _destination(said.data) != thread:
@@ -204,19 +209,52 @@ def settle(room: Path, thread: str, why: str, retire: bool = False,
         broken += [f"{where.name}: {line}" for line in lines]
     if broken:
         raise PortError("settle: a path guard is broken in this thread's rooms:\n" + "\n".join(broken))
-    pending = sorted(w.id for w in wishes(facts).values()
-                     if w.thread == thread and w.state == "delivered")
+    # Silence archives a thread, never accepts a wish: a delivered wish stays
+    # delivered on the settled thread, and a later verdict that puts it back
+    # to work reopens the thread (reopen_for). --hand-to moves them instead.
+    pending = sorted(w.id for w in mine if w.state == "delivered")
     if hand_to is not None:
         check_thread_id(hand_to)
         if hand_to == thread or not home.routable(hand_to):
             raise PortError("settle: --hand-to must name another thread on main")
-    if pending and hand_to is None:
-        raise PortError(f"settle: delivered wishes await a verdict: {', '.join(pending)}; "
-                        "record a verdict or use --hand-to <thread>")
-    for ident in pending:
-        append(home, wish_fact(facts, by="strand:" + strand_of_room(room),
-                               ident=ident, thread=hand_to))
+    handed = [wish_fact(facts, by="strand:" + strand_of_room(room), ident=ident, thread=hand_to)
+              for ident in pending] if hand_to is not None else []
+    for fact in reopen_for(room, handed):
+        append(home, fact)
+    for stamp in handed:
+        append(home, stamp)
     land_status(room, thread, "retired" if retire else "settled", f"settle {thread}: {why}")
+
+
+def reopen_for(room: Path, stamps) -> list:
+    """A wish placed on a closed thread opens it again, whatever placed it.
+
+    Every ``wish`` stamp names a thread and leaves the wish open, so a closed
+    thread holding it would hold open work. The status line on main stays the
+    one store: it flips to ``open`` here, before the stamp lands. The returned
+    ``thread.reopened`` facts are the event the next wake reads, never a state.
+    """
+    from brr.daemon2.facts import Fact
+    from .home import mint
+    from .registry import admit
+    home = home_of_room(room)
+    out, seen = [], set()
+    for stamp in stamps:
+        thread = stamp.data.get("thread")
+        if not thread or thread in seen:
+            continue
+        seen.add(thread)
+        status = read_thread(home, thread).get("status")
+        if status not in CLOSED:
+            continue
+        sha, why, _ = closing_commit(home, thread)
+        land_status(room, thread, "open", f"reopen {thread}: {stamp.data['wish']} placed on it")
+        fact = Fact(kind="thread.reopened", by=stamp.by, id="thread.reopened:" + mint(12),
+                    data={"thread": thread, "wish": stamp.data["wish"], "was": status,
+                          "closed": sha, "why": why})
+        admit(fact)
+        out.append(fact)
+    return out
 
 
 _closing: dict[tuple[str, str, str], tuple[str, str, str]] = {}
@@ -297,11 +335,15 @@ def readme_at(home: Home, thread: str, blob: str, ref: str) -> dict:
     return _READMES[key]
 
 
-def main_snapshot(home: Home) -> dict[str, dict]:
-    """Pin main once; both inventory and README fields come from that tree."""
+def main_snapshot(home: Home, tree: tuple[str, dict[str, str]] | None = None) -> dict[str, dict]:
+    """Pin main once; both inventory and README fields come from that tree.
+
+    A caller that also walks main's tree passes the ``main_tree`` it read, so a
+    commit landing between two reads cannot split one view across two tips.
+    """
     repo = home.root / "self"
     if (repo / ".git").exists():
-        ref, blobs = main_tree(repo)
+        ref, blobs = tree or main_tree(repo)
         cached = _MAIN_SNAPSHOTS.get(repo)
         if cached and cached[0] == ref:
             return cached[1]

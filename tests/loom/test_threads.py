@@ -36,6 +36,7 @@ def test_send_opens_lands_routes_and_shows_working_idle_settled(tmp_path):
     root = tmp_path / 'home'
     init_self(root, person='test')
     write_thread(root, 'opener', 'Opener', 'opener', wait='0')
+    # Ticked rows are no plan: the plan column counts wishes (test_wish_plan).
     write_thread(root, 'idle', 'Idle\n\n## Plan\n- [x] First\n- [ ] Second', 'idle', wait='0')
     old = (datetime.now(timezone.utc) - timedelta(hours=3, minutes=10)).isoformat()
     env = _env_without_pin()
@@ -72,7 +73,8 @@ if own == "opener":
             Path({str(root / "changed")!r}).write_text(view.raw)
         for letter in view.letters:
             if letter.body == "work answered":
-                assert "opened: new-work holding · owed 0" in context, context
+                # A post repeats no line it said before: holding was shown here or at an earlier post.
+                assert "opened: new-work holding · owed 0" in context or Path({str(root / "changed")!r}).exists(), context
                 ctx.send("thread:opener", note="read answer", re=letter.id)
                 Path({str(reply)!r}).write_text(letter.body)
         time.sleep(0.03)
@@ -118,15 +120,15 @@ else:
         rows = table(root)
         assert rows['new-work'] == {'thread': 'new-work', 'seat': 'worker/test-core', 'now': 'working',
                                     'owed': '1', 'unanswered': '0', 'opened-by': 'thread:opener',
-                                    'opened-for': f'{behind.id} heard: New work', 'plan': '—',
+                                    'opened-for': f'{behind.id} heard: New work', 'plan': '0/1',
                                     'owed-by': 'body:new-work', 'restart': 'current body', 'control': '—'}
         assert rows['idle'] == {'thread': 'idle', 'seat': '—', 'now': 'idle 3h', 'owed': '0', 'unanswered': '0',
-                                'opened-by': '—', 'opened-for': '—', 'plan': '1/2', 'owed-by': 'nobody',
+                                'opened-by': '—', 'opened-for': '—', 'plan': '—', 'owed-by': 'nobody',
                                 'restart': 'next letter', 'control': '—'}
         date = git(root / 'self', 'log', '-1', '-G', '^status:', '--format=%cs',
                    'main', '--', 'threads/settled/README.md').stdout.strip()
         assert rows['settled'] == {'thread': 'settled', 'seat': '—', 'now': f'settled {date}',
-                                   'owed': '0', 'unanswered': '0', 'opened-by': 'thread:opener', 'opened-for': '—', 'plan': '1/1',
+                                   'owed': '0', 'unanswered': '0', 'opened-by': 'thread:opener', 'opened-for': '—', 'plan': '—',
                                    'owed-by': 'nobody',
                                    'restart': 'new letter or opener answers', 'control': 'thread:opener'}
         (root / 'clear-owed').write_text('handle without replying yet')
@@ -213,7 +215,7 @@ Path({str(receipt)!r}).write_text(json.dumps({{k: [p.returncode, p.stderr] for k
         assert not (root / 'self/threads/injected-repo').exists()
         assert 'unsafe thread id' in rows['unsafe'][1]
         assert 'pre-receive hook declined' in rows['failed'][1]
-        assert 'tainted strand' in rows['tainted'][1] and 'clean letter to brnrd' in rows['tainted'][1]
+        assert 'tainted strand' in rows['tainted'][1] and 'clean letter to inbox' in rows['tainted'][1]
         assert not (root / 'self/threads/failed-open').exists()
         assert not (root / 'self/threads/tainted-open').exists()
         wait_until(lambda: holder(loom.facts(), 'opener') is None, 30, loom.dump)

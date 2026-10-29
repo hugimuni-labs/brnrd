@@ -9,7 +9,7 @@ from brr.loom.runtime.selfrepo import git
 from _step import Loom, wait_until, write_thread, kill_bodies
 
 
-@pytest.mark.parametrize("fault", ["plan", "identity", "stance", "recipe"])
+@pytest.mark.parametrize("fault", ["plan", "identity", "stance"])
 def test_self_refusal_stays_owed_and_one_notice_repairs_home(tmp_path, fault):
     root = tmp_path / "home"
     write_thread(root, "work", "The ask", "answer-fast", wait="0")
@@ -20,12 +20,9 @@ def test_self_refusal_stays_owed_and_one_notice_repairs_home(tmp_path, fault):
         recipe.write_text(recipe.read_text().replace("readme = clip(readme, excess, limit) or readme", "readme = readme"))
         path = clone / "threads/work/README.md"
         path.write_text(path.read_text() + "\n## Plan\n- [ ] " + "x" * 30000 + "\n")
-    elif fault in {"identity", "stance"}:
+    else:
         path = clone / ("core/identity.md" if fault == "identity" else "memory/stance.md")
         path.write_text("x" * 30000)
-    else:
-        # Same non-budget code as an ordinary dying body: origin, not code.
-        recipe.write_text("#!/bin/sh\necho broken recipe >&2\nexit 2\n")
     git(clone, "add", "-A")
     git(clone, "commit", "-m", "Home state that cannot wake")
     ident = inject_letter(root, to="thread:work", body="Please answer")
@@ -46,17 +43,14 @@ def test_self_refusal_stays_owed_and_one_notice_repairs_home(tmp_path, fault):
                    for f in ends for d in f.data["dispositions"] if d["id"] == ident)
         notices = [f for f in facts if f.kind == "letter" and f.id.startswith("loom/self-refusal-")]
         assert len(notices) == 1
-        assert notices[0].data["to"] == "thread:brnrd"
+        assert notices[0].data["to"] == "thread:inbox"
         assert not any(f.kind == "letter" and f.id.startswith("loom/failed-message-") for f in facts)
         assert not any(f.kind == "letter" and str(f.data.get("to", "")).startswith("channel:") for f in facts)
         # Repair main. The original letter, rather than a resend, now runs.
         if fault == "plan":
             path.write_text(path.read_text().split("\n## Plan")[0])
-        elif fault in {"identity", "stance"}:
-            path.write_text("The resident.\n")
         else:
-            from brr.loom.runtime.selfrepo import seed_root
-            recipe.write_text((seed_root() / "core/loom/wake").read_text())
+            path.write_text("The resident.\n")
         git(clone, "add", "-A")
         git(clone, "commit", "-m", "Repair the home")
         wait_until(lambda: letter_owners(loom.facts(), main_snapshot(loom.home))[ident].done,

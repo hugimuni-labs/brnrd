@@ -1455,6 +1455,14 @@ async def dashboard_loom_letter(request: Request, db: Session = Depends(get_db))
         payload = schemas.LoomLetterPost.model_validate(await _json_body(request))
     except ValidationError as exc:
         return JSONResponse({"detail": exc.errors(include_url=False, include_context=False)}, status_code=422)
+    queued = enqueue_loom_letter(request, db, account, payload)
+    if isinstance(queued, JSONResponse):
+        return queued
+    return JSONResponse({"ok": True, "event_id": queued.event_id}, status_code=202)
+
+
+def enqueue_loom_letter(request: Request, db: Session, account: Account, payload: schemas.LoomLetterPost):
+    """Queue one letter for the relay to deliver to a loom thread: the event, or a 409 response."""
     repo_id = _loom_letter_repo_id(db, account.id)
     if repo_id is None:
         return JSONResponse({"detail": "connect a repo first: the loom's relay inbox is repo-scoped"}, status_code=409)
@@ -1471,8 +1479,7 @@ async def dashboard_loom_letter(request: Request, db: Session = Depends(get_db))
         reply_to["body"] = payload.body
     if payload.wish:
         reply_to.update(wish=payload.wish, verdict=payload.verdict)
-    event = inbox_service.enqueue(db, repo_id=repo_id, body=payload.text, source="web", reply_to=reply_to)
-    return JSONResponse({"ok": True, "event_id": event.event_id}, status_code=202)
+    return inbox_service.enqueue(db, repo_id=repo_id, body=payload.text, source="web", reply_to=reply_to)
 
 
 @router.get("/v1/dashboard/runners")

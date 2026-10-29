@@ -71,14 +71,33 @@ class Fact:
                    after=tuple(after))
 
 
-def union(*streams: Iterable[Fact]) -> list[Fact]:
-    """Commutative identity union with causal, then HLC, ordering."""
+def keep(old: Fact, new: Fact) -> Fact:
+    """The copy a union keeps of one fact id.
+
+    Two installs that both ingested one source mint the same id with their own
+    `by`, `at` and HLC. The lower HLC wins, so every replica keeps the same
+    copy whatever order it reads them in. Within one install it is a conflict.
+    """
+    if old == new:
+        return old
+    if old.hlc is not None and new.hlc is not None and old.hlc[2] != new.hlc[2]:
+        return min(old, new, key=lambda fact: fact.hlc)
+    raise ValueError(f"conflicting fact id: {new.id}")
+
+
+def union(*streams: Iterable[Fact], duplicates: list[Fact] | None = None) -> list[Fact]:
+    """Commutative identity union with causal, then HLC, ordering.
+
+    A cross-install copy that loses `keep` is appended to *duplicates*.
+    """
     by_id: dict[str, Fact] = {}
     for stream in streams:
         for fact in stream:
             old = by_id.setdefault(fact.id, fact)
-            if old != fact:
-                raise ValueError(f"conflicting fact id: {fact.id}")
+            if old is not fact and old != fact:
+                by_id[fact.id] = keep(old, fact)
+                if duplicates is not None:
+                    duplicates.append(fact if by_id[fact.id] is old else old)
     outgoing: dict[str, list[str]] = {ident: [] for ident in by_id}
     incoming: dict[str, int] = {ident: 0 for ident in by_id}
     for fact in by_id.values():

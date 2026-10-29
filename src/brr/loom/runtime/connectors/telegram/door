@@ -1,0 +1,12 @@
+#!/usr/bin/env python3
+"""Print where a person opens this bot to send a pairing code: {"name", "link"}."""
+import json
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).parent))
+from common import call
+
+name = call('getMe', {}, timeout=15)['username']
+# Telegram turns ?start=<code> into the message "/start <code>" once Start is pressed.
+print(json.dumps(dict(name='@' + name, link=f'https://t.me/{name}?start={sys.argv[1]}')))

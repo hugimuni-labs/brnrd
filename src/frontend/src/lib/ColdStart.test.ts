@@ -375,7 +375,7 @@ test('the docs constant points at the published site, not the retired host', asy
 // file holding it moved.
 const SIGNED_IN_ROUTES = [
 	join(here, 'Dashboard.svelte'),
-	join(here, '..', 'routes', 'repos', '+page.svelte')
+	join(here, '..', 'routes', 'dashboard', 'repos', '+page.svelte')
 ];
 
 test('every signed-in surface carries a docs link, bound to the shared constant', () => {

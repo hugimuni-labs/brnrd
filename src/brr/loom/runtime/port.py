@@ -5,11 +5,13 @@ from __future__ import annotations
 import json
 import re
 from dataclasses import dataclass, field
+from datetime import datetime
 from pathlib import Path
 
 from brr.daemon2.facts import Fact
 from .ledger import LedgerView, kind_facts
 from .project import cached_projection
+from . import refs as refs_mod
 
 from .home import (
     atomic_write, channel_parts, home_of_room, is_channel, mint, strand_of_room, thread_of,
@@ -83,7 +85,8 @@ def parse_boundary(text: str) -> Boundary:
             settled = line.partition(":")[2].strip()
             current = None
             continue
-        if not line.strip() or line.startswith(("status:", "owed:", "opened:", "budget:")):
+        if not line.strip() or line.startswith(("status:", "owed:", "opened:", "budget:", "repaired:", "degraded:", "library:", "moved:",
+                                                "face? ", "left? ", "gone: ", "idle: ")):
             current = None
             continue
         match = _ITEM.match(line)
@@ -165,15 +168,44 @@ def letter_replies(facts: list[Fact]) -> dict[str, str]:
     return cached_projection(facts, "reply-context", (), _letter_replies)
 
 
+# A non-reply is read against the last turns on its channel, his and ours;
+# a letter within BURST seconds of his previous one, with nothing of ours
+# between, follows that one directly and carries nothing extra.
+TURNS = 4
+BURST = 600
+
+
 def _letter_replies(facts, selected=None):
     sources = facts.by_id if isinstance(facts, LedgerView) else {f.id: f for f in kind_facts(facts, "source")}
     letters = facts.named_letters if isinstance(facts, LedgerView) else {str(f.data.get("id") or f.id): f for f in kind_facts(facts, "letter")}
     result = {}
-    for letter in (letters.values() if selected is None else selected):
+    picked = None if selected is None else {letter.id for letter in selected}
+    turns: dict[str, list[Fact]] = {}
+    threads = None
+    # Canonical order: a letter is read against the turns before it, so its
+    # line never changes once projected.
+    for letter in kind_facts(facts, "letter"):
         source_fact = sources.get(letter.data.get("cites"))
         source = source_fact.data if source_fact is not None and source_fact.kind == "source" else {}
+        channel = str(letter.data.get("to") or "")
+        if not is_channel(channel):
+            channel = str(source.get("channel") or "")
+        before = turns.setdefault(channel, []) if channel else []
+        if channel:
+            before.append(letter)
+        if picked is not None and letter.id not in picked or letter.data.get("to") == channel:
+            continue
         native = source.get("re")
         if native in (None, ""):
+            before = before[:-1]
+            if not before or _follows(before[-1], letter):
+                continue
+            if threads is None:
+                from .project import sender_threads
+                threads = sender_threads(facts)
+            result[letter.id] = "\n".join(
+                ["not a reply; the conversation before it on this channel:"]
+                + [_turn_line(turn, letter, threads) for turn in before[-TURNS:]])
             continue
         target = letters.get(letter.data.get("re"))
         if target is not None:
@@ -182,6 +214,35 @@ def _letter_replies(facts, selected=None):
         else:
             result[letter.id] = f"replying to an earlier message ({native})"
     return result
+
+
+def _seconds_between(earlier: Fact, later: Fact) -> float | None:
+    try:
+        return (datetime.fromisoformat(later.at) - datetime.fromisoformat(earlier.at)).total_seconds()
+    except (TypeError, ValueError):
+        return None
+
+
+def _follows(previous: Fact, letter: Fact) -> bool:
+    """``letter`` is a later letter of a burst: his previous one came just before, unanswered."""
+    if is_channel(str(previous.data.get("to") or "")):
+        return False
+    seconds = _seconds_between(previous, letter)
+    return seconds is not None and seconds < BURST
+
+
+def _turn_line(turn: Fact, letter: Fact, threads: dict[str, str]) -> str:
+    first = " ".join(str(turn.data.get("body") or "").split("\n", 1)[0].split())
+    first = first if len(first) <= 160 else first[:159] + "…"
+    sender = str(turn.data.get("from") or "")
+    who = threads.get(sender, sender) if is_channel(str(turn.data.get("to") or "")) else sender
+    seconds = _seconds_between(turn, letter)
+    age = ""
+    if seconds is not None:
+        minutes = max(0, int(seconds // 60))
+        age = " · " + (f"{minutes // 1440}d" if minutes >= 1440 else
+                       f"{minutes // 60}h{minutes % 60:02d}m" if minutes >= 60 else f"{minutes}m") + " before"
+    return f"{turn.data.get('id', turn.id)} · {who}{age} — {first}"
 
 
 def _letter_lines(letter: Fact, reply: str, compact: bool,
@@ -195,10 +256,13 @@ def _letter_lines(letter: Fact, reply: str, compact: bool,
     ]
     if not compact:
         lines.extend(f"  {extra}" for extra in rest)
-    if context:
-        lines.append(f"  {context}")
+    lines.extend(f"  {line}" for line in context.splitlines())
     lines.extend(f"  {attachment}" for attachment in attachments)
     return lines
+
+
+#: A child thread's ``now`` word that earns it a line: a body is on it or waiting on fuel.
+MOVING = frozenset({"working", "holding", "paced", "pending", "unidentified"})
 
 
 def render_boundary(strand: str, gen: int, thread: str, letters: list[Fact],
@@ -209,7 +273,9 @@ def render_boundary(strand: str, gen: int, thread: str, letters: list[Fact],
                     replies: dict[str, str] | None = None,
                     attachments: dict[str, list[str]] | None = None,
                     reply_context: dict[str, str] | None = None,
-                    budget: str = "", over: str = "") -> str:
+                    budget: str = "", over: str = "", repaired: str = "",
+                    degraded: str = "", face: str = "", left: str = "", moved: str = "",
+                    library: str = "", forge: str = "") -> str:
     """Shown letters keep their first line, reply context and attachments when compacted.
 
     ``budget`` sits before the plan: the jack compares what follows `` · plan ``,
@@ -223,19 +289,50 @@ def render_boundary(strand: str, gen: int, thread: str, letters: list[Fact],
         + (f" · {plan}" if plan else ""),
         "owed:",
     ]
+    if left:
+        # What the stop will ask for; never after `` · plan``, so it wakes nobody.
+        lines.insert(2, left)
+    if moved:
+        # Its own line too: the jack shows a new one once, at the next post.
+        lines.insert(2, moved)
+    if face:
+        # Its own line, never after `` · plan``: a proposal is not news that wakes a held body.
+        lines.insert(2, face)
     if over:
         lines.insert(2, over)
+    if repaired:
+        lines.insert(2, repaired)
+    if library:
+        lines.insert(2, library)
+    if degraded:
+        lines.insert(2, degraded)
     if settled is not None:
         lines.insert(2, f"settled: {settled}")
-    children = []
+    children, idle = [], 0
     for row in opened:
         if row['opened-by'] != f"thread:{thread}" or row['status'] in {"settled", "retired"}:
             continue
         now, _, detail = row['now'].partition(' ')
+        # A pull request's age is said in minutes too: a kept render may be 10 s old (loom.RENDER_MAX_AGE).
+        prs = [re.sub(r" (\d+)s$", lambda m: f" {int(m[1]) // 60}m", pr) for pr in row.get('prs') or []]
+        # Only a moving thread gets a line (wake-vision); a due park is moving by the notice it owes.
+        if now not in MOVING and not row['owed'] and not prs:
+            idle += 1
+            continue
         # Child fuel is not a change of state; ages cost at most one write a minute.
         if re.fullmatch(r"\d+[smhd]", detail):
             now += ' ' + (f"{int(detail[:-1]) // 60}m" if detail.endswith('s') else detail)
-        children.append(f"opened: {row['thread']} {now} · owed {row['owed']}")
+        # The jack reads ``split()[1:3]`` and what follows `` · owed ``: new fields go after it.
+        fields = [f"owed {row['owed']}", *prs]
+        if row.get('waits'):
+            fields.append(f"waits {row['waits']}")
+        if row.get('headline'):
+            fields.append(row['headline'])
+        if forge:
+            fields.append(f"{forge}/{row['thread']}")
+        children.append(f"opened: {row['thread']} {now} · " + " · ".join(fields))
+    if idle:
+        children.append(f"idle: {idle} more opened here (brnrd runtime threads)")
     lines[2:2] = children
     for letter in letters:
         compact = str(letter.data["id"]) in shown
@@ -354,7 +451,7 @@ def _done_is_published(room: Path, strand: str, facts, refs) -> None:
     thread = sender_threads(facts).get(strand)
     if thread is None:
         return
-    declared = {name for name, _source in repos(seat_text(home, thread))}
+    declared = {name for name, _source in repos(seat_text(home, thread), home)}
     for name in sorted({Path(ref).parts[0] for ref in refs
                         if ref and not ref.startswith("https://") and Path(ref).parts}):
         if name not in declared:
@@ -437,6 +534,28 @@ OPEN_NEEDS_WISH = ('send: opening a thread needs the wish behind it: '
                    '--wish <id> | --wish new:"<line>"')
 
 
+# A path into the self, bare or in backticks, not already part of a URL or word.
+_SELF_PATH = re.compile(r"(`?)(?<![\w/.:@~%-])((?:[\w.-]+/)+[\w.-]*[\w-]/?)\1")
+
+
+def forge_paths(room: Path, home, body: str) -> str:
+    """A letter to a person names self files by forge URL: a chat app links a
+    bare ``design.md`` to the website design.md. Only a path the self holds
+    is rewritten, and never one under ``people/``."""
+    from .selfrepo import forge_threads
+    clone = room / "self" if (room / "self" / ".git").exists() else home.root / "self"
+    found = [m for m in _SELF_PATH.finditer(body)
+             if ".." not in m[2].split("/") and m[2].split("/", 1)[0] != "people"
+             and (clone / m[2]).exists()]
+    threads = forge_threads(clone) if found else None
+    if not threads:
+        return body
+    base = threads.removesuffix("/threads")
+    for m in reversed(found):
+        body = body[:m.start()] + f"{base}/{m[2].rstrip('/')}" + body[m.end():]
+    return body
+
+
 def write_send(room: Path, *, to: str, sender: str, body: str = "",
                re: str | None = None, note: str | None = None,
                clean: bool = False, kind: str | None = None,
@@ -445,7 +564,8 @@ def write_send(room: Path, *, to: str, sender: str, body: str = "",
                at: str | None = None, repo_sources: tuple[str, ...] | list[str] = (),
                wish: str | tuple | list | None = None,
                budget: int | None = None, chatter: list[str] | None = None,
-               echo: list[str] | None = None) -> str:
+               echo: list[str] | None = None, reopen: bool = False,
+               ask_for: str | None = None) -> str:
     """Write one letter (or note) into port/out, with the wish stamps it carries.
 
     ``wish`` items are a ``w-id`` or ``new:"line"``, or a dict with ``value``
@@ -453,6 +573,8 @@ def write_send(room: Path, *, to: str, sender: str, body: str = "",
     the letters this send cites as no wish (``[]``: the ``--re`` letter). A
     reply to a person letter that has no disposition yet must carry one.
     ``echo`` gathers the graph this send wrote, one line per wish.
+    A question in a letter to a channel files an ask under ``ask_for``
+    (raises.py); a bare ``chatter`` there opts out.
     """
     home = home_of_room(Path(room))
     opening = None
@@ -479,6 +601,7 @@ def write_send(room: Path, *, to: str, sender: str, body: str = "",
                    'choose an enabled channel and write a fresh letter',
                    thread=sender_threads(facts).get(sender))
             raise PortError(str(exc)) from exc
+        body = forge_paths(Path(room), home, body)
     else:
         thread = thread_of(to)
         if home.routable(thread):
@@ -528,7 +651,7 @@ def write_send(room: Path, *, to: str, sender: str, body: str = "",
             if ident is None:
                 raise PortError(f"send --chatter: no letter {raw}")
             named.append(ident)
-        if not chatter and not re:
+        if not chatter and not re and not is_channel(to):
             raise PortError("send --chatter names the letters it cites, or needs --re")
         # A bare --chatter cites the --re letter; a notice it answers is no letter and cites nothing.
         chatter = list(dict.fromkeys(named or ([re] if re in letters else [])))
@@ -537,6 +660,7 @@ def write_send(room: Path, *, to: str, sender: str, body: str = "",
         from .lifecycle import own_thread
         from .registry import admit
         from .verbs_wishes import say_span, wish_fact
+        from .wishes import Say
         if not re and opening is None:
             raise PortError("send --wish requires --re, unless the letter opens a thread")
         line = next((l.strip() for l in (note or body).splitlines() if l.strip()), letter_id)[:160]
@@ -551,7 +675,7 @@ def write_send(room: Path, *, to: str, sender: str, body: str = "",
                 else:
                     # Nothing to cite but the opening letter itself: a
                     # resident's say, so the fold reports the wish as derived.
-                    says = [[letter_id, 0, None]] if ident == "new" else []
+                    says = [Say(letter_id)] if ident == "new" else []
                 stamp = wish_fact(facts, by="strand:" + sender, ident=ident, says=says, line=wished,
                                   thread=opening or (own_thread(Path(room)) if ident == "new" else None))
                 admit(stamp)
@@ -567,20 +691,95 @@ def write_send(room: Path, *, to: str, sender: str, body: str = "",
                             data={"wish": stamp.data["wish"], "line": line, "delivered": False, **result})
                 admit(fact)
                 results.append(fact)
-            cited.update(str(say[0]) for say in says)
+            cited.update(say.letter for say in says)
             wish_stamps.append(stamp)
+            if echo is not None and ident == "new":
+                from .wishes import steer_candidates, wishes
+                beside = [w.id for w in steer_candidates(wishes(facts), stamp.data["thread"])]
+                if beside:
+                    echo.append(f"new {stamp.data['wish']} beside open {', '.join(beside)}: "
+                                f"if it steers one, say so on it: wish {beside[0]} --say "
+                                f"{says[0].letter if says else letter_id}")
             if echo is not None:
                 from .dispositions import echo as echo_line
                 echo.append(echo_line(stamp.data["wish"], says, [
                     "answered" if r["kind"] == "letter" and r["ref"] == letter_id else f"{r['kind']}:{r['ref']}"
                     for r in refs_of], letters))
+    fresh = [str(s.data.get("line", "")) for s in wish_stamps if not s.id.startswith("wish:")]
+    if echo is not None and (fresh or opening is not None):
+        # Recall at the act: the closest threads, settled ones included.
+        from .recall import related_line
+        query = " ".join(fresh + ([opening.replace("-", " "), body[:600]] if opening else []))
+        line = related_line(home, query, facts=facts, exclude={s.data["thread"] for s in wish_stamps})
+        if line:
+            echo.append(line)
+    if (re in letters and note is None and molt is None and not is_channel(to)
+            and thread_of(to) != home.main_thread()):
+        from .dispositions import is_person
+        from .project import sender_threads
+        if is_person(letters[re]) and sender_threads(facts).get(sender) == home.main_thread():
+            try:
+                carried = _carried(home, facts, wish_stamps, re, thread_of(to), sender)
+            except ValueError as exc:
+                raise PortError(f"send: {exc}") from exc
+            wish_stamps += carried
+            if echo is not None:
+                echo += [f"{s.data['wish']} → thread:{s.data['thread']}" if s.id.startswith("wish:")
+                         else f"{s.data['wish']} on thread:{s.data['thread']}, child of {s.data['parent']}"
+                         for s in carried]
     if re and re in letters and re not in cited:
         from .dispositions import disposed, is_person
         if is_person(letters[re]) and re not in disposed(facts, Path(room)):
+            from .project import sender_threads
+            from .wishes import steers_refusal, wishes
+            steer = steers_refusal(wishes(facts), sender_threads(facts).get(sender))
             raise PortError(
-                f"send: {re} is a person letter with no disposition yet; carry one: "
-                '--wish <w-id>|new:"<line>" [--says "quote"] [--ref kind:ref] [--answered], '
-                "or --chatter if it wants nothing")
+                f"send: {re} is a person letter with no disposition yet; "
+                + (steer + '--wish new:"<line>"' if steer else 'carry one: --wish <w-id>|new:"<line>"')
+                + ' [--says "quote"] [--ref kind:ref] [--answered], or --chatter if it wants nothing')
+    links, misses = [], []
+    if refs_mod.tokens(note or body):
+        from .ledger import read_facts
+        from .lifecycle import main_snapshot
+        facts = facts if letters else read_facts(home)
+        links, misses = refs_mod.link(facts, main_snapshot(home), note or body)
+    # A thread letter answers something: a letter, a wish, or an item it names.
+    # A reopen's parent is the thread it reopens, as a molt's is; a budget
+    # raise's is the thread it funds; a --clean handoff's is the strand whose
+    # work it publishes.
+    if (not is_channel(to) and opening is None and note is None and molt is None and at is None
+            and not reopen and budget is None and not clean
+            and not re and not asked and not chatter and not links):
+        raise PortError(f"send: a letter to {to} cites nothing; answer the letter it follows "
+                        "with --re <id>, or carry --wish, --chatter or an &ref")
+    if is_channel(to) and note is None and molt is None:
+        from .ledger import read_facts
+        from .project import sender_threads
+        from .raises import RaiseError, capture, refuse
+        from .registry import admit
+        facts = read_facts(home)
+        try:
+            refuse(facts, Path(room), links)
+            ask = None if chatter is not None else capture(
+                facts, by="strand:" + sender, thread=sender_threads(facts).get(sender),
+                main=home.main_thread(), body=body, links=links, ask_for=ask_for)
+        except ValueError as exc:
+            raise PortError(str(exc) if isinstance(exc, RaiseError) else f"send: {exc}") from exc
+        if ask is not None:
+            admit(ask)
+            wish_stamps.append(ask)
+            links.append(ask.data["wish"])
+            if echo is not None:
+                echo.append(f"ask {ask.data['wish']} under {ask.data['parent']}: {ask.data['line']}")
+    if misses:
+        if echo is not None:
+            echo.append(refs_mod.miss_words(misses))
+        if not is_channel(to):
+            from .ledger import read_facts
+            from .loom import notice
+            notice(home, read_facts(home), "ref-unknown", letter_id,
+                   f"{letter_id} from {sender}: {refs_mod.miss_words(misses)}",
+                   "nothing to look for: those ids do not exist", thread=thread_of(to), passive=True)
     if echo is not None and chatter:
         from .dispositions import short
         echo.append("chatter ← " + ", ".join(f"({short(ident)})" for ident in chatter))
@@ -596,6 +795,8 @@ def write_send(room: Path, *, to: str, sender: str, body: str = "",
         fields["re"] = re
     if chatter:
         fields["chatter"] = " ".join(chatter)
+    if links:
+        fields["links"] = " ".join(links)
     if molt:
         fields["molt"] = molt
     if note is not None:
@@ -617,6 +818,10 @@ def write_send(room: Path, *, to: str, sender: str, body: str = "",
         else:
             fields["label"] = sender_label.trailer()
     text = _front(fields, "" if note is not None else body)
+    reopened = []
+    if wish_stamps:
+        from .lifecycle import reopen_for
+        reopened = reopen_for(Path(room), wish_stamps)
     if opening is not None:
         from .lifecycle import open_thread
         open_thread(Path(room), opening, sender, body, body_choice, repo_sources,
@@ -625,6 +830,8 @@ def write_send(room: Path, *, to: str, sender: str, body: str = "",
     write_port(room, stem, text)
     if wish_stamps:
         from .ledger import append
+        for fact in reopened:
+            append(home, fact)
         for stamp in wish_stamps:
             append(home, stamp)
         for result in results:
@@ -632,9 +839,38 @@ def write_send(room: Path, *, to: str, sender: str, body: str = "",
     return letter_id
 
 
+def _carried(home, facts, stamped, re, target, sender) -> list:
+    """The home thread forwarding a person letter carries the wish it says.
+
+    The first forward moves the wish to the target thread; a later forward of
+    the same letter, once the wish has left home, makes a child wish there.
+    """
+    from .registry import admit
+    from .verbs_wishes import say_span, wish_fact
+    from .wishes import wishes
+    seen = [*facts, *stamped]
+    known = wishes(seen)
+    says_re = {w.id for w in known.values() if any(say.letter == re for say in w.says)}
+    out = []
+    for ident in sorted(says_re):
+        wish = known[ident]
+        if wish.parent in says_re or wish.thread == target or any(
+                w.parent == ident and w.thread == target for w in known.values()):
+            continue
+        if wish.thread == home.main_thread():
+            stamp = wish_fact(seen, by="strand:" + sender, ident=ident, thread=target)
+        else:
+            stamp = wish_fact(seen, by="strand:" + sender, ident="new", line=wish.line,
+                              thread=target, parent=ident, says=[say_span(re, facts)])
+        admit(stamp)
+        out.append(stamp)
+    return out
+
+
 def write_molt(room: Path, why: str, *, fresh: bool = False) -> str:
+    """``shed`` (``molt`` is its old name): hand the seat to a successor."""
     if not why:
-        raise PortError("molt: --why is empty")
+        raise PortError("shed: --why is empty")
     from .ledger import read_facts
     from .project import sender_threads
     from .merge import send_to_self
@@ -643,9 +879,31 @@ def write_molt(room: Path, why: str, *, fresh: bool = False) -> str:
     room = Path(room)
     strand = strand_of_room(room)
     home = home_of_room(room)
-    thread = sender_threads(read_facts(home)).get(strand)
+    facts = read_facts(home)
+    thread = sender_threads(facts).get(strand)
     if thread is None:
-        raise PortError("molt: room has no thread")
+        raise PortError("shed: room has no thread")
+    from .wishes import owed_lefts, wishes
+    owed = owed_lefts(wishes(facts), facts, thread, strand)
+    if owed:
+        # The successor reads what is left from the wish, not from this body's memory.
+        raise PortError("shed: say what is left first, then shed:\n" + "\n".join(
+            f'  brnrd runtime wish {ident} --left "<step>" --left "<step>"   ({why}; --left same if nothing moved)'
+            for ident, why in owed))
+    held = unreplied_held(facts, strand, room)
+    if held:
+        # A person who wrote to this body hears from it before a stranger takes over.
+        raise PortError("shed: reply to each person letter you hold first, even with just an ack:\n" + "\n".join(
+            f'  brnrd runtime send --re {ident} --to {channel} "…"   (from {letter.data.get("from") or letter.by})'
+            for ident, (letter, channel) in held.items()))
+    if not fresh:
+        from .jack import _state
+        from .shed import refusals
+        refused = refusals(room, thread, facts, _state(room))
+        if refused:
+            # The successor boots into this README; gen 233's was committed unread.
+            raise PortError("shed: the README isn't one a successor can boot into yet:\n" + "\n".join(
+                f"  - {why}" for why in refused) + "\nfix each, then shed again.")
     clone = resolve_clone(room)
     path = f"threads/{thread}/README.md"
     if not fresh and git(clone, "diff", "HEAD", "--quiet", "--", path, check=False).returncode:
@@ -654,7 +912,7 @@ def write_molt(room: Path, why: str, *, fresh: bool = False) -> str:
     if not fresh and not _current_label(clone, strand).taint:
         outcome = send_to_self(clone)
         if outcome.status != "merged":
-            raise PortError(outcome.stderr or f"molt: landing {outcome.status}: {', '.join(outcome.files)}")
+            raise PortError(outcome.stderr or f"shed: landing {outcome.status}: {', '.join(outcome.files)}")
     stem = mint(5)
     fact_id = f"{strand}/{stem}"
     fields = {"kind": "molt", "id": fact_id, "why": why}
@@ -666,6 +924,75 @@ def write_molt(room: Path, why: str, *, fresh: bool = False) -> str:
     from .jack import _set_state
     _set_state(room, molted=True)
     return fact_id
+
+
+def _words(value) -> tuple:
+    return tuple(value.split()) if isinstance(value, str) else tuple(value or ())
+
+
+def answered(room: Path) -> set[str]:
+    """Letter ids a reply or note from this strand already answers, drained or not.
+
+    The loom drains port/out on its tick and regenerates the boundary later; in
+    between, the boundary still lists those letters as owed. A slow loom made a
+    stop re-show letters the body had answered (stop-list, and again once the
+    reply had left port/out for the ledger: stop-answered) and refused a molt
+    whose ack was not yet drained (molt-flake). The stop and the molt both
+    read it here: port/out, then this strand's own ledger file."""
+    found = _ledger_answered(room)
+    for path in (room / "port" / "out").glob("*.md"):
+        try:
+            fields = parse_frontmatter(path.read_text())
+        except (PortError, OSError):
+            continue
+        if fields.get("kind") in {"letter", "note"} and fields.get("re"):
+            found.add(fields["re"])
+    return found
+
+
+def _ledger_answered(room: Path) -> set[str]:
+    """Letter ids this strand's drained letters and notes name in ``re``.
+
+    Only the strand's own file, and only lines that carry a ``re``: a stop
+    reads it at every attempt, never the whole ledger."""
+    try:
+        root = home_of_room(room).root / "ledger" / "facts"
+    except ValueError:
+        return set()
+    found = set()
+    by = f"strand:{room.name}"
+    for path in root.glob(f"*/{room.name}.jsonl"):
+        try:
+            lines = path.read_text().splitlines()
+        except OSError:
+            continue
+        for line in lines:
+            if '"re"' not in line:
+                continue
+            try:
+                row = json.loads(line)
+            except ValueError:
+                continue
+            ref = (row.get("data") or {}).get("re")
+            if row.get("kind") in {"letter", "note"} and row.get("by") == by and isinstance(ref, str) and ref:
+                found.add(ref)
+    return found
+
+
+def unreplied_held(facts, strand: str, room: Path) -> dict:
+    """Person letters with a chat to answer on, shown to this strand, that no letter answers yet.
+
+    A reply counts once it is written: its delivery receipt may come after the
+    molt, and the loom may not have drained it from port/out yet.
+    """
+    from .owners import unanswered_letters
+    from .project import is_notice, reply_channels
+    channels = reply_channels(facts)
+    shown = {ident for f in facts if f.kind == "shown" and f.data.get("strand") == strand
+             for ident in _words(f.data.get("ids"))}
+    replied = {f.data.get("re") for f in facts if f.kind == "letter" and not is_notice(f)} | answered(room)
+    return {ident: (letter, channels[ident]) for ident, letter in unanswered_letters(facts).items()
+            if ident in shown and ident in channels and ident not in replied}
 
 
 def _current_label(room: Path | None, strand: str):
@@ -704,7 +1031,7 @@ def fact_from_port(fm: dict[str, str], strand: str, gen: int | None,
     fact_id = fm.get("id")
     if not fact_id:
         raise PortError("port file has no id")
-    if kind in {"letter", "note", "molt"} and gen is None:
+    if kind in {"letter", "note", "molt", "face", "left-asked"} and gen is None:
         raise PortError(f"strand {strand} has no lease; refusing {kind} {fact_id}")
     if kind == "letter":
         data: dict = {
@@ -722,6 +1049,8 @@ def fact_from_port(fm: dict[str, str], strand: str, gen: int | None,
             data["re"] = fm["re"]
         if fm.get("chatter"):
             data["chatter"] = fm["chatter"].split()
+        if fm.get("links"):
+            data["links"] = fm["links"].split()
         if fm.get("edit"):
             data["edit"] = fm["edit"]
         if fm.get("molt"):
@@ -760,6 +1089,10 @@ def fact_from_port(fm: dict[str, str], strand: str, gen: int | None,
             kind="shown", by=f"strand:{strand}", id=fact_id,
             data={"strand": owner, "gen": int(fm["gen"]), "ids": fm.get("ids", "").split()},
         )
+    if kind == "left-asked":
+        # The jack refused a stop on these wishes; once asked, the next stop passes.
+        return Fact(kind="left.asked", by=f"strand:{strand}", id=fact_id,
+                    data={"strand": strand, "gen": gen, "wishes": fm.get("wishes", "").split()})
     if kind == "molt":
         if not fm.get("why"):
             raise PortError(f"molt {fact_id} has no why")
@@ -767,4 +1100,12 @@ def fact_from_port(fm: dict[str, str], strand: str, gen: int | None,
             kind="molt", by=f"strand:{strand}", id=fact_id,
             data={"strand": strand, "gen": gen, "why": fm["why"], **({"fresh": True} if fm.get("fresh") == "true" else {})},
         )
+    if kind == "face":
+        from .faces import face_of
+        try:
+            face = face_of(fm["face"]) if fm.get("face") else None
+        except ValueError as exc:
+            raise PortError(str(exc)) from exc
+        return Fact(kind="face", by=f"strand:{strand}", id=fact_id,
+                    data={"strand": strand, "gen": gen, "face": face})
     raise PortError(f"unknown port kind {kind!r}")

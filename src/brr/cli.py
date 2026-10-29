@@ -310,6 +310,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--name")
     p.add_argument("--person")
     p.add_argument("--timeout", type=float, default=180)
+    p.add_argument("--wait", type=float)
     p.set_defaults(func=cmd_setup_channel)
 
     gate_help = f"gate name ({', '.join(GATES)})"
@@ -1535,17 +1536,18 @@ def main(argv: list[str] | None = None) -> None:
 
     try:
         if not raw:
-            # Bare `brnrd` — the narrated front door
-            # (`decision-retire-init.md` §"The front door"). Handled here
+            # Bare `brnrd` — the loom's guided setup, the same one as
+            # `brnrd setup` (the daemon-era `front_door` ladder set up a
+            # machine the loom no longer reads). Handled here
             # rather than as an argparse default because the subparsers are
             # `required=True` and must stay that way: `brnrd <verb>` is the
             # CLI it has always been, and a mistyped verb must still be an
             # argparse error, not a guided setup. The only argv this
             # intercepts is the empty one, which argparse could previously
             # only answer with "the following arguments are required".
-            from . import front_door
+            from .loom.runtime.setup_channel import main as guided_setup
 
-            return front_door.run()
+            return guided_setup([])
         if raw[:2] == ["loom", "check"]:
             from .loom.runtime.check import run
             return run(raw[2:])
@@ -6946,7 +6948,7 @@ def cmd_setup_channel(args):
         return _retired_command("setup", "brnrd gate setup <gate>")(args)
     from .loom.runtime.setup_channel import main
     argv = [args.step]
-    for key in ('home', 'kind', 'name', 'person', 'timeout'):
+    for key in ('home', 'kind', 'name', 'person', 'timeout', 'wait'):
         value = getattr(args, key, None)
         if value is not None:
             argv.extend(['--' + key, str(value)])

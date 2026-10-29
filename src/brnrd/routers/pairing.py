@@ -44,6 +44,17 @@ def pair_suggested_repo_full_name(pair: PairRequest) -> str:
     return value.strip() if isinstance(value, str) else ""
 
 
+def pair_requester(pair: PairRequest) -> dict[str, str]:
+    """``{hostname, os_user}`` the requesting computer reported, each ``""`` when absent.
+
+    Display-only and self-reported: the approve page shows it beside the
+    code so a person can tell their own computer from one in a link someone
+    sent them (RFC 8628 §5.4), never as proof of who started the pairing.
+    """
+    caps = pair_capabilities(pair)
+    return {k: caps[k].strip() if isinstance(caps.get(k), str) else "" for k in ("hostname", "os_user")}
+
+
 def pair_suggested_forge(pair: PairRequest) -> str:
     """``"github"`` or ``"local"`` for the suggested repo above, or ``""``
     when there is no suggestion at all. Display-only — `_resolve_or_create_
@@ -124,7 +135,7 @@ def start_pair(
     capabilities_json = None
     if payload is not None:
         caps = {
-            k: v
+            k: v.strip()[:100]
             for k, v in payload.model_dump().items()
             if isinstance(v, str) and v.strip()
         }
@@ -142,7 +153,11 @@ def start_pair(
         )
     )
     db.commit()
-    pair_url = f"{settings.public_base_url.rstrip()}/connect"
+    # The page's own deep link: the code in the path opens the approve step,
+    # and in the fragment (never sent to a server) it is the initiator proof.
+    # One tap or one scan, nothing typed; the page shows the code so the
+    # person can match it against their terminal.
+    pair_url = f"{settings.public_base_url.rstrip('/')}/connect/{code}#{code}"
     return schemas.PairStarted(pair_code=code, pair_url=pair_url, poll_secret=secret, approve_secret=approve_secret, expires_at=expires_at)
 
 
@@ -259,7 +274,7 @@ def _active_telegram_pair(db: Session, account_id: str, repo_id: str) -> TgPairC
     return None
 
 
-def telegram_pair_core(db: Session, settings: Any, account_id: str, repo_id: str | None) -> schemas.TelegramPairStarted:
+def telegram_pair_core(db: Session, settings: Any, account_id: str, repo_id: str | None, relay_text: str | None = None) -> schemas.TelegramPairStarted:
     """Mint a pair code. ``repo_id=None`` mints an account-level code
     (#1457): consuming it binds the chat to the account with no repo pin,
     so it works for an account that has no repos yet — the mobile
@@ -276,7 +291,7 @@ def telegram_pair_core(db: Session, settings: Any, account_id: str, repo_id: str
     else:
         raise HTTPException(status_code=503, detail="could not allocate pair code")
     expires_at = datetime.now(timezone.utc) + timedelta(seconds=settings.messenger_pair_ttl_s)
-    db.add(TgPairCode(id=ids.tg_pair_code_id(), code=code, account_id=account_id, repo_id=repo.id if repo is not None else None, expires_at=expires_at))
+    db.add(TgPairCode(id=ids.tg_pair_code_id(), code=code, account_id=account_id, repo_id=repo.id if repo is not None else None, expires_at=expires_at, relay_text=relay_text))
     db.commit()
     return _telegram_pair_response(settings, repo, code, expires_at)
 

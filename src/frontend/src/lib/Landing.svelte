@@ -1,13 +1,12 @@
 <script lang="ts">
-	import { onMount } from 'svelte';
 	import { resolve } from '$app/paths';
 	import { DOCS_URL, GITHUB_REPO } from '$lib/publicStats';
 	import { isComplete as legalNoticeIsComplete } from '$lib/legalNotice';
 	import { typeReveal } from '$lib/transitions';
 	import WinkWordmark from '$lib/WinkWordmark.svelte';
-	import HeroExchange from '$lib/HeroExchange.svelte';
 	import ShelfIcon from '$lib/ShelfIcon.svelte';
 	import {
+		DOORS,
 		REACH_GROUPS,
 		SHELLS,
 		fetchDoorStatus,
@@ -24,18 +23,27 @@
 	let loginContext = $state<LoginContext | null>(null);
 	const legalNoticeReady = legalNoticeIsComplete();
 
-	onMount(async () => {
-		const [doors, login] = await Promise.all([
-			fetchDoorStatus(),
-			fetchLoginContext(null).catch(() => null)
-		]);
-		doorStatuses = doors;
-		loginContext = login;
+	// `/` draws this page while it is still probing for a board (routes/+page.svelte), so its fetches wait for
+	// `live`: a reader whose board answers never touches the app's endpoints.
+	let { live = true }: { live?: boolean } = $props();
+	let fetched = false;
+	$effect(() => {
+		if (!live || fetched) return;
+		fetched = true;
+		Promise.all([fetchDoorStatus(), fetchLoginContext(null).catch(() => null)]).then(
+			([doors, login]) => {
+				doorStatuses = doors;
+				loginContext = login;
+			}
+		);
 	});
 
 	let signinHref = $derived(resolveSigninHref(loginContext, resolve('/login')));
 
-	const HERO_HEADLINE = 'assign the work. get back a receipt.';
+	// Arseni's call (letter 5257): the returned pull request is the hook.
+	const HERO_HEADLINE = 'Message it the work. Get back a pull request.';
+	// Served by the app from docs/public/install.sh (spa.py, mount_installer).
+	const INSTALL_LINE = 'curl -fsSL https://brnrd.dev/install | sh';
 
 	interface DeckStep {
 		index: string;
@@ -121,48 +129,44 @@
 				{HERO_HEADLINE}
 			</h1>
 			<p class="mt-5 max-w-2xl text-base leading-relaxed text-stone-300 sm:text-lg">
-				A co-maintainer that lives on your machine: survives reboots, remembers who it is, works
-				your Claude, Codex, Grok, and Mistral Vibe subscriptions, and leaves receipts — a commit, a
-				pull request, or a reply you can actually check.
-			</p>
-			<p class="mt-2 max-w-2xl text-xs leading-relaxed text-ink-mute">
-				Needs a machine that's on — a laptop that doesn't sleep, a Mac mini, a home server, or a
-				<a
-					class="underline underline-offset-2 hover:text-stone-300"
-					href={`${DOCS_URL}guides/vps-install/`}
-					rel="external">$5 VPS</a
-				> (about ten minutes to set up).
+				Write to brnrd from Telegram, WhatsApp, Slack, Signal, or GitHub. A resident on your machine
+				keeps a thread per topic, works each one with the agent CLI you already pay for, and lands
+				every change as a commit or a pull request you can check.
 			</p>
 
-			<div class="mt-6 flex flex-wrap items-center gap-3">
+			<div class="mt-6 flex flex-col gap-3 sm:flex-row sm:items-center">
+				<pre
+					class="panel overflow-x-auto px-4 py-2.5 font-mono text-sm text-stone-200"
+					aria-label="install brnrd"><code
+						><span class="text-ink-mute select-none">$ </span>{INSTALL_LINE}</code
+					></pre>
 				<a
-					href={resolve('/new?demo')}
-					class="border border-amber-600 bg-amber-500/10 px-4 py-2.5 font-mono text-[12px] font-semibold tracking-wide text-amber-200 uppercase shadow-[0_0_20px_rgba(217,164,65,0.15)] hover:bg-amber-500/20"
-					>▶ explore the demo</a
-				>
-				<a
-					href="#install"
-					class="border border-amber-700 bg-amber-950/40 px-3 py-2 font-mono text-[12px] tracking-wide text-amber-200 uppercase hover:bg-amber-950/70"
-					>install brnrd</a
-				>
-				<a
-					href={DOCS_URL}
+					href={signinHref}
 					rel="external"
-					class="font-mono text-[12px] tracking-wide text-ink-quiet uppercase underline decoration-stone-700 underline-offset-4 hover:text-stone-300"
-					>read the docs →</a
+					class="border border-amber-700 bg-amber-950/40 px-3 py-2 text-center font-mono text-[12px] tracking-wide text-amber-200 uppercase hover:bg-amber-950/70"
+					>sign in</a
 				>
 			</div>
-			<p class="mt-3 font-mono text-[10px] tracking-wide text-ink-mute uppercase">
-				a scripted demo with sample data · sign in to watch your own runs live
-			</p>
-			<p class="mt-2 font-mono text-[10px] tracking-wide text-ink-mute uppercase">
-				open source · local execution · no brnrd account required for the local engine
-			</p>
 		</div>
 
-		<div class="mt-8 max-w-3xl">
-			<HeroExchange />
+		<div class="mt-10">
+			<h2 class="font-mono text-xl font-semibold tracking-tight text-amber-100">
+				brnrd's board. Your window.
+			</h2>
+			<p class="mt-1 text-sm text-stone-400">You don't maintain the tasks. brnrd does.</p>
 		</div>
+		<figure class="mt-4">
+			<img
+				src="/board.jpg"
+				width="1440"
+				height="745"
+				alt="brnrd's own board: one column per thread, each showing what its strand is doing now"
+				class="panel h-auto w-full"
+			/>
+			<figcaption class="mt-2 font-mono text-[10px] tracking-wide text-ink-mute uppercase">
+				brnrd's own board, building brnrd
+			</figcaption>
+		</figure>
 	</section>
 
 	<section
@@ -193,83 +197,60 @@
 		</div>
 	</section>
 
-	<section class="ignite mt-16 sm:mt-20" style="--ignite-delay: 260ms" aria-label="how brnrd fits">
-		<p class="eyebrow">how it fits</p>
-		<div class="mt-5">
-			<div class="mx-auto grid max-w-xl grid-cols-3 gap-2">
-				{#each ['Telegram', 'WhatsApp', 'GitHub'] as route (route)}
-					<div
-						class="border-t border-stone-800 px-1 pt-2 text-center font-mono text-[10px] tracking-wide text-ink-mute uppercase"
-					>
-						{route}
-					</div>
-				{/each}
-			</div>
-
-			<p class="my-4 text-center font-mono text-[10px] tracking-wide text-ink-mute uppercase">
-				letters · replies · steering<br />↓
-			</p>
-
-			<div class="mx-auto max-w-xl border-y border-amber-900/60 py-5 sm:border sm:px-6">
-				<p class="text-center font-mono text-[10px] tracking-[0.18em] text-amber-200/70 uppercase">
-					brnrd loom
-				</p>
-				<h2 class="mt-2 text-center font-mono text-xl font-semibold tracking-tight text-amber-100">
-					one resident · many threads
+	<section
+		class="ignite mt-16 sm:mt-20"
+		style="--ignite-delay: 260ms"
+		aria-label="one mind for all your work"
+	>
+		<div class="grid grid-cols-1 gap-8 md:grid-cols-[1.2fr_1fr]">
+			<div>
+				<h2 class="font-mono text-xl font-semibold tracking-tight text-amber-100">
+					One persistent mind for all your work.
 				</h2>
-				<div
-					class="mt-5 grid grid-cols-2 gap-x-5 gap-y-3 text-center font-mono text-[11px] text-stone-400 sm:grid-cols-4"
-				>
-					<span>letters</span>
-					<span>threads</span>
-					<span>memory</span>
-					<span>git receipts</span>
-				</div>
-				<p class="mt-4 text-center font-mono text-[10px] tracking-wide text-ink-mute uppercase">
-					persistent state · not a permanently-running model
+				<p class="mt-3 text-sm leading-relaxed text-stone-300">
+					Message brnrd from anywhere. It keeps its own threads moving, uses the AI tools you
+					already pay for, and gives you a window into everything it's doing, waiting on, and
+					finished.
+				</p>
+				<p class="mt-3 text-sm leading-relaxed text-ink-quiet">
+					The loom runs on your machine, with your repos and your credentials. Its memory is a git
+					repository you can read.
 				</p>
 			</div>
-
-			<p class="my-4 text-center font-mono text-[10px] tracking-wide text-ink-mute uppercase">
-				↓ a letter lands on its thread · a strand wakes to work it
-			</p>
-
-			<div class="mx-auto grid max-w-xl grid-cols-1 gap-5 sm:grid-cols-2">
-				<div class="border-t border-stone-800 pt-3 text-center">
-					<p class="font-mono text-[10px] tracking-wide text-amber-200/70 uppercase">thread</p>
-					<p class="mt-2 text-xs leading-relaxed text-stone-400">
-						one topic · its letters · its Plan
-					</p>
-				</div>
-				<div class="border-t border-stone-800 pt-3 text-center">
-					<p class="font-mono text-[10px] tracking-wide text-amber-200/70 uppercase">strand</p>
-					<p class="mt-2 text-xs leading-relaxed text-stone-400">
-						your agent CLI · its own room · receipts back to the thread
-					</p>
-				</div>
-			</div>
-
-			<p class="my-4 text-center font-mono text-[10px] tracking-wide text-ink-mute uppercase">
-				↓ runs through the agent CLI already on your machine
-			</p>
-
-			<div class="flex flex-wrap items-center justify-center gap-5">
-				{#each SHELLS as shell (shell.slug)}
-					<div class="flex items-center gap-2.5">
-						<ShelfIcon icon={shell.icon} />
-						<span class="text-sm text-stone-300">{shell.label}</span>
-					</div>
-				{/each}
-			</div>
-			<p class="mt-4 text-center font-mono text-[10px] tracking-wide text-amber-200/60 uppercase">
-				repository · room · tests · credentials
-			</p>
+			<table class="w-full text-sm" aria-label="what brnrd works with">
+				<tbody>
+					<tr class="border-b border-stone-800">
+						<th
+							class="py-2 pr-4 text-left align-top font-mono text-[10px] font-normal tracking-wide whitespace-nowrap text-ink-mute uppercase"
+							>write from</th
+						>
+						<td class="py-2 text-stone-300">{DOORS.map((d) => d.label).join(' · ')}</td>
+					</tr>
+					<tr class="border-b border-stone-800">
+						<th
+							class="py-2 pr-4 text-left align-top font-mono text-[10px] font-normal tracking-wide whitespace-nowrap text-ink-mute uppercase"
+							>works with</th
+						>
+						<td class="py-2">
+							<span class="flex flex-wrap gap-x-4 gap-y-2">
+								{#each SHELLS as shell (shell.slug)}
+									<span class="flex items-center gap-2 text-stone-300">
+										<ShelfIcon icon={shell.icon} />{shell.label}
+									</span>
+								{/each}
+							</span>
+						</td>
+					</tr>
+					<tr>
+						<th
+							class="py-2 pr-4 text-left align-top font-mono text-[10px] font-normal tracking-wide whitespace-nowrap text-ink-mute uppercase"
+							>runs on</th
+						>
+						<td class="py-2 text-stone-300">macOS · Linux</td>
+					</tr>
+				</tbody>
+			</table>
 		</div>
-		<p class="mx-auto mt-6 max-w-2xl text-center text-sm leading-relaxed text-ink-quiet">
-			The loom runs on your machine. Letters land on threads; a strand works each thread through the
-			agent CLI you already pay for and leaves its receipt there. brnrd is the layer connecting
-			those pieces, not another model behind them.
-		</p>
 	</section>
 
 	<section class="ignite mt-16 sm:mt-20" style="--ignite-delay: 340ms" aria-label="why a resident">
@@ -435,9 +416,8 @@
 					install your resident
 				</h2>
 				<p class="mt-3 text-sm leading-relaxed text-stone-400">
-					The npm package installs the same brnrd CLI as the uv and pipx routes. Run it from a
-					repository to start; the guided setup picks up that project context and walks you through
-					the rest.
+					One line puts the brnrd CLI on your PATH; the guided setup walks you through the rest. Run
+					it from a repository and setup picks up that project.
 				</p>
 				<a
 					class="mt-4 inline-flex font-mono text-[11px] tracking-wide text-sky-400 underline underline-offset-2"
@@ -448,7 +428,7 @@
 			<div class="panel p-4" aria-label="terminal install commands">
 				<p class="font-mono text-[10px] tracking-wide text-ink-mute uppercase">terminal</p>
 				<pre class="mt-3 overflow-x-auto font-mono text-sm leading-7 text-stone-300"><code
-						><span class="text-ink-mute">$</span> npm install -g brnrd
+						><span class="text-ink-mute">$</span> {INSTALL_LINE}
 <span class="text-ink-mute">$</span> brnrd</code
 					></pre>
 			</div>

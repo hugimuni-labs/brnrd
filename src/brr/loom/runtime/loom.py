@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import fcntl
+import functools
 import json
 import os
 import re
@@ -22,8 +23,13 @@ from pathlib import Path
 
 from brr.daemon2.facts import Fact
 
-from .adapters import resolve
+from .adapters import body_label, resolve
 from .bodies import COMMANDS, TABLE, Observation, decide, fact_for, row_for, state_of
+from .faces import propose, proposal_line
+from .health import Health, degraded_line
+from .library import problem_line
+from .since import since_gone
+from .update import Updater, moved_line
 from .home import Home, atomic_write, is_channel, mint, notice_id
 from .ledger import LedgerView, kind_facts, LedgerConflict, append, read_facts
 from .registry import KINDS
@@ -35,9 +41,10 @@ from .project import projection_cache, fold, generation, is_notice, reply_channe
 from .owners import active_owners, letters_for, letter_owners
 from .lifecycle import main_snapshot
 from .timers import observe_due
+from .waits import Watcher, forge_wants, observe_waits
 from .selfrepo import (
     AUTHOR_EMAIL, AUTHOR_NAME, SelfError, _env_without_pin, git,
-    room as clone_room, run_wake,
+    ensure_room, forge_threads, repaired_line, run_wake, seed_root,
 )
 
 SRC = str(Path(__file__).resolve().parents[3])
@@ -157,8 +164,11 @@ def _env(room: Path) -> dict[str, str]:
     env["BRNRD_WAKE"] = str(room / "port" / "wake.md")
     env["BRNRD_CORE"] = str(room / "port" / "core.md")
     env["BRNRD_OCCASION"] = str(room / "port" / "occasion.md")
-    env["BRNRD_JACK"] = (f"{shlex.quote(sys.executable)} -m brr.loom.runtime jack "
-                         f"--room {shlex.quote(str(room))}")
+    # Launchers name the shim, never this interpreter (entry.py); a body types
+    # ``brnrd runtime``, so the shim's directory leads its PATH.
+    from . import entry
+    env["BRNRD_JACK"] = entry.command("jack", "--room", str(room))
+    env["PATH"] = str(entry.shim().parent) + os.pathsep + env.get("PATH", os.defpath)
     wait = room / "port" / "wait"
     from .jack import PARK
     env["BRNRD_WAIT"] = wait.read_text().strip() if wait.is_file() else f"{PARK:g}"
@@ -197,7 +207,95 @@ class WakeFailure(SelfError):
         self.letter_ids = tuple(letter_ids)
 
 
-def _oversized_letters(clone, thread, owed, part, repos):
+def _run_recipe(clone, thread, owed_path, part_path, repo_file, core_path, recipe=None):
+    with tempfile.TemporaryFile(mode="w+") as wake, tempfile.TemporaryFile(mode="w+") as why:
+        code = run_wake(clone, thread, owed_path, loom_part=part_path, repos=repo_file,
+                        core=core_path, stdout=wake, stderr=why, recipe=recipe)
+        wake.seek(0)
+        why.seek(0)
+        return code, wake.read(), why.read().strip()
+
+
+def _loom_line(home, facts) -> str:
+    """What this loom runs against main; a failure costs the line, never the wake."""
+    from .receipts import source_root
+    from .update import wake_line
+    try:
+        return wake_line(facts, home.install_id(), source_root())
+    except Exception as exc:  # noqa: BLE001
+        _log(home, f"wake: loom line skipped ({exc})")
+        return ""
+
+
+def _build_wake(home, strand, gen, clone, thread, rows, part, owed_path, part_path, repo_file, core_path):
+    """Run the recipe; a home that cannot wake still wakes when it can be made to.
+
+    The resident is who repairs its home, and it can only do that awake. So a
+    broken recipe is replaced by the packaged one, and owed letters that do not
+    fit are left for the first boundary, which shows unread letters whole. Only
+    a wake that cannot be built at all (no recipe fits even an empty occasion,
+    or one letter is larger than the budget) is refused. ``owed.json`` ends as
+    the letters the wake carried.
+    """
+    def attempt(carried, text, recipe):
+        atomic_write(owed_path, json.dumps(carried))
+        atomic_write(part_path, text)
+        return _run_recipe(clone, thread, owed_path, part_path, repo_file, core_path, recipe)
+
+    from .converge import WAKE_FALLBACK, record
+    recipe = None
+    try:
+        code, occasion, why = attempt(rows, part, None)
+        broken = f"wake exited {code}: {why}"
+    except SelfError as exc:  # a recipe that is missing or not executable
+        code, occasion, why, broken = -1, "", str(exc), str(exc)
+    if code not in (0, 3):
+        recipe = seed_root() / "core" / "loom" / "wake"
+        _log(home, f"start {strand}: the self's core/loom/wake failed ({broken}); "
+                   "waking with the packaged recipe")
+        part = (f"your self's core/loom/wake failed ({broken[:400]}); brnrd's packaged recipe "
+                "built this wake instead; repair core/loom/wake and land it with send-self "
+                "before other work. ") + part
+        record(home, WAKE_FALLBACK, strand, gen, "recipe", {"want": "recipe", "error": broken[:400]})
+        code, occasion, why = attempt(rows, part, recipe)
+    if code == 3 and rows and not _oversized_letters(clone, thread, owed_path, part_path,
+                                                     repo_file, recipe=recipe):
+        best = None
+        low, high = 0, len(rows) - 1
+        while low <= high:
+            mid = (low + high) // 2
+            text = _deferred_line(rows[mid:], len(rows)) + part
+            result = attempt(rows[:mid], text, recipe)
+            if result[0] == 0:
+                best, low = (mid, text, result), mid + 1
+            else:
+                high = mid - 1
+        if best is not None:
+            mid, text, (code, occasion, why) = best
+            atomic_write(owed_path, json.dumps(rows[:mid]))
+            atomic_write(part_path, text)
+            _log(home, f"start {strand}: the wake carries {mid} of {len(rows)} owed letters; "
+                       "the rest arrive at the first boundary")
+            record(home, WAKE_FALLBACK, strand, gen, "letters", {
+                "want": "letters", "carried": mid,
+                "deferred": [str(row.get("id")) for row in rows[mid:]]})
+            return occasion
+        attempt(rows, part, recipe)
+    if code != 0:
+        raise WakeFailure(f"wake exited {code}: {why}",
+                          _oversized_letters(clone, thread, owed_path, part_path, repo_file,
+                                             recipe=recipe))
+    return occasion
+
+
+def _deferred_line(rest, total):
+    ids = ", ".join(str(row.get("id")) for row in rest)
+    return (f"the wake had room for {total - len(rest)} of {total} owed letters; the other "
+            f"{len(rest)} ({ids}) arrive whole at your first tool boundary: read them "
+            "before you act on the ones below. ")
+
+
+def _oversized_letters(clone, thread, owed, part, repos, recipe=None):
     """Prove input-local failure without interpreting a recipe's exit codes.
 
     The wake budget is the recipe contract. A large home plus small mail is
@@ -216,7 +314,7 @@ def _oversized_letters(clone, thread, owed, part, repos):
     try:
         with tempfile.TemporaryFile(mode="w+") as output:
             ok = run_wake(clone, thread, loom_part=part, repos=repos,
-                          stdout=output, stderr=output) == 0
+                          stdout=output, stderr=output, recipe=recipe) == 0
     except Exception:
         return ()
     return large if ok else ()
@@ -242,7 +340,7 @@ def notice(home: Home, facts: list[Fact], kind: str, subject: str, what: str, ca
     """The one writer of loom notices: what the loom cannot settle, a body is told.
 
     A notice is an owed letter from ``loom``, so it is shown at every
-    boundary until a body settles it. Its id is derived from the condition:
+    boundary until a body settles it; a ``passive`` one is done once shown. Its id is derived from the condition:
     a condition met on every tick writes one letter. It goes to ``thread``
     when a body can run there, else to the home thread. The last lines always name
     the handle. ``stands`` ties it to ``about``: the two settle together.
@@ -270,7 +368,8 @@ def notice(home: Home, facts: list[Fact], kind: str, subject: str, what: str, ca
     else:
         lines.append(can)
     if channel is None:
-        lines.append(f"settle this notice with a reply or a note, re: {ident}")
+        lines.append("passive: shown once, owed by nobody" if passive
+                     else f"settle this notice with a reply or a note, re: {ident}")
     data.update(body="\n".join(lines), label=label.as_dict())
     draft = Fact(kind="letter", by=_by(home), data=data, id=ident)
     if channel is not None:
@@ -326,6 +425,72 @@ def _policy(home: Home, thread: str) -> str | None:
     return name or None
 
 
+def _handover(facts: list[Fact], thread: str, gen: int, threads: dict[str, str],
+              home: Home | None = None) -> str:
+    """How the body before this one ended, and what it did since its README last landed.
+
+    The wake used to say "read the handover" without showing it, and the real
+    state sat in a note written after the molt: gen 221 of the inbox grepped
+    the ledger for both (wake-vision). A body can also end with no molt, displaced
+    over ``max_held`` or gone mid-turn, and its successor then saw only how it
+    ended, not what it did (handover). Only the body just before this one hands over; an older end
+    is history, not a handover.
+    """
+    lease = next((f for f in reversed(facts) if f.kind == "lease" and str(f.data.get("thread")) == thread
+                  and int(f.data.get("gen") or 0) == gen - 1), None)
+    if lease is None:
+        return ""
+    who = str(lease.data.get("strand"))
+    molt = next((f for f in reversed(facts) if f.kind == "molt" and f.data.get("gen") == gen - 1
+                 and f.data.get("strand") == who and threads.get(who) == thread), None)
+    if molt is not None:
+        lines = [f"handover from {who} (gen {gen - 1}, molted {molt.at[11:16]}Z): {molt.data.get('why', '')}"]
+    else:
+        # How it ended is since_gone's line (attempt.ended); this says what it left.
+        lines = [f"handover from {who} (gen {gen - 1}): no molt; this thread's README and the wish lefts"
+                 " are what it left, and its room is yours"]
+    landed = _landed(home, thread) if home is not None else None
+    if landed is not None:
+        lines.append(f"README last landed {landed[0]} {datetime.fromtimestamp(landed[1], timezone.utc):%H:%MZ}"
+                     f" \"{landed[2]}\"")
+    after = False
+    for fact in facts:
+        if fact is molt:
+            after = True
+        elif after and fact.kind == "note" and fact.by == f"strand:{who}" and fact.data.get("why"):
+            lines.append(f"after the molt, {fact.at[11:16]}Z ({fact.id}): {fact.data['why']}")
+    since = landed[1] if landed is not None else 0
+    sent = [f for f in facts if f.kind == "letter" and f.by == f"strand:{who}" and not is_notice(f)
+            and not f.data.get("molt") and _stamp(f.at) > since]
+    for fact in sent[-SINCE_MOST:]:
+        first = " ".join(str(fact.data.get("body", "")).split())[:SINCE_HEAD]
+        lines.append(f"since then, {fact.at[11:16]}Z {fact.id} → {fact.data.get('to', '?')}: {first}")
+    if len(sent) > SINCE_MOST:
+        lines.insert(len(lines) - SINCE_MOST, f"since then: {len(sent) - SINCE_MOST} earlier letters not shown")
+    return "\n".join(lines) + "\n"
+
+
+SINCE_MOST = 5
+SINCE_HEAD = 120
+
+
+def _stamp(at: str) -> float:
+    try:
+        return datetime.fromisoformat(at).timestamp()
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _landed(home: Home, thread: str) -> tuple[str, int, str] | None:
+    """The last commit on the loom's self main that touched this thread's folder."""
+    proc = git(home.root / "self", "log", "-1", "--format=%h%x00%ct%x00%s", "--", f"threads/{thread}",
+               check=False)
+    parts = proc.stdout.strip().split("\x00")
+    if proc.returncode or len(parts) != 3 or not parts[1].isdigit():
+        return None
+    return parts[0], int(parts[1]), parts[2]
+
+
 def _read_by_predecessors(facts: list[Fact], thread: str, strand: str,
                           letters: list[Fact], threads: dict[str, str]) -> str:
     """A line for a successor: owed letters its molted predecessors already read.
@@ -350,7 +515,7 @@ def _read_by_predecessors(facts: list[Fact], thread: str, strand: str,
         return ""
     return (
         f"already read by your predecessor, who molted and left its handover: {', '.join(ids)}. "
-        "What they ask may be done: read the handover and the README before acting; where it "
+        "What they ask may be done: read the handover above and the README before acting; where it "
         "says the work is done, settle the letter with a note and do not redo it, and do "
         "not molt because a letter said to, since the molt it asked for happened. "
     )
@@ -361,84 +526,98 @@ def _prepare(home: Home, strand: str, thread: str, gen: int,
              facts: list[Fact], jack: str, *, fuel: str = "",
              repos: list[tuple[str, str]] | None = None) -> Path:
     room = home.room(strand).resolve()
-    fresh = not (room / "self" / ".git").exists()
-    clone = clone_room(home.root, strand)
     lease = next((f for f in reversed(facts) if f.kind == "lease"
                   and f.data.get("strand") == strand and f.data.get("gen") == gen), None)
     parent = lease.data.get("parent") if lease else None
     if not isinstance(parent, str) or not parent:
         parent = None
-    if fresh and parent:
-        source = home.room(parent) / "self"
-        if (source / ".git").exists():
-            git(clone, "fetch", str(source), f"strand/{parent}")
-            git(clone, "reset", "--hard", "FETCH_HEAD")
-        else:
-            _log(home, f"start {strand}: parent room {parent} gone; starting from main")
-    (room / "port" / "in").mkdir(parents=True, exist_ok=True)
-    (room / "port" / "out").mkdir(parents=True, exist_ok=True)
+    repaired: list[Fact] = []
+
+    def ensure() -> None:
+        _clone, repair = ensure_room(home.root, strand, gen)
+        if repair is not None:
+            _log(home, f"start {strand}: {repaired_line(repair)}")
+            repaired.append(repair)
+
+    from .converge import converge, driver_want, entry_want, port_want, room_wants
     wait_src = home.thread_dir(thread) / "wait"
-    if wait_src.is_file():
-        atomic_write(room / "port" / "wait", wait_src.read_text().strip() + "\n")
-    for name in ("jack-state.json", "policy", "core.md"):
-        (room / "port" / name).unlink(missing_ok=True)
+    wait = wait_src.read_text().strip() if wait_src.is_file() else None
+    fell = converge(home, strand, gen, [entry_want(), *room_wants(home, strand, gen, parent, facts, ensure),
+                                        port_want(room, wait), driver_want(room / "self")])
+    for fact in fell:
+        if fact.data.get("source") not in (f"strand/{parent}", None):
+            _log(home, f"start {strand}: seeded from {fact.data['source']} "
+                       f"({fact.data.get('error', 'no error')})")
+    facts = [*facts, *repaired, *fell]
+    clone = room / "self"
     owed_path = room / "port" / "owed.json"
     attachments = letter_attachments(home.root, facts)
-    reply_context = letter_replies(facts)
-    atomic_write(owed_path, json.dumps([dict(letter.data, attachments=attachments.get(letter.id, []),
-                                           reply_context=reply_context.get(letter.id, ""),
-                                           reply_to=letter_owners(facts, main_snapshot(home))[letter.id].reply_to)
-                                              for letter in letters]))
+    reply_context = _reply_context(facts, thread, letters, room)
+    rows = [dict(letter.data, attachments=attachments.get(letter.id, []),
+                 reply_context=reply_context.get(letter.id, ""),
+                 reply_to=letter_owners(facts, main_snapshot(home))[letter.id].reply_to)
+            for letter in letters]
+    atomic_write(owed_path, json.dumps(rows))
     part_path = room / "port" / "loom.md"
     inherited = _read_by_predecessors(facts, thread, strand, letters, threads)
-    atomic_write(part_path, inherited + (
-        f"you are strand {strand} on thread {thread}; letters arrive at your "
-        "tool boundaries, each line naming its reply address; answer with "
-        "`python -m brr.loom.runtime send --re <id> --to <reply address> \"…\"`; "
-        "where the address is `-` nobody is waiting for words: settle the letter with "
-        f"`python -m brr.loom.runtime send --re <id> --to thread:{thread} --note "
-        "\"<what you did>\"`; if you commit in this self clone, land it with "
-        "`python -m brr.loom.runtime send-self --room .`; you will forget what is "
-        "not written: keep this thread's README true; under `## Plan`, cite each "
-        "row's letters and wish ids with ` · re: <id>, <w-id>` and land the edit "
-        "with send-self. "
-        "When your context grows "
-        "heavy hand over with `python -m brr.loom.runtime molt --why \"<where "
-        "things stand>\"`; `python -m brr.loom.runtime settle <thread> --why "
-        "\"…\"` closes a thread whose work is done; "
-        "a letter from `loom` is a notice of something the loom could not settle, "
-        "yours to deal with: its last lines name what settles it "
-        "(core/loom/README.md, Notices); stamp what someone wants with "
-        "`send --wish` (core/loom/README.md, Wishes), and open a thread only for "
-        "a wish: `send --to thread:<new> --wish <w-id>` or `--wish new:\"<line>\"`; "
+    gone = since_gone(facts, strand, gen, thread, threads, home.install_id())
+    from .reap import kept_line
+    gone += kept_line(home, thread, threads)
+    forge = forge_threads(home.root / "self")
+    from .waits import GRAMMAR
+    part = gone + _handover(facts, thread, gen, threads, home) + inherited + (
+        f"you are strand {strand} on thread {thread}"
+        + (f" ({forge}/{thread})" if forge else "") + "; letters arrive at your tool "
+        "boundaries, each naming its reply address: answer with "
+        "`brnrd runtime send --re <id> --to <address> \"…\"`, or where the address is `-`, "
+        f"settle it with `send --re <id> --to thread:{thread} --note \"<what you did>\"`. "
+        "You forget what is not written: keep this thread's README true (spec, decisions) and "
+        "land self commits with `brnrd runtime send-self --room .`; what is left on a wish lives "
+        "on it: `wish <w-id> --left \"<step>\" …`, the whole list, latest wins (`--left same` "
+        "when nothing moved), and the stop asks for it once a wish moved. When the stop says a shed is due, read this README as your successor will, rewrite it to the state, then `shed --why \"<one line>\"` and end the turn (or `shed --decline \"<reason>\"`, once); work done: "
+        "`settle <thread> --why \"…\"`. A letter from `loom` is a notice yours to settle; its "
+        "last lines say how (core/loom/README.md, Notices). Stamp what someone wants with "
+        "`send --wish`; open a thread only for one: `send --to thread:<new> --wish <w-id>` or "
+        "`--wish new:\"<line>\"`. A `face?` line: `face take` wears it, `face <face>` another, "
+        "silence lets it lapse. "
         + ("call `$BRNRD_JACK --event start` now, `$BRNRD_JACK --event post` between "
            "steps and `$BRNRD_JACK --event stop` before ending; read each returned boundary\n"
            if jack == "hand" else
-           "when you're done, stop, and the jack holds you while letters may come\n")
-    ))
+           "Stopping is resting, not ending: the jack holds you at no cost and the next letter "
+           "wakes you here. Waiting on CI, a PR, a command, a person or a time, park it: "
+           f"`wish <w-id> --read \"waiting: …\" --wait <{GRAMMAR}>`, then stop; the loom's letter "
+           "wakes you when it comes true. A sleep or poll loop is never the wait: no letter "
+           "lands inside it. Before you stop with wishes open, end each as a result "
+           "(`wish <w-id> --result`), an `ask`, a park or `settle`\n")
+    ) + _loom_line(home, facts)
+    atomic_write(part_path, part)
     if repos is None:
         from .adapters import repos as seat_repos, seat_text
-        repos = seat_repos(seat_text(home, thread))
+        repos = seat_repos(seat_text(home, thread), home)
     from .repos import PUBLISH_HINT, prepare_repos
     repo_text, failures = prepare_repos(home, strand, thread, repos, parent)
     if any((room / name / ".git").exists() for name, _ in repos):
         repo_text += PUBLISH_HINT
+    from . import library
+    repo_text += library.wake_text(home)
+    shelf = library.entries(home)[0]
+    library.write_room_list(room, shelf)
+    for trouble in library.link(room, shelf):
+        repo_text += trouble + "\n"
     repo_file = None
     if failures:
         _log(home, f"start {strand}: {'; '.join(failures)}")
+    from .converge import FALLBACK, record
+    for line in failures:
+        name = line.split(":", 1)[0].removeprefix("repo ")
+        record(home, FALLBACK, strand, gen, f"repo:{name}", {
+            "want": f"repo:{name}", "expected": f"a fetched mirror and loom/{thread}", "got": line})
     if repo_text:
         repo_file = room / "port" / "repos"
         atomic_write(repo_file, repo_text)
     core_path = room / "port" / "core.md"
-    with tempfile.TemporaryFile(mode="w+") as wake, tempfile.TemporaryFile(mode="w+") as why:
-        code = run_wake(clone, thread, owed_path, loom_part=part_path, repos=repo_file,
-                        core=core_path, stdout=wake, stderr=why)
-        why.seek(0)
-        if code != 0:
-            raise WakeFailure(f"wake exited {code}: {why.read().strip()}",
-                              _oversized_letters(clone, thread, owed_path, part_path, repo_file))
-        wake.seek(0)
-        occasion = wake.read()
+    occasion = _build_wake(home, strand, gen, clone, thread, rows, part, owed_path, part_path,
+                           repo_file, core_path)
     # The core rides in a body's system slot, where automated turns and
     # compaction do not wear it down. wake.md stays whole, so a body that
     # reads only BRNRD_WAKE never loses it. An older recipe writes no core.
@@ -452,9 +631,15 @@ def _prepare(home: Home, strand: str, thread: str, gen: int,
         room / "port" / "in" / "boundary.md",
         render_boundary(strand, gen, thread, letters, shown, threads,
                         fuel=fuel, channels=reply_channels(facts, home),
-                        opened=thread_table(home, facts), plan=_plan(home, thread, facts),
+                        opened=thread_table(home, facts, f"thread:{thread}"), forge=_forge(home), plan=_plan(home, thread, facts),
                         replies={f.letter.id: f.reply_to for f in active_owners(facts, main_snapshot(home))},
                         attachments=attachments, reply_context=reply_context,
+                        repaired=_repaired(facts, strand, gen),
+                        degraded=degraded_line(facts, home.install_id()),
+                        library=problem_line(facts, home.install_id()),
+                        moved=moved_line(facts, strand, gen, home.install_id()),
+                        face=proposal_line(propose(facts, strand, gen, thread)),
+                        left=_left(facts, thread, strand),
                         **_budget(home, thread, facts)),
     )
     return room
@@ -498,18 +683,18 @@ def body_alive(room: Path) -> bool:
     """True while the body's process holds the flock on ``room/.body``."""
     path = Path(room) / ".body"
     if not path.exists():
-        return False
+        return _seen_alive(room, False)
     try:
         fd = os.open(path, os.O_RDWR)
     except OSError:
-        return False
+        return _seen_alive(room, False)
     try:
         fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
     except BlockingIOError:
-        return True
+        return _seen_alive(room, True)
     else:
         fcntl.flock(fd, fcntl.LOCK_UN)
-        return False
+        return _seen_alive(room, False)
     finally:
         os.close(fd)
 
@@ -786,27 +971,60 @@ def _readme(room: Path, thread: str) -> str | None:
         return None
 
 
+_FORGE: dict[Path, str] = {}
+
+
+def _forge(home: Home) -> str:
+    """The self's threads folder on its forge, read once per process: a thread line links to it."""
+    if home.root not in _FORGE:
+        from .selfrepo import forge_threads
+        _FORGE[home.root] = forge_threads(home.root / "self") or ""
+    return _FORGE[home.root]
+
+
 def _plan(home: Home, thread: str, facts: list[Fact]) -> str:
-    main = main_snapshot(home)
-    rows = main.get(thread, {}).get("plan_rows")
-    missing = [fate.letter.id for fate in active_owners(facts, main)
-               if not fate.done and fate.thread == thread
-               and fate.owner in {"body", "loom", "opener"} and not fate.plan_rows]
-    if rows is None:
-        # A thread with no plan is not asked for one: the nag is for a plan
-        # that exists and has fallen behind its letters.
-        return ""
-    text = f"plan {sum(done for done, _ in rows)}/{len(rows)}"
-    if missing:
-        text += " · letters without a row: " + ", ".join(missing)
+    """The thread's wishes, delivered or accepted over all; no wishes, no plan."""
     from .owners import unanswered_by_thread
+    from .wishes import progress, told
+    main, plan = main_snapshot(home), progress(told(facts), thread)
+    if plan is None and main.get(thread, {}).get("plan_rows") is None:
+        # Neither wishes nor a Plan: the thread is not asked for one.
+        return ""
     unanswered = unanswered_by_thread(facts, main).get(thread, ())
+    parts = [f"plan {plan['done']}/{plan['total']}"] if plan else []
     if unanswered:
-        text += " · unanswered: " + ", ".join(unanswered)
-    next_row = next((text for done, text in rows if not done), "")
-    if next_row:
-        text += f" · next: {next_row[:60]}"
-    return text
+        parts.append("unanswered: " + ", ".join(unanswered))
+    if plan and plan.get("next"):
+        parts.append(f"next: {plan['next'][:60]}")
+    return " · ".join(parts)
+
+
+def _left(facts, thread: str, strand: str) -> str:
+    """The wishes this body's stop will ask to restate, derived at every render."""
+    from .wishes import left_line, owed_lefts, told
+    return left_line(owed_lefts(told(facts), facts, thread, strand))
+
+
+def _reply_context(facts, thread: str, letters, room: Path | None = None) -> dict[str, str]:
+    """Reply context, and a steers? line under each undisposed person letter."""
+    context = dict(letter_replies(facts))
+    from .dispositions import disposed, is_person
+    person = [letter for letter in letters if is_person(letter)]
+    if not person:
+        return context
+    from .wishes import steers_line, told
+    found, done = told(facts), disposed(facts, room)
+    said = False
+    for letter in person:
+        ident = str(letter.data.get("id", letter.id))
+        line = "" if ident in done else steers_line(found, thread, ident)
+        if line and said:
+            # The candidates are the thread's, the same under every letter: named once (wake-vision).
+            line = f"steers? as above — send --re {ident} --wish <w-id> | --wish new:\"<line>\" | --chatter"
+        said = said or bool(line)
+        if line:
+            context[letter.id] = "\n".join(filter(None, (context.get(letter.id, ""), line)))
+    return context
 
 
 def _budget(home: Home, thread: str, facts) -> dict[str, str]:
@@ -867,7 +1085,7 @@ def _leftovers(home: Home, strand: str) -> str:
         lines.extend(f"- {commit}" for commit in commits)
         if count > limit:
             lines.append(f"... and {count - limit} more commits")
-        command = f"python -m brr.loom.runtime send-self --room {shlex.quote(str(clone))}"
+        command = f"brnrd runtime send-self --room {shlex.quote(str(clone))}"
         lines.append(f"To land these commits on the self's main, run: `{command}`")
     if paths:
         lines.append(f"Uncommitted paths relative to that self clone ({len(paths)}):")
@@ -896,6 +1114,19 @@ def _room_kept(home: Home, strand: str) -> list[str]:
         lines.extend(f"{sha} {subject}" for sha, subject in item.commits)
         lines.extend(f"edit {path}" for path in item.edits)
     return lines
+
+
+def _home_streak(facts, thread: str, gen: int) -> int:
+    """The first generation of the home-caused failures that end at ``gen``."""
+    ends = sorted((int(f.data["gen"]), f) for f in kind_facts(facts, "attempt.ended")
+                  if f.data.get("thread") == thread
+                  and int(f.data["gen"]) < gen)
+    start = gen
+    for prior, fact in reversed(ends):
+        if not fact.data.get("evidence", {}).get("home_failure"):
+            break
+        start = prior
+    return start
 
 
 def _end_attempt(home, facts, strand, thread, gen, code, letters, cause, failure="",
@@ -958,7 +1189,9 @@ def _end_attempt(home, facts, strand, thread, gen, code, letters, cause, failure
             revision = git(clone, "rev-parse", "HEAD").stdout.strip()
         except (SelfError, OSError):
             revision = "unknown"
-        notice(home, facts, "self-refusal", f"{thread}:{revision}",
+        # One notice per run of home-caused failures: keyed on the HEAD each
+        # retry cloned, a busy main minted a new one per attempt (inbox, 2026-10-23).
+        notice(home, facts, "self-refusal", f"{thread}:streak:{_home_streak(facts, thread, gen)}",
                f"thread {thread} could not start from its own state: {failure or tail}",
                f"repair the home's wake recipe or context; its letters remain owed on {thread}",
                thread=repair_thread)
@@ -1020,6 +1253,7 @@ def _end_attempt(home, facts, strand, thread, gen, code, letters, cause, failure
         "thread": thread, "strand": strand, "gen": gen, "ids": ids,
         "cause": cause, "code": code, "dispositions": dispositions,
         "evidence": {"tail": tail, "readme_changed": changed, "fuel": tank,
+                     **({"home_failure": True} if cause == "failed" and failure_origin == "home" else {}),
                      **({"self_revision": retry_revision} if retry_revision else {}),
                      **({"unpublished": left} if left else {}),
                      **({"kept": kept} if kept else {}),
@@ -1065,6 +1299,17 @@ def pending_bodies(facts: list[Fact]) -> dict[str, Fact]:
             if f.kind.startswith("body.") and f.data.get("strand")}
 
 
+_FENCED = ("fenced: this install lost the inbox lease and another may lead; "
+           "land what you have and stop, the thread wakes again where the lease is")
+
+
+def _fenced(home, facts) -> bool:
+    """A lease streak is open on this install: the router fenced and has not
+    taken the inbox lease back (``Router._fence``, ``Router._recovered``)."""
+    from .health import open_streaks
+    return any(f.data.get("step") == "lease" for f in open_streaks(facts, home.install_id()))
+
+
 def _observe_body(home, facts, strand, thread, gen, bodies, *, choice=None, force=False):
     from .config import load_config
     from .lifecycle import CLOSED, closing_commit, read_thread
@@ -1076,6 +1321,7 @@ def _observe_body(home, facts, strand, thread, gen, bodies, *, choice=None, forc
     lease = fact_for(facts, "lease", strand, gen).data
     start = fact_for(facts, "body.started", strand, gen)
     closed = read_thread(home, thread).get("status") in CLOSED
+    fenced = _fenced(home, facts)
     default = choice or ("fake", "haiku")
     shell, core = lease.get("shell", default[0]), lease.get("core", default[1])
     if isinstance(facts, LedgerView):
@@ -1108,19 +1354,20 @@ def _observe_body(home, facts, strand, thread, gen, bodies, *, choice=None, forc
     # A stop on record with the body still alive is a signal that was never
     # sent or did not land: prove again, every tick, until the lock is gone.
     if alive and (state.name == "stopping"
-                  or closed and state.name == "leaving" and now >= state.deadline):
+                  or (closed or fenced) and state.name == "leaving" and now >= state.deadline):
         body = bodies.get(strand)
         proven = _proven_body(room, pid, str(start.data.get("lstart") or "") if start else "",
                               body.proc if body else None, alive=alive)
     # The boundary lists every cached shell. Park still reads `empty`, the seated gauge only.
     fuel = fuels(home, shell)
     context = SimpleNamespace(thread=thread, shell=shell, core=core, pid=pid, empty=empty, fuel=fuel,
-                              why=(closing_commit(home, thread)[1] or f"thread {thread} settled") if closed else "", failure="", repos=lease.get("repos"))
+                              why=(closing_commit(home, thread)[1] or f"thread {thread} settled") if closed
+                              else _FENCED if fenced else "", failure="", repos=lease.get("repos"))
     o = Observation(strand, gen, alive, closed, "refreshing" if gauge is None else "empty" if empty
                     else "ok" if gauge["windows"] else "unknown",
                     now, proven, until=until, force=force, stop_grace=config.stop_grace,
-                    woken="/".join(woken) if woken else "")
-    if TABLE[row_for(facts, o)].next == "parked":
+                    woken="/".join(woken) if woken else "", fenced=fenced)
+    if TABLE[row_for(facts, o)].next == "parked" and not fenced:
         park = fact_for(facts, "body.parked", strand, gen)
         window, left, when = ((empty["name"], empty["left_pct"], until) if empty else
                               (park.data["window"], park.data["left_pct"], park.data["until"]))
@@ -1160,7 +1407,7 @@ def _wake_letter(home, facts, thread, leased, letter, channel, *, parked=True):
     elif parked and named == leased:
         disposition["reason"] = "wake: started before its reset"
     else:
-        disposition.update(reason=f"wake: on {named[0]}/{named[1]}", thread=thread, body="/".join(named))
+        disposition.update(reason=f"wake: on {body_label(*named)}", thread=thread, body=body_label(*named))
     try:
         facts.append(_record(home, "letter.disposed", {"dispositions": [disposition]},
                              f"letter.disposed:{ident}"))
@@ -1184,7 +1431,7 @@ def _core_for(home, facts, thread, shell, leased):
         seated = at_birth(home, thread, ("", ""))
     except (ValueError, OSError):
         seated = ("", "")
-    if seated[0] == shell and seated[1]:
+    if seated[0] == shell:
         return seated[1]
     return next((f.data["core"] for f in reversed(facts)
                  if f.kind == "lease" and f.data.get("shell") == shell and f.data.get("core")), None)
@@ -1199,7 +1446,7 @@ def _wake_body(home, facts, thread, leased, said):
     if shell not in valid:
         return f"No body {said[1]!r} here; bodies are {', '.join(valid)}."
     core = said[2] or _core_for(home, facts, thread, shell, leased)
-    if not core:
+    if core is None:
         return f"No core on record for {shell}: name one, as wake {shell}/<core>."
     return shell, core
 
@@ -1210,14 +1457,14 @@ def _wake_lines(home, facts, thread, leased, park):
     found = shell_fuels(home)
     if park:
         window, left, when = park
-        lines = [f"wake: retry {leased[0]}/{leased[1]} ({window} {left:g}%, "
+        lines = [f"wake: retry {body_label(*leased)} ({window} {left:g}%, "
                  f"resets {datetime.fromtimestamp(when).astimezone():%a %H:%M})"]
     else:
-        lines = [f"wake: retry {leased[0]}/{leased[1]}"]
+        lines = [f"wake: retry {body_label(*leased)}"]
     for shell in _wake_shells(home, leased[0]):
         if shell == leased[0]:
             continue
-        word = f"wake {shell}" if _core_for(home, facts, thread, shell, leased) else f"wake {shell}/<core>"
+        word = f"wake {shell}" if _core_for(home, facts, thread, shell, leased) is not None else f"wake {shell}/<core>"
         lines.append(f"{word}: {shell + ' ' + found[shell] if shell in found else 'fuel unknown'}")
     return lines
 
@@ -1234,8 +1481,11 @@ def _wake_choice(facts, thread):
         if f.kind == "letter.disposed" and f.by.startswith("loom:"):
             for d in f.data.get("dispositions", ()):
                 if d.get("thread") == thread and d.get("body"):
-                    shell, _, core = str(d["body"]).partition("/")
-                    return shell, core
+                    from .adapters import parse_body
+                    try:
+                        return parse_body(d["body"])
+                    except ValueError:
+                        continue
     return None
 
 
@@ -1251,25 +1501,141 @@ def _person_dms(home, facts, thread):
             yield letter, channel
 
 
+def _repaired(facts, strand, gen) -> str:
+    """What the loom repaired in this generation's room before it woke."""
+    for fact in reversed(kind_facts(facts, "room.repaired")):
+        if (fact.data.get("strand") == strand
+                and fact.data.get("gen") == gen):
+            return repaired_line(fact)
+    return ""
+
+
+# A boundary is rendered again only when something it read changed. What it
+# read is recorded, not listed: every path it opened or listed (main's ref,
+# config, gauges, a child's jack state, ...) with its stat, every body whose
+# liveness it probed, and the ledger's semantic revision. The clock is the one
+# input no stat sees, so a render is also retired after RENDER_MAX_AGE.
+RENDER_MAX_AGE = 10.0
+_RENDERS: dict[str, tuple] = {}
+_READING: list = [None]
+
+
+def _note_read(event, args):
+    """Audit hook: while a boundary renders on this thread, keep what it opens."""
+    reading = _READING[0]
+    if reading is None or reading[0] != threading.get_ident():
+        return
+    if event in ("open", "os.listdir", "os.scandir") and args and isinstance(args[0], (str, bytes, os.PathLike)):
+        reading[1].add(os.fsdecode(args[0]))
+
+
+sys.addaudithook(_note_read)
+
+
+def _stat(path):
+    try:
+        st = os.stat(path)
+    except OSError:
+        return None
+    return st.st_mtime_ns, st.st_size, st.st_ino
+
+
+def _seen_alive(room, alive):
+    reading = _READING[0]
+    if reading is not None and reading[0] == threading.get_ident():
+        reading[2][str(room)] = alive
+    return alive
+
+
+def _rendered(facts, key, render):
+    """``render()``, or its last text when nothing it read has changed since."""
+    prior = _RENDERS.get(key[0])
+    if (prior is not None and prior[5] is facts and prior[0] == key
+            and time.monotonic() - prior[1] < RENDER_MAX_AGE
+            and all(_stat(path) == stat for path, stat in prior[2].items())
+            and all(body_alive(Path(room)) == alive for room, alive in prior[3].items())):
+        return prior[4]
+    reading = _READING[0] = (threading.get_ident(), set(), {})
+    try:
+        text = render()
+    finally:
+        _READING[0] = None
+    paths = {path: _stat(path) for path in reading[1]}
+    _RENDERS[key[0]] = (key, time.monotonic(), paths, reading[2], text, facts)
+    return text
+
+
 def _boundary(home, facts, strand, gen, context):
-    from .threads import thread_table
-    main, state = main_snapshot(home), fold(facts)
-    text = render_boundary(
-        strand, gen, context.thread, letters_for(facts, main, context.thread),
-        state.shown.get(strand, set()), sender_threads(facts), context.fuel,
-        context.why or None, reply_channels(facts, home),
-        opened=thread_table(home, facts), plan=_plan(home, context.thread, facts),
-        replies={f.letter.id: f.reply_to for f in active_owners(facts, main)},
-        attachments=letter_attachments(home.root, facts),
-        reply_context=letter_replies(facts),
-        **_budget(home, context.thread, facts),
-    )
+    if isinstance(facts, LedgerView):
+        # The view is replaced on repair and only appended to otherwise; a
+        # renewal is the one append no boundary reads.
+        key = (strand, gen, facts.semantic_revision, context.thread, context.fuel, context.why)
+        text = _rendered(facts, key, lambda: _render_boundary(home, facts, strand, gen, context))
+    else:
+        text = _render_boundary(home, facts, strand, gen, context)
     path = home.room(strand) / "port/in/boundary.md"
     if not path.is_file() or path.read_text() != text:
         atomic_write(path, text)
+    else:
+        # Rendered from these facts: the jack's stop compares this mtime with the ledger's.
+        os.utime(path)
+
+
+def _render_boundary(home, facts, strand, gen, context):
+    from .threads import thread_table
+    main, state = main_snapshot(home), fold(facts)
+    owed = letters_for(facts, main, context.thread)
+    text = render_boundary(
+        strand, gen, context.thread, owed,
+        state.shown.get(strand, set()), sender_threads(facts), context.fuel,
+        context.why or None, reply_channels(facts, home),
+        opened=thread_table(home, facts, f"thread:{context.thread}"), forge=_forge(home),
+        plan=_plan(home, context.thread, facts),
+        replies={f.letter.id: f.reply_to for f in active_owners(facts, main)},
+        attachments=letter_attachments(home.root, facts),
+        reply_context=_reply_context(facts, context.thread, owed, home.room(strand)),
+        repaired=_repaired(facts, strand, gen),
+        degraded=degraded_line(facts, home.install_id()),
+        library=problem_line(facts, home.install_id()),
+        moved=moved_line(facts, strand, gen, home.install_id()),
+        face=proposal_line(propose(facts, strand, gen, context.thread)),
+        left=_left(facts, context.thread, strand),
+        **_budget(home, context.thread, facts),
+    )
+    return text
 
 
 _PAUSE_LOOKED: dict[Path, float] = {}
+# Ports with a call this process paused, and their home: a stopped call that
+# holds the ledger lock is resumed before anyone waits on it.
+_PAUSED: dict[Path, Home] = {}
+
+
+def _free_ledger(lock):
+    """``ledger.ON_CONTENDED``: resume each paused call that has ``lock`` open."""
+    if not _PAUSED:
+        return
+    from brr import pause
+    from . import pausing
+    for port, records in pausing.free_lock(list(_PAUSED), Path(lock)).items():
+        _log(_PAUSED[port], f"resumed {port.parent.name}'s paused call, which held the ledger lock: "
+                            + pause.describe_paused(records))
+    for port in [p for p in _PAUSED if not pause.read_paused_record(p)]:
+        del _PAUSED[port]
+
+
+def _unstick(home):
+    """Between ticks nobody may wait behind a paused call that holds the lock."""
+    if not _PAUSED:
+        return
+    lock = home.facts_dir() / ".lock"
+    with open(lock, "a+") as handle:
+        try:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            _free_ledger(lock)
+        else:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
 
 
 def _pause_for_letters(home, strand, c):
@@ -1296,6 +1662,7 @@ def _pause_for_letters(home, strand, c):
     delegating = live.is_dir() and any(time.time() - p.stat().st_mtime < pausing.CAP for p in live.iterdir())
     if since and not delegating and (records := pausing.pause_call(port, c.pid, pattern, float(since))):
         _log(home, f"paused {strand}'s call for a letter: {pause.describe_paused(records)}")
+        _PAUSED[port] = home
 
 
 @dataclass
@@ -1332,6 +1699,9 @@ def _hand_prepare(x, command, step):
         x.letters = letters_for(x.facts, main_snapshot(x.home), c.thread)
         x.room = _prepare(x.home, x.o.strand, c.thread, x.o.gen, x.letters, sender_threads(x.facts), x.facts,
                           (x.folder / "jack").read_text().strip(), fuel=c.fuel, repos=c.repos)
+        # Shown is what the wake carried; a letter left out arrives at a boundary.
+        carried = {str(row.get("id")) for row in json.loads((x.room / "port/owed.json").read_text())}
+        x.letters = [f for f in x.letters if str(f.data.get("id", f.id)) in carried]
         policy = _policy(x.home, c.thread)
         if policy is not None:
             atomic_write(x.room / "port/policy", policy + "\n")
@@ -1370,7 +1740,7 @@ def _hand_started(x, command, step):
     c = x.c
     x.values["lstart"] = _ps_field(x.proc.pid, "lstart") or ""
     _hand_record(x, command, step)
-    _log(x.home, f"start {x.o.strand} thread {c.thread} gen {x.o.gen} pid {x.proc.pid} {c.shell}/{c.core}")
+    _log(x.home, f"start {x.o.strand} thread {c.thread} gen {x.o.gen} pid {x.proc.pid} {body_label(c.shell, c.core)}")
 
 
 def _hand_signal(x, command, step):
@@ -1477,6 +1847,43 @@ def _advance_bodies(home, bodies, facts, choice, *, reader=None):
     return facts
 
 
+def _displace(home: Home, facts: list[Fact]) -> None:
+    """Over ``max_held`` live bodies, the ones held longest are asked to leave.
+
+    The home thread's body is not counted and never displaced. Only a body
+    parked in its stop hook (``held_at`` in its jack state) is marked, so work
+    in flight is never cut; the count settles as working bodies park.
+    """
+    from .config import load_config
+    from .jack import DISPLACED
+    from .router import install_of
+    limit = load_config(home.root).max_held
+    if not limit:
+        return
+    main = home.main_thread()
+    live = [(thread, strand, home.room(strand))
+            for thread, (strand, _gen) in fold(facts).holder.items()
+            if thread != main and install_of(strand) == home.install_id()
+            and body_alive(home.room(strand))]
+    marked = sum((room / "port" / DISPLACED).exists() for _t, _s, room in live)
+    over = len(live) - int(limit) - marked
+    if over <= 0:
+        return
+    held = []
+    for thread, strand, room in live:
+        try:
+            held_at = json.loads((room / "port" / "jack-state.json").read_text()).get("held_at")
+        except (OSError, ValueError):
+            continue
+        if held_at and not (room / "port" / DISPLACED).exists():
+            held.append((float(held_at), thread, strand, room))
+    now = time.time()
+    for held_at, thread, strand, room in sorted(held)[:over]:
+        atomic_write(room / "port" / DISPLACED, f"{len(live)} live bodies, max_held {limit:g}\n")
+        _log(home, f"displace {strand} thread {thread}: held {(now - held_at) / 60:.0f} min,"
+                   f" {len(live)} live bodies over max_held {limit:g}")
+
+
 def tick_once(home: Home, bodies: dict[str, Body], adapter: str, core: str,
               router=None) -> None:
     """One read of the ledger, then ingest, route, boundaries, reap.
@@ -1487,6 +1894,7 @@ def tick_once(home: Home, bodies: dict[str, Body], adapter: str, core: str,
     from .router import Router
     if router is None:
         router = Router(home)
+    _unstick(home)
     facts = router.reader.refresh(home)
     if router.projection_revision != router.reader.revision:
         router.projections.clear()
@@ -1494,11 +1902,50 @@ def tick_once(home: Home, bodies: dict[str, Body], adapter: str, core: str,
     with projection_cache(router.projections):
         facts = router.begin_tick(facts)
         facts = _ingest(home, facts, router.config.router_ttl)
+        facts = _grant_landed(home, facts)
+        facts = _grant_opened(home, facts)
         facts = _advance_bodies(home, bodies, facts, (adapter, core), reader=router.reader)
+        _displace(home, facts)
         # Time enters the owner table once, using only the facts already held.
         facts = observe_due(home, facts, router.armed())
+        # A park's condition is checked the same way; the forge is read off the loop.
+        watcher = getattr(router, "watcher", None)
+        facts = observe_waits(home, facts, router.armed(), watcher.states if watcher else None)
+        if watcher is not None:
+            from .receipts import receipts
+            from .waits import open_claims
+            from .wishes import told
+            watcher.wants = forge_wants(told(facts))
+            watcher.prs = open_claims(receipts(facts, home.install_id()))
         facts = router.route(facts, bodies, (adapter, core))
         facts = router.speak_out(facts)
+
+
+_GRANTED: dict[Path, str] = {}
+
+
+def _grant_landed(home: Home, facts: list[Fact]) -> list[Fact]:
+    """Once per main commit: a landed Plan row's receipt is a result on each wish it cites."""
+    from .lifecycle import main_tip
+    from .wishes import landed_results, told
+    repo = home.root / "self"
+    if not (repo / ".git").exists():
+        return facts
+    tip = main_tip(repo)
+    if _GRANTED.get(repo) == tip:
+        return facts
+    for fact in landed_results(told(facts), main_snapshot(home), f"loom:{home.install_id()}"):
+        facts.append(append(home, fact))
+    _GRANTED[repo] = tip
+    return facts
+
+
+def _grant_opened(home: Home, facts: list[Fact]) -> list[Fact]:
+    """A pull request opened on a thread with one open wish is that wish's result."""
+    from .wishes import opened_results, told
+    for fact in opened_results(told(facts), kind_facts(facts, "pr.opened"), f"loom:{home.install_id()}"):
+        facts.append(append(home, fact))
+    return facts
 
 
 def _pause(stop, seconds: float) -> bool:
@@ -1567,6 +2014,30 @@ def _source_fingerprint():
     ]).encode()).hexdigest()
 
 
+#: An open call older than this is a lost post hook, not a body at work.
+IDLE_STALE = 1800
+
+
+def _idle(home: Home, young: float | None = None) -> bool:
+    """No live body of this install has a tool call open younger than ``young`` seconds
+    (``None``: none open at all): the loom may move its code."""
+    limit = IDLE_STALE if young is None else min(young, IDLE_STALE)
+    from . import tooltrace
+    from .router import install_of
+    for strand, _gen in fold(read_facts(home)).holder.values():
+        room = home.room(strand)
+        if install_of(strand) != home.install_id() or not body_alive(room):
+            continue
+        if any(time.time() - call["at"] < limit for call in tooltrace.live(room)["open"]):
+            return False
+    return True
+
+
+def _read_usage(home, usage) -> None:
+    for shell in usage.shells(home):
+        usage.reading(home, shell)
+
+
 def run(root: Path | str, *, adapter: str = "fake", core: str = "haiku",
         tick: float = 0.2, stop=None, install: str | None = None) -> None:
     if tick <= 0:
@@ -1576,12 +2047,16 @@ def run(root: Path | str, *, adapter: str = "fake", core: str = "haiku",
     held = _hold_loop(home, stop)
     if held is None:
         return
-    inputs = None
+    inputs = board = shell = None
     bodies: dict[str, Body] = {}
     try:
         if stop is not None and stop.is_set():
             return
         home.install_id()
+        from . import ledger
+        ledger.ON_CONTENDED = _free_ledger
+        # A pause outlives a re-exec on disk; the loop must still free its lock.
+        _PAUSED.update((port.parent, home) for port in (home.root / "rooms").glob("*/port/.paused.json"))
         from .receipts import record_start
         try:
             # Each start and re-exec: which merged pull requests this code holds.
@@ -1597,10 +2072,36 @@ def run(root: Path | str, *, adapter: str = "fake", core: str = "haiku",
         router = Router(home, config)
         from .connector import Inputs
         inputs = Inputs(home)
+        health = Health(home, read_facts(home), _log)
         from .snapshot import Publisher
-        publisher = Publisher(home, _log)
+        publisher = Publisher(home, _log, functools.partial(health.guard, backoff=False))
+        spa = None
+        pusher = None
+        # The board's parts feed the loopback (board_port) and the cloud (relay_state); both read at start.
+        if config.board_port or config.relay_state:
+            from .board import Parts, Pusher
+            board = Parts(home, lambda: load_config(home.root), _log)
+            threading.Thread(target=board.run, name="board", daemon=True).start()
+            pusher = Pusher(board)
+        if config.board_port:  # read at start: a port change waits for the next re-exec
+            from .board import serve
+            from .spabuild import SpaBuild
+            frontend = Path(__file__).resolve().parents[3] / "frontend"
+            if (frontend / "package.json").is_file() and not os.environ.get("BRNRD_FRONTEND_DIR"):
+                spa = SpaBuild(frontend, lambda text: _log(home, text))
+            try:
+                shell = serve(board, int(config.board_port))
+            except (OSError, ValueError) as exc:  # a taken port or not a number: the loop runs on without a board
+                _log(home, f"board: port {config.board_port}: {exc}")
         from .mirror import Mirror
         mirror = Mirror(home, _log)
+        from .library import Keeper
+        keeper = Keeper(home, _log)
+        from .reap import Reaper
+        reaper = Reaper(home, _log)
+        from .receipts import source_root
+        updater = Updater(home, _log, source_root())
+        router.watcher = Watcher(home.root / "loom" / "prs.json")
         while not (stop is not None and stop.is_set()):
             try:
                 config = load_config(home.root)
@@ -1611,35 +2112,46 @@ def run(root: Path | str, *, adapter: str = "fake", core: str = "haiku",
             with tick_config(home.root, config):
                 router.config = config
                 if time.monotonic() >= next_usage:
-                    for shell in usage.shells(home):
-                        usage.reading(home, shell)
+                    health.guard("usage", _read_usage, home, usage, backoff=False)
                     next_usage = time.monotonic() + usage.REFRESH_INTERVAL
-                try:
-                    inputs.step()
-                except Exception:
-                    _log(home, traceback.format_exc().rstrip())
-                try:
-                    tick_once(home, bodies, adapter, core, router)
-                except Exception:
-                    _log(home, traceback.format_exc().rstrip())
-                try:
-                    publisher.step(config, router)
-                except Exception:
-                    _log(home, traceback.format_exc().rstrip())
-                try:
-                    mirror.step(config)
-                except Exception:
-                    _log(home, traceback.format_exc().rstrip())
-            if _source_fingerprint() != fingerprint:
+                # Inputs, publisher, mirror and reap pace their own retries; only the tick backs off.
+                # Connectors run only on the router lease's holder: a second
+                # install ingesting too would answer every letter twice.
+                if router.armed():
+                    health.guard("inputs", inputs.step, backoff=False)
+                else:
+                    inputs.close()
+                health.guard("tick_once", tick_once, home, bodies, adapter, core, router)
+                health.guard("publisher", publisher.step, config, router, backoff=False)
+                if pusher is not None:
+                    health.guard("parts", pusher.step, config, backoff=False)
+                health.guard("waits", router.watcher.step, config, router.armed(), backoff=False)
+                health.guard("mirror", mirror.step, config, backoff=False)
+                health.guard("library", keeper.step, backoff=False)
+                health.guard("disk", reaper.disk, backoff=False)
+                health.guard("reap", reaper.step, backoff=False)
+                if spa is not None:  # the board's build follows the checkout; a failed one stays degraded
+                    health.guard("spa", spa.step, backoff=False)
+                # Only at an idle tick, and the re-exec follows in this same pass.
+                health.guard("update", updater.step, config, functools.partial(_idle, home),
+                             backoff=False)
+            if updater.moved is not None or _source_fingerprint() != fingerprint:
                 _log(home, "runtime source changed; re-executing loom")
                 inputs.close()
                 _shutdown(bodies)
-                os.execv(sys.executable, [sys.executable, *sys.orig_argv[1:]])
+                from .entry import reexec_argv
+                argv = reexec_argv() or [sys.executable, *sys.orig_argv[1:]]
+                os.execv(argv[0], argv)
                 return
             if _pause(stop, tick):
                 break
     finally:
         _shutdown(bodies)
+        if board is not None:
+            board.stop.set()
+        if shell is not None:
+            shell.shutdown()
+            shell.server_close()
         if inputs is not None:
             inputs.close()
         fcntl.flock(held, fcntl.LOCK_UN)

@@ -58,8 +58,9 @@ KEYS: tuple[Key, ...] = (
     Key("name", "text", None,
         "This loom's name. A thread whose README says `for: <name>` runs only on the loom of that name; unset matches none."),
     Key("body", "text", None,
-        "The body a login service runs, as shell/core (e.g. claude/sonnet). "
-        "Required by `brnrd loom install`."),
+        "The body a login service runs: a shell (e.g. claude), which uses the harness's own "
+        "model choice, or shell/core to pin a model (e.g. claude/sonnet). "
+        "`brnrd loom install` writes one when unset."),
     Key("author", "text", None,
         "`Name <email>` for every commit a body makes. Unset: the loom's own."),
     Key("forge_token", "secret", None,
@@ -70,6 +71,11 @@ KEYS: tuple[Key, ...] = (
         "A body's `gh`: auto uses the forge token above when the home has one, "
         "else the machine's gh login; off signs it out.",
         choices=("auto", "off")),
+    Key("update", "choice", "auto",
+        "How the loom follows new code: dev fast-forwards the checkout it runs from to origin's "
+        "main once main's CI is green, then re-execs at an idle tick; stable is the release "
+        "channel (not built yet); off stays put. auto: dev for a git checkout, else off.",
+        choices=("auto", "dev", "stable", "off")),
     Key("connectors", "names", (),
         "Enabled folders or named channels, e.g. [\"inbox=addon\"]. Home folders override bundled folders; default: none."),
     Key("relay_state", "path", None,
@@ -82,9 +88,22 @@ KEYS: tuple[Key, ...] = (
         choices=("on", "off")),
     Key("hold_floor_pct", "percent", 3.0,
         "A quota window with this percent or less left counts as exhausted: a held body stays held."),
+    Key("disk_floor_pct", "percent", 5.0,
+        "The disk floor, as a percent of the home's volume (never under 5 GiB): below it the loom "
+        "is degraded, reaps rooms at once and prunes package caches."),
+    Key("max_held", "positive", None,
+        "Most live bodies this install keeps warm, the home thread's not counted. Past it, the "
+        "body held longest with nothing to do leaves at its stop hook; a working body is never "
+        "cut, and the next letter to its thread starts a fresh one. Unset: every body holds."),
     Key("thread_budget", "positive", 2_000_000,
         "Weighted tokens a thread opened by another thread may spend before its strand is told, at "
         "every boundary, to write to its parent for more. `send --budget` overrides it."),
+    Key("shed_excess", "positive", 60_000,
+        "Context tokens a body grows past its boot before a mostly-idle scroll makes a shed due; "
+        "fast quota pace lowers it, slack raises it, at most to double."),
+    Key("shed_hold", "names", ("home",),
+        "Threads whose bodies are never asked to shed; \"home\" names the home thread. "
+        "Set to [] to release them."),
     Key("stop_grace", "seconds", DEFAULT_STOP_GRACE,
         "Seconds a settled thread's body may take to land and exit before it is signalled."),
     Key("router_ttl", "positive", DEFAULT_TTL,
@@ -93,6 +112,16 @@ KEYS: tuple[Key, ...] = (
         "Clock skew, in seconds, a router lease must tolerate; grants stop at until - max_skew - margin."),
     Key("margin", "seconds", DEFAULT_MARGIN,
         "Extra seconds, beyond max_skew, a router stops granting before its lease ends."),
+    Key("lease_remote", "text", None,
+        "The self's https URL whose refs/leases/inbox decides which install routes and runs "
+        "connectors, so two machines can share one resident; that lease lasts router_ttl but at "
+        "least 90 s. Unset, the router lease is this machine's alone."),
+    Key("lease_mode", "choice", "contested",
+        "contested: a holder that cannot reach lease_remote keeps routing unless a peer's "
+        "ledger moved there in the last 10 minutes; strict: it stops at the end of its ttl.",
+        choices=("contested", "strict")),
+    Key("board_port", "text", None,
+        "Loopback port the board's parts are served on (127.0.0.1); unset, the board is off. Read at start."),
 )
 BY_NAME = {k.name: k for k in KEYS}
 
@@ -173,6 +202,9 @@ def _coerce(key: Key, value: object, path: Path) -> object:
         if value not in key.choices:
             raise refuse(" or ".join(f'"{c}"' for c in key.choices))
         return value
+    if value == "" and key.default is None:
+        # A number with no default renders as "" in the seeded file: unset.
+        return None
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         raise refuse("a number")
     number = float(value)
@@ -213,10 +245,78 @@ def read_values(path: Path | str) -> dict[str, object]:
                 continue
             key, _, raw = line.partition("=")
             key = key.strip()
-            if key in {"connectors", "channels"} and key in found:
-                raise ConfigError(f"{path}: duplicate {key} declaration")
+            if key in found:
+                # The last line used to win, so a hand edit above an appended
+                # line was silently ignored. Writers fold; a reader refuses.
+                raise ConfigError(f"{path}: {key} is set twice; keep one line")
             found[key] = _literal(raw.strip())
     return found
+
+
+def _set_key(line: str) -> str | None:
+    """The key an uncommented ``key = value`` line sets, else None."""
+    line = _without_comment(line).strip()
+    if not line or "=" not in line:
+        return None
+    return line.partition("=")[0].strip()
+
+
+_FOLDED = "# folded, an earlier duplicate the last line overrode: "
+
+
+def fold_config(root: Path | str) -> list[str]:
+    """Comment out every line a later line of the same key overrode.
+
+    The value in effect does not change: the reader used to keep the last
+    line. Returns the keys folded, so a caller can say so.
+    """
+    path = config_path(root)
+    if not path.is_file():
+        return []
+    lines = path.read_text(encoding="utf-8").splitlines()
+    last: dict[str, int] = {}
+    for index, line in enumerate(lines):
+        key = _set_key(line)
+        if key is not None:
+            last[key] = index
+    folded = []
+    for index, line in enumerate(lines):
+        key = _set_key(line)
+        if key is not None and last[key] != index:
+            lines[index] = _FOLDED + line
+            folded.append(key)
+    if folded:
+        from .home import atomic_write
+        atomic_write(path, "\n".join(lines) + "\n")
+    return sorted(set(folded))
+
+
+def set_value(root: Path | str, name: str, value: object) -> None:
+    """Set one key in place, keeping every other line as written.
+
+    The line that sets ``name`` is replaced; with none, the seeded template's
+    commented ``# name = ...`` line is; with neither, the line is appended.
+    Any other line setting ``name`` is folded, so the file says it once.
+    """
+    if name not in BY_NAME:
+        raise ConfigError(f"{config_path(root)}: unknown key {name!r}")
+    seed_config(root)
+    path = config_path(root)
+    lines = path.read_text(encoding="utf-8").splitlines()
+    setting = f"{name} = {_render_value(value)}"
+    live = [i for i, line in enumerate(lines) if _set_key(line) == name]
+    template = [i for i, line in enumerate(lines)
+                if re.match(rf"#\s*{re.escape(name)}\s*=", line.strip())]
+    if live:
+        lines[live[-1]] = setting
+        for index in live[:-1]:
+            lines[index] = _FOLDED + lines[index]
+    elif template:
+        lines[template[-1]] = setting
+    else:
+        lines.append(setting)
+    from .home import atomic_write
+    atomic_write(path, "\n".join(lines) + "\n")
 
 
 def read_array(path: Path, key: str) -> list[str]:
@@ -286,9 +386,14 @@ def render_config() -> str:
 
 
 def seed_config(root: Path | str) -> bool:
-    """Write the commented file unless one exists. True when it wrote."""
+    """Write the commented file unless one exists. True when it wrote.
+
+    An existing file is folded instead, so a home written by an appending
+    writer loads under the reader that refuses duplicates.
+    """
     path = config_path(root)
     if path.exists():
+        fold_config(root)
         return False
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(render_config(), encoding="utf-8")

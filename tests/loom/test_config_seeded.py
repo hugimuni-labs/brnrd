@@ -27,7 +27,7 @@ def _home(tmp_path: Path, text: str | None = None) -> Path:
 
 def test_declaration_is_the_dataclass():
     assert [f.name for f in dataclasses.fields(load_config(Path("/nonexistent")))] == [k.name for k in KEYS]
-    assert len(KEYS) == 14
+    assert len(KEYS) == 22
 
 
 def test_unknown_key_is_refused_with_the_nearest(tmp_path):
@@ -182,3 +182,14 @@ def test_non_utf8_secret_file_is_refused_without_its_bytes(tmp_path):
     with pytest.raises(ConfigError) as err:
         resolve_secret(f"file: {token}")
     assert str(err.value) == f"secret file {token}: not UTF-8 text"
+
+
+def test_loom_start_folds_a_key_set_twice_and_runs_the_body_in_effect(tmp_path, monkeypatch):
+    from brr.loom.runtime import verbs_loom
+
+    home = _home(tmp_path, 'body = "claude/opus"\nguard = "off"\nbody = "codex/gpt-6"\n')
+    ran = {}
+    monkeypatch.setattr(verbs_loom, "run_loom", lambda home, **kw: ran.update(kw))
+    assert verbs_loom._loom(["--home", str(home)]) == 0
+    assert (ran["adapter"], ran["core"]) == ("codex", "gpt-6")
+    assert load_config(home).body == "codex/gpt-6"

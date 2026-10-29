@@ -28,7 +28,7 @@ from collections.abc import Iterable
 from pathlib import Path
 
 from fastapi import APIRouter, FastAPI
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 from starlette.requests import Request
 from starlette.responses import Response
 
@@ -43,6 +43,10 @@ _READ_METHODS = frozenset({"GET", "HEAD"})
 # revalidation before reuse; the hashed ``/_app/immutable`` files remain free
 # to use their own long-lived cache semantics.
 _SHELL_CACHE_CONTROL = "no-cache"
+
+# The old app lives under ``/dashboard`` now; its former top-level paths answer
+# with a permanent redirect so bookmarks and links printed by older looms land.
+MOVED_TO_DASHBOARD = frozenset({"bridge", "daily", "repos", "runs", "warp", "goals", "bench", "thread"})
 
 
 def resolve_frontend_dir(configured: str = "") -> Path | None:
@@ -61,6 +65,44 @@ def resolve_frontend_dir(configured: str = "") -> Path | None:
         return path if path.is_dir() else None
     default = Path(__file__).resolve().parents[1] / "frontend" / "build"
     return default if default.is_dir() else None
+
+
+def resolve_installer(configured: str = "") -> Path | None:
+    """The installer script, or ``None`` when this deployment has none.
+
+    Same shape as :func:`resolve_frontend_dir`: ``BRNRD_INSTALLER`` wins (the
+    image copies ``docs/public/install.sh`` and names it), else the source
+    checkout's copy. There is one installer file; GitHub Pages publishes it
+    too, so ``brnrd.dev/install`` and the Pages URL serve the same bytes.
+    """
+    if configured:
+        path = Path(configured).expanduser()
+        return path if path.is_file() else None
+    default = Path(__file__).resolve().parents[2] / "docs" / "public" / "install.sh"
+    return default if default.is_file() else None
+
+
+def mount_installer(app: FastAPI, script: Path) -> None:
+    """Serve ``script`` as ``text/plain`` at ``/install`` and ``/install.sh``.
+
+    Without these routes both paths fell through to the SPA shell with a 200,
+    so ``curl -fsSL https://brnrd.dev/install.sh | sh`` piped HTML into a
+    shell. Declared on the app, so their heads join the backend namespaces
+    and the fallback never answers for them again. Must run before
+    :func:`mount_frontend`.
+    """
+
+    def installer() -> Response:
+        if not script.is_file():
+            return JSONResponse({"detail": "Not Found"}, status_code=404)
+        response = FileResponse(script, media_type="text/plain")
+        # Read at request time and revalidated: an install must get main's
+        # installer, not whatever a cache held from the last deploy.
+        response.headers["Cache-Control"] = _SHELL_CACHE_CONTROL
+        return response
+
+    for path in ("/install", "/install.sh"):
+        app.add_api_route(path, installer, methods=["GET", "HEAD"], include_in_schema=False)
 
 
 def declared_paths(app: FastAPI, routers: Iterable[APIRouter]) -> list[str]:
@@ -166,6 +208,9 @@ def mount_frontend(app: FastAPI, directory: Path, claimed: frozenset[str]) -> No
         head = spa_path.split("/", 1)[0]
         if head in claimed or request.method not in _READ_METHODS:
             return JSONResponse({"detail": "Not Found"}, status_code=404)
+        if head in MOVED_TO_DASHBOARD:
+            query = f"?{request.url.query}" if request.url.query else ""
+            return RedirectResponse(f"/dashboard/{spa_path}{query}", status_code=308)
         asset = _safe_file(root, spa_path)
         if asset is not None:
             response = FileResponse(asset)

@@ -14,7 +14,7 @@ import time
 
 import pytest
 
-from brr import daemon, hooks, pause
+from brr import hooks, pause
 from brr.cli import main
 
 
@@ -63,6 +63,8 @@ def chain(tmp_path):
     try:
         yield root
     finally:
+        # Read before the root dies: its orphans go to init, out of reach.
+        stray = pause.descendants(root.pid)
         if root.poll() is None:
             root.kill()
         try:
@@ -71,7 +73,7 @@ def chain(tmp_path):
             pass
         # Reap anything still alive under the root — best-effort, tests
         # must not leak stopped/zombie processes into the rest of the suite.
-        for proc in pause.descendants(root.pid):
+        for proc in stray + pause.descendants(root.pid):
             try:
                 import os
                 import signal
@@ -137,17 +139,6 @@ class TestPausableChildren:
             pid=10, ppid=1, started_at=now + 1,
             command="zsh -lc 'cd /work/brnrd && pytest'")
         assert pause.pausable_children(1, now, snapshot=[tool]) == [tool]
-
-
-def test_pause_trigger_counts_correspondent_messages_not_daemon_events():
-    events = [
-        {"id": "evt-message", "correspondent_key": "telegram:user:1"},
-        {"id": "evt-other", "correspondent_key": "telegram:user:2"},
-        {"id": "evt-spawn", "source": "spawn_completed"},
-    ]
-    assert daemon._correspondent_event_ids(events, "telegram:user:1") == {
-        "evt-message"
-    }
 
 
 def test_pause_stops_child_and_grandchild_deepest_first(chain, tmp_path):

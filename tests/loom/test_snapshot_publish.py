@@ -9,7 +9,8 @@ import pytest
 from brr.daemon2.facts import Fact
 from brr.gates import cloud
 from brr.loom.runtime import snapshot, usage
-from brr.loom.runtime.ledger import inject_letter
+from brr.loom.runtime.home import Home
+from brr.loom.runtime.ledger import append, inject_letter, read_facts
 
 from _step import Loom, kill_bodies, wait_until, write_thread
 
@@ -17,7 +18,7 @@ README = """---
 id: web
 status: open
 tense: plan
-opened-by: thread:brnrd
+opened-by: thread:inbox
 ---
 # Put the loom on the web. Then tell brnrd.
 
@@ -94,9 +95,12 @@ ctx = Ctx(Path(sys.argv[1]))
 own = _own_thread(ctx.wake())
 for letter in ctx.owed():
     ctx.send("thread:" + own, note="ok", re=letter.id)
-if own == "web":
-    ctx.send("thread:brnrd", "PR https://github.com/acme/brnrd/pull/7 opened")
-ctx.jack("stop")
+    if own == "web" and letter.sender == "p-test":
+        ctx.send("thread:inbox", "PR https://github.com/acme/brnrd/pull/7 opened", cite=letter.id)
+# The PR letter's no-policy notice can land at the stop; a body answers what the stop hands it.
+while letters := ctx.jack("stop").letters:
+    for letter in letters:
+        ctx.send("thread:" + own, note="ok", re=letter.id)
 """)
     run.chmod(0o755)
 
@@ -110,7 +114,14 @@ def steps(loom, n=3):
 def test_document_matches_the_contract(board):
     fuel(board.root, 82)
     reporting_body(board.root)
-    inject_letter(board.root, to="thread:web", body="Ship the board, please.")
+    ask = inject_letter(board.root, to="thread:web", body="Ship the board, please.")
+    # The plan is web's wishes; its ticked README rows count for nothing.
+    home = Home(board.root)
+    for ident, line in (("w-contract", "Contract read"), ("w-push", "Publisher pushes")):
+        append(home, Fact(kind="wish", by="person:test", id=ident, data={
+            "wish": ident, "says": [{"letter": ask}], "from": "person", "line": line, "thread": "web"}))
+    append(home, Fact(kind="wish.result", by="strand:s-test-web001", data={
+        "wish": "w-contract", "kind": "pr", "ref": "#7", "line": "read", "delivered": True}))
     board.start()
 
     def pushed_full():
@@ -118,7 +129,8 @@ def test_document_matches_the_contract(board):
         steps(board)
         doc = board.cloud.calls[-1]["doc"] if board.cloud.calls else {}
         web = [t for t in doc.get("threads", []) if t["id"] == "web"]
-        return web and web[0].get("strands") and any(e["kind"] == "receipt" for e in doc["log"])
+        ended = any(f.kind == "attempt.ended" for f in read_facts(home))
+        return ended and web and web[0].get("strands") and any(e["kind"] == "receipt" for e in doc["log"])
     wait_until(pushed_full, 20, board.dump)
     call = board.cloud.calls[-1]
     assert (call["url"], call["method"], call["path"], call["token"], call["retry"]) == (
@@ -130,7 +142,7 @@ def test_document_matches_the_contract(board):
         {"window": "session", "left_pct": 82, "resets_at": "2026-10-19T05:00:00Z"}]}]
     thread = next(t for t in doc["threads"] if t["id"] == "web")
     assert thread["id"] == "web" and thread["title"] == "Put the loom on the web."
-    assert thread["status"] == "open" and thread["opened_by"] == "thread:brnrd"
+    assert thread["status"] == "open" and thread["opened_by"] == "thread:inbox"
     assert thread["plan"] == {"done": 1, "total": 2, "next": "Publisher pushes"}
     assert thread["done"] == [{"kind": "pr", "ref": "https://github.com/acme/brnrd/pull/7",
                                "line": "snapshot contract"}]
@@ -147,7 +159,7 @@ def test_document_matches_the_contract(board):
     assert asked == {"id": asked["id"], "at": asked["at"], "from": "p-test", "to": "thread:web",
                      "thread": "web", "kind": "letter", "head": "Ship the board, please."}
     receipt = next(e for e in doc["log"] if e["kind"] == "receipt")
-    assert receipt["thread"] == "web" and receipt["to"] == "thread:brnrd"
+    assert receipt["thread"] == "web" and receipt["to"] == "thread:inbox"
     assert receipt["ref"] == "https://github.com/acme/brnrd/pull/7"
     assert receipt["from"] in {s["id"] for s in thread["strands"]}
     # Nothing the loom lacks is sent as a placeholder.
@@ -187,22 +199,55 @@ def test_an_unchanged_snapshot_is_re_put_once_a_minute(board):
     assert len(board.cloud.calls) == 2 and snapshot.digest(first) == snapshot.digest(second)
 
 
-def test_a_failing_board_is_logged_once_and_the_loop_keeps_going(board):
+def test_a_failing_board_is_one_streak_and_the_loop_keeps_going(board):
     board.cloud.fail = True
     board.start()
     for count in (1, 2, 3):
         wait_until(lambda: len(board.cloud.calls) == count, 10, board.dump)
         steps(board)
         board.now[0] += snapshot.IDLE
+    kinds = lambda kind: [f for f in read_facts(Home(board.root)) if f.kind == kind]
+    # The parts pusher shares the unreachable cloud and keeps its own streak; this one is the publisher's.
+    publisher = lambda: [f for f in kinds("loom.degraded") if f.data["step"] == "publisher"]
+    [down] = publisher()
+    assert "board unreachable" in down.data["error"]
     log = board.root / "loom/loom.log"
-    assert log.read_text().count("snapshot: push failed: board unreachable") == 1
+    assert log.read_text().count("degraded: publisher") == 1
     board.cloud.fail = False
     wait_until(lambda: len(board.cloud.calls) == 4, 10, board.dump)
-    steps(board)
+    wait_until(lambda: kinds("loom.recovered"), 10, board.dump)
     board.cloud.fail = True
     board.now[0] += snapshot.IDLE
-    wait_until(lambda: log.read_text().count("snapshot: push failed") == 2, 10, board.dump)
+    wait_until(lambda: len(publisher()) == 2, 10, board.dump)
+    assert log.read_text().count("degraded: publisher") == 2
     assert board.thread.is_alive()
+
+
+def test_a_section_that_raises_is_left_out_and_is_its_own_streak(board, monkeypatch):
+    fuel(board.root, 82)
+    broken, real = [True], snapshot._fuel
+
+    def gauges(*args):
+        if broken[0]:
+            raise TypeError("cannot unpack non-iterable dict object")
+        return real(*args)
+    monkeypatch.setattr(snapshot, "_fuel", gauges)
+    board.start()
+    wait_until(lambda: board.cloud.calls, 10, board.dump)
+    doc = board.cloud.calls[-1]["doc"]
+    assert "fuel" not in doc and any(t["id"] == "web" for t in doc["threads"])
+    kinds = lambda kind: [f for f in read_facts(Home(board.root)) if f.kind == kind]
+    [down] = kinds("loom.degraded")
+    assert down.data["step"] == "publisher.fuel"
+    assert down.data["error"] == "TypeError: cannot unpack non-iterable dict object"
+    assert down.data["where"].startswith("loom/runtime/snapshot.py:")
+    broken[0] = False
+    wait_until(lambda: kinds("loom.recovered"), 10, board.dump)
+    [back] = kinds("loom.recovered")
+    assert back.data["step"] == "publisher.fuel"
+    board.now[0] += snapshot.IDLE
+    wait_until(lambda: "fuel" in board.cloud.calls[-1]["doc"], 10, board.dump)
+    assert [f.data["step"] for f in kinds("loom.degraded")] == ["publisher.fuel"]
 
 
 def test_without_relay_state_nothing_is_read_or_sent(tmp_path, monkeypatch):
@@ -247,9 +292,11 @@ def test_an_open_ask_to_a_person_is_their_turn(tmp_path):
                                        says=[["p-test/site", 0, None]], thread="web"))
     ask = append(home, wish_fact(read_facts(home), by="person:test", ident="new", line="Pick a domain",
                                  thread="web", sender="resident", parent=root_wish.data["wish"]))
-    assert turn() != "yours"  # it waits on its opener, thread:brnrd, until that asks onward
+    # Its opener is the home thread, which relays to the person: it is their turn already
+    # (threads/requests/design.md §5, F3), and an onward ask keeps it theirs.
+    assert turn() == "yours"
     onward = append(home, wish_fact(read_facts(home), by="person:test", ident="new", line="Pick a domain",
-                                    thread="brnrd", sender="resident", parent=ask.data["wish"]))
+                                    thread="inbox", sender="resident", parent=ask.data["wish"]))
     assert turn() == "yours"
     for i, w in enumerate((onward, ask)):
         append(home, Fact(kind="wish.verdict", by="person:test", id=f"wish.verdict:t{i}",
@@ -289,6 +336,12 @@ def test_wishes_carry_their_words_results_and_the_answer_newer_than_them(tmp_pat
     result(4, "wish.result:r2", "w-said", "#2", "board", True)
     letter(5, "p-test/answer", "Not quite: also the cost.", wish="w-said", verdict="correct")
     wish(3, "w-ask", "resident", "Pick a domain", parent="w-said")
+    # An unplaced quote (dispositions.say_of) cites the whole letter.
+    wish(3, "w-unplaced", "person", "Unplaced", [["p-test/said1", 0, None, "not in it"]], by="person:test")
+    # A record, the shape every new wish fact writes; and one bad say beside a good one.
+    wish(3, "w-record", "person", "Record", [{"letter": "p-test/said1", "offset": 7, "size": 4}], by="person:test")
+    wish(3, "w-bad", "person", "Bad", [["p-test/said1", "7", 4], {"offset": 1}, "p-test/said1",
+                                        ["p-test/said1", 0, 6]], by="person:test")
     wish(6, "w-done", "person", "Old thing", [["p-test/said1", 0, None]], by="person:test")
     result(7, "wish.result:d1", "w-done", "#0", "old", True)
     letter(8, "p-test/agree", "Yes.", wish="w-done", verdict="agree")
@@ -296,8 +349,11 @@ def test_wishes_carry_their_words_results_and_the_answer_newer_than_them(tmp_pat
                                                 "ref": "p-test/agree"}, by="person:test")
 
     rows = snapshot.assemble(home, read_facts(home), load_config(root))["wishes"]
-    assert [w["id"] for w in rows] == ["w-said", "w-ask", "w-done"]
-    said, ask, done = rows
+    assert [w["id"] for w in rows] == ["w-said", "w-ask", "w-bad", "w-record", "w-unplaced", "w-done"]
+    said, ask, bad, record, unplaced, done = rows
+    assert [s["head"] for s in unplaced["says"]] == ["Hello. Show my wishes on the board, please."]
+    assert [s["head"] for s in record["says"]] == ["Show"]
+    assert [s["head"] for s in bad["says"]] == ["Hello."]
     assert said == {
         "id": "w-said", "thread": "web", "from": "person", "line": "Wishes on the board",
         "state": "delivered", "origin": "said", "at": "2026-10-19T10:04:00Z",
