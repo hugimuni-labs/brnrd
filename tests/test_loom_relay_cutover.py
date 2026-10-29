@@ -280,3 +280,44 @@ def test_bare_message_after_the_speaker_released_goes_to_inbox(home):
     relay.pull_once(home, FakeClient([event("ev_late")]), 0)
     (letter,) = [f for f in kinds(home, "letter") if f.id == "letter:relay:telegram:555:ev_late"]
     assert letter.data["to"] == "thread:inbox"
+
+
+def test_the_relay_poll_gives_up_on_a_dead_socket_soon_after_its_wait(tmp_path, monkeypatch):
+    """A long-poll answers within its wait; one silent past it was dropped
+    (a rollout cuts it without a reset). The default 60 s timeout spent that
+    silence where the cloud counts a loom offline after 2 min (2026-10-29)."""
+    calls = []
+    client = relay.RelayClient(tmp_path)
+    monkeypatch.setattr(client, "_state", lambda: {"brnrd_url": "https://x", "token": "t"})
+    monkeypatch.setattr(cloud, "_request", lambda *a, **kw: calls.append(kw) or {"events": [], "cursor": 0})
+    client.pull(4)
+    wait, timeout = calls[0]["params"]["wait"], calls[0]["timeout"]
+    assert wait < timeout <= wait + 10
+
+
+def test_a_slow_or_failed_poll_leaves_a_line(home, tmp_path):
+    """The relay logged nothing per poll, so the 2026-10-29 gap had a leading
+    cause and no measured one. A poll past its wait, or one that raises, says
+    how long it took."""
+    stop = threading.Event()
+    ticks = iter([0, 61, 100, 107, 200, 201])
+    calls = []
+
+    class Client(FakeClient):
+        def pull(self, cursor):
+            calls.append(cursor)
+            if len(calls) == 2:
+                raise cloud.CloudUnavailableError("reset by peer")
+            if len(calls) == 3:
+                stop.set()
+            return {"events": [], "cursor": 0}
+
+    lines = []
+    relay.enable(home)
+    drop, state = relay.directories(home)
+    relay.input_module.poll_forever(drop, state, Client([], cursor=0),
+                                    relay_lock.RelayLock(tmp_path / "acct", "loom"), stop,
+                                    lines.append, lambda: next(ticks))
+    assert lines[0] == f"relay: slow poll, 61s for a {cloud._POLL_WAIT_S}s wait"
+    assert lines[1].startswith("relay: CloudUnavailableError after 7s: ")
+    assert len(lines) == 2  # the quick third poll says nothing

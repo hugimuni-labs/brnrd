@@ -516,7 +516,7 @@ def test_no_daemon_online_gets_a_nudge_and_still_enqueues(env):
     )
     assert r.status_code == 200
     assert sends
-    assert "no daemon" in sends[0]["text"].lower()
+    assert "no brnrd of yours" in sends[0]["text"].lower()
     assert "account connect" in sends[0]["text"]
 
     with app.state.SessionLocal() as db:
@@ -544,6 +544,40 @@ def test_online_daemon_suppresses_the_no_daemon_nudge(env):
     )
     assert r.status_code == 200
     assert sends == []
+
+
+def test_a_daemon_parked_in_its_long_poll_reads_online(env, monkeypatch):
+    """2026-10-29: the bot told Arseni his brnrd "last checked in 2 minutes
+    ago and isn't reachable" while the loom was up and answering. The inbox
+    long-poll touched `last_seen_at` only on return, so a poll held open (or
+    dropped by a container rollout until the client gave up) read as silence.
+    A daemon whose poll has arrived is listening: it must read online for the
+    whole wait, not just after it."""
+    from brnrd.routers import webhooks
+    from brnrd import inbox as inbox_service
+
+    app, client, sends = env
+    acc = _account(client)
+    rid = _repo(client, acc)
+    dmn = _daemon_headers(client, acc, rid)
+    _register_daemon(client, dmn)
+    with app.state.SessionLocal() as db:
+        daemon = db.execute(select(Daemon)).scalar_one()
+        daemon.last_seen_at = datetime.now(timezone.utc) - timedelta(minutes=6)
+        account_id = daemon.account_id
+        db.commit()
+
+    seen = []
+
+    async def held(session_factory, *args, **kwargs):
+        with session_factory() as db:
+            seen.append(webhooks._account_daemon_status(db, account_id)[0])
+        return []
+
+    monkeypatch.setattr(inbox_service, "long_poll_many", held)
+    r = client.get("/v1/daemons/inbox", params={"since": 0, "wait": 25}, headers=dmn)
+    assert r.status_code == 200
+    assert seen == [True], "a daemon inside its long-poll must read online to the webhook"
 
 
 def test_stale_daemon_heartbeat_names_last_seen_and_no_remedy(env):

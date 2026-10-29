@@ -239,6 +239,10 @@ CAN_SEND_UNADDRESSED = True
 CAN_ROUTE_THREAD = False
 
 _POLL_WAIT_S = 25
+# A long-poll answers within its wait; a socket silent past it is dead (a
+# container rollout drops it without a reset), and every second spent on it is
+# a second the cloud sees no check-in. Wait + 10 s, not the 60 s default.
+_POLL_TIMEOUT_S = _POLL_WAIT_S + 10
 _HTTP_TIMEOUT_S = 60
 _DEFAULT_DAEMON_NAME = "daemon"
 _RESPONSE_LIMITS = {"telegram": 3900, "whatsapp": 4000}
@@ -1397,7 +1401,7 @@ def _apply_ask_directive(brr_dir: Path, event_id: str, body: str) -> None:
 def _loop_once(brr_dir: Path, inbox_dir: Path, responses_dir: Path) -> None:
     state = _load_state(brr_dir)
     since = state.get("since", 0)
-    result = _request(state["brnrd_url"], "GET", "/v1/daemons/inbox", token=state["token"], params={"since": since, "wait": _POLL_WAIT_S})
+    result = _request(state["brnrd_url"], "GET", "/v1/daemons/inbox", token=state["token"], params={"since": since, "wait": _POLL_WAIT_S}, timeout=_POLL_TIMEOUT_S)
     # What prod is actually running, riding this same long-poll response
     # (schemas.InboxResponse.server, brnrd 2026-07-30) — no new request, no
     # new poll loop. Absent on an older brnrd that doesn't send the block

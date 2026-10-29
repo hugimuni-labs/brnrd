@@ -84,12 +84,12 @@ _PAIR_CODE_EXPIRED_TEXT = "This pairing code expired — run brnrd account conne
 # right below it is #1486's fix for the other case: a paired account whose
 # daemon has gone quiet.
 _NO_RUNNER_TEXT = (
-    "I'm bound to this chat but no daemon of yours is online right now, so "
+    "I'm bound to this chat but no brnrd of yours is online right now, so "
     "nothing is listening for this message yet. Run brnrd account connect "
-    "on the machine you want to run agents from (it pairs and starts the "
-    "daemon), with claude or codex installed and logged in so it has a "
+    "on the machine you want to run agents from (it pairs and starts "
+    "brnrd), with claude or codex installed and logged in so it has a "
     "runner to use — brnrd runners doctor checks that. Your message is "
-    "saved; I'll answer once a daemon is online."
+    "saved; I'll answer once your brnrd is online."
 )
 # #1486 — a *paired* account whose daemon has gone quiet (asleep, offline,
 # rebooting) is a completely different situation from never-paired, and
@@ -100,7 +100,7 @@ _NO_RUNNER_TEXT = (
 # `brnrd runners doctor`, nothing to run. Waiting is the correct fix, and
 # the queue already does that on its own.
 _STALE_DAEMON_TEXT = (
-    "I'm bound to this chat, but your daemon {last_seen_label} and isn't "
+    "I'm bound to this chat, but your brnrd {last_seen_label} and isn't "
     "reachable right now — could be asleep, offline, or between reboots. "
     "Nothing to do on your end: your message is saved and I'll answer the "
     "moment it checks back in."
