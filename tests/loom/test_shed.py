@@ -146,25 +146,27 @@ def test_a_broken_tally_never_ends_the_stop(room, tmp_path, monkeypatch):
     assert not (room / "port" / "jack-errors.log").exists()
 
 
-def test_an_acting_turn_asks_once_for_the_readme_as_state(room, tmp_path):
+
+def test_a_resting_stop_asks_once_for_the_readme_acts_left_behind(room, tmp_path):
     stdin = _transcript(tmp_path, 40_000, 50_000)
     readme = room / "self" / "threads" / "work" / "README.md"
     execute("start", room, "")
-    assert _turn(room, stdin) == ""  # nothing acted, nothing asked
-    execute("post", room, json.dumps({"tool_name": "Bash"}))
-    _fact(room, "letter", to="thread:inbox", body="merged #7")
-    asked = json.loads(execute("stop", room, stdin))
-    assert asked["decision"] == "block"
-    assert "this turn acted and the README didn't change (letter)" in asked["reason"]
-    assert "threads/work/README.md" in asked["reason"] and "never add a log line" in asked["reason"]
-    # The turn that answers the ask is never asked again, whatever it did.
-    time.sleep(0.01)
-    execute("post", room, json.dumps({"tool_name": "Bash"}))
-    _fact(room, "letter", to="thread:inbox", body="and one more")
-    assert execute("stop", room, stdin) == ""
-    # A turn that acted and rewrote the README is not asked.
+    # Letters alone are routing, not state: nothing to ask.
+    _fact(room, "letter", to="thread:inbox", body="routed")
+    assert _turn(room, stdin) == ""
     time.sleep(0.01)
     execute("post", room, json.dumps({"tool_name": "Bash"}))
     _fact(room, "wish.left", wish="w-aaaaaaaaaaaa", steps=["C"])
-    readme.write_text("# Work\n\n## Now\n- Next build: C\n")
-    assert _turn(room, stdin) == ""
+    _fact(room, "pr.opened", number=7)
+    asked = json.loads(execute("stop", room, stdin))
+    assert asked["decision"] == "block"
+    assert "since threads/work/README.md last changed this body did wish.left, pr.opened." in asked["reason"]
+    assert "never a log line" in asked["reason"]
+    # Asked once: stopping again rests.
+    assert execute("stop", room, stdin) == ""
+    # Acts after a rewrite of the README are reflected in it.
+    time.sleep(0.01)
+    execute("post", room, json.dumps({"tool_name": "Bash"}))
+    _fact(room, "wish.left", wish="w-aaaaaaaaaaaa", steps=["C", "D"])
+    readme.write_text("# Work\n\n## Now\n- Next build: C, PR #7 open\n")
+    assert execute("stop", room, stdin) == ""

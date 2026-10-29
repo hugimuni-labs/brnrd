@@ -400,22 +400,18 @@ def _turn(room: Path, stdin_text: str) -> None:
     moved = [name for name, head in heads.items() if head != (state.get("heads") or {}).get(name)]
     did = [*shed.acts(room, float(state.get("turn_at") or 0)), *(f"{name} HEAD" for name in moved)]
     boot, now = shed.contexts(stdin_text, state.get("boot"))
-    thread = os.environ.get("BRNRD_THREAD") or ""
-    # The turn right after the ask is the body's answer to it, never asked again.
-    stale = (bool(did) and bool(thread) and not state.get("readme_asked")
-             and bool(state.get("turn_readme"))
-             and shed.readme_hash(room, thread) == state.get("turn_readme"))
+    # Acts since the README last changed, letters aside (routing is not state).
+    readme = shed.readme_hash(room, os.environ.get("BRNRD_THREAD") or "")
+    unread = [] if readme != state.get("readme_seen") else [
+        *(state.get("readme_acts") or []),
+        *(x for x in did if x != "letter" and x not in (state.get("readme_acts") or []))]
     _set_state(room, turns=[*(state.get("turns") or []), [bool(did), now]], heads=heads,
-               boot=boot or state.get("boot"), turn_open=False,
-               readme_did=did if stale else [], readme_asked=False)
+               boot=boot or state.get("boot"), turn_open=False, readme_seen=readme, readme_acts=unread)
 
 
-def _opened(room: Path, asked: bool = False) -> None:
+def _opened(room: Path) -> None:
     """A stop that returns work opens the next turn."""
-    from .shed import readme_hash
-    thread = os.environ.get("BRNRD_THREAD") or ""
-    _set_state(room, turn_open=True, turn_at=time.time(), readme_asked=asked,
-               turn_readme=_shed(room, readme_hash, room, thread) if thread else None)
+    _set_state(room, turn_open=True, turn_at=time.time())
 
 
 # A delegate's report in a letter head; the whole report stays in the room.
@@ -613,10 +609,9 @@ def execute(event: str, room: Path, stdin_text: str) -> str:
         (room / "port" / DISPLACED).unlink(missing_ok=True)
     elif event == "start":
         from .shed import heads, readme_hash
-        thread = os.environ.get("BRNRD_THREAD") or ""
         _set_state(room, boundary_at=time.time(), turn_open=True, turn_at=time.time(),
                    heads=_shed(room, heads, room, default={}),
-                   turn_readme=_shed(room, readme_hash, room, thread) if thread else None)
+                   readme_seen=_shed(room, readme_hash, room, os.environ.get("BRNRD_THREAD") or ""))
     text = _boundary_text(room)
     parsed = parse_boundary(text)
     opened = [[line.split()[1], line.split()[2], _ageless(line.rpartition(" · owed ")[2])]
@@ -699,7 +694,7 @@ def execute(event: str, room: Path, stdin_text: str) -> str:
     _shed(room, _turn, room, stdin_text)
     out = _stop_block(room, text, plan) or _poll(room, stdin_text)
     if out:
-        _opened(room, asked=README_HEAD in out)
+        _opened(room)
     return out
 
 
@@ -746,7 +741,6 @@ def _stop_block(room: Path, text: str, plan: str) -> str:
         _end_miss(room, plan),
         _guard_miss(room),
         _kept_miss(room),
-        _readme_miss(room),
     ]
     sections = [section for section in sections if section]
     state = _state(room)
@@ -755,7 +749,8 @@ def _stop_block(room: Path, text: str, plan: str) -> str:
         due, record = _shed(room, ask, room, state, os.environ.get("BRNRD_THREAD") or "", default=("", {}))
         if record:
             _set_state(room, **record)
-        sections = [due] if due else []
+        sections = [due or _readme_miss(room, state)]
+        sections = [section for section in sections if section]
     count = int(state.get("stop_blocks") or 0)
     seen = "\n\n".join(sections)
     if (count >= 3) if _hand() else (count and seen == state.get("stop_said")):
@@ -792,17 +787,20 @@ TOP = """a letter of theirs says an order word and no wish was put on top for it
 - brnrd runtime wish <w-id> --top <letter>   (the wish it puts first)
 - or stop again: the order did not change"""
 
-README_HEAD = "this turn acted and the README didn't change"
-README = README_HEAD + """ ({did}): is threads/{thread}/README.md still the state a successor
-should boot into? Rewrite it to the current state (a decision with its why, `## Now`, a done row cut to
-its receipt), never add a log line, and land it with `brnrd runtime send-self --room .`; or stop again: it still is."""
+README = """before resting: since threads/{thread}/README.md last changed this body did {did}. Any end can
+come while it rests, and the README is what its successor boots into. Rewrite it to the current state
+(a decision with its why, `## Now`, a done row cut to its receipt; never a log line) and land it with
+`brnrd runtime send-self --room .`; or stop again: it still is."""
 
 
-def _readme_miss(room: Path) -> str:
-    """Once per acting turn, the README as state (handover design §3)."""
-    did = _state(room).get("readme_did") or []
+def _readme_miss(room: Path, state: dict) -> str:
+    """At a resting stop, once per README version that acts left behind (handover design §3)."""
+    did = state.get("readme_acts") or []
     thread = os.environ.get("BRNRD_THREAD") or ""
-    return README.format(did=", ".join(did), thread=thread) if did and thread else ""
+    if not did or not thread:
+        return ""
+    _set_state(room, readme_acts=[])
+    return README.format(did=", ".join(did), thread=thread)
 
 
 # Long enough for the loom to render a fact written just before the stop.
