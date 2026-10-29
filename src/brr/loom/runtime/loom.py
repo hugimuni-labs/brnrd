@@ -2248,6 +2248,8 @@ def run(root: Path | str, *, adapter: str = "fake", core: str = "haiku",
         keeper = Keeper(home, _log)
         from .reap import Reaper
         reaper = Reaper(home, _log)
+        from .sampler import Sampler
+        sampler = Sampler(home, _log)
         from .receipts import source_root
         updater = Updater(home, _log, source_root())
         router.watcher = Watcher(home.root / "loom" / "prs.json")
@@ -2279,6 +2281,7 @@ def run(root: Path | str, *, adapter: str = "fake", core: str = "haiku",
                 health.guard("waits", router.watcher.step, config, router.armed(), backoff=False)
                 health.guard("mirror", mirror.step, config, backoff=False)
                 health.guard("library", keeper.step, backoff=False)
+                health.guard("sample", sampler.step, backoff=False)
                 health.guard("disk", reaper.disk, backoff=False)
                 health.guard("reap", reaper.step, backoff=False)
                 if spa is not None:  # the board's build follows the checkout; a failed one stays degraded
