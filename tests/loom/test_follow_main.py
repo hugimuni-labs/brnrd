@@ -13,7 +13,7 @@ from brr.loom.runtime import loom, update
 from brr.loom.runtime.home import Home
 from brr.loom.runtime.jack import execute
 from brr.loom.runtime.ledger import append, read_facts
-from brr.loom.runtime.port import parse_boundary, render_boundary
+from brr.loom.runtime.port import PortError, parse_boundary, render_boundary
 from brr.loom.runtime.since import since_gone
 
 from _step import Loom, wait_until, write_thread
@@ -337,3 +337,25 @@ def test_a_wake_says_what_the_loom_runs_against_main_and_what_it_loaded(world, m
     assert loom._loom_line(home, read_facts(home)) == (
         f"loom: runs {world.tip[:8]}; main {world.tip[:8]}, nothing behind; "
         f"last loom moved {world.old[:8]} → {world.tip[:8]}, loaded #7\n")
+
+
+def test_a_jack_skips_a_boundary_line_kind_it_does_not_know(tmp_path):
+    """A held jack keeps the code it imported; after a move the loom writes kinds that
+    code never listed (moved: at a0552d77 raised and dropped the boundary)."""
+    room = tmp_path / "rooms" / STRAND
+    (room / "port" / "in").mkdir(parents=True)
+    (room / "port" / "out").mkdir()
+    (room / "port/in/boundary.md").write_text(render_boundary(STRAND, 1, "brnrd", [], set(), {}))
+    execute("start", room, "{}")
+    letter = "- s-ab12-bbbbbb/x1 · from s-ab12-bbbbbb · reply thread:other — the defect"
+    text = (f"<!-- port {STRAND} gen 1 · owed s-ab12-bbbbbb/x1 -->\n"
+            "status: strand · gen 1\nweather? a kind from a later loom\n"
+            f"moved: loom moved aaaaaaaa → bbbbbbbb, loaded #7\nowed:\n{letter}\n")
+    assert [view.id for view in parse_boundary(text).letters] == ["s-ab12-bbbbbb/x1"]
+    (room / "port/in/boundary.md").write_text(text)
+    shown = json.loads(execute("post", room, "{}"))["hookSpecificOutput"]["additionalContext"]
+    assert "s-ab12-bbbbbb/x1" in shown
+    assert not (room / "port" / "jack-errors.log").exists()
+    # A "- " line is still a letter or corrupt.
+    with pytest.raises(PortError):
+        parse_boundary(text.replace(letter, "- not a letter"))

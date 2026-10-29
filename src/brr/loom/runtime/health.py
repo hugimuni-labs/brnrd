@@ -17,6 +17,7 @@ that was told and then stays up ``CLEAR_AFTER`` seconds ends with one passive
 
 from __future__ import annotations
 
+import threading
 import time
 import traceback
 from dataclasses import dataclass
@@ -157,6 +158,13 @@ def degraded_line(facts, install: str | None = None, now: float | None = None) -
     return "degraded: " + "; ".join(parts) if parts else ""
 
 
+def _about(about) -> dict:
+    try:
+        return dict(about()) if about is not None else {}
+    except Exception:
+        return {}
+
+
 class Health:
     """The guard ``run()`` passes each loop step through."""
 
@@ -177,12 +185,23 @@ class Health:
                 int((back.data if back else {}).get("grade") or 0),
                 _up(back) if back else 0.0)
 
-    def guard(self, step: str, fn, *args, backoff: bool = True) -> None:
-        """``backoff=False`` for a step its caller already spaces out."""
+    def guard(self, step: str, fn, *args, backoff: bool = True, overrun: float | None = None,
+              about=None) -> None:
+        """``backoff=False`` for a step its caller already spaces out. ``overrun``
+        is how long the step may run: past it, a watchdog writes ``loom.degraded``
+        for ``<step>.overrun`` while the step still runs, and its end writes
+        ``loom.recovered`` with how long it ran (2026-10-25: a nine-minute tick left
+        no fact). ``about()`` adds fields to both, such as the live-body count."""
         streak = self.streaks.get(step)
         if streak is not None and streak.skip > 0:
             streak.skip -= 1
             return
+        watchdog = None
+        if overrun is not None:
+            begun = time.monotonic()
+            watchdog = threading.Timer(overrun, self._overran, (step, overrun, about))
+            watchdog.daemon = True
+            watchdog.start()
         try:
             fn(*args)
         except Exception as exc:
@@ -196,8 +215,22 @@ class Health:
                     del self.episodes[step]
                     if episode.told:
                         self._cleared(step, episode)
+        finally:
+            if watchdog is not None:
+                watchdog.cancel()
+                watchdog.join()
+                late = self.streaks.get(step + ".overrun")
+                if late is not None:
+                    self._passed(step + ".overrun", late,
+                                 {"seconds": round(time.monotonic() - begun, 3), **_about(about)})
 
-    def _failed(self, step: str, exc: Exception, backoff: bool) -> None:
+    def _overran(self, step: str, limit: float, about) -> None:
+        try:
+            raise TimeoutError(f"{step} still running after {limit:g}s, past the router lease")
+        except TimeoutError as exc:
+            self._failed(step + ".overrun", exc, backoff=False, extra={"seconds": limit, **_about(about)})
+
+    def _failed(self, step: str, exc: Exception, backoff: bool, extra: dict | None = None) -> None:
         error = f"{type(exc).__name__}: {exc}"[:300]
         streak = self.streaks.get(step)
         now = time.time()
@@ -217,7 +250,7 @@ class Health:
             self._write("loom.degraded", step, streak.since, {
                 "install": self.install, "step": step, "error": error,
                 "where": where(exc), "since": streak.since,
-                "episode": episode.since, "dips": episode.dips})
+                "episode": episode.since, "dips": episode.dips, **(extra or {})})
         else:
             streak.count += 1
             streak.error = error
@@ -231,7 +264,7 @@ class Health:
                 episode.told, episode.grade = said, max(worse, episode.grade if said == episode.told else 0)
                 self._tell(step, streak, episode, said)
 
-    def _passed(self, step: str, streak: Streak) -> None:
+    def _passed(self, step: str, streak: Streak, extra: dict | None = None) -> None:
         del self.streaks[step]
         episode = self.episodes.setdefault(step, Episode(streak.since))
         episode.up = time.time()
@@ -240,7 +273,7 @@ class Health:
             "install": self.install, "step": step, "since": streak.since,
             "count": streak.count, "last": streak.error,
             "episode": episode.since, "told": episode.told, "grade": episode.grade,
-            "up": _iso(episode.up)})
+            "up": _iso(episode.up), **(extra or {})})
 
     def _write(self, kind: str, step: str, since: str, data: dict) -> None:
         # The guard's own bookkeeping must never be what stops the loop.

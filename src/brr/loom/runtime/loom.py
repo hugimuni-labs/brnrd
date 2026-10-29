@@ -2225,7 +2225,9 @@ def run(root: Path | str, *, adapter: str = "fake", core: str = "haiku",
                     health.guard("inputs", inputs.step, backoff=False)
                 else:
                     inputs.close()
-                health.guard("tick_once", tick_once, home, bodies, adapter, core, router)
+                health.guard("tick_once", tick_once, home, bodies, adapter, core, router,
+                             overrun=router.config.router_ttl,
+                             about=lambda: {"bodies": len(bodies)})
                 health.guard("publisher", publisher.step, config, router, backoff=False)
                 if pusher is not None:
                     health.guard("parts", pusher.step, config, backoff=False)
