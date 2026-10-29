@@ -165,6 +165,38 @@ def test_a_copy_the_cloud_refuses_leaves_the_config_as_it_was(tmp_path):
     assert (root / "loom/config.toml").read_text() == before
 
 
+def test_migrate_checks_the_copy_by_minting_through_it(tmp_path, mint, shim):
+    root, old = legacy_home(tmp_path)
+    (old / "gates/cloud.json").write_text(json.dumps({"brnrd_url": mint.url}))
+    gates.migrate(root)
+    assert mint.minted == ["ghs_1"]
+    assert load_config(root).forge_token == spec(root)
+    assert resolve_secret(spec(root)) == "ghs_1"
+
+
+def test_a_copy_that_cannot_mint_leaves_the_config_as_it_was(tmp_path):
+    root, old = legacy_home(tmp_path)
+    before = (root / "loom/config.toml").read_text()
+
+    class Gone(BaseHTTPRequestHandler):
+        def do_POST(self):
+            self.send_response(404)
+            self.end_headers()
+
+        def log_message(self, *args):
+            pass
+
+    server = HTTPServer(("127.0.0.1", 0), Gone)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        (old / "gates/cloud.json").write_text(json.dumps({"brnrd_url": f"http://127.0.0.1:{server.server_port}"}))
+        with pytest.raises(Exception):
+            gates.migrate(root)
+    finally:
+        server.shutdown()
+    assert (root / "loom/config.toml").read_text() == before
+
+
 def test_relay_state_inside_the_home_or_a_plain_forge_token_is_not_legacy(tmp_path):
     root = tmp_path / "home"
     connected(root, "https://brnrd.test")
