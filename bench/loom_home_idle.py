@@ -139,13 +139,18 @@ def main():
                 tick()
             print(f'{args.ticks} unprofiled ticks: {time.process_time() - started:.3f}s CPU')
             maximum = max((f.hlc[0] for f in read_facts(home) if f.hlc), default=0)
+            changed = cProfile.Profile()
             started = time.process_time()
             for n in range(args.changed_ticks):
                 append(home, Fact(kind='router.renewed', by=f'loom:{home.install_id()}',
                                   id=f'benchmark:new:{n}', data={'gen': 0},
                                   hlc=(maximum + n + 1, 0, home.install_id())))
-                tick()
+                with changed:
+                    tick()
             print(f'{args.changed_ticks} changed ticks including writer: {time.process_time() - started:.3f}s CPU')
+            if args.profile_out:
+                changed.dump_stats(args.profile_out.with_suffix('.changed'))
+            pstats.Stats(changed).strip_dirs().sort_stats('cumulative').print_stats(40)
             started = time.process_time()
             for _ in range(args.ticks):
                 loom._source_fingerprint()
