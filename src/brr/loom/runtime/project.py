@@ -154,6 +154,7 @@ class Reducer:
         self.notice_count = 0
         self.available = {}
         self.pending_handled = set()
+        self.handovers = set()
         self.offset = 0
         self.published = set()
         self.strand_activity = {}
@@ -269,6 +270,8 @@ class Reducer:
                 thread = _destination(data)
                 if thread is not None and data.get("id"):
                     dest[str(data["id"])] = thread
+                if data.get("molt"):
+                    self.handovers.add(fact.id)
                 re = data.get("re")
                 if str(data.get("to", "")).startswith("channel:"):
                     if isinstance(re, str) and state.holder.get(dest.get(re)) == (strand, gen):
@@ -279,8 +282,15 @@ class Reducer:
             elif fact.kind == "note":
                 consider(strand, gen, data.get("re"))
             elif fact.kind == "shown":
-                state.shown.setdefault(strand, set()).update(
-                    str(item) for item in data.get("ids") or ())
+                ids = [str(item) for item in data.get("ids") or ()]
+                state.shown.setdefault(strand, set()).update(ids)
+                # A shed's --why points at the README and asks nothing: once the
+                # successor's own boundary showed it, it is read, not owed (the
+                # loom's wake-time show doesn't count, the body may never start).
+                if fact.by == f"strand:{strand}":
+                    for ident in ids:
+                        if ident in self.handovers:
+                            consider(strand, gen, ident)
         self.newest = newest
         for fact in state.accepted[before:]:
             data = fact.data

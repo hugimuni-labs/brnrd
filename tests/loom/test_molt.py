@@ -304,3 +304,38 @@ else:
     finally:
         loom.halt()
     assert not loom.errors
+
+
+def test_a_sheds_why_is_read_once_its_successor_was_shown_it(tmp_path):
+    """handover, 2026-10-29: requests gen 4 was shown its predecessor's shed --why
+    at every boundary for 12 minutes until it noted it; the why asks nothing."""
+    from brr.loom.runtime.project import fold
+    root = tmp_path / "home"
+    init_self(root, person="test")
+    write_thread(root, "work", "Work\n\n## Now\nNext step: original", "work", wait="0")
+    ask = inject_letter(root, to="thread:work", body="merge it once green")
+    received = root / "successor.json"
+    bodies(root, f'''import json, sys
+from pathlib import Path
+from brr.loom.runtime.fakebody import Ctx
+from brr.loom.runtime.home import atomic_write
+ctx = Ctx(Path(sys.argv[1]))
+letters = ctx.owed()
+if "handover from" in ctx.wake():
+    atomic_write(Path({str(received)!r}), json.dumps([letter.id for letter in letters]))
+else:
+    ctx.molt("README Now says merge #7")
+    assert ctx.jack("stop").raw == ""
+''')
+    loom = Loom(root)
+    loom.start()
+    try:
+        wait_until(received.exists, 30, loom.dump)
+        owed = json.loads(received.read_text())
+        why = next(f.id for f in loom.facts() if f.kind == "letter" and f.data.get("molt"))
+        assert why in owed and ask in owed
+        wait_until(lambda: why in fold(loom.facts()).handled, 30, loom.dump)
+        assert ask not in fold(loom.facts()).handled
+    finally:
+        loom.halt()
+    assert not loom.errors
