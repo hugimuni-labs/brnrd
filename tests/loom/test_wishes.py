@@ -364,3 +364,14 @@ def test_bare_wish_is_a_read_even_when_closed(ledger, verdict, person):
     assert output == f"{ident} · {verdict or 'heard'} · Keep this wish · -"
     assert "no wish" in command(home, seat, "wish", "w-missing", person=person, ok=False)
     assert read_facts(home) == before
+
+
+def test_a_wish_born_with_no_citation_is_only_a_person_s_own():
+    """A strand's new wish cites what was said; a person writing at their own
+    terminal (setup's onboarding wish) is the citation, signed as them."""
+    from brr.daemon2.facts import Fact
+    from brr.loom.runtime.registry import admit
+    data = {"wish": "w-aaaaaaaaaaaa", "says": [], "from": "person", "line": "x", "thread": "inbox"}
+    admit(Fact(kind="wish", by="person:ada", id="w-aaaaaaaaaaaa", data=data))
+    with pytest.raises(ValueError, match="needs --say"):
+        admit(Fact(kind="wish", by="strand:s-1", id="w-aaaaaaaaaaaa", data=data))
