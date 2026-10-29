@@ -56,8 +56,10 @@ _AUTHORIZED_PERMISSIONS = frozenset({"admin", "write", "maintain"})
 # (`_handle_command` requires a route before either does anything), so the
 # one command that actually works — /start <code>, or the bare code once
 # it's typed — never appeared anywhere in the bot's own replies. Name it
-# here instead of only in the dashboard-side instructions.
-_UNPAIRED_TEXT = "This chat is not paired to a brnrd account yet. Get a pair code from the dashboard, then send /start <code> (or just paste the code) here to pair."
+# here instead of only in the dashboard-side instructions. The code alone is
+# that command: a plain Start lands here too, and Telegram makes typing
+# anything inside /start awkward, so the reply never asks for that.
+_UNPAIRED_TEXT = "This chat is not paired to a brnrd account yet. Send the pair code `brnrd setup` (or the dashboard) shows you, and this chat is paired."
 # WhatsApp has no slash-command surface (`_handle_command`'s /repo, /repos,
 # /status are Telegram-only, see the WhatsApp section below) — pointing a
 # WhatsApp user at commands that don't work on this channel would be a

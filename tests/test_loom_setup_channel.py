@@ -17,7 +17,7 @@ from brr.loom.runtime.port import _front
 
 
 def code_in(line):
-    found = re.search(r'send the code (\w+)\.', line)
+    found = re.search(r'send the code ([\w-]+)\.', line)
     return found and found.group(1)
 
 
@@ -525,7 +525,7 @@ def test_brnrd_setup_passes_wait_through(monkeypatch):
     seen = []
     monkeypatch.setattr(setup_channel, 'main', lambda argv: seen.append(argv) or 0)
     cli.main(['setup', '--kind', 'fake', '--wait', '15'])
-    assert seen == [['channel', '--kind', 'fake', '--timeout', '180', '--wait', '15.0']]
+    assert seen == [['--kind', 'fake', '--timeout', '180', '--wait', '15.0']]
 
 
 def test_the_body_step_shows_every_harness_with_its_fuel_and_keeps_a_set_one_on_enter(tmp_path, monkeypatch, capsys,
@@ -550,3 +550,62 @@ def test_the_body_step_shows_every_harness_with_its_fuel_and_keeps_a_set_one_on_
     monkeypatch.setattr('sys.stdin', io.StringIO('2\n'))
     setup_channel._choose_body(home)
     assert default_body(home) == 'codex'
+
+
+def test_a_plain_start_pairs_nothing_and_the_chat_asks_for_the_code(tmp_path):
+    home = home_at(tmp_path)
+    state = Path(connector.environment(home, 'desk')['BRNRD_STATE'])
+    drop = state / 'in'
+    lines = []
+    def press_start_then_send(line):
+        lines.append(line)
+        if code_in(line):
+            (drop / 'start.md').write_text(_front(dict(kind='letter', id='start',
+                                           to='42', **{'from': '42'}), '/start'))
+        elif line.startswith('Start was pressed'):
+            (drop / 'code.md').write_text(_front(dict(kind='letter', id='code',
+                                          to='42', **{'from': '42'}), code_in(lines[0])))
+    assert setup_channel.pair(home, 'fake', 'desk', 'ada', out=press_start_then_send) == 'desk:42'
+    sent = [json.loads(r)['text'] for r in (tmp_path / 'loom/channel-fake.jsonl').read_text().splitlines()]
+    assert sent[0] == 'Send me the code your terminal shows, and this chat is paired.'
+    assert sent[1].startswith('Paired ✓')
+    assert code_in(lines[0]) in lines[1] and not (drop / 'start.md').exists()
+
+
+def test_a_shared_bot_is_given_its_own_code_and_no_qr(tmp_path):
+    home = home_at(tmp_path)
+    folder = tmp_path / 'loom/connectors/fake'
+    shutil.copytree(Path(setup_channel.__file__).parent / 'connectors/fake', folder)
+    (folder / 'door').write_text('#!/usr/bin/env python3\nimport json, sys\n'
+                                 'print(json.dumps(dict(name="@brnrd_bot", link="https://t.me/brnrd_bot?start=PK-AB12",'
+                                 ' code="PK-AB12", qr=False)))\n')
+    (folder / 'door').chmod(0o755)
+    lines = []
+    with pytest.raises(TimeoutError):
+        setup_channel.pair(home, 'fake', 'desk', 'ada', timeout=0, out=lines.append, qr=True)
+    assert len(lines) == 1 and 'scan' not in lines[0]
+    assert 'open @brnrd_bot yourself and send the code PK-AB12.' in lines[0]
+
+
+def test_setup_run_again_shows_the_home_and_asks_nothing(tmp_path, monkeypatch, capsys):
+    from brr.loom.runtime.config import seed_config
+    seed_config(tmp_path)
+    set_value(tmp_path, 'connectors', ['telegram=telegram'])
+    def asked(*_a, **_kw):
+        raise AssertionError('a set-up home was asked something')
+    monkeypatch.setattr('builtins.input', asked)
+    monkeypatch.setattr(setup_channel, 'pair', asked)
+    monkeypatch.setattr(setup_channel, '_choose_body', asked)
+    assert setup_channel.main(['--home', str(tmp_path)]) == 0
+    shown = capsys.readouterr().out
+    assert 'brnrd is set up here' in shown and 'talks over telegram' in shown
+    assert 'brnrd setup channel' in shown
+
+
+def test_the_code_is_typed_by_a_person_never_hex():
+    for _ in range(200):
+        code = setup_channel.pairing_code()
+        assert re.fullmatch(r'[A-HJKMNP-Z2-9]{3}-[A-HJKMNP-Z2-9]{3}', code)
+    assert setup_channel._says_code(' k7q m9x ', 'K7Q-M9X')
+    assert setup_channel._says_code('/start K7Q-M9X', 'K7Q-M9X')
+    assert not setup_channel._says_code('/start', 'K7Q-M9X')

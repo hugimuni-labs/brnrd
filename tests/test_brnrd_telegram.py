@@ -267,22 +267,25 @@ def test_expired_start_code_names_the_retry_command(env):
 def test_unpaired_repos_reply_names_the_rescue_command(env):
     """The old text pointed an unpaired chat at /repos, whose own unpaired
     reply is this same message — a closed loop. The reply must instead name
-    /start, the command that actually works."""
+    what actually works: the pair code, sent as it is (never inside /start,
+    which Telegram makes awkward to type)."""
     _, client, sends = env
     r = client.post(
         "/v1/webhooks/telegram", json=_message(7, "/repos"), headers=_HDR
     )
     assert r.status_code == 200
-    assert sends and "/start" in sends[0]["text"]
+    assert sends and "Send the pair code" in sends[0]["text"] and "/start" not in sends[0]["text"]
 
 
-def test_unpaired_plain_message_reply_names_the_rescue_command(env):
+@pytest.mark.parametrize("text", ["hello", "/start"])
+def test_unpaired_plain_message_reply_names_the_rescue_command(env, text):
+    """A plain Start pairs nothing: the bot asks for the code, the next step in the chat."""
     _, client, sends = env
     r = client.post(
-        "/v1/webhooks/telegram", json=_message(7, "hello"), headers=_HDR
+        "/v1/webhooks/telegram", json=_message(7, text), headers=_HDR
     )
     assert r.status_code == 200
-    assert sends and "/start" in sends[0]["text"]
+    assert sends and "Send the pair code" in sends[0]["text"]
 
 
 def test_bare_pair_code_binds_chat_like_start(env):

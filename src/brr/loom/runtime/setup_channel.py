@@ -22,7 +22,12 @@ from .selfrepo import IDENTITY_NOTE, SelfError, init_self
 
 
 def _door(folder, env, code):
-    """An optional door's ``{name, link}``: the bot, and a link that sends the code by itself."""
+    """An optional door's ``{name, link}``: the bot, and a link that sends the code by itself.
+
+    Two optional keys: ``code``, what to type into that bot when it is not
+    ours (a shared bot knows only the code its server minted), and ``qr``,
+    false where a picture of the link is not offered.
+    """
     if not (folder / 'door').is_file():
         return None
     try:
@@ -35,6 +40,8 @@ def _door(folder, env, code):
     if not (isinstance(door, dict) and isinstance(door.get('name'), str)
             and isinstance(door.get('link'), str)):
         return None
+    if not isinstance(door.get('code'), str) or not door['code']:
+        door['code'] = code
     return door
 
 
@@ -45,9 +52,35 @@ def _instructions(door, code, timeout, scan=False):
     if door:
         also = ", or scan the code below with your phone's camera" if scan else ''
         return (f"Open {door['link']} where you use the app and press Start{also}: that sends "
-                f"your code. Or open {door['name']} yourself and send the code {code}. " + tail)
+                f"your code. Or open {door['name']} yourself and send the code {door['code']}. " + tail)
     return (f'Open the chat with your bot yourself (press Start if the app asks) '
             f'and send the code {code}. ' + tail)
+
+
+def _answer(folder, env, state, chat, answers, ident, text):
+    """Say ``text`` in ``chat`` through the connector's out; its completed process."""
+    with tempfile.TemporaryDirectory(prefix='pair-', dir=state) as directory:
+        reply = Path(directory) / 'reply.md'
+        reply.write_text(_front(dict(kind='letter', id=ident, to=chat, re=answers), text))
+        return subprocess.run([str(folder / 'out'), str(reply)], env=env,
+                              capture_output=True, text=True, timeout=60)
+
+
+#: Letters a person reads off a screen and types without a second look: no 0/O, 1/I/L.
+ALPHABET = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789'
+
+
+def pairing_code():
+    """A code to type, never hex: six such letters, ``K7Q-M9X``."""
+    picked = ''.join(secrets.choice(ALPHABET) for _ in range(6))
+    return f'{picked[:3]}-{picked[3:]}'
+
+
+def _says_code(body, code):
+    """Is ``body`` the code, typed or sent by Start? Case, spaces and dashes are forgiven."""
+    plain = re.sub(r'[^A-Z0-9]', '', body.upper())
+    want = re.sub(r'[^A-Z0-9]', '', code.upper())
+    return plain in (want, 'START' + want)
 
 
 def qr_code(link):
@@ -80,7 +113,7 @@ def pair(home, kind, name, person, *, timeout=180, out=print, qr=None):
         sys.stdout.flush()  # the connector writes to the same terminal, after what is already said
         if subprocess.run([str(setup)], env=env).returncode != 0:
             raise ValueError('Nothing was enabled; run brnrd again when you have it.')
-    code = secrets.token_hex(4)
+    code = pairing_code()
     # Use the normal drop directory: unrelated letters survive pairing for the
     # loom to ingest once enabled. The connector advances its usual cursor.
     drop = state / 'in'
@@ -88,7 +121,8 @@ def pair(home, kind, name, person, *, timeout=180, out=print, qr=None):
     command = folder / 'in'
     child = subprocess.Popen([str(command), str(drop)], env=env) if command.is_file() else None
     door = _door(folder, env, code)
-    picture = qr_code(door['link']) if door and (sys.stdout.isatty() if qr is None else qr) else ''
+    shown = door and door.get('qr', True) is not False
+    picture = qr_code(door['link']) if shown and (sys.stdout.isatty() if qr is None else qr) else ''
     out(_instructions(door, code, timeout, scan=bool(picture)))
     if picture:
         out(picture)
@@ -99,19 +133,28 @@ def pair(home, kind, name, person, *, timeout=180, out=print, qr=None):
                 if path.is_symlink():
                     continue
                 fm = addressed(name, parse_frontmatter(path.read_text()))
-                if fm.get('body', '').strip() not in (code, '/start ' + code):
-                    continue
+                body = fm.get('body', '').strip()
                 address, chat = channel_parts(fm.get('to', ''))
-                sender = fm.get('from', '')
-                if address != name or sender != f'{name}:{chat}':
+                direct = address == name and fm.get('from', '') == f'{name}:{chat}'
+                if body == '/start' and direct and fm.get('id'):
+                    # A plain Start pairs nothing: several homes may be
+                    # waiting at once, and only the code says which one.
+                    # Ask for it in the chat, the next step there.
+                    asked = _answer(folder, env, state, chat, fm['id'], 'ask-' + code,
+                                    'Send me the code your terminal shows, and this chat is paired.')
+                    path.unlink()
+                    if path.with_suffix('.d').exists():
+                        shutil.rmtree(path.with_suffix('.d'))
+                    out(f"Start was pressed without the code; send {door['code'] if door else code} in that chat."
+                        + ('' if asked.returncode == 0 else ' (The chat could not be told.)'))
+                    continue
+                if not _says_code(body, code):
+                    continue
+                if not direct:
                     out('Pairing needs a direct message from your own account; ignored this message.')
                     continue
-                with tempfile.TemporaryDirectory(prefix='pair-', dir=state) as directory:
-                    reply = Path(directory) / 'reply.md'
-                    reply.write_text(_front(dict(kind='letter', id='pair-' + code,
-                                                to=chat, re=fm['id']), 'Paired ✓ This chat now reaches brnrd; write here any time.'))
-                    result = subprocess.run([str(folder / 'out'), str(reply)], env=env,
-                                            capture_output=True, text=True, timeout=60)
+                result = _answer(folder, env, state, chat, fm['id'], 'pair-' + code,
+                                 'Paired ✓ This chat now reaches brnrd; write here any time.')
                 if result.returncode != 0:
                     # The heard code is the proof: it came from this chat, so
                     # the channel is enabled either way. Only the answer
@@ -154,7 +197,7 @@ def pair(home, kind, name, person, *, timeout=180, out=print, qr=None):
         # The code said twice (the start link, then typed) leaves a second
         # copy; once the loom polls this channel it would be a stray letter.
         for path in drop.glob('*.md'):
-            if not path.is_symlink() and parse_frontmatter(path.read_text()).get('body', '').strip() in (code, '/start ' + code):
+            if not path.is_symlink() and _says_code(parse_frontmatter(path.read_text()).get('body', ''), code):
                 path.unlink()
                 if path.with_suffix('.d').exists():
                     shutil.rmtree(path.with_suffix('.d'))
@@ -375,9 +418,34 @@ def _choose_body(home):
     print(f"  {style.dim('Change it any time: brnrd setup, or model.default in loom/preferences.toml.')}")
 
 
+def _status(home):
+    """What a set-up home has, said without asking anything; None when it has no channel yet."""
+    from .service import _body_choice, _lock_held
+    config = load_config(home.root)
+    if not config.connectors:
+        return None
+    _step('brnrd is set up here')
+    try:
+        body = _body_choice(home.root)
+    except (ValueError, OSError):
+        body = None
+    if body:
+        _ok(f"thinks with {body}")
+    else:
+        print(f"  {style.cross()} no AI chosen yet: run brnrd setup channel")
+    for connector in config.connectors:
+        _ok(f"talks over {connector.partition('=')[0]}")
+    if _lock_held(home.root):
+        _ok('running')
+    else:
+        print(f"  {style.dot()} not running: start it with `brnrd loom install`")
+    print(f"  {style.dim('Add a channel: brnrd setup channel. Change the AI: model.default in loom/preferences.toml.')}")
+    return 0
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(prog='brnrd setup')
-    parser.add_argument('step', nargs='?', choices=['channel'], default='channel')
+    parser.add_argument('step', nargs='?', choices=['channel'])
     parser.add_argument('--home')
     parser.add_argument('--kind')
     parser.add_argument('--name')
@@ -395,6 +463,8 @@ def main(argv=None):
     from brr import __version__
     print(f"{style.bold('brnrd')} {style.dim(__version__)} {style.dim('· guided setup')}")
     print(f"{style.dim('home:')} {style.accent(str(home.root))}")
+    if args.step is None and not args.kind and _status(home) is not None:
+        return 0
     try:
         _choose_body(home)
         kind = args.kind or _choose_kind(kinds)

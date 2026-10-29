@@ -48,12 +48,12 @@ def env(monkeypatch):
 def test_a_door_link_binds_the_chat_and_hands_the_daemon_the_loom_code(env):
     client, sends = env
     _account, daemon, _repo = brnrd_repo_and_daemon(client)
-    r = client.post("/v1/daemons/door", json={"code": "0a1b2c3d"}, headers=daemon)
+    r = client.post("/v1/daemons/door", json={"code": "K7Q-M9X"}, headers=daemon)
     assert r.status_code == 200, r.text
     door = r.json()
     assert door["name"] == "@brnrd_bot"
     server_code = door["link"].removeprefix("https://t.me/brnrd_bot?start=")
-    assert server_code and server_code != "0a1b2c3d"
+    assert server_code and server_code != "K7Q-M9X"
 
     # Telegram turns the link into "/start <code>" once Start is pressed.
     update = {"message": {
@@ -67,14 +67,17 @@ def test_a_door_link_binds_the_chat_and_hands_the_daemon_the_loom_code(env):
     # The loom answers ("Paired ✓"); the bot's own pairing text would be a second voice.
     assert sends == []
     events = client.get("/v1/daemons/inbox", params={"since": 0, "wait": 0}, headers=daemon).json()["events"]
-    assert [(e["body"], str(e["reply_to"]["chat_id"])) for e in events] == [("0a1b2c3d", "777")]
+    assert [(e["body"], str(e["reply_to"]["chat_id"])) for e in events] == [("K7Q-M9X", "777")]
 
 
 def test_door_refuses_an_account_token_and_a_malformed_code(env):
     client, _ = env
     account, daemon, _repo = brnrd_repo_and_daemon(client)
     assert client.post("/v1/daemons/door", json={"code": "0a1b2c3d"}, headers=account).status_code == 403
-    assert client.post("/v1/daemons/door", json={"code": "not hex!"}, headers=daemon).status_code == 422
+    for bad in ("not hex!", "k7q-m9x", "K7Q-M9O"):
+        assert client.post("/v1/daemons/door", json={"code": bad}, headers=daemon).status_code == 422
+    # A loom older than the typed code still pairs.
+    assert client.post("/v1/daemons/door", json={"code": "0a1b2c3d"}, headers=daemon).status_code == 200
 
 
 def test_relay_door_prints_the_link_the_server_mints(tmp_path):
@@ -110,5 +113,6 @@ def test_relay_door_prints_the_link_the_server_mints(tmp_path):
         door = setup_channel._door(folder, connector.environment(Home(tmp_path), "cloud"), "0a1b2c3d")
     finally:
         server.shutdown()
-    assert door == {"name": "@brnrd_bot", "link": "https://t.me/brnrd_bot?start=TG1"}
+    # Typed into the shared bot, only the server's code pairs; no QR on this path.
+    assert door == {"name": "@brnrd_bot", "link": "https://t.me/brnrd_bot?start=TG1", "code": "TG1", "qr": False}
     assert seen == [("/v1/daemons/door", {"code": "0a1b2c3d"}, "Bearer bd_tok")]
