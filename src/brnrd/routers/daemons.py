@@ -32,7 +32,7 @@ from .. import (
 )
 from ..activity_records import ACTIVITY_STALE_TTL
 from ..auth import Principal, get_db, require_daemon
-from ..models import Account, ActivityRecord, Daemon, DaemonRepo, LoomPart, Event, GitHubInstallation, GitHubInstalledRepo, Repo
+from ..models import Account, ActivityRecord, Daemon, DaemonRepo, LoomPart, Event, GitHubInstallation, GitHubInstalledRepo, Repo, Token
 from ..platforms import github_app as github_app_client
 
 router = APIRouter(prefix="/v1/daemons", tags=["daemons"])
@@ -189,6 +189,45 @@ def _inbox_scope(
         if since_seq > 0:
             since_seq = inbox_service.clamp_since_many(db, repo_ids, since_seq)
     return repo_ids, repo_labels, since_seq
+
+
+#: A loom that polled within this reads as live; matches the webhook's
+#: `_DAEMON_ONLINE_AFTER`, the window a parked long-poll re-polls in.
+_LOOM_LIVE_AFTER = timedelta(minutes=2)
+
+
+def _claim_inbox(session_factory, principal: Principal, consumer: str | None) -> tuple[Token, datetime] | None:
+    """Stamp a loom's poll; refuse a poller never heard as a loom while one is live.
+
+    Every poller on an account sees every event, so an old daemon left
+    running answered a Telegram /start before the new loom (yellowcat,
+    2026-10-29). A loom is never refused: two looms on one account share a
+    home and run connectors only on the inbox-lease holder (loom.py).
+    Returns the refused token and the live loom's last word.
+    """
+    now = datetime.now(timezone.utc)
+    with session_factory() as db:
+        mine = db.get(Token, principal.token.id)
+        if mine is None:
+            return None
+        if consumer == "loom":
+            mine.loom_seen_at = now
+            db.commit()
+        if mine.loom_seen_at is not None:
+            return None
+        loom_at = db.execute(
+            select(Token.loom_seen_at).where(
+                Token.account_id == mine.account_id,
+                Token.kind == Token.KIND_DAEMON,
+                Token.revoked.is_(False),
+                Token.id != mine.id,
+                Token.loom_seen_at >= now - _LOOM_LIVE_AFTER,
+            ).order_by(Token.loom_seen_at.desc()).limit(1)
+        ).scalar_one_or_none()
+        if loom_at is None:
+            return None
+        db.expunge(mine)
+        return mine, loom_at
 
 
 def _touch_daemon_from_factory(session_factory, principal: Principal) -> None:
@@ -718,6 +757,10 @@ def put_loom(doc: dict[str, Any] = Body(...), principal: Principal = Depends(req
     permitted = publish_scope.lane_permitted(db, repo_id=principal.repo_id, lane="activity")
     daemon.loom_json = blob if permitted else None
     daemon.loom_updated_at = now
+    # A snapshot marks the token a loom, so the inbox never refuses it (_claim_inbox).
+    token = db.get(Token, principal.token.id)
+    if token is not None:
+        token.loom_seen_at = now
     daemon.online = True
     daemon.last_seen_at = now
     db.commit()
@@ -1094,7 +1137,7 @@ def put_run_ledger(payload: schemas.RunLedgerReport, principal: Principal = Depe
 
 
 @router.get("/inbox", response_model=schemas.InboxResponse)
-async def inbox(request: Request, since: int | None = Query(default=None), wait: float | None = Query(default=None), principal: Principal = Depends(require_daemon)):
+async def inbox(request: Request, since: int | None = Query(default=None), wait: float | None = Query(default=None), consumer: str | None = Query(default=None), principal: Principal = Depends(require_daemon)):
     settings = request.app.state.settings
     since_seq = since if since is not None else 0
     repo_ids, repo_labels, since_seq = await anyio.to_thread.run_sync(
@@ -1103,6 +1146,27 @@ async def inbox(request: Request, since: int | None = Query(default=None), wait:
         principal,
         since_seq,
     )
+    refused = await anyio.to_thread.run_sync(
+        _claim_inbox,
+        request.app.state.SessionLocal,
+        principal,
+        consumer,
+    )
+    if refused is not None:
+        token, loom_at = refused
+        forwarded = request.headers.get("x-forwarded-for", "")
+        logger.warning(
+            "inbox refused an old daemon account=%s token=%s paired=%s from=%s; a loom polled at %s",
+            token.account_id, token.id, token.created_at, forwarded or (request.client.host if request.client else "-"), loom_at,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                f"a brnrd loom now receives this account's messages (heard at {loom_at:%H:%M:%S} UTC); "
+                f"this old daemon (token {token.id}, paired {token.created_at:%Y-%m-%d}) no longer does. "
+                "Stop it here with `brnrd daemon uninstall`."
+            ),
+        )
     max_wait = settings.inbox_long_poll_max_s if wait is None else max(0.0, min(wait, settings.inbox_long_poll_max_s))
     # Touch on arrival as well as on return: a daemon parked in a long-poll is
     # listening, and the webhook's 2-minute liveness read must see it so. A

@@ -36,8 +36,9 @@ class RelayClient:
 
     def pull(self, cursor):
         state = self._state()
+        # consumer=loom: the cloud refuses an old daemon's poll while a loom polls.
         return cloud._request(state['brnrd_url'], 'GET', '/v1/daemons/inbox', token=state['token'],
-                              params=dict(since=cursor, wait=cloud._POLL_WAIT_S),
+                              params=dict(since=cursor, wait=cloud._POLL_WAIT_S, consumer='loom'),
                               timeout=cloud._POLL_TIMEOUT_S)
 
     def send(self, payload):
