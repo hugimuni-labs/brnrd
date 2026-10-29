@@ -125,7 +125,7 @@ def test_the_stop_holds_once_on_a_rank_word_and_the_band_is_news_on_change(body)
     # Every letter settled, so the band is the only thing a post could say.
     import re
     for ident in re.search(r"owed (.*) -->", render(home))[1].split():
-        command(home, seat, "send", "--re", ident, "--to", "thread:work", "--note", "read")
+        command(home, seat, "send", "--re", ident, "--to", "thread:work", "--chatter", "--note", "read")
     _ingest(home)
     render(home)
     jack.execute("post", seat, "{}")
