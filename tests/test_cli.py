@@ -167,8 +167,12 @@ def test_account_disconnect_removes_gate_state_but_keeps_the_home(
     credential = account_root / "credentials" / "github" / "token"
     credential.parent.mkdir(parents=True)
     credential.write_text("derived-token\n", encoding="utf-8")
+    # Disconnect revokes the token on brnrd (#2528); brnrd.example is not a server.
+    asked = []
+    monkeypatch.setattr(cloud, "revoke", lambda state_dir: asked.append(state_dir) or [])
 
     assert main(["account", "disconnect"]) is None
+    assert account_root in asked
 
     assert not runtime.state_path(account_root, "cloud").exists()
     assert not credential.parent.exists()
