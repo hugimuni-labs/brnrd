@@ -83,6 +83,10 @@ def record_start(home, facts, *, root: Path | None = None) -> Fact:
         merges = _merges_held(root, commit, facts, recorded)
         loaded.extend(merges)
     install = home.install_id()
+    first = next((str(f.data["commit"]) for f in kind_facts(facts, "loom.started")
+                  if f.data.get("install") == install and f.data.get("commit")), None)
+    if commit and first:
+        loaded.extend(_landed_since(root, first, commit))
     data = {"install": install, "pid": os.getpid(), "loaded": sorted(set(loaded))}
     if commit:
         data["commit"] = commit
@@ -138,9 +142,23 @@ def _merges_held(root: Path, commit: str, facts, recorded: set[str]) -> dict[str
     for landed, head, number in (_merge_log(root, commit) if heads or own else ()):
         if head in heads and heads[head][1] == number:
             found.setdefault(heads[head][0], landed)
-        elif not head and number in own:
+        elif number in own:
+            # GitHub titles its own repo's landings: the number holds even
+            # when the branch moved after its last ``pr.opened``.
             found.setdefault(own[number], landed)
     return found
+
+
+def _landed_since(root: Path, first: str, commit: str) -> list[str]:
+    """``repo#N`` for every landing on ``commit``'s first-parent line that
+    ``first``, this install's first start, did not hold: what the loom has
+    loaded since it began, whether or not any body recorded it. Nothing when
+    ``first`` is not in ``commit``'s history (a rollback past it)."""
+    if git(root, "merge-base", "--is-ancestor", first, commit, check=False).returncode != 0:
+        return []
+    repo = _repo_name(root)
+    held = {landed for landed, _head, _n in _merge_log(root, first)}
+    return [f"{repo}#{n}" for landed, _head, n in _merge_log(root, commit) if landed not in held]
 
 
 #: A wish result's pull request: ``pr:N`` (the loom's own repo) or its URL.

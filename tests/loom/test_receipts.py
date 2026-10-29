@@ -278,3 +278,34 @@ def test_a_start_lists_a_squash_of_its_own_repo(tmp_path: Path) -> None:
         assert _shipped(root) == ["widget#7 merged, loaded"]
     finally:
         _kill(read_facts(Home(root)))
+
+
+def test_a_start_lists_every_landing_since_the_first_start(tmp_path: Path) -> None:
+    root, room, checkout, bare = _open(tmp_path)
+    try:
+        _note(checkout, room, "fix.txt", "fixed\n")
+        assert _verb(room, "widget").returncode == 0
+        stale = _tip(checkout, "HEAD")
+        _pull(bare, 7, stale)
+        assert _verb(room, "widget", "--pr", "7").returncode == 0
+        _merge(bare, stale, "Merge pull request #5 from acme/before", squash=True)
+        source = tmp_path / "loom-src"
+        git(None, "clone", "--quiet", str(bare), str(source))
+        home = Home(root)
+        record_start(home, read_facts(home), root=source)
+        assert _kinds(root, "loom.started")[-1].data["loaded"] == []
+        # The branch moved on with no new --pr; nobody recorded #9 at all.
+        _note(checkout, room, "more.txt", "more\n")
+        assert _verb(room, "widget").returncode == 0
+        head = _tip(checkout, "HEAD")
+        _pull(bare, 7, head)
+        seven = _merge(bare, head, "Merge pull request #7 from acme/loom/work")
+        _merge(bare, head, "Merge pull request #9 from acme/someone-else")
+        git(source, "pull", "--quiet", "--ff-only")
+        record_start(home, read_facts(home), root=source)
+        started = _kinds(root, "loom.started")[-1].data
+        assert started["loaded"] == ["widget#7", "widget#9"]
+        assert started["merges"] == {"widget#7": seven}
+        assert _shipped(root) == ["widget#7 merged, loaded"]
+    finally:
+        _kill(read_facts(Home(root)))
