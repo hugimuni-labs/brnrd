@@ -205,6 +205,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog=brnrd_cmd(),
         description="Resident agent runtime for local and managed repo work",
+        epilog=(
+            "The loom, the service the resident runs on: `brnrd loom --help`. "
+            "A body's verbs (send, wish, ask, settle, send-self, publish, lib): "
+            "`brnrd runtime --help`."
+        ),
     )
     parser.add_argument("--version", action="version", version=f"brnrd {__version__}")
 
@@ -1554,8 +1559,8 @@ def main(argv: list[str] | None = None) -> None:
         if (
             len(raw) >= 2
             and raw[0] == "loom"
-            and raw[1] in {"install", "uninstall", "start", "stop", "status", "logs", "config", "where"}
-        ):
+            and raw[1] in {"install", "uninstall", "start", "stop", "status", "logs", "config", "where", "-h", "--help", "help"}
+        ) or raw == ["loom"]:
             from .loom.runtime.service import main as loom_service
             code = loom_service(raw[1:])
             if code:

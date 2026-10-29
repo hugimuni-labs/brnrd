@@ -35,12 +35,54 @@ VERBS = {
     "merge-driver": ("merge_driver", "main"),
 }
 
+# One line per verb for ``brnrd runtime --help``; a verb's own ``--help`` has the rest.
+SUMMARY = {
+    "send": "send a letter: a reply (--re), a note, a new thread, a timer (--at)",
+    "wish": "what is left on a wish (--left), its result, a park (--wait)",
+    "ask": "ask a person for a decision or an act, --for the wish it unblocks",
+    "settle": "close a thread whose work is done",
+    "shed": "hand the seat to a successor (molt is its old name)",
+    "send-self": "land this room's self commits on main",
+    "publish": "push a project branch and record its pull request",
+    "lib": "the library: folders and repos the self works in",
+    "threads": "every thread, who owes it and what can start it",
+    "asks": "what is in hand, asked and unanswered, over every thread",
+    "wishes": "the wishes of a thread",
+    "graph": "threads and their strands",
+    "attention": "parked bodies and notices nobody has settled",
+    "face": "wear, change or drop a face",
+    "machines": "the machines this home runs on",
+    "where": "where the home, rooms and self are",
+    "config": "show or edit the home config",
+    "resume": "resume a paused tool child",
+    "drop": "give up on a paused tool child",
+    "init": "create a home and its self",
+    "wake": "print the wake a room's body would get",
+    "forge-token": "print the forge token bodies use",
+    "reap": "remove a finished strand's room",
+    "molt": "old name of shed",
+    "loom": "the loom process itself (loom machinery)",
+    "jack": "a body's hook (loom machinery)",
+    "merge-driver": "git merge driver for the self (loom machinery)",
+}
+
+
+def usage() -> str:
+    width = max(len(verb) for verb in VERBS)
+    rows = [f"  {verb:<{width}}  {SUMMARY.get(verb, '')}".rstrip() for verb in VERBS]
+    return "usage: brnrd runtime <verb> ...\n\nverbs:\n" + "\n".join(rows) + "\n\n`brnrd runtime <verb> --help` shows a verb's flags.\n"
+
 
 def main(argv: list[str] | None = None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
+    if argv[:1] in (["-h"], ["--help"], ["help"]):
+        sys.stdout.write(usage())
+        return 0
     target = VERBS.get(argv[0]) if argv else None
     if target is None:
-        sys.stderr.write(f"usage: python -m brr.loom.runtime {'|'.join(VERBS)} ...\n")
+        if argv:
+            sys.stderr.write(f"brnrd runtime: no verb {argv[0]!r}\n")
+        sys.stderr.write(usage())
         return 2
     module, function = target
     command = getattr(importlib.import_module(f"brr.loom.runtime.{module}"), function)
