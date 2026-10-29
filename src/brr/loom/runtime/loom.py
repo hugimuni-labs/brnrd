@@ -1339,9 +1339,21 @@ _FENCED = ("fenced: this install lost the inbox lease and another may lead; "
 
 def _fenced(home, facts) -> bool:
     """A lease streak is open on this install: the router fenced and has not
-    taken the inbox lease back (``Router._fence``, ``Router._recovered``)."""
+    taken the inbox lease back (``Router._fence``, ``Router._recovered``).
+    Or it handed inbox to another install (``Router._handover``) and holds
+    no router gen above the one it handed."""
     from .health import open_streaks
-    return any(f.data.get("step") == "lease" for f in open_streaks(facts, home.install_id()))
+    from .ledger import kind_facts
+    install = home.install_id()
+    if any(f.data.get("step") == "lease" for f in open_streaks(facts, install)):
+        return True
+    handed = [int(f.data["gen"]) for f in kind_facts(facts, "lease.handed")
+              if f.data.get("install") == install]
+    if not handed:
+        return False
+    held = [int(f.data.get("gen", 0)) for f in kind_facts(facts, "router")
+            if f.data.get("install") == install]
+    return max(held, default=0) <= max(handed)
 
 
 def _observe_body(home, facts, strand, thread, gen, bodies, *, choice=None, force=False):

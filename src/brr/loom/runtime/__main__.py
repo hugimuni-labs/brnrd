@@ -23,6 +23,7 @@ VERBS = {
     "asks": ("verbs_asks", "_asks"),
     "graph": ("verbs_asks", "_graph"),
     "face": ("verbs_faces", "_face"),
+    "machines": ("verbs_machines", "_machines"),
     "attention": ("verbs_loom", "_attention"),
     "init": ("verbs_self", "cmd_init"),
     "wake": ("verbs_self", "cmd_wake"),

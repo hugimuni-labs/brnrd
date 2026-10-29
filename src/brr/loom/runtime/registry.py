@@ -91,6 +91,8 @@ REGISTRY = (
     _kind("loom.moved",        "loom",    "install from to merges started",                   "loom",        "global"),
     _kind("loom.pruned",       "loom",    "install ran bytes",                                "loom",        "machine"),
     _kind("lease.fenced",      "loom",    "install gen why",                                  "loom",        "global"),
+    _kind("lease.handed",      "loom",    "install gen prefer to",                            "loom",        "global",  once=True),
+    _kind("machines.prefer",   "loom",    "install from",                                     "person",      "global"),
     _kind("self.healed",       "loom",    "thread commit",                                    "loom",        "global",  once=True),
     _kind("library.problem",   "loom",    "install name problem text since",                  "loom",        "machine"),
     _kind("library.cleared",   "loom",    "install name problem",                             "loom",        "machine"),

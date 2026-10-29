@@ -258,7 +258,7 @@ class Router:
             if renewed is None or not self.gate.authorize(renewed):
                 return self._fence(facts, "lost" if renewed is None else "expired")
             self.gate_lease = renewed
-            return facts
+            return self._handover(facts)
         row = self.authority._read(self.authority._paths("router")[0])
         self.gate_lease = self.gate.acquire("inbox", self.home.install_id(), ttl,
                                             floor=int(row["gen"]) + 1)
@@ -281,8 +281,31 @@ class Router:
             "count": 1, "last": streak.data.get("error", ""),
         }, streak.id.replace("loom.degraded:", "loom.recovered:", 1))
 
-    def _fence(self, facts: list[Fact], why: str) -> list[Fact]:
-        gen = self.gate_lease.gen if self.gate_lease else 0
+    def _handover(self, facts: list[Fact]) -> list[Fact]:
+        """The newest ``machines.prefer`` names another install and this one
+        has not handed for it: step down, then release inbox to that install.
+
+        ``lease.handed`` is written before the release so its ledger rides
+        the push; it is what ``_fenced`` reads, so the seated bodies leave
+        without a degraded streak.
+        """
+        prefers = kind_facts(facts, "machines.prefer")
+        if not prefers:
+            return facts
+        prefer = prefers[-1]
+        to, install = prefer.data.get("install"), self.home.install_id()
+        handed = f"lease.handed:{prefer.id}"
+        if not to or to == install or any(f.id == handed for f in kind_facts(facts, "lease.handed")):
+            return facts
+        lease = self.gate_lease
+        self._step_down()
+        facts = self._keep(facts, "lease.handed", {
+            "install": install, "gen": lease.gen, "prefer": prefer.id, "to": to,
+        }, handed)
+        self.gate.release(lease, preferred=to, ttl=self.gate_ttl)
+        return facts
+
+    def _step_down(self) -> None:
         self.gate_lease = None
         self._gate_at = None
         if self.lease is not None:
@@ -290,6 +313,10 @@ class Router:
         self.lease = None
         self.granting = False
         self.caught_up = False
+
+    def _fence(self, facts: list[Fact], why: str) -> list[Fact]:
+        gen = self.gate_lease.gen if self.gate_lease else 0
+        self._step_down()
         install = self.home.install_id()
         facts = self._keep(facts, "lease.fenced", {
             "install": install, "gen": gen, "why": why,
