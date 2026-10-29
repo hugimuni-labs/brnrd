@@ -10,14 +10,14 @@ works.
 ## The machine
 
 ```bash
-brnrd account disconnect     # revoke this machine's token on brnrd.dev, then forget it here
+brnrd account disconnect --home ~/brnrd   # revoke this machine's token on brnrd.dev, then forget it here
 brnrd loom uninstall         # stop the loom and remove its login service
 brnrd daemon uninstall       # only if you ever installed the daemon
 ```
 
 `account disconnect` revokes the machine's token on brnrd.dev and marks the
-machine offline there. It also deletes the gate state under the loom home
-(`--home`, `BRNRD_HOME`, or `~/brnrd`) and under the current repo. It prints
+machine offline there. It also deletes the gate state under the current repo
+and, only when `--home` names it, under that loom home. It prints
 which machines went offline. If brnrd.dev did not answer, it says so, and the
 token may still work until you delete the account.
 

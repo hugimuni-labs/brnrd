@@ -400,7 +400,7 @@ def build_parser() -> argparse.ArgumentParser:
         "disconnect",
         help="unlink this daemon (and the loom home, if any) from brnrd and revoke its token there")
     p.add_argument("--home", default=None,
-                   help="the loom home whose gate to disconnect (default: BRNRD_HOME, else ~/brnrd if it is one)")
+                   help="also disconnect this loom home's gate (e.g. ~/brnrd); never implied")
     p.set_defaults(func=cmd_brnrd_disconnect)
 
     p = account_sub.add_parser(
@@ -7784,10 +7784,16 @@ def _connect_finish_setup(repo_root: Path, brr_dir: Path, *, defaults: bool) -> 
 
 
 def _loom_gate_dir(flag: str | None) -> Path | None:
-    """The loom home's cloud-gate directory (``relay_state``), if there is a home."""
+    """The cloud-gate directory (``relay_state``) of the loom home named by ``--home``.
+
+    Only an explicit ``--home``: this feeds a delete, and an implied home
+    (BRNRD_HOME, ~/brnrd) once let a test run wipe a live install's gate.
+    """
     from .loom.runtime.config import ConfigError, load_config
     from .loom.runtime.home import resolve_home
 
+    if flag is None:
+        return None
     try:
         home, _how = resolve_home(flag)
     except SystemExit:

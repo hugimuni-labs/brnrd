@@ -348,3 +348,24 @@ def test_account_disconnect_revokes_and_clears_the_loom_homes_gate(tmp_path, mon
     out = capsys.readouterr().out
     assert "Disconnected" in out and "took iMac.local offline" in out
     assert not cloud._token_path(home / "loom").exists()
+
+
+def test_account_disconnect_never_reaches_an_implied_loom_home(tmp_path, monkeypatch, capsys):
+    """Without --home, BRNRD_HOME and ~/brnrd are never touched: this verb deletes."""
+    from argparse import Namespace
+
+    from brr import cli
+
+    home = tmp_path / "brnrd"
+    (home / "loom").mkdir(parents=True)
+    (home / "loom" / "config.toml").write_text("")
+    cloud._save_state_to_dir(home / "loom", {"brnrd_url": "http://brnrd", "token": "bd_live"})
+    monkeypatch.setenv("BRNRD_HOME", str(home))
+    monkeypatch.setattr(cli, "_maybe_brr_dir", lambda: None)
+    called = []
+    monkeypatch.setattr(cloud, "revoke", lambda state_dir: called.append(state_dir))
+
+    cli.cmd_brnrd_disconnect(Namespace(home=None))
+
+    assert called == [] and cloud._token_path(home / "loom").exists()
+    assert "not connected" in capsys.readouterr().out
