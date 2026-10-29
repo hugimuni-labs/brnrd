@@ -32,6 +32,8 @@ import ast
 import json
 from pathlib import Path
 
+import pytest
+
 from brr import account
 from brr.gates import cloud, runtime
 
@@ -369,3 +371,15 @@ def test_account_disconnect_never_reaches_an_implied_loom_home(tmp_path, monkeyp
 
     assert called == [] and cloud._token_path(home / "loom").exists()
     assert "not connected" in capsys.readouterr().out
+
+
+def test_a_save_that_dies_writing_the_token_leaves_no_cloud_json(tmp_path, monkeypatch):
+    """The token is written first: a cloud.json on disk never lacks its token."""
+    from brr.gates import cloud
+
+    def dies(*_):
+        raise OSError("disk full")
+    monkeypatch.setattr(cloud, "_write_token", dies)
+    with pytest.raises(OSError):
+        cloud._save_state_to_dir(tmp_path, {"brnrd_url": "https://x", "token": "t"})
+    assert not (tmp_path / "gates" / "cloud.json").exists()

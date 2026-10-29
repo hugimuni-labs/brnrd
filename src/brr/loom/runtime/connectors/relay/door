@@ -8,6 +8,8 @@ sys.path.insert(0, str(Path(__file__).parent))
 from common import cloud, settings
 
 _, _, gate = settings()
+if gate is None:
+    sys.exit('not signed in to brnrd.dev')
 state = cloud._load_state_from_dir(gate)
 # The server mints the bot's own code and hands it ours when the link is used.
 door = cloud._request(state['brnrd_url'], 'POST', '/v1/daemons/door', token=state['token'],

@@ -34,12 +34,36 @@ MIN_LIFE_ENV = "BRNRD_FORGE_MIN_LIFE"
 MINT_PATH = "/v1/daemons/publishing-credential"
 
 
+def connected(state: Path) -> bool:
+    """``state/gates`` holds a gate a client can use: cloud.json with a
+    brnrd_url, and a token (cloud.token, or the legacy field in cloud.json).
+
+    Read only: the legacy token's migration stays in ``cloud``'s reader.
+    """
+    gates = Path(state) / "gates"
+    try:
+        doc = json.loads((gates / "cloud.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return False
+    if not isinstance(doc, dict) or not doc.get("brnrd_url"):
+        return False
+    try:
+        if (gates / "cloud.token").read_text(encoding="utf-8").strip():
+            return True
+    except OSError:
+        pass
+    return bool(doc.get("token"))
+
+
 def state_dir(home_root: Path | str, config) -> Path | None:
-    """The directory whose ``gates/`` holds the cloud gate, or None when not connected."""
-    if config.relay_state:
-        return Path(config.relay_state)
-    own = Path(home_root) / "loom"
-    return own if (own / "gates" / "cloud.json").is_file() else None
+    """The directory whose ``gates/`` holds a usable cloud gate, or None when not connected.
+
+    ``relay_state`` names where to look, not a promise: a gate whose
+    cloud.json or token is gone is not connected, so setup pairs again
+    instead of handing a door an empty state (Sasha's lost cloud.json).
+    """
+    state = Path(config.relay_state) if config.relay_state else Path(home_root) / "loom"
+    return state if connected(state) else None
 
 
 def forge_token(state: Path, *, request=None, now=time.time, margin: float = MARGIN) -> str:
