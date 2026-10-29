@@ -67,7 +67,7 @@ REGISTRY = (
     _kind("body.stopped",      "body",    "strand gen pid why",                               "loom",        "machine", once=True),
     _kind("body.unidentified", "body",    "strand gen pid why",                               "loom",        "machine"),
     _kind("body.exited",       "body",    "strand gen code why? failure_origin? failure_letters?",                             "loom",        "global",  once=True),
-    _kind("wish",              "wish",    "wish says from line thread parent? rec?",           "strand person", "global"),
+    _kind("wish",              "wish",    "wish says from line thread parent? rec?",           "strand person loom", "global"),
     _kind("wish.read",         "wish",    "wish reading by wait?",                             "strand person", "global"),
     _kind("wish.result",       "wish",    "wish kind ref line delivered cmd?",                  "strand loom",   "global"),
     _kind("wish.verdict",      "wish",    "wish as evidence ref",                              "strand person", "global"),
@@ -129,7 +129,8 @@ def admit(fact: Fact) -> None:
     """Refuse a fact of a closed resource the registry has anything against.
 
     A wish is born for someone: the fact that creates one (its id is the
-    wish) cites a letter in ``says`` or names a ``parent`` wish; one a
+    wish) cites a letter in ``says`` or names a ``parent`` wish, unless the
+    loom writes it as the resident's own (setup's onboarding wish); one a
     resident makes of a person (an ask) names the wish it unblocks, so it
     always has a ``parent``. Any other
     ``wish`` fact is a touch, id ``wish:…``; one with neither shape would be
@@ -143,7 +144,14 @@ def admit(fact: Fact) -> None:
     found = problems(fact)
     if fact.kind == "wish" and not found:
         if fact.id == fact.data["wish"]:
-            if not fact.data["says"] and not fact.data.get("parent"):
+            # The loom, the home's trusted writer, may bear the resident's own
+            # wish (setup's onboarding); everyone else cites what was said.
+            loom_resident = fact.by.startswith("loom:") and fact.data["from"] == "resident"
+            if fact.by.startswith("loom:") and not loom_resident:
+                found.append("the loom writes only the resident's own wishes")
+            elif loom_resident:
+                pass
+            elif not fact.data["says"] and not fact.data.get("parent"):
                 found.append("a new wish needs --say <letter> or --parent <wish>")
             elif fact.data["from"] == "resident" and not fact.data.get("parent"):
                 found.append("an ask needs the wish it unblocks: ask --for <wish>")

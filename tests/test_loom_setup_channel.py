@@ -265,10 +265,7 @@ def test_setup_seeds_a_self_so_a_letter_has_a_thread_to_land_on(tmp_path, monkey
     tracked = subprocess.run(['git', '-C', str(tmp_path / 'self'), 'ls-tree', '-r', '--name-only', 'main'],
                              capture_output=True, text=True, check=True).stdout.split()
     assert 'threads/inbox/README.md' in tracked and 'people/ada/agreement.md' in tracked
-    # The first body asks the name: setup's onboarding row rides the seed.
-    inbox = subprocess.run(['git', '-C', str(tmp_path / 'self'), 'show', 'main:threads/inbox/README.md'],
-                           capture_output=True, text=True, check=True).stdout
-    assert '## Onboarding (open)' in inbox and 'what to call them' in inbox
+    assert 'core/onboarding.md' in tracked
     # The pairing's file survives the seed, outside the commit.
     assert channels.read_text() == 'channels = ["desk:42"]\n'
     assert 'people/ada/channels.toml' not in tracked
@@ -276,6 +273,35 @@ def test_setup_seeds_a_self_so_a_letter_has_a_thread_to_land_on(tmp_path, monkey
     # A second run finds the self and leaves it be.
     assert setup_channel.main(['--home', str(tmp_path), '--kind', 'fake',
                                '--name', 'desk', '--person', 'ada']) == 0
+
+
+def test_setup_turns_the_onboarding_list_into_asks_the_first_wake_shows(tmp_path, monkeypatch):
+    from brr.loom.runtime.ledger import read_facts
+    from brr.loom.runtime.wishes import waits_on, wake_wishes, wishes
+    from brr.loom.runtime.lifecycle import main_snapshot
+    monkeypatch.setattr(setup_channel, 'pair', lambda *a, **kw: None)
+    argv = ['--home', str(tmp_path), '--kind', 'fake', '--name', 'desk', '--person', 'ada']
+    assert setup_channel.main(argv) == 0
+    home = Home(tmp_path)
+    found = wishes(read_facts(home))
+    # The resident's own wish, written by the loom: the person said nothing yet.
+    [own] = [w for w in found.values() if w.line == setup_channel.ONBOARDING_WISH]
+    assert own.sender == 'resident' and not own.says and not own.parent
+    asks = [w for w in found.values() if w.parent == own.id]
+    assert [w.line for w in sorted(asks, key=lambda w: w.born)][0] == 'What should I call you?'
+    assert len(asks) == 3 and {w.sender for w in asks} == {'resident'}
+    assert not [f for f in read_facts(home) if f.kind == 'wish' and not f.by.startswith('loom:')]
+    # They wait on the person, and the home thread's next body wakes with them.
+    heads = waits_on(found, main_snapshot(home))
+    assert {heads[w.id] for w in asks} == {'person:loom'}
+    wake = wake_wishes(read_facts(home), home.main_thread())
+    assert 'What should I call you?' in wake and 'What do you want help with first?' in wake
+    # The list is the self's: a line added later is asked, none twice.
+    listed = tmp_path / 'self/core/onboarding.md'
+    listed.write_text(listed.read_text() + '- Which language do you write in?\n')
+    assert setup_channel.main(argv) == 0
+    lines = [w.line for w in wishes(read_facts(home)).values() if w.parent == own.id]
+    assert len(lines) == 4 and lines.count('What should I call you?') == 1
 
 
 def test_pairing_prompt_says_the_person_writes_first(tmp_path):
