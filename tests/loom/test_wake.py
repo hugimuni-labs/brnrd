@@ -219,7 +219,11 @@ def test_a_new_self_wakes_as_the_product_character_and_init_says_it_is_editable(
     # The default budget, not an override: a fresh self's wake fits it.
     woke = wake(selfrepo.room(home, "seeded"), "w-1", owed, LOOM_BUDGET_BYTES="", LOOM_CORE=str(core))
     assert woke.returncode == 0, woke.stderr
-    assert core.read_text(encoding="utf-8").startswith(f"## core/identity.md\n{character}")
+    # The seed stance wakes whole, right after the identity.
+    stance = (selfrepo.seed_root() / "memory" / "stance.md").read_text(encoding="utf-8")
+    assert "status := claim" in stance
+    assert core.read_text(encoding="utf-8").startswith(
+        f"## core/identity.md\n{character}## memory/stance.md\n{stance}")
     assert "placeholder" not in core.read_text(encoding="utf-8")
 
     again = cli(["init", "--home", str(home)])
