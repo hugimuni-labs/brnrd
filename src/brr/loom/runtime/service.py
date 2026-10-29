@@ -775,6 +775,14 @@ def _uninstall(*, run, agents_home, system) -> int:
     return 0
 
 
+LOOM_USAGE = (
+    "usage: brnrd loom install [--home PATH] [--no-start] [--dry-run] [--dev] | uninstall | start | stop | status | logs | where | config [edit] | check\n"
+    "\n"
+    "The loom is the service brnrd's resident runs on. A body's own verbs\n"
+    "(send, wish, ask, settle, send-self, ...) are `brnrd runtime --help`."
+)
+
+
 def main(
     argv: list[str] | None = None,
     *,
@@ -817,6 +825,7 @@ def main(
         return _logs(rest, run=run, agents_home=agents_home, system=system)
     if verb == "uninstall":
         return _uninstall(run=run, agents_home=agents_home, system=system)
-    raise SystemExit(
-        "usage: brnrd loom install [--home PATH] [--no-start] [--dry-run] [--dev] | uninstall | start | stop | status | logs | where | config [edit]"
-    )
+    if verb in {"-h", "--help", "help"}:
+        print(LOOM_USAGE)
+        return 0
+    raise SystemExit(LOOM_USAGE)

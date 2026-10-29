@@ -164,7 +164,7 @@ def test_macos_install_freezes_the_home_and_abandons_the_group(tmp_path, monkeyp
     # The shim runs current's python on brr's runtime CLI.
     ran = subprocess.run([data["ProgramArguments"][0], "runtime", "no-such-verb"],
                          capture_output=True, text=True)
-    assert ran.returncode == 2 and "usage: python -m brr.loom.runtime" in ran.stderr
+    assert ran.returncode == 2 and "usage: brnrd runtime <verb>" in ran.stderr
     assert "--adapter" not in data["ProgramArguments"]
     assert data["WorkingDirectory"] == str(home.resolve())
     assert "brnrd-loom" in data["StandardOutPath"]
