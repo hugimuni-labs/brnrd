@@ -135,6 +135,24 @@ def remote_command(source: str, tail: list[str], forge_token: str | None,
     return [*args, *tail], env, "machine", note
 
 
+def read_command(root: Path, source: str, tail: list[str],
+                 ) -> tuple[list[str], dict[str, str] | None]:
+    """``(git arguments, environment)`` for a loom read of ``source``.
+
+    An https source goes out the push's token lane when the home has a
+    token, so a private repo the bot can push is one the loom can read. Any
+    other source, or no token, reads as before: ``env`` is ``None``.
+    """
+    token = load_config(root).forge_token
+    if not token or urlsplit(source).scheme != "https":
+        return list(tail), None
+    try:
+        args, env, _lane, _note = remote_command(source, tail, token)
+    except PublishError as exc:
+        raise SelfError(str(exc)) from None
+    return args, env
+
+
 def _declared(home, thread: str, name: str) -> str:
     from .adapters import repos, seat_text
     for found, source in repos(seat_text(home, thread)):

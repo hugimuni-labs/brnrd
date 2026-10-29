@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import gzip
+import io
 import json
 import logging
 import mimetypes
+import re
 import time
 from datetime import datetime, timedelta, timezone
 from pathlib import PurePosixPath
@@ -29,7 +32,7 @@ from .. import (
 )
 from ..activity_records import ACTIVITY_STALE_TTL
 from ..auth import Principal, get_db, require_daemon
-from ..models import Account, ActivityRecord, Daemon, DaemonRepo, Event, GitHubInstallation, GitHubInstalledRepo, Repo
+from ..models import Account, ActivityRecord, Daemon, DaemonRepo, LoomPart, Event, GitHubInstallation, GitHubInstalledRepo, Repo
 from ..platforms import github_app as github_app_client
 
 router = APIRouter(prefix="/v1/daemons", tags=["daemons"])
@@ -721,6 +724,64 @@ def put_loom(doc: dict[str, Any] = Body(...), principal: Principal = Depends(req
     if not permitted:
         raise HTTPException(status_code=403, detail="this repo's publish scope withholds the activity lane")
     return schemas.LoomOut(loom_updated_at=now)
+
+
+#: A part push is gzip JSON ``{"keys": [every part the loom holds], "parts":
+#: {key: {"hash": h, "part": {...}}}}``: the changed parts, and the whole key
+#: set so a thread that left the board leaves the store.
+_MAX_PARTS_GZIP = 4_000_000
+_MAX_PARTS_BYTES = 40_000_000
+_PART_KEY = re.compile(r"^(index|beads|thread/[A-Za-z0-9._-]{1,180})$")
+
+
+@router.put("/loom/parts")
+async def put_loom_parts(request: Request, principal: Principal = Depends(require_daemon), db: Session = Depends(get_db)):
+    """Store the board parts whose hash moved; answer every hash now held."""
+    raw = await request.body()
+    if len(raw) > _MAX_PARTS_GZIP:
+        raise HTTPException(status_code=413, detail="loom parts push exceeds 4 MB")
+    if (request.headers.get("content-encoding") or "").strip() == "gzip":
+        try:
+            raw = gzip.GzipFile(fileobj=io.BytesIO(raw)).read(_MAX_PARTS_BYTES + 1)
+        except (OSError, EOFError) as exc:
+            raise HTTPException(status_code=400, detail="loom parts: bad gzip") from exc
+        if len(raw) > _MAX_PARTS_BYTES:
+            raise HTTPException(status_code=413, detail="loom parts exceed 40 MB")
+    try:
+        doc = json.loads(raw)
+        keys = set(doc["keys"])
+        parts = dict(doc.get("parts") or {})
+        if not all(isinstance(k, str) and _PART_KEY.match(k) for k in keys | set(parts)):
+            raise ValueError("a part key is index, beads or thread/<id>")
+        if not set(parts) <= keys:
+            raise ValueError("a pushed part is not in keys")
+        rows = {k: (str(v["hash"])[:64], v["part"]) for k, v in parts.items()}
+    except (ValueError, KeyError, TypeError) as exc:
+        raise HTTPException(status_code=422, detail=_safe_detail(f"loom parts: {exc}")) from exc
+    daemon = _current_daemon(db, principal)
+    if daemon is None:
+        daemon = _upsert_daemon(db, principal, schemas.DaemonRegister(daemon_name=LOOM_DAEMON_NAME))
+    now = datetime.now(timezone.utc)
+    if not publish_scope.lane_permitted(db, repo_id=principal.repo_id, lane="activity"):
+        # A refusal also drops the copy, as the snapshot does.
+        db.execute(delete(LoomPart).where(LoomPart.daemon_id == daemon.id))
+        db.commit()
+        raise HTTPException(status_code=403, detail="this repo's publish scope withholds the activity lane")
+    held = {row.key: row for row in db.execute(select(LoomPart).where(LoomPart.daemon_id == daemon.id)).scalars()}
+    for key in set(held) - keys:
+        db.delete(held.pop(key))
+    for key, (digest, part) in rows.items():
+        body = gzip.compress(json.dumps(part, separators=(",", ":")).encode(), 6)
+        row = held.get(key)
+        if row is None:
+            row = held[key] = LoomPart(daemon_id=daemon.id, key=key)
+            db.add(row)
+        row.account_id, row.repo_id = principal.account_id, principal.repo_id
+        row.hash, row.body, row.updated_at = digest, body, now
+    daemon.online = True
+    daemon.last_seen_at = now
+    db.commit()
+    return {"hashes": {key: row.hash for key, row in held.items()}}
 
 
 @router.put("/runners", response_model=schemas.RunnersOut)

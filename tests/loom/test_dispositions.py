@@ -148,3 +148,34 @@ def test_bad_refs_and_unbound_flags_refuse_and_write_nothing(ledger):
 def test_place_ignores_case_whitespace_and_punctuation():
     assert place("Hello,  World!", "hello world") == (0, len("Hello,  World"))
     assert place("abc", "...") is None
+
+
+def test_a_pr_result_the_running_commit_merged_reads_delivered(ledger, tmp_path, monkeypatch):
+    from brr.loom.runtime import receipts
+    from brr.loom.runtime.selfrepo import git
+    home, seat = ledger
+    # The loom's source: brnrd, with pull request 7 merged and nothing recorded.
+    bare = tmp_path / "brnrd.git"
+    git(None, "init", "--quiet", "--bare", "-b", "main", str(bare))
+    src = tmp_path / "brnrd"
+    git(None, "clone", "--quiet", str(bare), str(src))
+    for args in (["commit", "--allow-empty", "-qm", "base"], ["switch", "-qc", "loom/x"],
+                 ["commit", "--allow-empty", "-qm", "fix"], ["switch", "-q", "main"],
+                 ["merge", "--no-ff", "-qm", "Merge pull request #7 from acme/loom/x", "loom/x"]):
+        git(src, "-c", "user.name=t", "-c", "user.email=t@t", *args)
+    monkeypatch.setattr(receipts, "source_root", lambda: src)
+    letter = inject_letter(home.root, to="thread:work", body=BODY)
+    done = send(seat, "--re", letter, "--wish", "new:Seven", "--ref", "pr:7",
+                "--wish", "new:Url", "--ref", "https://github.com/acme/brnrd/pull/7",
+                "--wish", "new:Other", "--ref", "https://github.com/acme/widget/pull/7",
+                "--wish", "new:Eight", "--ref", "pr:8", "Done.\nMore")
+    assert done.returncode == 0, done.stderr
+    receipts.record_start(home, read_facts(home))
+    states = {line: by_line(home, line).state for line in ("Seven", "Url", "Other", "Eight")}
+    assert states == {"Seven": "delivered", "Url": "delivered",
+                      "Other": "granting", "Eight": "granting"}
+    assert by_line(home, "Seven").results[0]["held"] == git(src, "rev-parse", "HEAD").stdout.strip()
+    # Rolled back before the merge: the latest start no longer holds it.
+    git(src, "checkout", "-q", "--detach", "HEAD^1")
+    receipts.record_start(home, read_facts(home))
+    assert by_line(home, "Seven").state == "granting"

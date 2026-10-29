@@ -65,24 +65,24 @@ if own == "opener":
             if not Path({str(opened)!r}).exists():
                 again = ctx.jack("post")
                 assert again.raw == "", again.raw
-                Path({str(opened)!r}).write_text(view.raw)
+                ctx.handoff({str(opened)!r}, view.raw)
         # No mail is expected only before the test releases the reply.
         # A holding worker can still send a letter to its opener.
         if "opened: new-work holding · owed 0" in context and not Path({str(root / "changed")!r}).exists():
             assert not view.letters
-            Path({str(root / "changed")!r}).write_text(view.raw)
+            ctx.handoff({str(root / "changed")!r}, view.raw)
         for letter in view.letters:
             if letter.body == "work answered":
                 # A post repeats no line it said before: holding was shown here or at an earlier post.
                 assert "opened: new-work holding · owed 0" in context or Path({str(root / "changed")!r}).exists(), context
                 ctx.send("thread:opener", note="read answer", re=letter.id)
-                Path({str(reply)!r}).write_text(letter.body)
+                ctx.handoff({str(reply)!r}, letter.body)
         time.sleep(0.03)
 else:
     letters = ctx.owed()
     assert own == "new-work" and [l.body.split("\\n", 1)[0] for l in letters] == ["New work"]
     assert "New work\\nDetails" in ctx.wake()
-    Path({str(ready)!r}).write_text("ready")
+    ctx.handoff({str(ready)!r}, "ready")
     while not Path({str(root / "clear-owed")!r}).exists():
         ctx.jack("post")
         time.sleep(0.03)
@@ -197,7 +197,7 @@ git(clone, "reset", "--hard", "origin/main")
 (ctx.room / "port/out/taint-pending.json").write_text('{{"tool":"WebSearch"}}')
 tainted = send("tainted-open")
 assert not (clone / "threads/tainted-open").exists()
-Path({str(receipt)!r}).write_text(json.dumps({{k: [p.returncode, p.stderr] for k, p in
+ctx.handoff({str(receipt)!r}, json.dumps({{k: [p.returncode, p.stderr] for k, p in
                                             [("existing", existing), ("unsafe", unsafe),
                                              ("failed", failed), ("tainted", tainted), ("duplicate", duplicate), ("injected", injected)]}}))
 ''')

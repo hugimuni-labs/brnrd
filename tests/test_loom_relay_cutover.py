@@ -272,11 +272,11 @@ def test_a_missing_attachment_holds_the_cursor_three_pulls_then_lands(home):
 # ── the molt analog: a bare line after the speaker released ────────────
 
 
-def test_bare_message_after_the_speaker_released_wakes_that_thread(home):
+def test_bare_message_after_the_speaker_released_goes_to_inbox(home):
     spoke(home, "s-first", "first")
     append(home, Fact(kind="released", by="loom:aaaa", id="released:first:1",
                       data={"thread": "first", "strand": "s-first", "gen": 1,
                             "why": "molt", "install": "aaaa"}))
     relay.pull_once(home, FakeClient([event("ev_late")]), 0)
     (letter,) = [f for f in kinds(home, "letter") if f.id == "letter:relay:telegram:555:ev_late"]
-    assert letter.data["to"] == "thread:first"
+    assert letter.data["to"] == "thread:inbox"

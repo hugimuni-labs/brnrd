@@ -183,6 +183,31 @@ def test_bad_out_receipt_never_enrols_person(tmp_path, receipt):
     assert not (tmp_path / 'self/people/ada/channels.toml').exists()
 
 
+@pytest.mark.parametrize('code, says', [(3, 'was not sent'), (1, 'may or may not have been sent')])
+def test_a_heard_code_pairs_even_when_the_answer_fails_and_says_why(tmp_path, code, says):
+    home = home_at(tmp_path)
+    folder = tmp_path / 'loom/connectors/fake'
+    folder.mkdir(parents=True)
+    (folder / 'carries').write_text('')
+    program = folder / 'out'
+    program.write_text('#!/usr/bin/env python3\nimport sys\n'
+                       "print('relay: event not found for this account', file=sys.stderr)\n"
+                       f'sys.exit({code})\n')
+    program.chmod(0o755)
+    said = []
+    def send_code(line):
+        said.append(line)
+        if code_in(line):
+            drop = Path(connector.environment(home, 'desk')['BRNRD_STATE']) / 'in'
+            (drop / 'code.md').write_text(_front(dict(kind='letter', id='code',
+                        to='42', **{'from': '42'}), '/start ' + code_in(line)))
+    assert setup_channel.pair(home, 'fake', 'desk', 'ada', out=send_code) == 'desk:42'
+    warning = next(line for line in said if line.startswith('Your code arrived'))
+    assert says in warning and 'event not found for this account' in warning
+    assert load_config(tmp_path).connectors == ('desk=fake',)
+    assert (tmp_path / 'self/people/ada/channels.toml').read_text() == 'channels = ["desk:42"]\n'
+
+
 def test_home_folder_pairs_ingests_and_sends_native_ids(tmp_path):
     from brr.daemon2.leases import LocalLeaseAuthority
     from brr.loom.runtime import speak
@@ -240,6 +265,10 @@ def test_setup_seeds_a_self_so_a_letter_has_a_thread_to_land_on(tmp_path, monkey
     tracked = subprocess.run(['git', '-C', str(tmp_path / 'self'), 'ls-tree', '-r', '--name-only', 'main'],
                              capture_output=True, text=True, check=True).stdout.split()
     assert 'threads/inbox/README.md' in tracked and 'people/ada/agreement.md' in tracked
+    # The first body asks the name: setup's onboarding row rides the seed.
+    inbox = subprocess.run(['git', '-C', str(tmp_path / 'self'), 'show', 'main:threads/inbox/README.md'],
+                           capture_output=True, text=True, check=True).stdout
+    assert '## Onboarding (open)' in inbox and 'what to call them' in inbox
     # The pairing's file survives the seed, outside the commit.
     assert channels.read_text() == 'channels = ["desk:42"]\n'
     assert 'people/ada/channels.toml' not in tracked
@@ -304,20 +333,20 @@ def test_guided_setup_asks_in_plain_words_and_derives_the_channel_name(tmp_path,
     import io
     calls = []
     monkeypatch.setattr(setup_channel, 'pair', lambda *a, **kw: calls.append(a))
-    monkeypatch.setattr(setup_channel, '_full_name', lambda: 'Sasha Petrova')
+    monkeypatch.setattr('getpass.getuser', lambda: 'Sasha.Petrova')
     monkeypatch.setattr(setup_channel.shutil, 'which', lambda name: f'/bin/{name}')
     monkeypatch.setattr('brr.loom.runtime.service._windows', lambda home, shell: None)
     monkeypatch.setattr('brr.loom.runtime.service._defaults', lambda: [('claude', ''), ('codex', '')])
-    # Piped answers: codex, Enter for Telegram, Enter for the OS name.
-    monkeypatch.setattr('sys.stdin', io.StringIO('2\n\n\n'))
+    # Piped answers: codex, Enter for Telegram; nothing asks a name.
+    monkeypatch.setattr('sys.stdin', io.StringIO('2\n\n'))
     assert setup_channel.main(['--home', str(tmp_path)]) == 0
     out = capsys.readouterr().out
-    for asked in ('Which AI should brnrd think with?', 'How do you want to talk to brnrd?',
-                  'What should brnrd call you?', 'brnrd will call you Sasha Petrova'):
+    for asked in ('Which AI should brnrd think with?', 'How do you want to talk to brnrd?'):
         assert asked in out
-    for gone in ('Channel kind', 'Name this channel', 'Your person name', 'fake'):
+    # The name is the resident's first question, not a form field.
+    for gone in ('Channel kind', 'Name this channel', 'Your person name', 'fake', 'call you', 'Your name'):
         assert gone not in out
-    assert [a[1:] for a in calls] == [('telegram', 'telegram', 'sasha-petrova')]
+    assert [a[1:] for a in calls] == [('telegram', 'telegram', 'sasha.petrova')]
     assert (tmp_path / 'loom' / 'preferences.toml').read_text().startswith('model.default = "codex"')
     assert load_config(tmp_path).body is None
 

@@ -45,7 +45,7 @@ if own == "child":
     path.write_text(path.read_text().replace("Plan: original", "Plan: completed"))
     git(ctx.room / "self", "add", "threads/child/README.md")
     git(ctx.room / "self", "commit", "-m", "child plan")
-    Path({str(ready)!r}).write_text("holding")
+    ctx.handoff({str(ready)!r}, "holding")
     # The unlanded commit is left in room: the stop is refused and names the
     # command that lands it, so the body waits for acceptance on its posts.
     blocked = ctx.jack("stop").raw
@@ -56,7 +56,7 @@ if own == "child":
         time.sleep(0.03)
     assert "settled: accepted result" not in ctx.jack("post").raw
     verb("send-self")
-    Path({str(ended)!r}).write_text(boundary)
+    ctx.handoff({str(ended)!r}, boundary)
     sys.exit(0)
 else:
     for letter in ctx.owed():
@@ -75,14 +75,14 @@ else:
                 verb("settle", "child", "--why", "accepted result")
             elif "closed thread child climbed here" in letter.body:
                 assert "late work" in letter.body
-                Path({str(climbed)!r}).write_text(letter.body)
+                ctx.handoff({str(climbed)!r}, letter.body)
                 ctx.send("thread:opener", note="read late work", re=letter.id)
                 # A room that predates acceptance must still be able to reopen.
                 git(ctx.room / "self", "reset", "--hard", before_close)
                 verb("send", "--to", "thread:child", "--reopen", "second work")
             elif letter.body == "second answer":
                 ctx.send("thread:opener", note="accepted second answer", re=letter.id)
-                Path({str(answer)!r}).write_text(letter.body)
+                ctx.handoff({str(answer)!r}, letter.body)
                 sys.exit(0)
             else:
                 ctx.send("thread:opener", note="read", re=letter.id)
@@ -132,7 +132,7 @@ assert proc.returncode == 0, proc.stderr + proc.stdout
 time.sleep(1.5)  # the loom ticks every 0.05s here: the letter is owed to a closed thread
 for letter in letters:
     ctx.send("thread:work", note="settled", re=letter.id)
-Path({str(done)!r}).write_text("ok")
+ctx.handoff({str(done)!r}, "ok")
 ''')
     loom = Loom(root)
     loom.start()

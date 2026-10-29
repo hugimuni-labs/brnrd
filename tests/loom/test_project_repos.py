@@ -303,7 +303,7 @@ else:
     subprocess.check_call(
         ["git", "-c", "commit.gpgsign=false", "commit", "-m", "keep"], cwd=checkout)
     sha = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=checkout, text=True).strip()
-    Path({str(pred)!r}).write_text(json.dumps({{
+    ctx.handoff({str(pred)!r}, json.dumps({{
         "sha": sha, "cwd": str(Path.cwd()), "room": str(ctx.room),
     }}))
     self_clone = ctx.room / "self"

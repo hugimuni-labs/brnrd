@@ -112,12 +112,19 @@ def pair(home, kind, name, person, *, timeout=180, out=print, qr=None):
                     result = subprocess.run([str(folder / 'out'), str(reply)], env=env,
                                             capture_output=True, text=True, timeout=60)
                 if result.returncode != 0:
-                    raise ValueError('Pairing reply failed or may have sent; channel was not enabled')
-                # A zero exit is a receipt only with the same output grammar.
-                receipt = json.loads(result.stdout)
-                if (not isinstance(receipt, dict) or not isinstance(receipt.get('ids'), list) or
-                        any(not isinstance(i, (str, int)) or isinstance(i, bool) for i in receipt['ids'])):
-                    raise ValueError('Pairing out returned no ids receipt')
+                    # The heard code is the proof: it came from this chat, so
+                    # the channel is enabled either way. Only the answer
+                    # failed; say why (the connector's last stderr line is the
+                    # server's own reason) and go on.
+                    why = (result.stderr.strip().splitlines() or [f'{kind}/out exited {result.returncode}'])[-1]
+                    sent = 'was not sent' if result.returncode == 3 else 'may or may not have been sent'
+                    out(f"Your code arrived, so this chat is paired, but the 'Paired ✓' answer {sent}: {why}")
+                else:
+                    # A zero exit is a receipt only with the same output grammar.
+                    receipt = json.loads(result.stdout)
+                    if (not isinstance(receipt, dict) or not isinstance(receipt.get('ids'), list) or
+                            any(not isinstance(i, (str, int)) or isinstance(i, bool) for i in receipt['ids'])):
+                        raise ValueError('Pairing out returned no ids receipt')
                 path.unlink()
                 if path.with_suffix('.d').exists():
                     shutil.rmtree(path.with_suffix('.d'))
@@ -234,24 +241,8 @@ def _channel_name(home, kind):
     return next(n for n in (kind, *(f'{kind}-{i}' for i in range(2, 100))) if n not in taken)
 
 
-def _full_name():
-    """The OS account's display name: macOS ``id -F``, else the passwd comment."""
-    import getpass
-    try:
-        name = subprocess.run(['id', '-F'], capture_output=True, text=True, timeout=5).stdout.strip()
-    except (OSError, subprocess.SubprocessError):
-        name = ''
-    if not name:
-        try:
-            import pwd
-            name = pwd.getpwuid(os.getuid()).pw_gecos.split(',')[0].strip()
-        except (ImportError, KeyError):
-            name = ''
-    return name or getpass.getuser()
-
-
 def _person_id(name):
-    """A people/ folder name from what a person wants to be called."""
+    """A people/ folder name from the OS login."""
     slug = re.sub(r'[^a-z0-9._-]+', '-', name.strip().lower()).strip('-._')
     return slug or 'me'
 
@@ -336,10 +327,10 @@ def main(argv=None):
         if args.person or len(people) == 1:
             person = args.person or people[0]
         else:
-            _step('What should brnrd call you?')
-            called = _ask('Your name:', _full_name())
-            person = _person_id(called)
-            _ok(f'brnrd will call you {called}')
+            # An internal id, never shown: brnrd asks the name itself in its
+            # first conversation (the seed's inbox onboarding row).
+            import getpass
+            person = _person_id(getpass.getuser())
         # A letter lands only on a thread on the self's main: seed it before pairing.
         if init_self(home.root, person=person).startswith('initialized '):
             _ok(IDENTITY_NOTE)

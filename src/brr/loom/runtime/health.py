@@ -119,6 +119,23 @@ def _episodes(facts, install: str | None, now: float) -> dict[str, tuple[Fact, F
     return standing
 
 
+def acted(facts, install: str | None, since: str) -> str:
+    """What the loom did about the disk since an episode began: reaped paths and pruned caches."""
+    start, reaped, pruned, freed = _seconds(since), 0, 0, 0
+    for kind in ("room.reaped", "loom.pruned"):
+        for fact in kind_facts(facts, kind):
+            if (install is not None and fact.by != f"loom:{install}") or _seconds(fact.at) < start:
+                continue
+            freed += int(fact.data.get("bytes") or 0)
+            if kind == "room.reaped":
+                reaped += 1
+            else:
+                pruned += 1
+    done = ([f"reaped {reaped} path{'s' * (reaped > 1)}"] if reaped else []) + (
+        [f"pruned caches{f' {pruned}x' if pruned > 1 else ''}"] if pruned else [])
+    return f"; did: {', '.join(done)}, {freed / 1024 ** 3:.1f} GB freed" if done else ""
+
+
 def degraded_line(facts, install: str | None = None, now: float | None = None) -> str:
     """The gauge: per standing condition, since when, where it broke, and how often it dipped."""
     parts = []
@@ -129,12 +146,13 @@ def degraded_line(facts, install: str | None = None, now: float | None = None) -
         dips = int(data.get("dips") or 1)
         first = str(data.get("episode") or data.get("since", ""))[11:16]
         since = str(data.get("since", ""))[11:16]
+        did = acted(facts, install, str(data.get("episode") or data.get("since"))) if step == "disk" else ""
         if back is None:
             part = f"{step} since {since}Z ({kind}"
-            part += f"; dip {dips} since {first}Z)" if dips > 1 else ")"
+            part += (f"; dip {dips} since {first}Z" if dips > 1 else "") + did + ")"
         else:
             part = (f"{step} up since {_iso(_up(back))[11:16]}Z after {dips} dip{'s' * (dips > 1)} "
-                    f"since {first}Z ({kind}; told, watching)")
+                    f"since {first}Z ({kind}{did}; told, watching)")
         parts.append(part)
     return "degraded: " + "; ".join(parts) if parts else ""
 

@@ -15,8 +15,11 @@ each, ``CLONE_AGE`` after release; self and port stay until the room goes.
 A strand whose thread is settled (closed on main, no open wish) skips both
 ages and the latest-strand keep: its room goes once released and drained, and
 a wish that reopens the thread wakes it into a fresh room.
-``loom.log`` rotates at ``LOG_MAX`` to three generations. Below the disk floor
-``disk`` raises, so the guard opens a degradation, and the pass runs at once.
+``loom.log`` rotates at ``LOG_MAX`` to three generations. Free space counts
+what macOS purges on demand (``important``); below the disk floor
+``disk`` raises, so the guard opens a degradation, and the pass runs at once;
+a pass that ends still under the floor prunes the package caches (``PRUNE``)
+and writes ``loom.pruned`` with the bytes it freed, which the gauge shows.
 The pass runs off the loop: ``leftovers`` fetches into every room it reads.
 
 Loose files and leftovers are work a body left: ``left`` lists them for the
@@ -29,6 +32,7 @@ a body has settled; every other reason still keeps it.
 from __future__ import annotations
 
 import argparse
+import ctypes
 import json
 import os
 import re
@@ -37,7 +41,7 @@ import subprocess
 import sys
 import threading
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 EVERY = 3600
@@ -47,20 +51,23 @@ BROKEN_AGE = 14 * 86400
 LOG_MAX = 20 * 1024 * 1024
 LOG_KEEP = 3
 FLOOR_BYTES = 5 * 1024 ** 3
-FLOOR_SHARE = 0.05
 # What the loom and the harness put at a room's root; checkouts are read by leftovers.
 # lib/ holds links into a person's own folders; nothing here follows a link.
 PLUMBING = {"self", "port", ".body", ".starting", ".claude", ".pytest-tmp", "delegates", "lib"}
 # Reasons only a body can settle; the rest are the loom's or time's.
 BODY_REASONS = ("loose files", "leftovers in", "a stash in")
 KEPT = "loom/reap-kept.json"
+# Caches a tool rebuilds on its next install; each runs only where its binary is on PATH.
+PRUNE = (("uv", "cache", "prune"), ("npm", "cache", "verify"), ("pip", "cache", "purge"))
+PRUNE_TIMEOUT = 600
 
 
 class DiskFloor(Exception):
     """Free space under the floor; ``grade`` counts the halvings of the floor it is below."""
 
-    def __init__(self, free: int, least: int):
-        super().__init__(f"{free >> 20} MB free on the home's volume, under the floor of {least >> 20} MB")
+    def __init__(self, free: int, least: int, plain: int | None = None):
+        held = f" ({plain >> 20} MB before macOS purges)" if plain is not None and plain != free else ""
+        super().__init__(f"{free >> 20} MB free on the home's volume{held}, under the floor of {least >> 20} MB")
         self.grade, mark = 0, least // 2
         while free < mark and self.grade < 8:
             self.grade, mark = self.grade + 1, mark // 2
@@ -95,10 +102,52 @@ def heads(path: Path) -> dict[str, dict[str, str]]:
     return found
 
 
-def floor(path: Path) -> tuple[int, int]:
-    """``(free, floor)`` in bytes for the volume holding ``path``."""
+def important(path: Path) -> int | None:
+    """Bytes macOS frees for an important write at ``path``, purgeable space (local snapshots, caches) counted; None off macOS."""
+    if sys.platform != "darwin":
+        return None
+    try:
+        cf = ctypes.CDLL("/System/Library/Frameworks/CoreFoundation.framework/CoreFoundation")
+        cf.CFURLCreateFromFileSystemRepresentation.restype = ctypes.c_void_p
+        cf.CFURLCreateFromFileSystemRepresentation.argtypes = [ctypes.c_void_p, ctypes.c_char_p, ctypes.c_long, ctypes.c_bool]
+        cf.CFURLCopyResourcePropertyForKey.restype = ctypes.c_bool
+        cf.CFURLCopyResourcePropertyForKey.argtypes = [ctypes.c_void_p, ctypes.c_void_p, ctypes.POINTER(ctypes.c_void_p), ctypes.c_void_p]
+        cf.CFNumberGetValue.restype = ctypes.c_bool
+        cf.CFNumberGetValue.argtypes = [ctypes.c_void_p, ctypes.c_int, ctypes.c_void_p]
+        cf.CFRelease.argtypes = [ctypes.c_void_p]
+        key = ctypes.c_void_p.in_dll(cf, "kCFURLVolumeAvailableCapacityForImportantUsageKey")
+        raw = os.fsencode(path)
+        url = cf.CFURLCreateFromFileSystemRepresentation(None, raw, len(raw), True)
+        if not url:
+            return None
+        try:
+            value, out = ctypes.c_void_p(), ctypes.c_int64()
+            if not cf.CFURLCopyResourcePropertyForKey(url, key, ctypes.byref(value), None) or not value.value:
+                return None
+            try:
+                return out.value if cf.CFNumberGetValue(value, 4, ctypes.byref(out)) and out.value > 0 else None  # 4: kCFNumberSInt64Type
+            finally:
+                cf.CFRelease(value)
+        finally:
+            cf.CFRelease(url)
+    except (OSError, AttributeError, ValueError):
+        return None
+
+
+def space(path: Path) -> tuple[int, int, int]:
+    """``(free, plain, total)``: ``free`` counts what macOS purges on demand, ``plain`` is statvfs's free."""
     usage = shutil.disk_usage(path)
-    return usage.free, max(FLOOR_BYTES, int(usage.total * FLOOR_SHARE))
+    return max(usage.free, important(path) or 0), usage.free, usage.total
+
+
+def floor(path: Path) -> tuple[int, int]:
+    """``(free, floor)`` in bytes for the volume holding the home at ``path``; the share is ``disk_floor_pct``.
+
+    Free counts purgeable space: a local snapshot pins deleted blocks that statvfs reports as used,
+    and macOS hands them back the moment a write needs them."""
+    from .config import load_config
+    free, _plain, total = space(path)
+    return free, max(FLOOR_BYTES, int(total * load_config(path).disk_floor_pct / 100))
 
 
 def loose(room: Path) -> list[str]:
@@ -291,7 +340,7 @@ class Reaper:
             self.next = 0.0  # Once per streak: the pass is not a tick-rate loop.
         self.below = free < least
         if self.below:
-            raise DiskFloor(free, least)
+            raise DiskFloor(free, least, space(self.home.root)[1])
 
     def step(self) -> None:
         """Until a pass succeeds again, raise the last pass's failure for the loop's guard."""
@@ -306,6 +355,9 @@ class Reaper:
         try:
             self.rotate()
             self.reap()
+            free, least = floor(self.home.root)
+            if free < least:   # measured after the reap: a reap that cleared the floor prunes nothing
+                self.prune()
             self.failing = None
         except Exception as exc:
             self.failing = (exc, exc.__traceback__)
@@ -322,6 +374,29 @@ class Reaper:
             if older.exists():
                 os.replace(older, log.with_name(f"loom.log.{n + 1}"))
         os.replace(log, log.with_name("loom.log.1"))
+
+    def prune(self) -> None:
+        """Still under the floor after the reap: prune the package caches, one fact for what freed."""
+        ran, before = [], floor(self.home.root)[0]
+        for command in PRUNE:
+            if not shutil.which(command[0]):
+                continue
+            try:
+                subprocess.run(command, capture_output=True, timeout=PRUNE_TIMEOUT, check=False)
+            except (OSError, subprocess.TimeoutExpired) as exc:
+                self.log(self.home, f"prune: {' '.join(command)} failed: {exc}")
+                continue
+            ran.append(" ".join(command))
+        if not ran:
+            return
+        from brr.daemon2.facts import Fact
+        from .ledger import append
+        freed = max(0, floor(self.home.root)[0] - before)
+        install = self.home.install_id()
+        append(self.home, Fact(kind="loom.pruned", by=f"loom:{install}",
+                               at=datetime.fromtimestamp(time.time(), timezone.utc).isoformat(),
+                               data={"install": install, "ran": ran, "bytes": freed}))
+        self.log(self.home, f"prune: {', '.join(ran)} freed {freed / 1024 ** 3:.2f} GB")
 
     def reap(self) -> None:
         from .ledger import read_facts

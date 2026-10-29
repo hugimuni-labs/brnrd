@@ -14,6 +14,8 @@ SECOND_LINES = ["Part 1 merged.\nkey: next is (c), not a field", 'Part 1 merged.
 @pytest.mark.parametrize("text", SECOND_LINES)
 def test_a_two_line_molt_why_and_note_reach_the_ledger_whole(ledger, text):
     home, seat = ledger
+    readme = next(seat.glob("*/threads/work/README.md"))
+    readme.write_text(readme.read_text() + "\n## Now\n- part 2\n")
     command(home, seat, "molt", "--why", text)
     command(home, seat, "send", "--re", "p-test/none", "--to", "thread:work", "--note", text)
     _ingest(home)

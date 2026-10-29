@@ -110,6 +110,33 @@ def test_a_released_lease_is_free_at_once(pair):
     assert taken is not None and taken.gen == 2
 
 
+def test_a_handover_yields_to_the_preferred_install_until_ttl(tmp_path):
+    remote = _bare(tmp_path / "remote.git")
+    clock_a, clock_b, clock_c = Clock(1000), Clock(50_000), Clock(7)
+    a = _authority(tmp_path, "a", remote, clock_a)
+    b = _authority(tmp_path, "b", remote, clock_b)
+    c = _authority(tmp_path, "c", remote, clock_c)
+    lease = a.acquire("inbox", "aaaa", 90)
+    assert a.release(lease, preferred="cccc", ttl=90)
+    # Neither the releaser nor a bystander takes it while cccc may.
+    assert a.acquire("inbox", "aaaa", 90) is None
+    assert b.acquire("inbox", "bbbb", 90) is None
+    clock_b.now += 60
+    assert b.acquire("inbox", "bbbb", 90) is None
+    # cccc never came: past ttl on b's own clock, anyone takes it.
+    clock_b.now += 40
+    taken = b.acquire("inbox", "bbbb", 90)
+    assert taken is not None and taken.gen == 2
+
+
+def test_the_preferred_install_takes_a_handover_at_once(pair):
+    a, b, *_ = pair
+    lease = a.acquire("inbox", "aaaa", 90)
+    assert a.release(lease, preferred="bbbb", ttl=90)
+    taken = b.acquire("inbox", "bbbb", 90)
+    assert taken is not None and taken.gen == 2
+
+
 def test_ledger_rides_the_lease_push(tmp_path):
     remote = _bare(tmp_path / "remote.git")
     holder = {}

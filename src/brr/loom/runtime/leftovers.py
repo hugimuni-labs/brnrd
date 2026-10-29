@@ -11,7 +11,7 @@ from pathlib import Path
 from .adapters import repos, seat_text
 from .ledger import read_facts
 from .project import fold, sender_threads
-from .publish import _opened, _uncovered
+from .publish import _opened, _uncovered, read_command
 from .selfrepo import SelfError, git
 
 
@@ -71,10 +71,18 @@ def leftovers(home, strand: str, only: str | None = None) -> tuple[Leftover, ...
     declared = dict(repos(seat_text(home, thread), home)) if thread else {}
     result = []
     for checkout in sorted(room.iterdir()):
-        if not (checkout / '.git').exists() or only is not None and checkout.name != only:
+        # A link into a person's folder is not the room's; deleting the room unlinks it.
+        if checkout.is_symlink() or not (checkout / '.git').exists() \
+                or only is not None and checkout.name != only:
             continue
         edits = ()
         try:
+            if (checkout / '.git').is_file():
+                # Its branches and refs are another repository's: counting them
+                # counts that repository, and a fetch here writes into it.
+                common = git(checkout, 'rev-parse', '--path-format=absolute',
+                             '--git-common-dir').stdout.strip()
+                raise SelfError(f'a linked worktree of {common}')
             edits = _edits(checkout)
             if checkout.name == 'self':
                 # Local main is authoritative; the room's main is a birth snapshot.
@@ -85,8 +93,10 @@ def leftovers(home, strand: str, only: str | None = None) -> tuple[Leftover, ...
                 source = declared.get(checkout.name)
                 if source is None:
                     raise SelfError('no declared source for this checkout')
-                git(checkout, 'fetch', '--prune', '--no-tags', '--no-write-fetch-head', '--',
-                    source, '+refs/heads/*:refs/leftovers/source/*')
+                args, env = read_command(home.root, source, [
+                    'fetch', '--prune', '--no-tags', '--no-write-fetch-head', '--',
+                    source, '+refs/heads/*:refs/leftovers/source/*'])
+                git(checkout, *args, env=env)
                 covered = ['--glob=refs/leftovers/source/*']
                 covered += [str(f.data['commit']) for f in facts
                             if f.kind == 'branch.published' and f.data.get('thread') == thread

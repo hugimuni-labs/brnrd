@@ -53,19 +53,19 @@ out = ctx.room / "task.output"
 with out.open("w") as handle:
     call = subprocess.Popen(["/bin/sh", "-c", f": fake-tool-wrapper; {{sys.executable}} {str(work)!r}; echo done"],
                             stdout=handle, stderr=handle)
-Path({str(started)!r}).write_text("1")
+ctx.handoff({str(started)!r}, "1")
 code = call.wait()
 out.unlink()
 view = ctx.jack("post", {{"hook_event_name": "PostToolUseFailure", "tool_name": "Bash", "error": "Exit code 1"}})
 for letter in view.letters:
     ctx.send(f"thread:{{own}}", note="read", re=letter.id)
 paused = json.loads((ctx.room / "port/.paused.json").read_text())
-Path({str(seen)!r}).write_text(json.dumps({{"code": code, "raw": view.raw, "paused": paused,
+ctx.handoff({str(seen)!r}, json.dumps({{"code": code, "raw": view.raw, "paused": paused,
     "letters": [letter.body for letter in view.letters]}}))
 while not Path({str(go)!r}).exists():
     time.sleep(0.05)
 resumed = subprocess.run([sys.executable, "-m", "brr.loom.runtime", "resume"], capture_output=True, text=True)
-Path({str(go)!r}).write_text(resumed.stdout)
+ctx.handoff({str(go)!r}, resumed.stdout)
 ''')
     (root / "loom/bodies/fake/jack").write_text("hooks\n")
     (root / "loom/bodies/fake/pause").write_text("fake-tool-wrapper\n")
@@ -123,13 +123,13 @@ while ctx.jack("post").letters:
     time.sleep(0.03)
 time.sleep(0.2)
 call = subprocess.Popen(["/bin/sh", "-c", ": fake-tool-wrapper; /bin/sh -c 'until [ -e {finish} ]; do sleep 0.05; done'"])
-Path({str(started)!r}).write_text("1")
+ctx.handoff({str(started)!r}, "1")
 call.wait()
 view = ctx.jack("post", {{"hook_event_name": "PostToolUseFailure", "tool_name": "Bash", "error": "Exit code 1"}})
 for letter in view.letters:
     ctx.send(f"thread:{{own}}", note="read", re=letter.id)
 subprocess.run([sys.executable, "-m", "brr.loom.runtime", "drop"], capture_output=True, text=True)
-Path({str(seen)!r}).write_text(view.raw)
+ctx.handoff({str(seen)!r}, view.raw)
 ''')
     (root / "loom/bodies/fake/jack").write_text("hooks\n")
     (root / "loom/bodies/fake/pause").write_text("fake-tool-wrapper\n")
@@ -167,13 +167,13 @@ call = subprocess.Popen(["/bin/sh", "-c", ": fake-tool-wrapper; sleep 30; echo d
 time.sleep(1.1)
 while ctx.jack("post").letters:
     time.sleep(0.03)
-Path({str(started)!r}).write_text("1")
+ctx.handoff({str(started)!r}, "1")
 deadline = time.monotonic() + 15
 while not (view := ctx.jack("post")).letters and time.monotonic() < deadline:
     time.sleep(1.5)  # a long generation: no boundary for a while
 alive = call.poll() is None
 call.kill()
-Path({str(seen)!r}).write_text(json.dumps({{"alive": alive, "letters": [letter.body for letter in view.letters],
+ctx.handoff({str(seen)!r}, json.dumps({{"alive": alive, "letters": [letter.body for letter in view.letters],
     "paused": (ctx.room / "port/.paused.json").exists()}}))
 ''')
     (root / "loom/bodies/fake/jack").write_text("hooks\n")
@@ -209,12 +209,12 @@ while ctx.jack("post").letters:
 ctx.jack("post", {{"agent_id": "d1", "agent_type": "general-purpose", "tool_name": "Bash"}})
 time.sleep(1.1)
 call = subprocess.Popen(["/bin/sh", "-c", ": fake-tool-wrapper; sleep 30; echo done"])
-Path({str(started)!r}).write_text("1")
+ctx.handoff({str(started)!r}, "1")
 time.sleep(3)
 alive = call.poll() is None
 call.kill()
 view = ctx.jack("post")
-Path({str(seen)!r}).write_text(json.dumps({{"alive": alive, "letters": [letter.body for letter in view.letters],
+ctx.handoff({str(seen)!r}, json.dumps({{"alive": alive, "letters": [letter.body for letter in view.letters],
     "paused": (ctx.room / "port/.paused.json").exists()}}))
 ''')
     (root / "loom/bodies/fake/jack").write_text("hooks\n")
@@ -253,12 +253,12 @@ while ctx.jack("post").letters:
     time.sleep(0.03)
 time.sleep(1.1)
 call = subprocess.Popen(["/bin/sh", "-c", ": fake-tool-wrapper; {verb} runtime send --to channel:mine hi"])
-Path({str(started)!r}).write_text("1")
+ctx.handoff({str(started)!r}, "1")
 time.sleep(3)
 alive = call.poll() is None
 call.kill()
 view = ctx.jack("post")
-Path({str(seen)!r}).write_text(json.dumps({{"alive": alive, "letters": [letter.body for letter in view.letters],
+ctx.handoff({str(seen)!r}, json.dumps({{"alive": alive, "letters": [letter.body for letter in view.letters],
     "paused": (ctx.room / "port/.paused.json").exists()}}))
 ''')
     (root / "loom/bodies/fake/jack").write_text("hooks\n")

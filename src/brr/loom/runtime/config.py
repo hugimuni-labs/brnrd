@@ -88,6 +88,9 @@ KEYS: tuple[Key, ...] = (
         choices=("on", "off")),
     Key("hold_floor_pct", "percent", 3.0,
         "A quota window with this percent or less left counts as exhausted: a held body stays held."),
+    Key("disk_floor_pct", "percent", 5.0,
+        "The disk floor, as a percent of the home's volume (never under 5 GiB): below it the loom "
+        "is degraded, reaps rooms at once and prunes package caches."),
     Key("max_held", "positive", None,
         "Most live bodies this install keeps warm, the home thread's not counted. Past it, the "
         "body held longest with nothing to do leaves at its stop hook; a working body is never "
@@ -95,6 +98,12 @@ KEYS: tuple[Key, ...] = (
     Key("thread_budget", "positive", 2_000_000,
         "Weighted tokens a thread opened by another thread may spend before its strand is told, at "
         "every boundary, to write to its parent for more. `send --budget` overrides it."),
+    Key("shed_excess", "positive", 60_000,
+        "Context tokens a body grows past its boot before a mostly-idle scroll makes a shed due; "
+        "fast quota pace lowers it, slack raises it, at most to double."),
+    Key("shed_hold", "names", ("home",),
+        "Threads whose bodies are never asked to shed; \"home\" names the home thread. "
+        "Set to [] to release them."),
     Key("stop_grace", "seconds", DEFAULT_STOP_GRACE,
         "Seconds a settled thread's body may take to land and exit before it is signalled."),
     Key("router_ttl", "positive", DEFAULT_TTL,

@@ -86,7 +86,8 @@ def parse_boundary(text: str) -> Boundary:
             current = None
             continue
         if not line.strip() or line.startswith(("status:", "owed:", "opened:", "budget:", "repaired:", "degraded:", "library:", "moved:",
-                                                "face? ", "left? ", "gone: ", "idle: ")):
+                                                "face? ", "left? ", "gone: ", "idle: ",
+                                                "asks: ", "asks? ", "top? ", "done: ")):
             current = None
             continue
         match = _ITEM.match(line)
@@ -275,7 +276,8 @@ def render_boundary(strand: str, gen: int, thread: str, letters: list[Fact],
                     reply_context: dict[str, str] | None = None,
                     budget: str = "", over: str = "", repaired: str = "",
                     degraded: str = "", face: str = "", left: str = "", moved: str = "",
-                    library: str = "", forge: str = "") -> str:
+                    library: str = "", forge: str = "", band: str = "", top: str = "",
+                    done: str = "", room: str = "") -> str:
     """Shown letters keep their first line, reply context and attachments when compacted.
 
     ``budget`` sits before the plan: the jack compares what follows `` · plan ``,
@@ -292,6 +294,13 @@ def render_boundary(strand: str, gen: int, thread: str, letters: list[Fact],
     if left:
         # What the stop will ask for; never after `` · plan``, so it wakes nobody.
         lines.insert(2, left)
+    if top:
+        lines.insert(2, top)
+    if band:
+        # The open asks (requests R4): the jack says it again only when a flavour changes.
+        lines.insert(2, band)
+    if done:
+        lines.insert(2, done)
     if moved:
         # Its own line too: the jack shows a new one once, at the next post.
         lines.insert(2, moved)
@@ -306,6 +315,9 @@ def render_boundary(strand: str, gen: int, thread: str, letters: list[Fact],
         lines.insert(2, library)
     if degraded:
         lines.insert(2, degraded)
+    if room:
+        # A person's channel off their own baseline (roomsense): every body on the seat sees it.
+        lines.insert(2, room)
     if settled is not None:
         lines.insert(2, f"settled: {settled}")
     children, idle = [], 0
@@ -564,7 +576,8 @@ def write_send(room: Path, *, to: str, sender: str, body: str = "",
                at: str | None = None, repo_sources: tuple[str, ...] | list[str] = (),
                wish: str | tuple | list | None = None,
                budget: int | None = None, chatter: list[str] | None = None,
-               echo: list[str] | None = None, reopen: bool = False) -> str:
+               echo: list[str] | None = None, reopen: bool = False,
+               ask_for: str | None = None) -> str:
     """Write one letter (or note) into port/out, with the wish stamps it carries.
 
     ``wish`` items are a ``w-id`` or ``new:"line"``, or a dict with ``value``
@@ -572,6 +585,8 @@ def write_send(room: Path, *, to: str, sender: str, body: str = "",
     the letters this send cites as no wish (``[]``: the ``--re`` letter). A
     reply to a person letter that has no disposition yet must carry one.
     ``echo`` gathers the graph this send wrote, one line per wish.
+    A question in a letter to a channel files an ask under ``ask_for``
+    (raises.py); a bare ``chatter`` there opts out.
     """
     home = home_of_room(Path(room))
     opening = None
@@ -648,7 +663,7 @@ def write_send(room: Path, *, to: str, sender: str, body: str = "",
             if ident is None:
                 raise PortError(f"send --chatter: no letter {raw}")
             named.append(ident)
-        if not chatter and not re:
+        if not chatter and not re and not is_channel(to):
             raise PortError("send --chatter names the letters it cites, or needs --re")
         # A bare --chatter cites the --re letter; a notice it answers is no letter and cites nothing.
         chatter = list(dict.fromkeys(named or ([re] if re in letters else [])))
@@ -749,6 +764,25 @@ def write_send(room: Path, *, to: str, sender: str, body: str = "",
             and not re and not asked and not chatter and not links):
         raise PortError(f"send: a letter to {to} cites nothing; answer the letter it follows "
                         "with --re <id>, or carry --wish, --chatter or an &ref")
+    if is_channel(to) and note is None and molt is None:
+        from .ledger import read_facts
+        from .project import sender_threads
+        from .raises import RaiseError, capture, refuse
+        from .registry import admit
+        facts = read_facts(home)
+        try:
+            refuse(facts, Path(room), links)
+            ask = None if chatter is not None else capture(
+                facts, by="strand:" + sender, thread=sender_threads(facts).get(sender),
+                main=home.main_thread(), body=body, links=links, ask_for=ask_for)
+        except ValueError as exc:
+            raise PortError(str(exc) if isinstance(exc, RaiseError) else f"send: {exc}") from exc
+        if ask is not None:
+            admit(ask)
+            wish_stamps.append(ask)
+            links.append(ask.data["wish"])
+            if echo is not None:
+                echo.append(f"ask {ask.data['wish']} under {ask.data['parent']}: {ask.data['line']}")
     if misses:
         if echo is not None:
             echo.append(refs_mod.miss_words(misses))
@@ -846,8 +880,9 @@ def _carried(home, facts, stamped, re, target, sender) -> list:
 
 
 def write_molt(room: Path, why: str, *, fresh: bool = False) -> str:
+    """``shed`` (``molt`` is its old name): hand the seat to a successor."""
     if not why:
-        raise PortError("molt: --why is empty")
+        raise PortError("shed: --why is empty")
     from .ledger import read_facts
     from .project import sender_threads
     from .merge import send_to_self
@@ -859,20 +894,28 @@ def write_molt(room: Path, why: str, *, fresh: bool = False) -> str:
     facts = read_facts(home)
     thread = sender_threads(facts).get(strand)
     if thread is None:
-        raise PortError("molt: room has no thread")
+        raise PortError("shed: room has no thread")
     from .wishes import owed_lefts, wishes
     owed = owed_lefts(wishes(facts), facts, thread, strand)
     if owed:
         # The successor reads what is left from the wish, not from this body's memory.
-        raise PortError("molt: say what is left first, then molt:\n" + "\n".join(
+        raise PortError("shed: say what is left first, then shed:\n" + "\n".join(
             f'  brnrd runtime wish {ident} --left "<step>" --left "<step>"   ({why}; --left same if nothing moved)'
             for ident, why in owed))
     held = unreplied_held(facts, strand, room)
     if held:
         # A person who wrote to this body hears from it before a stranger takes over.
-        raise PortError("molt: reply to each person letter you hold first, even with just an ack:\n" + "\n".join(
+        raise PortError("shed: reply to each person letter you hold first, even with just an ack:\n" + "\n".join(
             f'  brnrd runtime send --re {ident} --to {channel} "…"   (from {letter.data.get("from") or letter.by})'
             for ident, (letter, channel) in held.items()))
+    if not fresh:
+        from .jack import _state
+        from .shed import refusals
+        refused = refusals(room, thread, facts, _state(room))
+        if refused:
+            # The successor boots into this README; gen 233's was committed unread.
+            raise PortError("shed: the README isn't one a successor can boot into yet:\n" + "\n".join(
+                f"  - {why}" for why in refused) + "\nfix each, then shed again.")
     clone = resolve_clone(room)
     path = f"threads/{thread}/README.md"
     if not fresh and git(clone, "diff", "HEAD", "--quiet", "--", path, check=False).returncode:
@@ -881,7 +924,7 @@ def write_molt(room: Path, why: str, *, fresh: bool = False) -> str:
     if not fresh and not _current_label(clone, strand).taint:
         outcome = send_to_self(clone)
         if outcome.status != "merged":
-            raise PortError(outcome.stderr or f"molt: landing {outcome.status}: {', '.join(outcome.files)}")
+            raise PortError(outcome.stderr or f"shed: landing {outcome.status}: {', '.join(outcome.files)}")
     stem = mint(5)
     fact_id = f"{strand}/{stem}"
     fields = {"kind": "molt", "id": fact_id, "why": why}
@@ -900,13 +943,15 @@ def _words(value) -> tuple:
 
 
 def answered(room: Path) -> set[str]:
-    """Letter ids a reply or note in this room's port/out already answers.
+    """Letter ids a reply or note from this strand already answers, drained or not.
 
-    The loom drains port/out on its tick; until it does, the ledger still
-    holds those letters as owed. A slow loom made a stop re-show letters the
-    body had answered (stop-list) and refused a molt whose ack was not yet
-    drained (molt-flake). The stop and the molt both read it here."""
-    found = set()
+    The loom drains port/out on its tick and regenerates the boundary later; in
+    between, the boundary still lists those letters as owed. A slow loom made a
+    stop re-show letters the body had answered (stop-list, and again once the
+    reply had left port/out for the ledger: stop-answered) and refused a molt
+    whose ack was not yet drained (molt-flake). The stop and the molt both
+    read it here: port/out, then this strand's own ledger file."""
+    found = _ledger_answered(room)
     for path in (room / "port" / "out").glob("*.md"):
         try:
             fields = parse_frontmatter(path.read_text())
@@ -914,6 +959,35 @@ def answered(room: Path) -> set[str]:
             continue
         if fields.get("kind") in {"letter", "note"} and fields.get("re"):
             found.add(fields["re"])
+    return found
+
+
+def _ledger_answered(room: Path) -> set[str]:
+    """Letter ids this strand's drained letters and notes name in ``re``.
+
+    Only the strand's own file, and only lines that carry a ``re``: a stop
+    reads it at every attempt, never the whole ledger."""
+    try:
+        root = home_of_room(room).root / "ledger" / "facts"
+    except ValueError:
+        return set()
+    found = set()
+    by = f"strand:{room.name}"
+    for path in root.glob(f"*/{room.name}.jsonl"):
+        try:
+            lines = path.read_text().splitlines()
+        except OSError:
+            continue
+        for line in lines:
+            if '"re"' not in line:
+                continue
+            try:
+                row = json.loads(line)
+            except ValueError:
+                continue
+            ref = (row.get("data") or {}).get("re")
+            if row.get("kind") in {"letter", "note"} and row.get("by") == by and isinstance(ref, str) and ref:
+                found.add(ref)
     return found
 
 
@@ -1030,7 +1104,8 @@ def fact_from_port(fm: dict[str, str], strand: str, gen: int | None,
     if kind == "left-asked":
         # The jack refused a stop on these wishes; once asked, the next stop passes.
         return Fact(kind="left.asked", by=f"strand:{strand}", id=fact_id,
-                    data={"strand": strand, "gen": gen, "wishes": fm.get("wishes", "").split()})
+                    data={"strand": strand, "gen": gen, "wishes": fm.get("wishes", "").split(),
+                          **({"letters": fm["letters"].split()} if fm.get("letters") else {})})
     if kind == "molt":
         if not fm.get("why"):
             raise PortError(f"molt {fact_id} has no why")
