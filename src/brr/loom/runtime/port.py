@@ -275,7 +275,7 @@ def render_boundary(strand: str, gen: int, thread: str, letters: list[Fact],
                     reply_context: dict[str, str] | None = None,
                     budget: str = "", over: str = "", repaired: str = "",
                     degraded: str = "", face: str = "", left: str = "", moved: str = "",
-                    library: str = "", forge: str = "") -> str:
+                    library: str = "", forge: str = "", room: str = "") -> str:
     """Shown letters keep their first line, reply context and attachments when compacted.
 
     ``budget`` sits before the plan: the jack compares what follows `` · plan ``,
@@ -306,6 +306,9 @@ def render_boundary(strand: str, gen: int, thread: str, letters: list[Fact],
         lines.insert(2, library)
     if degraded:
         lines.insert(2, degraded)
+    if room:
+        # A person's channel off their own baseline (roomsense): every body on the seat sees it.
+        lines.insert(2, room)
     if settled is not None:
         lines.insert(2, f"settled: {settled}")
     children, idle = [], 0
