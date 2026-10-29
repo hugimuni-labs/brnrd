@@ -2,7 +2,7 @@
 id: inbox
 status: open
 tense: plan
-opened-by: person:loom
+opened-by: operator
 for: ""
 when: ""
 limbs: []

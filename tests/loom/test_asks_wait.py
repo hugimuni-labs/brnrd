@@ -157,6 +157,15 @@ def test_the_chain_reaches_a_person_and_survives_a_loop():
     assert waits_on(found, {"leaf": {"opened-by": "thread:gone"}})["a"] == "operator"
 
 
+def test_an_ask_on_the_seeded_inbox_waits_on_the_operator_not_on_loom():
+    # The seed's inbox says opened-by: person:loom; nobody is named loom, so
+    # the onboarding asks there must reach the operator's DM, not a dead name.
+    found = {"a": Wish("a", sender="resident", thread="inbox", parent="w-root", line="What should I call you?"),
+             "w-root": Wish("w-root", thread="inbox")}
+    assert waits_on(found, {"inbox": {"opened-by": "person:loom"}}) == {"a": "operator"}
+    assert waits_on(found, {"inbox": {"opened-by": "person:sasha"}}) == {"a": "person:sasha"}
+
+
 def test_the_live_ledger_replays_with_no_parentless_ask(ledger):
     home, seat = ledger
     shutil.copy(FIXTURE, home.facts_dir() / "live.jsonl")

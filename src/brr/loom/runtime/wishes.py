@@ -229,6 +229,9 @@ def wishes(facts: Iterable[Fact]) -> dict[str, Wish]:
 # The home thread routes letters; it holds no answer of its own. Older ledgers carry letters it wrote under its
 # former name `brnrd` (#2500 dropped the routing alias, not the history), so that name still reads as a relay.
 RELAYS = frozenset({HOME_THREAD, "brnrd"})
+# The seed's inbox README says ``opened-by: person:loom``: the loom opened it,
+# and no person is named loom. An ask there waits on the operator.
+LOOM_OPENER = "person:loom"
 
 
 def _answer(asked: list[Wish], letters: dict, ordered: list[Fact]) -> None:
@@ -290,6 +293,8 @@ def waits_on(found: dict[str, Wish], main: dict) -> dict[str, str]:
         while True:
             seen.add(current.id)
             head = str(main.get(current.thread, {}).get("opened-by") or "operator")
+            if head == LOOM_OPENER:
+                head = "operator"
             opener = head.removeprefix("thread:")
             if head.startswith("thread:") and (opener not in main or main[opener].get("status") in CLOSED):
                 head = "operator"
