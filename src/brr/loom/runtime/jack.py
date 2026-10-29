@@ -399,13 +399,18 @@ def _turn(room: Path, stdin_text: str) -> None:
     heads = shed.heads(room)
     moved = [name for name, head in heads.items() if head != (state.get("heads") or {}).get(name)]
     did = [*shed.acts(room, float(state.get("turn_at") or 0)), *(f"{name} HEAD" for name in moved)]
+    acted = bool(did)
     boot, now = shed.contexts(stdin_text, state.get("boot"))
     # Acts since the README last changed, letters aside (routing is not state).
     readme = shed.readme_hash(room, os.environ.get("BRNRD_THREAD") or "")
-    unread = [] if readme != state.get("readme_seen") else [
-        *(state.get("readme_acts") or []),
-        *(x for x in did if x != "letter" and x not in (state.get("readme_acts") or []))]
-    _set_state(room, turns=[*(state.get("turns") or []), [bool(did), now]], heads=heads,
+    if readme != state.get("readme_seen"):
+        # Rewritten this turn: only the acts written after it are left behind.
+        thread = os.environ.get("BRNRD_THREAD") or ""
+        did, kept = shed.acts(room, shed.readme_mtime(room, thread)), []
+    else:
+        kept = state.get("readme_acts") or []
+    unread = [*kept, *(x for x in did if x != "letter" and x not in kept)]
+    _set_state(room, turns=[*(state.get("turns") or []), [acted, now]], heads=heads,
                boot=boot or state.get("boot"), turn_open=False, readme_seen=readme, readme_acts=unread)
 
 

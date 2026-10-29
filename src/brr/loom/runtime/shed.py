@@ -204,6 +204,13 @@ def readme_hash(room: Path, thread: str) -> str:
         return ""
 
 
+def readme_mtime(room: Path, thread: str) -> float:
+    try:
+        return _readme(room, thread).stat().st_mtime
+    except (OSError, ValueError):
+        return time.time()
+
+
 _WISH = re.compile(r"\bw-[0-9a-z]{12}\b")
 _PR = re.compile(r"(?:#|/pull/)(\d+)\b")
 
