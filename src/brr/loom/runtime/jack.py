@@ -115,6 +115,8 @@ def _ageless(line: str) -> str:
 def _slot(key: str) -> str:
     if key.startswith("opened: "):
         return " ".join(key.split()[:2])
+    if key.startswith("asks: "):
+        return "asks:"
     return "idle:" if key.startswith("idle: ") else key
 
 
@@ -157,7 +159,7 @@ def _news(text: str, state: dict, plan_changed: bool) -> tuple[str, list[str], l
             continue
         status = unit[0].startswith("status:")
         key = ("status: · plan " + unit[0].partition(" · plan ")[2] if status
-               else _ageless(unit[0]) if unit[0].startswith("opened: ") else "\n".join(unit))
+               else _ageless(unit[0]) if unit[0].startswith(("opened: ", "asks: ")) else "\n".join(unit))
         said.append(key)
         if (plan_changed if status else key not in before):
             body.extend(unit)
@@ -611,6 +613,7 @@ def execute(event: str, room: Path, stdin_text: str) -> str:
                  if line.startswith("status:")), "")
     face = next((line for line in text.splitlines() if line.startswith("face? ")), "")
     moved = next((line for line in text.splitlines() if line.startswith("moved: ")), "")
+    band = _ageless(next((line for line in text.splitlines() if line.startswith("asks: ")), ""))
     if event == "start":
         broken = _guards(room)[1]
         if broken:
@@ -621,7 +624,7 @@ def execute(event: str, room: Path, stdin_text: str) -> str:
             return ""
         if parsed.ids:
             _shown(room, parsed)
-        _set_state(room, opened=opened, plan=plan, face=face, moved=moved,
+        _set_state(room, opened=opened, plan=plan, face=face, moved=moved, band=band,
                    **dict(zip(("said", "told"), _news(text, {}, True)[1:])))
         return text if text.endswith("\n") else text + "\n"
     if event == "post":
@@ -633,6 +636,8 @@ def execute(event: str, room: Path, stdin_text: str) -> str:
         face_changed = bool(face) and face != state.get("face", "")
         # The loom's code moved under a seated body: said once, at the next post.
         moved_changed = bool(moved) and moved != state.get("moved", "")
+        # An ask turning moved or stale is the cue to raise or drop it (requests R4).
+        band_changed = bool(band) and band != state.get("band", "")
         weight = _shed(room, _shed_news, room, stdin_text, state, default="")
         paused = describe(read_paused_record(room / "port"))
         hook = _hook_event(stdin_text)
@@ -647,12 +652,12 @@ def execute(event: str, room: Path, stdin_text: str) -> str:
         news, said, told = _news(text, state, plan_changed)
         _set_state(room, said=said, told=told)
         if not parsed.ids and not settled_changed and not opened_changed and not plan_changed \
-                and not face_changed and not moved_changed:
+                and not face_changed and not moved_changed and not band_changed:
             news = ""
         if not news:
             if parsed.ids:
                 _shown(room, parsed)
-            _set_state(room, opened=opened, plan=plan, face=face, moved=moved)
+            _set_state(room, opened=opened, plan=plan, face=face, moved=moved, band=band)
             if parsed.settled is not None:
                 _set_state(room, settled=parsed.settled)
             if not weight and not paused and not over and not guarded and not left:
@@ -674,7 +679,7 @@ def execute(event: str, room: Path, stdin_text: str) -> str:
             _set_state(room, settled=parsed.settled)
         if parsed.ids:
             _shown(room, parsed)
-        _set_state(room, opened=opened, plan=plan, face=face, moved=moved)
+        _set_state(room, opened=opened, plan=plan, face=face, moved=moved, band=band)
         return _json({"hookSpecificOutput": {
             "hookEventName": hook, "additionalContext": text}})
     if _state(room).get("molted") or parsed.settled is not None:
@@ -717,12 +722,15 @@ def _stop_block(room: Path, text: str, plan: str) -> str:
         return ""
     text, lefts = _settled_render(room, text)
     parsed = parse_boundary(text)
+    top = next((line for line in text.splitlines() if line.startswith("top? ")), "")
+    tops = re.findall(r"(\S+) says \"", top)
     if parsed.settled is not None:
         return ""
     sections = [
         _letter_miss(room, parsed, answered(room)),
         _left(room, True).rstrip("\n"),
         LEFT.format(named=" · ".join(f"{ident} ({why})" for ident, why in lefts)) if lefts else "",
+        TOP.format(line=top) if top else "",
         _end_miss(room, plan),
         _guard_miss(room),
         _kept_miss(room),
@@ -739,7 +747,7 @@ def _stop_block(room: Path, text: str, plan: str) -> str:
     seen = "\n\n".join(sections)
     if (count >= 3) if _hand() else (count and seen == state.get("stop_said")):
         # Stopped again with nothing done since the same list: let it through.
-        _asked(room, parsed, [ident for ident, _ in lefts])
+        _asked(room, parsed, [ident for ident, _ in lefts], tops)
         return ""
     known = _known_miss(room)
     if not sections and not known:
@@ -767,6 +775,10 @@ Restate each one's whole list:
 - brnrd runtime wish <w-id> --left "<step>" --left "<step>"   (--left same when nothing moved)
 - or a park: wish <w-id> --read "waiting: <on what>"; a delivery: --result <kind>:<ref> --line "<what>" --deliver"""
 
+TOP = """a letter of theirs says an order word and no wish was put on top for it: {line}
+- brnrd runtime wish <w-id> --top <letter>   (the wish it puts first)
+- or stop again: the order did not change"""
+
 # Long enough for the loom to render a fact written just before the stop.
 LEFT_GRACE = 3.0
 
@@ -792,10 +804,10 @@ def _settled_render(room: Path, text: str) -> tuple[str, list[tuple[str, str]]]:
                   if ident not in pending]
 
 
-def _asked(room: Path, parsed: Boundary, owed: list[str]) -> None:
-    """A stop let through with lefts still owed: a ``left.asked`` fact through the
-    port, after which the line drops them and the wake shows them stale."""
-    if not owed:
+def _asked(room: Path, parsed: Boundary, owed: list[str], tops: list[str] = ()) -> None:
+    """A stop let through with lefts or rank words still owed: a ``left.asked`` fact
+    through the port, after which the lines drop them and the wake shows them stale."""
+    if not owed and not tops:
         return
     stem = mint(5)
     atomic_write(room / "port" / "out" / f"asked-{stem}.md", (
@@ -803,7 +815,8 @@ def _asked(room: Path, parsed: Boundary, owed: list[str]) -> None:
         "kind: left-asked\n"
         f"id: {parsed.strand or room.name}/{stem}\n"
         f"wishes: {' '.join(owed)}\n"
-        "---\n"))
+        + (f"letters: {' '.join(tops)}\n" if tops else "")
+        + "---\n"))
 
 
 def _rendered_before_ledger(room: Path) -> bool:

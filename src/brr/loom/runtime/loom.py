@@ -640,6 +640,7 @@ def _prepare(home: Home, strand: str, thread: str, gen: int,
                         moved=moved_line(facts, strand, gen, home.install_id()),
                         face=proposal_line(propose(facts, strand, gen, thread)),
                         left=_left(facts, thread, strand),
+                        **_pull(home, facts, thread, strand, room),
                         **_budget(home, thread, facts)),
     )
     return room
@@ -1005,6 +1006,22 @@ def _left(facts, thread: str, strand: str) -> str:
     return left_line(owed_lefts(told(facts), facts, thread, strand))
 
 
+def _pull(home: Home, facts, thread: str, strand: str, room: Path) -> dict[str, str]:
+    """The asks band, a rank word's ``top?`` and a done thread (requests R4)."""
+    from .lifecycle import CLOSED
+    from .pull import band_line, done_line, owed_tops, top_line
+    from .threads import thread_table
+    from .wishes import told
+    found = told(facts)
+    try:
+        closed = {row['thread'] for row in thread_table(home, facts) if row['status'] in CLOSED}
+    except (OSError, ValueError, KeyError):
+        closed = set()
+    return {"band": band_line(facts, found, thread, home.main_thread(), room, closed),
+            "top": top_line(owed_tops(facts, thread, strand)),
+            "done": done_line(found, thread, home.main_thread())}
+
+
 def _reply_context(facts, thread: str, letters, room: Path | None = None) -> dict[str, str]:
     """Reply context, and a steers? line under each undisposed person letter."""
     context = dict(letter_replies(facts))
@@ -1012,8 +1029,10 @@ def _reply_context(facts, thread: str, letters, room: Path | None = None) -> dic
     person = [letter for letter in letters if is_person(letter)]
     if not person:
         return context
-    from .wishes import steers_line, told
+    from .wishes import _short, steers_line, told
     found, done = told(facts), disposed(facts, room)
+    from .pull import thread_asks
+    asks = [w for w in thread_asks(found, thread, "") if w.thread == thread]
     said = False
     for letter in person:
         ident = str(letter.data.get("id", letter.id))
@@ -1021,6 +1040,10 @@ def _reply_context(facts, thread: str, letters, room: Path | None = None) -> dic
         if line and said:
             # The candidates are the thread's, the same under every letter: named once (wake-vision).
             line = f"steers? as above — send --re {ident} --wish <w-id> | --wish new:\"<line>\" | --chatter"
+        if line and asks and not said:
+            # An answer that did not reply to the raise still closes the ask it answers.
+            line += "\nasks? " + " · ".join(f'{w.id} "{_short(w.line, 40)}"' for w in asks[:3]) \
+                + f" — send --re {ident} --wish <ask-id> if it answers one"
         said = said or bool(line)
         if line:
             context[letter.id] = "\n".join(filter(None, (context.get(letter.id, ""), line)))
@@ -1600,6 +1623,7 @@ def _render_boundary(home, facts, strand, gen, context):
         moved=moved_line(facts, strand, gen, home.install_id()),
         face=proposal_line(propose(facts, strand, gen, context.thread)),
         left=_left(facts, context.thread, strand),
+        **_pull(home, facts, context.thread, strand, home.room(strand)),
         **_budget(home, context.thread, facts),
     )
     return text
