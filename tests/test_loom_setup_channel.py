@@ -284,9 +284,13 @@ def test_setup_turns_the_onboarding_list_into_asks_the_first_wake_shows(tmp_path
     assert setup_channel.main(argv) == 0
     home = Home(tmp_path)
     found = wishes(read_facts(home))
-    asks = [w for w in found.values() if w.sender == 'resident']
+    # The resident's own wish, written by the loom: the person said nothing yet.
+    [own] = [w for w in found.values() if w.line == setup_channel.ONBOARDING_WISH]
+    assert own.sender == 'resident' and not own.says and not own.parent
+    asks = [w for w in found.values() if w.parent == own.id]
     assert [w.line for w in sorted(asks, key=lambda w: w.born)][0] == 'What should I call you?'
-    assert len(asks) == 3 and {found[w.parent].line for w in asks} == {setup_channel.ONBOARDING_WISH}
+    assert len(asks) == 3 and {w.sender for w in asks} == {'resident'}
+    assert not [f for f in read_facts(home) if f.kind == 'wish' and not f.by.startswith('loom:')]
     # They wait on the person, and the home thread's next body wakes with them.
     heads = waits_on(found, main_snapshot(home))
     assert {heads[w.id] for w in asks} == {'person:loom'}
@@ -296,7 +300,7 @@ def test_setup_turns_the_onboarding_list_into_asks_the_first_wake_shows(tmp_path
     listed = tmp_path / 'self/core/onboarding.md'
     listed.write_text(listed.read_text() + '- Which language do you write in?\n')
     assert setup_channel.main(argv) == 0
-    lines = [w.line for w in wishes(read_facts(home)).values() if w.sender == 'resident']
+    lines = [w.line for w in wishes(read_facts(home)).values() if w.parent == own.id]
     assert len(lines) == 4 and lines.count('What should I call you?') == 1
 
 

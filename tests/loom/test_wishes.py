@@ -366,12 +366,15 @@ def test_bare_wish_is_a_read_even_when_closed(ledger, verdict, person):
     assert read_facts(home) == before
 
 
-def test_a_wish_born_with_no_citation_is_only_a_person_s_own():
-    """A strand's new wish cites what was said; a person writing at their own
-    terminal (setup's onboarding wish) is the citation, signed as them."""
-    from brr.daemon2.facts import Fact
+def test_a_wish_born_with_no_citation_is_only_the_loom_s_resident_wish():
+    """A person's word in the ledger is a letter they sent: a person-signed
+    wish still cites one. Only the loom, the home's trusted writer, bears the
+    resident's own wish uncited (setup's onboarding)."""
     from brr.loom.runtime.registry import admit
-    data = {"wish": "w-aaaaaaaaaaaa", "says": [], "from": "person", "line": "x", "thread": "inbox"}
-    admit(Fact(kind="wish", by="person:ada", id="w-aaaaaaaaaaaa", data=data))
-    with pytest.raises(ValueError, match="needs --say"):
-        admit(Fact(kind="wish", by="strand:s-1", id="w-aaaaaaaaaaaa", data=data))
+    def fact(by, sender):
+        return Fact(kind="wish", by=by, id="w-aaaaaaaaaaaa", data={
+            "wish": "w-aaaaaaaaaaaa", "says": [], "from": sender, "line": "x", "thread": "inbox"})
+    admit(fact("loom:aaaa", "resident"))
+    for by, sender in (("person:ada", "person"), ("strand:s-1", "person"), ("loom:aaaa", "person")):
+        with pytest.raises(ValueError):
+            admit(fact(by, sender))

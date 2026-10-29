@@ -244,14 +244,14 @@ def _channel_name(home, kind):
 ONBOARDING_WISH = 'brnrd knows the person it works for'
 
 
-def onboarding_asks(home, person):
+def onboarding_asks(home):
     """``core/onboarding.md``'s list, as asks on the home thread: what brnrd
     asks a new person, carried like any ask and answered in chat.
 
     Each ``- `` line is one ask under one wish, in the file's order. The list
     is the self's to edit; a line already asked is never asked twice. Returns
-    the ask ids written. Signed by the person running setup: the list is
-    theirs, put in at their own terminal.
+    the ask ids written. The loom writes them as the resident's own: the
+    person said nothing yet, and a person's word is only a letter they sent.
     """
     from .ledger import append, read_facts
     from .verbs_wishes import wish_fact
@@ -261,15 +261,18 @@ def onboarding_asks(home, person):
              if line.startswith('- ') and line[2:].strip()] if listed.is_file() else []
     if not lines:
         return []
-    by, thread = f'person:{person}', home.main_thread()
+    by, thread = f'loom:{home.install_id()}', home.main_thread()
     facts = read_facts(home)
     found = wishes(facts)
     parent = next((w.id for w in found.values() if (w.thread, w.line) == (thread, ONBOARDING_WISH)), None)
     if parent is None:
-        # Nobody said it: a derived wish, the one the asks unblock.
-        fact = append(home, wish_fact(facts, by=by, ident='new', line=ONBOARDING_WISH,
-                                      thread=thread, sender='person'))
-        parent = fact.data['wish']
+        # The resident's own wish, the one the asks unblock: nobody said it,
+        # and it unblocks nothing above it (wish_fact would ask for a parent).
+        from brr.daemon2.facts import Fact
+        from .home import mint
+        parent = 'w-' + mint(12)
+        append(home, Fact(kind='wish', by=by, id=parent, data={
+            'wish': parent, 'says': [], 'from': 'resident', 'line': ONBOARDING_WISH, 'thread': thread}))
         facts = read_facts(home)
         found = wishes(facts)
     asked = {w.line for w in found.values() if w.parent == parent and w.sender == 'resident'}
@@ -377,7 +380,7 @@ def main(argv=None):
         # A letter lands only on a thread on the self's main: seed it before pairing.
         if init_self(home.root, person=person).startswith('initialized '):
             _ok(IDENTITY_NOTE)
-        onboarding_asks(home, person)
+        onboarding_asks(home)
         _step(f'Connect {CHOICES.get(kind, kind).split(",")[0]}')
         paired = pair(home, kind, name, person, timeout=args.timeout)
         if paired and args.wait > 0:
