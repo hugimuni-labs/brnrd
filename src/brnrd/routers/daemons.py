@@ -1104,6 +1104,15 @@ async def inbox(request: Request, since: int | None = Query(default=None), wait:
         since_seq,
     )
     max_wait = settings.inbox_long_poll_max_s if wait is None else max(0.0, min(wait, settings.inbox_long_poll_max_s))
+    # Touch on arrival as well as on return: a daemon parked in a long-poll is
+    # listening, and the webhook's 2-minute liveness read must see it so. A
+    # touch only on return let one dropped poll plus the client's timeout read
+    # as "isn't reachable" while the loom was up (web-main, 2026-10-29).
+    await anyio.to_thread.run_sync(
+        _touch_daemon_from_factory,
+        request.app.state.SessionLocal,
+        principal,
+    )
     events = await inbox_service.long_poll_many(
         request.app.state.SessionLocal,
         repo_ids,

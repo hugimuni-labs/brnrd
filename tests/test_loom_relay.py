@@ -285,7 +285,8 @@ def test_client_uses_existing_cloud_state_request_and_download(tmp_path, monkeyp
         seen.append(path) or {"brnrd_url": "https://relay.invalid", "token": "test-token"}))
     def request(base_url, method, path, **kwargs):
         assert (base_url, method, path) == ("https://relay.invalid", "GET", "/v1/daemons/inbox")
-        assert kwargs == {"token": "test-token", "params": {"since": 7, "wait": cloud._POLL_WAIT_S}}
+        assert kwargs == {"token": "test-token", "params": {"since": 7, "wait": cloud._POLL_WAIT_S},
+                          "timeout": cloud._POLL_TIMEOUT_S}
         return {"events": [], "cursor": 2}
     monkeypatch.setattr(cloud, "_request", request)
     def download(url, token, event_id, index, dest):

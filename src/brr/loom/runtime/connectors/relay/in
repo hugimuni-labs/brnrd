@@ -6,6 +6,8 @@ import json
 import signal
 import sys
 import threading
+import time
+from datetime import datetime, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
@@ -121,7 +123,19 @@ def pull_once(drop, state, client, cursor, failures=None):
     return next_cursor
 
 
-def poll_forever(drop, state, client, lock, stop, log=print):
+# The cloud counts a loom online only while its inbox polls keep landing
+# (webhooks._DAEMON_ONLINE_AFTER, 2 min), so a poll that fails or runs past
+# its long-poll wait is the one thing worth a line: it is how a "your brnrd
+# isn't reachable" reply gets a cause instead of a guess.
+SLOW = cloud._POLL_WAIT_S + 15
+
+
+def stamped(line):
+    # stderr, flushed: the launchd stdout file is block-buffered and stamps nothing.
+    print(f'{datetime.now(timezone.utc).isoformat(timespec="seconds")} {line}', file=sys.stderr, flush=True)
+
+
+def poll_forever(drop, state, client, lock, stop, log=stamped, clock=time.monotonic):
     lock.want()
     try:
         waiting = False
@@ -135,15 +149,19 @@ def poll_forever(drop, state, client, lock, stop, log=print):
         cursor = None
         failures, backoff = {}, 1
         while not stop.is_set():
+            started = clock()
             try:
                 if cursor is None:
                     cursor = max(cursor_at(state), lock.cursor() or 0)
                     write_cursor(state, cursor)
                 cursor = pull_once(drop, state, client, cursor, failures)
+                took = clock() - started
+                if took > SLOW:
+                    log(f'relay: slow poll, {took:.0f}s for a {cloud._POLL_WAIT_S}s wait')
                 lock.record(cursor)
                 backoff = 1
             except Exception as exc:
-                log(f'relay: {type(exc).__name__}: {exc}; retry in {backoff}s')
+                log(f'relay: {type(exc).__name__} after {clock() - started:.0f}s: {exc}; retry in {backoff}s')
                 stop.wait(backoff)
                 backoff = min(backoff * 2, 60)
     finally:
