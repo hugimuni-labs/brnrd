@@ -146,3 +146,19 @@ def test_every_root_kind_through_its_writer_and_nothing_dangles(ledger):
     assert walk(molt) == ([*up, (said, "verdict")], "person")
     # The invariant: every letter here ends at a person, a loom fact or an unconfirmed wish.
     assert set(roots(read_facts(home), main_snapshot(home))) <= {"person", "loom", "unconfirmed"}
+
+
+def test_a_follow_up_that_cites_nothing_is_told_the_letter_to_cite(ledger):
+    # Strand to strand, the way on was a guess: --wish asked for --re, and the
+    # bare refusal named no id. It names the newest letter between the threads.
+    home, seat = ledger
+    append(home, Fact(kind="lease", by="loom:aaaa", data={
+        "thread": "other", "strand": "s-aaaa-othr", "gen": 1,
+        "install": "aaaa", "router_gen": 1, "shell": "fake", "core": "fake", "repos": [],
+    }))
+    append(home, Fact(kind="letter", by="strand:s-aaaa-othr", id="letter:s-aaaa-othr/abcde", data={
+        "id": "s-aaaa-othr/abcde", "from": "s-aaaa-othr", "to": "thread:work", "body": "more findings"}))
+    refused = send(seat, "another one")
+    assert refused.returncode == 1 and "--re s-aaaa-othr/abcde" in refused.stderr
+    assert "&<w-id>" in refused.stderr
+    assert send(seat, "--re", "s-aaaa-othr/abcde", "another one").returncode == 0

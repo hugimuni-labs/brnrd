@@ -570,6 +570,24 @@ def forge_paths(room: Path, home, body: str) -> str:
     return body
 
 
+def _latest_between(facts, sender: str, to: str) -> str | None:
+    """The newest letter either way between ``sender``'s thread and ``to``: what a follow-up cites."""
+    from .home import thread_of
+    from .project import sender_threads
+    if not to.startswith("thread:"):
+        return None
+    threads = sender_threads(facts)
+    own, other = threads.get(sender), thread_of(to)
+    latest = None
+    for fact in facts:
+        if fact.kind != "letter":
+            continue
+        source, dest = threads.get(str(fact.data.get("from") or "")), str(fact.data.get("to") or "")
+        if (source == own and dest == to) or (source == other and own and dest == f"thread:{own}"):
+            latest = str(fact.data.get("id") or fact.id)
+    return latest
+
+
 def write_send(room: Path, *, to: str, sender: str, body: str = "",
                re: str | None = None, note: str | None = None,
                clean: bool = False, kind: str | None = None,
@@ -676,7 +694,8 @@ def write_send(room: Path, *, to: str, sender: str, body: str = "",
         from .verbs_wishes import say_span, wish_fact
         from .wishes import Say
         if not re and opening is None:
-            raise PortError("send --wish requires --re, unless the letter opens a thread")
+            raise PortError("send --wish requires --re <the letter it answers>, unless the letter opens a thread; "
+                            "to name a wish in a follow-up without stamping one, write &<w-id> in the body")
         line = next((l.strip() for l in (note or body).splitlines() if l.strip()), letter_id)[:160]
         for item in asked:
             value = item["value"]
@@ -764,8 +783,11 @@ def write_send(room: Path, *, to: str, sender: str, body: str = "",
     if (not is_channel(to) and opening is None and note is None and molt is None and at is None
             and not reopen and budget is None and not clean
             and not re and not asked and not chatter and not links):
-        raise PortError(f"send: a letter to {to} cites nothing; answer the letter it follows "
-                        "with --re <id>, or carry --wish, --chatter or an &ref")
+        from .ledger import read_facts
+        latest = _latest_between(read_facts(home), sender, to)
+        raise PortError(f"send: a letter to {to} cites nothing. A follow-up answers the letter it follows: "
+                        + (f"--re {latest} (the latest between you)" if latest else "--re <id>")
+                        + ", or names what it is about with an &ref in the body (&<w-id>, &<letter>)")
     if is_channel(to) and note is None and molt is None:
         from .ledger import read_facts
         from .project import sender_threads
