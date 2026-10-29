@@ -6,6 +6,7 @@ from brr.loom.runtime.ledger import Fact, append, inject_letter, read_facts
 from brr.loom.runtime.pull import band_line, done_line, flavour, owed_tops, top_line
 from brr.loom.runtime.wishes import wishes
 from test_requests_raises import TO, asks, channel, person_wish
+from test_wish_tree import body  # noqa: F401  (fixture)
 from test_wishes import command, ledger  # noqa: F401  (ledger is a fixture)
 
 STRAND = "s-aaaa-test"
@@ -98,3 +99,32 @@ def test_a_thread_is_done_when_every_request_on_it_is_shut(ledger):
     command(home, seat, "wish", root, "--drop", "not wanted")
     assert done_line(wishes(read_facts(home)), "work", "inbox").startswith("done: no open request on work")
     assert done_line(wishes(read_facts(home)), "other", "inbox") == ""
+
+
+def test_the_stop_holds_once_on_a_rank_word_and_the_band_is_news_on_change(body):
+    from test_wish_tree import render, stop
+    import json
+    from brr.loom.runtime import jack
+    from brr.loom.runtime.loom import _ingest
+    home, seat = body
+    channel(home)
+    root = person_wish(home, seat, "Ship the parser")
+    command(home, seat, "wish", root, "--left", "parser")
+    order = inject_letter(home.root, to="thread:work", body="Lexer first please")
+    word = order.rpartition(":")[2]
+    assert f'top? {word} says "first"' in render(home)
+    refused = json.loads(stop(seat))
+    assert refused["decision"] == "block" and "an order word" in refused["reason"]
+    # Stopped again with nothing done: let through, asked once as a fact through the port.
+    stop(seat)
+    _ingest(home)
+    assert [f.data.get("letters") for f in read_facts(home) if f.kind == "left.asked"] == [[word]]
+    assert not [line for line in render(home).splitlines() if line.startswith("top? ")]
+    # The band is said at a post when a flavour changes, and not when only its age does.
+    command(home, seat, "send", "--to", TO, "Merge #12?")
+    render(home)
+    jack.execute("post", seat, "{}")
+    assert "asks: " not in jack.execute("post", seat, "{}")
+    pr(home, "pr.merged", 12)
+    render(home)
+    assert "stale (#12 merged)" in jack.execute("post", seat, "{}")
