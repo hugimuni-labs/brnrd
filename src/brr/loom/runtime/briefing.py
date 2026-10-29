@@ -18,6 +18,7 @@ BRIEFING = f"""How a body holds the seat. The installed loom writes this section
 - A command the body starts itself runs as `(cmd; echo $? > <path>) &` and parks on `file:<path>`.
 - Before stopping with wishes open, end each as a result (`wish <w-id> --result`), an `ask`, a park or `settle`.
 - A turn's first line is the verdict. No "still working" heartbeat.
+- A project lives in a thread whose seat declares its repo: `send --to thread:<new> --wish <w-id> --repo <url or lib name> "<work>"`. Its body commits on `loom/<thread>` and pushes with `publish <name>`, then records `publish <name> --pr N`. A repo the person already has can be named once in the library, so later threads cite it by name: `lib add <name> <url> --kind known --whose <person> --for "<why>"`. When the wish needs a repo that does not exist yet, making it is part of the work: `gh repo create <owner>/<name> --private`, say so in your reply, then open the thread on it.
 - Idle, with nothing owed, in order: a live chase, an open item, an own unmerged PR, a question worth asking. Declining one says why.
 """
 
