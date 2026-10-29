@@ -38,6 +38,7 @@ FINISH = ("collect", "drain", "exit") + END
 TABLE = (
     Row(STARTABLE, "closed", "ended", ("end_settled",) + CLEANUP),
     Row(STARTABLE, "failure", "ended", ("exit", "end_failed") + CLEANUP),
+    Row(STARTABLE, "pinned away", "ended", ("end_moved",) + CLEANUP),
     Row(("wanted",), "fenced", "wanted", ()),
     Row(("parked",), "fenced", "parked", ()),
     Row(("parked",), "woken on another body", "ended", ("end_molted",) + CLEANUP),
@@ -97,6 +98,7 @@ COMMANDS = {step.name: step for step in (
     Step("end_settled",  "end",      "attempt.ended",     False, "settled"),
     Step("end_failed",   "end",      "attempt.ended",     False, "failed"),
     Step("end_molted",   "end",      "attempt.ended",     False, "molted"),
+    Step("end_moved",    "end",      "attempt.ended",     False, "moved"),
     Step("drained",      "drained",  "port.drained",      True),
     Step("release",      "release",  "released",          True),
 )}
@@ -118,6 +120,7 @@ class Observation:
     woken: str = ""
     fenced: bool = False
     held: bool = False
+    away: bool = False
 
 
 @dataclass(frozen=True)
@@ -184,6 +187,9 @@ OBSERVED = {
     # This install lost the inbox lease: another may lead, so nothing starts
     # and a seated body leaves as if its thread had closed.
     "fenced": lambda s, o: o.fenced,
+    # The thread is pinned to another install: it runs there, so a seat here
+    # ends, and a running body leaves as if its thread had closed.
+    "pinned away": lambda s, o: o.away,
     "failure": lambda s, o: bool(o.failure),
     "woken on another body": lambda s, o: bool(o.woken),
     "held dry, woken on another body": lambda s, o: o.alive and o.held and bool(o.woken),
@@ -194,9 +200,9 @@ OBSERVED = {
     "not alive": lambda s, o: not o.alive,
     "alive, proven": lambda s, o: o.alive and o.proven is True,
     "alive, not proven": lambda s, o: o.alive and o.proven is not True,
-    "alive, open": lambda s, o: o.alive and not (o.closed or o.fenced),
-    "alive, closed": lambda s, o: o.alive and (o.closed or o.fenced),
-    "alive, reopened": lambda s, o: o.alive and not (o.closed or o.fenced),
+    "alive, open": lambda s, o: o.alive and not (o.closed or o.fenced or o.away),
+    "alive, closed": lambda s, o: o.alive and (o.closed or o.fenced or o.away),
+    "alive, reopened": lambda s, o: o.alive and not (o.closed or o.fenced or o.away),
     "alive, before deadline": lambda s, o: o.alive and o.now < s.deadline,
     "alive, due, proven": lambda s, o: o.alive and o.now >= s.deadline and o.proven is True,
     "alive, due, unproven": lambda s, o: o.alive and o.now >= s.deadline and o.proven is False,

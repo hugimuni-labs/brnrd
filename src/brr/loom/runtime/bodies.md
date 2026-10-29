@@ -2,6 +2,7 @@
 |---|---|---|---|
 | wanted, parked | closed | ended | end_settled, drain, drained, release |
 | wanted, parked | failure | ended | exit, end_failed, drain, drained, release |
+| wanted, parked | pinned away | ended | end_moved, drain, drained, release |
 | wanted | fenced | wanted | none |
 | parked | fenced | parked | none |
 | parked | woken on another body | ended | end_molted, drain, drained, release |

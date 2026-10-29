@@ -44,8 +44,12 @@ def lease_accepted(newest_router: int | None, fact: Fact) -> bool:
     No ``router_gen`` is a step-1 lease: it counts while no router fact
     precedes it, and counts for nothing once a router has. A lease whose
     ``router_gen`` is not the newest ``router`` fact so far was written by a
-    stale router after the new one and does not take the thread.
+    stale router after the new one and does not take the thread. A lease the
+    pinned install wrote for its own thread (``pin``) counts at any gen.
     """
+    if fact.data.get("pin") and fact.data.get("pin") == fact.data.get("install"):
+        # A pinned thread's grant comes from its machine, not from the router.
+        return True
     raw = fact.data.get("router_gen")
     if raw is None:
         return newest_router is None

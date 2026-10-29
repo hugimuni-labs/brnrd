@@ -71,6 +71,13 @@ def readme_for(home: Home, thread: str) -> str | None:
 
 
 
+def pinned_to(facts: list[Fact], thread: str) -> str | None:
+    """The install the newest ``machines.pin`` for ``thread`` names; None when
+    it was never pinned or the newest pin is an unpin."""
+    pins = [f for f in kind_facts(facts, "machines.pin") if f.data.get("thread") == thread]
+    return str(pins[-1].data.get("install") or "") or None if pins else None
+
+
 def gate_for(home: Home, config: LoomConfig):
     """The git inbox lease on ``lease_remote``, or None when it is unset."""
     remote = config.lease_remote
@@ -398,12 +405,24 @@ class Router:
         }, f"router.renewed:{self.home.install_id()}:{self.lease.gen}:{bucket}")
 
     def route(self, facts: list[Fact], bodies: dict, default: tuple[str, str]) -> list[Fact]:
-        if not self.armed():
+        """The inbox holder grants every thread not pinned to another install.
+
+        An install that does not hold inbox grants only the threads pinned to
+        it (``machines.pin``), whoever leads: a pinned thread waits for its
+        machine and never fails over.
+        """
+        holding = self.armed()
+        if not holding and self.gate is None:
             return facts
         from .loom import _attention, _closures, _policy, _start, body_alive, notice
 
         home = self.home
-        threads = _routable(home, facts)
+        install = home.install_id()
+        ours = (None, install) if holding else (install,)
+        threads = [t for t in _routable(home, facts) if pinned_to(facts, t) in ours]
+        if not threads:
+            return facts
+        armed = self.armed if holding else (lambda: True)
         facts = _closures(home, facts, threads)
         from .lifecycle import CLOSED, read_thread
         pending = []
@@ -411,10 +430,11 @@ class Router:
         for thread in threads:
             if read_thread(home, thread).get("status") in CLOSED:
                 continue
-            if not self.armed():
+            if not armed():
                 break
             if thread in state.holder:
-                facts = self._release_abandoned(facts, thread, body_alive)
+                if holding:
+                    facts = self._release_abandoned(facts, thread, body_alive)
                 state = fold(facts)
                 if thread in state.holder:
                     continue
@@ -464,16 +484,19 @@ class Router:
                               f"thread {thread} runs the fake adapter, which has no policy here",
                               "give the thread a policy or another body")
                 continue
-            if not self.armed():
+            if not armed():
                 break
             from .loom import _next_gen, _record
             strand = f"s-{home.install_id()}-{mint(6)}"
             gen = _next_gen(facts, thread)
             data = {
                 "thread": thread, "strand": strand, "gen": gen,
-                "install": home.install_id(), "router_gen": self.lease.gen,
+                "install": install, "router_gen": self.lease.gen if holding else _newest_router(facts),
                 "shell": choice[0], "core": choice[1], "repos": declared,
             }
+            if pinned_to(facts, thread) == install:
+                # Counts whatever router leads: only the pinned install grants it.
+                data["pin"] = install
             parent = heir_of(home, facts, letters, thread, gen)
             if parent:
                 data["parent"] = parent
@@ -488,7 +511,7 @@ class Router:
         for strand, thread, gen, choice, declared in pending:
             facts = _start(home, strand, thread, gen, bodies, facts, choice,
                            repos=declared, reader=self.reader)
-        if not self.armed():
+        if not holding or not self.armed():
             return facts
         facts = self._unrouted(facts, set(threads))
         return facts
@@ -758,6 +781,11 @@ def _answers_event(state, letter: Fact) -> str | None:
             if cites.startswith("source:"):
                 return cites.split(":", 2)[2]
     return None
+
+
+def _newest_router(facts: list[Fact]) -> int | None:
+    gens = [int(f.data.get("gen") or 0) for f in kind_facts(facts, "router")]
+    return gens[-1] if gens else None
 
 
 def _routable(home: Home, facts: list[Fact]) -> list[str]:

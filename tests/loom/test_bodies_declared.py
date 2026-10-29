@@ -58,7 +58,7 @@ class MemoryBody:
                 assert not observation.closed and not observation.fenced
             if fact.kind == "body.stopped":
                 leaving = fact_for(self.facts[:index], "body.leaving", fact.data["strand"], fact.data["gen"])
-                assert (observation.closed or observation.fenced) and leaving is not None
+                assert (observation.closed or observation.fenced or observation.away) and leaving is not None
                 assert observation.now >= leaving.data["deadline"]
         # Rule 5: release follows both ending and draining on this prefix.
         ended, drained = set(), set()
@@ -116,7 +116,7 @@ class MemoryBody:
                     if name == "stopped":
                         # Rule 3: closed, and this generation's durable deadline.
                         leaving = fact_for(self.facts, "body.leaving", self.strand, self.gen)
-                        assert (o.closed or o.fenced) and leaving is not None
+                        assert (o.closed or o.fenced or o.away) and leaving is not None
                         assert o.now >= leaving.data["deadline"]
                     self.add("body." + name)
             elif name == "exit":
@@ -125,7 +125,7 @@ class MemoryBody:
                 if crash_at_exit:
                     self.check_prefix(o)
                     return
-            elif name in {"end", "end_failed", "end_settled", "end_molted"}:
+            elif name in {"end", "end_failed", "end_settled", "end_molted", "end_moved"}:
                 cause = ("failed" if name == "end_failed" else "molted" if name == "end_molted"
                          else exit_cause(self.facts, o, owed=False))
                 if fact_for(self.facts, "attempt.ended", self.strand, self.gen) is None:
@@ -170,6 +170,7 @@ def test_seeded_sequences_check_ledger_prefixes_and_reach_every_row():
                 body.alive = True
             closed = rng.random() < 0.65
             fenced = rng.random() < 0.15
+            away = rng.random() < 0.05
             gauge = rng.choice(["ok", "ok", "unknown", "refreshing", "empty"])
             failure = "spawn failed" if state in STARTABLE and not body.alive and rng.random() < 0.1 else ""
             # A live body asleep in its stop hook is woken the same way.
@@ -177,7 +178,7 @@ def test_seeded_sequences_check_ledger_prefixes_and_reach_every_row():
             woken = "other/core" if (state == "parked" or held) and rng.random() < 0.1 else ""
             o = Observation(body.strand, body.gen, body.alive, closed, gauge, body.now,
                             proven=rng.choice([True, False]), until=body.now + 3,
-                            stop_grace=1, failure=failure, woken=woken, fenced=fenced, held=held)
+                            stop_grace=1, failure=failure, woken=woken, fenced=fenced, held=held, away=away)
             body.step(o, crash_at_end=not body.alive and rng.random() < 0.2,
                       crash_at_exit=not body.alive and rng.random() < 0.2)
     assert coverage == set(range(len(TABLE))), {i: TABLE[i] for i in set(range(len(TABLE))) - coverage}
