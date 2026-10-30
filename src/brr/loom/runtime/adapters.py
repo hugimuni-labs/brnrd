@@ -58,12 +58,29 @@ class RepoSeatError(ValueError):
     """A seat's ``repo:`` lines cannot be used."""
 
 
+# (self repo, thread) -> (main tip, seat): the router asks every tick, and a
+# git process per thread per tick was a fifth of the live loop (loom-cpu).
+_SEATS: dict = {}
+
+
 def seat_text(home, thread: str) -> str:
     """The seat as it landed on main, or the file when the self is not git yet."""
     from .selfrepo import git
     if (home.root / "self/.git").exists():
-        proc = git(home.root / "self", "show", f"main:threads/{thread}/seat", check=False)
-        return proc.stdout if proc.returncode == 0 else ""
+        from .lifecycle import main_tip
+        from .selfrepo import SelfError
+        repo = home.root / "self"
+        try:
+            tip = main_tip(repo)
+        except SelfError:
+            return ""
+        cached = _SEATS.get((repo, thread))
+        if cached and cached[0] == tip:
+            return cached[1]
+        proc = git(repo, "show", f"{tip}:threads/{thread}/seat", check=False)
+        text = proc.stdout if proc.returncode == 0 else ""
+        _SEATS[(repo, thread)] = (tip, text)
+        return text
     path = home.thread_dir(thread) / "seat"
     return path.read_text() if path.exists() else ""
 

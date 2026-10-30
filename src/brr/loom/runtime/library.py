@@ -98,6 +98,24 @@ def parse(name: str, text: str) -> Entry:
 
 def read(self_dir: Path, rev: str = "main") -> tuple[list[Entry], list[str]]:
     """Entries on ``rev`` by name, and one line per page that cannot be read."""
+    if rev == "main":
+        from .lifecycle import main_tip
+        try:
+            tip = main_tip(self_dir)
+        except SelfError:
+            return [], []
+        cached = _READ.get(self_dir)
+        if cached is None or cached[0] != tip:
+            cached = _READ[self_dir] = (tip, _read(self_dir, tip))
+        return list(cached[1][0]), list(cached[1][1])
+    return _read(self_dir, rev)
+
+
+# self dir -> (main tip, read): the router resolves seat repos every tick.
+_READ: dict = {}
+
+
+def _read(self_dir: Path, rev: str) -> tuple[list[Entry], list[str]]:
     proc = git(self_dir, "ls-tree", "--name-only", rev, "library/", check=False)
     if proc.returncode != 0:
         return [], []
