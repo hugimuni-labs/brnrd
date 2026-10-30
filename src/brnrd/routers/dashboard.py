@@ -25,7 +25,7 @@ from brnrd import (
     run_stop_requests,
     wake_requests,
 )
-from brnrd.routers.daemons import LOOM_DAEMON_NAME
+from brnrd.looms import loom_repos
 from brnrd.routers.pairing import telegram_pair_core
 from brnrd.activity_records import dedupe_activity_records, fresh_activity_records
 from brnrd.auth import get_db
@@ -1428,14 +1428,10 @@ def dashboard_loom_api(request: Request, db: Session = Depends(get_db)) -> JSONR
 
 
 def _loom_letter_repo_id(db: Session, account_id: str) -> str | None:
-    """The loom daemon's repo when it still belongs here, else the oldest repo."""
-    loom = db.execute(
-        select(Daemon).where(Daemon.account_id == account_id, Daemon.daemon_name == LOOM_DAEMON_NAME)
-    ).scalar_one_or_none()
-    if loom is not None and loom.repo_id:
-        repo = db.get(Repo, loom.repo_id)
-        if repo is not None and repo.account_id == account_id:
-            return repo.id
+    """The last seen loom's repo when there is one, else the oldest repo."""
+    looms = loom_repos(db, account_id)
+    if looms:
+        return looms[0][0].id
     return db.execute(
         select(Repo.id).where(Repo.account_id == account_id).order_by(Repo.created_at, Repo.id).limit(1)
     ).scalar_one_or_none()

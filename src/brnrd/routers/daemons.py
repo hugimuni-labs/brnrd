@@ -34,7 +34,8 @@ from .. import (
 )
 from ..activity_records import ACTIVITY_STALE_TTL
 from ..auth import Principal, get_db, require_daemon
-from ..models import Account, ActivityRecord, Daemon, DaemonRepo, LoomPart, Event, GitHubInstallation, GitHubInstalledRepo, Repo
+from ..looms import LOOM_DAEMON_NAME
+from ..models import Account, ActivityRecord, ChannelRoute, Daemon, DaemonRepo, LoomPart, Event, GitHubInstallation, GitHubInstalledRepo, Repo
 from ..platforms import github_app as github_app_client
 
 router = APIRouter(prefix="/v1/daemons", tags=["daemons"])
@@ -274,24 +275,65 @@ def register(payload: schemas.DaemonRegister, principal: Principal = Depends(req
 
 @router.post("/door", response_model=schemas.DaemonDoor)
 def door(payload: schemas.DaemonDoorStart, request: Request, principal: Principal = Depends(require_daemon), db: Session = Depends(get_db)):
-    """A one-tap link to the shared bot that pairs a person with this loom.
+    """A one-tap link to the shared bot that binds a chat.
 
     The shared bot binds a chat only to a code the server minted, and a
-    daemon token cannot mint through the account routes. This mints one
-    for the token's repo carrying the loom's own pairing code: redeeming it
-    binds the chat and hands the daemon that code as the chat's first
-    message (`webhooks._handle_start`), which is what the loom pairs on.
+    daemon token cannot mint through the account routes. With no ``code``
+    the link binds the chat to the account, the way the dashboard's does:
+    the loom then reads it back from ``GET /chats``. With the loom's own
+    pairing code it is pinned to the token's repo and redeeming it hands
+    the daemon that code as the chat's first message
+    (`webhooks._handle_start`), which is what an older loom pairs on.
     """
     from .pairing import telegram_pair_core
 
-    if principal.repo_id is None:
+    if payload.code is not None and principal.repo_id is None:
         raise HTTPException(status_code=409, detail="daemon token names no repo")
-    started = telegram_pair_core(db, request.app.state.settings, principal.account_id, principal.repo_id,
+    repo_id = principal.repo_id if payload.code is not None else None
+    started = telegram_pair_core(db, request.app.state.settings, principal.account_id, repo_id,
                                  relay_text=payload.code)
     if not started.deep_link:
         raise HTTPException(status_code=503, detail="no shared Telegram bot is configured")
     name = started.deep_link.removeprefix("https://t.me/").split("?", 1)[0]
     return schemas.DaemonDoor(name="@" + name, link=started.deep_link)
+
+
+@router.get("/chats", response_model=schemas.DaemonChats)
+def chats(principal: Principal = Depends(require_daemon), db: Session = Depends(get_db)) -> schemas.DaemonChats:
+    """The chats bound to the token's account, newest first.
+
+    A chat binds to the account, not to a loom (#1457), so a loom set up on
+    a new computer finds the person's chats here instead of pairing again.
+    Only a route with a verified sender is listed: the rest authorize
+    nobody (`webhooks._authorized`).
+    """
+    routes = db.execute(
+        select(ChannelRoute)
+        .where(ChannelRoute.account_id == principal.account_id, ChannelRoute.paired_principal_id.is_not(None))
+        .order_by(ChannelRoute.created_at.desc())
+    ).scalars()
+    return schemas.DaemonChats(chats=[
+        schemas.DaemonChat(id=r.id, platform=r.platform, chat_id=r.channel_id, topic_id=r.topic_id,
+                           principal_id=r.paired_principal_id, principal_display=r.paired_user_display,
+                           chat_title=r.chat_title, paired_at=r.created_at)
+        for r in routes
+    ])
+
+
+@router.delete("/chats/{route_id}")
+def unbind_chat(route_id: str, principal: Principal = Depends(require_daemon), db: Session = Depends(get_db)) -> dict[str, bool]:
+    """Unbind one of the account's chats: the CLI's half of the settings
+    page's revoke (`dashboard_paired_chat_revoke_api`), same effect. A
+    daemon token may take a binding away but never make one: binding
+    always needs a tap on the person's own phone."""
+    route = db.execute(
+        select(ChannelRoute).where(ChannelRoute.id == route_id, ChannelRoute.account_id == principal.account_id)
+    ).scalar_one_or_none()
+    if route is None:
+        raise HTTPException(status_code=404, detail="chat not found")
+    db.delete(route)
+    db.commit()
+    return {"ok": True}
 
 
 @router.get("/whoami", response_model=schemas.DaemonWhoami)
@@ -697,9 +739,6 @@ def put_news(payload: schemas.NewsReport, principal: Principal = Depends(require
     return schemas.NewsOut(items=items, news_updated_at=now)
 
 
-#: The loom names itself; `brnrd account connect` mints its token without a
-#: `/register`, so the first snapshot creates the row.
-LOOM_DAEMON_NAME = "loom"
 _MAX_LOOM_BYTES = 1_000_000
 
 
