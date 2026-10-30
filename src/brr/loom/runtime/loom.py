@@ -186,6 +186,11 @@ def _env(room: Path) -> dict[str, str]:
         env[f"GIT_{role}_EMAIL"] = email
     _forge_env(room, env)
     env["BRNRD_ROOM"] = str(room)
+    # The room is a body's only scratch: mktemp, pytest and uv land where the
+    # reaper's room rules already reach, never in a /tmp nothing reaps.
+    scratch = room / "tmp"
+    scratch.mkdir(exist_ok=True)
+    env["TMPDIR"] = str(scratch)
     # The whole wake for any body; the core and the occasion apart for a body
     # with a system slot (_prepare).
     env["BRNRD_WAKE"] = str(room / "port" / "wake.md")

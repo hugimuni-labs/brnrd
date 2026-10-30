@@ -347,3 +347,21 @@ def test_a_pass_folds_the_ledger_once_however_many_rooms_it_reads(tmp_path, monk
     reap.Reaper(home, lambda *_: None).reap()
     assert seen == alone
     assert len(folds) == 1
+
+
+def test_loose_scratch_dirs_never_keep_a_room_but_a_loose_file_by_their_name_does(tmp_path):
+    home = Home(tmp_path / "home", install="0001")
+    init_self(home.root, person="test")
+    room = _ended(home, "shots", "0001-shots", 8)
+    for name in ("shots", "runs", "cache-probes", "scratch", "tmp"):
+        (room / name).mkdir()
+        (room / name / "a.png").write_text("a run's leftovers")
+    assert reap.loose(room) == []
+    assert reap.room_kept(home, read_facts(home), "0001-shots", reap.time.time()) == ""
+    (room / "notes").write_text("only here")
+    assert reap.loose(room) == ["notes"]
+    (room / "notes").unlink()
+    (room / "runs" / "a.png").unlink()
+    (room / "runs").rmdir()
+    (room / "runs").write_text("a file, not scratch")
+    assert reap.loose(room) == ["runs"]
