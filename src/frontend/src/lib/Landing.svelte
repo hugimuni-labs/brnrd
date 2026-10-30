@@ -136,7 +136,7 @@
 
 			<div class="mt-6 flex flex-col gap-3 sm:flex-row sm:items-center">
 				<pre
-					class="panel overflow-x-auto px-4 py-2.5 font-mono text-sm text-stone-200"
+					class="panel overflow-x-auto px-4 py-2.5 font-mono text-sm whitespace-pre-wrap text-stone-200 sm:whitespace-pre"
 					aria-label="install brnrd"><code
 						><span class="text-ink-mute select-none">$ </span>{INSTALL_LINE}</code
 					></pre>
@@ -427,7 +427,8 @@
 			</div>
 			<div class="panel p-4" aria-label="terminal install commands">
 				<p class="font-mono text-[10px] tracking-wide text-ink-mute uppercase">terminal</p>
-				<pre class="mt-3 overflow-x-auto font-mono text-sm leading-7 text-stone-300"><code
+				<pre
+					class="mt-3 overflow-x-auto font-mono text-sm leading-7 whitespace-pre-wrap text-stone-300 sm:whitespace-pre"><code
 						><span class="text-ink-mute">$</span> {INSTALL_LINE}
 <span class="text-ink-mute">$</span> brnrd</code
 					></pre>

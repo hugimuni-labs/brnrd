@@ -172,6 +172,9 @@ export function isAftershock(index: number, head: number, frame: number): boolea
 	return glitchNoise(index, frame) < AFTERSHOCK_ODDS;
 }
 
+/** How long past a sweep's scheduled end the timer fallback waits before settling. */
+export const REVEAL_SETTLE_SLACK_MS = 400;
+
 export const TYPE_REVEAL_GLYPHS = ['░', '▒', '·', '—', '/', '∆'] as const;
 
 export function typeRevealDuration(length: number): number {
@@ -362,6 +365,7 @@ export function shouldRestartReveal(currentText: string, nextText: string): bool
 export function typeReveal(node: HTMLElement, params: TypeRevealParams = {}) {
 	let frame = 0;
 	let timer = 0;
+	let fallback = 0;
 	let currentText = '';
 	let cancelBootWait: () => void = () => {};
 
@@ -375,6 +379,7 @@ export function typeReveal(node: HTMLElement, params: TypeRevealParams = {}) {
 		if (!shouldRestartReveal(currentText, text)) return;
 		cancelAnimationFrame(frame);
 		clearTimeout(timer);
+		clearTimeout(fallback);
 		currentText = text;
 
 		// `duration: 0` is the explicit opt-out, for a caller that must attach the
@@ -446,7 +451,10 @@ export function typeReveal(node: HTMLElement, params: TypeRevealParams = {}) {
 			// missed inline style away from being the frontier glyphs a reader
 			// sees stranded at the end of a fully revealed string.
 			if (ratio < 1) frame = requestAnimationFrame(draw);
-			else settle(text);
+			else {
+				clearTimeout(fallback);
+				settle(text);
+			}
 		};
 
 		// Held until the boot curtain lifts. The clock starts *then*, so a reveal
@@ -463,6 +471,20 @@ export function typeReveal(node: HTMLElement, params: TypeRevealParams = {}) {
 			timer = window.setTimeout(() => {
 				frame = requestAnimationFrame(draw);
 			}, delay);
+			// The sweep is driven by rAF, and rAF is not a promise: a throttled
+			// headless shell, a page that loads hidden, or a renderer that never
+			// paints can stop delivering frames after the first, leaving the
+			// node stranded on frontier glyphs instead of its words (goal-loop
+			// round 4, 2026-10-30: the landing h1 stuck at 'Δ—▒' after 30 s).
+			// A plain timer past the sweep's own end settles the text whether or
+			// not the animation got to finish it.
+			fallback = window.setTimeout(
+				() => {
+					cancelAnimationFrame(frame);
+					settle(text);
+				},
+				delay + duration + REVEAL_SETTLE_SLACK_MS
+			);
 		});
 	}
 
@@ -473,6 +495,7 @@ export function typeReveal(node: HTMLElement, params: TypeRevealParams = {}) {
 			cancelBootWait();
 			cancelAnimationFrame(frame);
 			clearTimeout(timer);
+			clearTimeout(fallback);
 		}
 	};
 }
