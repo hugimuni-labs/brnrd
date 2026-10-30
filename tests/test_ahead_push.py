@@ -307,3 +307,15 @@ def test_push_ahead_disabled_account_is_a_noop(tmp_path, monkeypatch):
     dispatched = daemon._push_ahead_repos_if_due(brr_dir, disabled_ctx, cfg)
     assert dispatched == []
     assert calls == []
+
+
+def test_push_ahead_first_attempt_is_due_on_a_young_clock(tmp_path, monkeypatch):
+    # time.monotonic counts from boot: on a fresh CI VM it can sit below the
+    # push interval, which must not read as "attempted at boot".
+    _spy_push_branch(monkeypatch)
+    ctx, cfg, repo = _account_context(tmp_path)
+    brr_dir = gitops.shared_brr_dir(repo)
+
+    dispatched = daemon._push_ahead_repos_if_due(brr_dir, ctx, cfg, now=10.0)
+    assert dispatched == ["account home"]
+    _wait_for_ahead_push_threads()

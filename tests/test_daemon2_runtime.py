@@ -1683,6 +1683,13 @@ def test_recorded_telegram_inbound_routes_and_answers_through_serve(
 
     monkeypatch.setattr(telegram, "_api_call", fake_api)
 
+    # Both writers this test reads record their receipt after their effect:
+    # the gate calls the platform before appending "sent", and daemon2 writes
+    # the response file the gate delivers before recording the letter
+    # answered. Seeing the platform called proves neither has finished, so
+    # wait for the gate's delivery pass, then quiesce serve, then read.
+    delivered = threading.Event()
+
     def one_gate_turn(gate_brr, inbox, responses):
         telegram._loop_once(gate_brr, inbox, responses)
         deadline = time.monotonic() + 30
@@ -1690,6 +1697,7 @@ def test_recorded_telegram_inbound_routes_and_answers_through_serve(
             events = list(inbox.glob("*.md"))
             if events and protocol.read_response(responses, events[0].stem):
                 telegram._deliver_responses(gate_brr, inbox, responses, "secret")
+                delivered.set()
                 return
             time.sleep(0.02)
         raise AssertionError("daemon2 did not answer recorded gate letter")
@@ -1697,14 +1705,15 @@ def test_recorded_telegram_inbound_routes_and_answers_through_serve(
     monkeypatch.setattr(telegram, "run_loop", one_gate_turn)
     thread = threading.Thread(target=runtime.serve, daemon=True)
     thread.start()
-    deadline = time.monotonic() + 30
     try:
-        terminal = lambda: [params for method, params in sent
-                            if method == "sendMessage"
-                            and params.get("text") == "hello from fake Shell"]
-        while not terminal() and time.monotonic() < deadline:
-            time.sleep(0.02)
-        assert len(terminal()) == 1
+        assert delivered.wait(timeout=30)
+        runtime.stop()
+        thread.join(timeout=30)
+        assert not thread.is_alive()
+        terminal = [params for method, params in sent
+                    if method == "sendMessage"
+                    and params.get("text") == "hello from fake Shell"]
+        assert len(terminal) == 1
         events = list(runtime.door.event_paths())
         assert len(events) == 1
         event = runtime.door.get(events[0].stem)
