@@ -93,6 +93,9 @@
 	// the repository is the loom's storage, never shown or picked.
 	let loomPair = $derived(isLoomPair(context));
 	let approvedLoom = $state(false);
+	// The board box on a loom pair: starts as the terminal left it; the
+	// approve click with it ticked is the person's yes.
+	let showBoard = $derived(context?.board === true);
 
 	async function loadContext(c: string): Promise<void> {
 		contextError = null;
@@ -167,7 +170,13 @@
 		posting = true;
 		result = null;
 		try {
-			result = await approveConnect(code, useSuggested ? '' : repoId, approveProof);
+			result = await approveConnect(
+				code,
+				useSuggested ? '' : repoId,
+				approveProof,
+				fetch,
+				loomPair ? showBoard : null
+			);
 			if (result.ok) {
 				// A loom goes on in the terminal that asked; the doors are the
 				// daemon flow's next step, not this one's.
@@ -329,6 +338,18 @@
 					</p>
 				{:else if canApprove(context)}
 					{#if loomPair}
+						<label class="mt-4 flex items-start gap-2 text-sm text-stone-300">
+							<input
+								type="checkbox"
+								data-testid="show-board"
+								class="mt-1"
+								bind:checked={showBoard}
+							/>
+							<span
+								>Show this computer's board on brnrd.dev: its threads, wishes and asks, seen only
+								when you are signed in. Change it any time in settings.</span
+							>
+						</label>
 						<button
 							type="button"
 							data-testid="approve-computer"

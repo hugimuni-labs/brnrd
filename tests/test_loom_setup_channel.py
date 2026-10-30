@@ -30,6 +30,12 @@ def no_harness_on_path(monkeypatch):
     return real
 
 
+@pytest.fixture(autouse=True)
+def no_gh_login(monkeypatch):
+    """Setup's GitHub offers see no gh login unless a test gives one; this Mac's gh would make it create repos."""
+    monkeypatch.setattr(setup_channel, '_gh_login', lambda: (None, 'needs gh signed in'))
+
+
 def home_at(tmp_path):
     (tmp_path / 'loom').mkdir()
     return Home(tmp_path, 'aaaa')
@@ -144,6 +150,7 @@ def test_relay_setup_signs_in_and_writes_the_gate_the_relay_reads(tmp_path):
     assert seen[0][:2] == ('POST', '/v1/accounts/pair') and seen[0][2]['forge'] == 'local'
     # The approve page names the computer that asked, beside the code.
     assert seen[0][2]['hostname'] == socket.gethostname() and seen[0][2]['os_user'] == getpass.getuser()
+    assert 'board' not in seen[0][2]  # nobody ticked the board offer
     assert seen[-1][:2] == ('POST', '/v1/daemons/register') and seen[-1][3] == 'Bearer bd_tok'
     assert load_config(tmp_path).relay_state == str(tmp_path / 'loom')
     state = cloud._load_state_from_dir(tmp_path / 'loom')
@@ -167,6 +174,7 @@ def test_relay_setup_signs_in_and_writes_the_gate_the_relay_reads(tmp_path):
     server = http.server.ThreadingHTTPServer(('127.0.0.1', 0), Pairing)
     threading.Thread(target=server.serve_forever, daemon=True).start()
     env['BRNRD_URL'] = f'http://127.0.0.1:{server.server_port}'
+    env['BRNRD_SETUP_BOARD'] = '1'  # setup's board offer, kept: the approve page's box starts ticked
     try:
         fresh = subprocess.run([str(Path(setup_channel.__file__).parent / 'connectors/relay/setup')],
                                env=env, capture_output=True, text=True, timeout=60)
@@ -174,6 +182,7 @@ def test_relay_setup_signs_in_and_writes_the_gate_the_relay_reads(tmp_path):
         server.shutdown()
     assert fresh.returncode == 0 and 'Traceback' not in fresh.stderr, fresh.stderr
     assert 'Signed in to brnrd.dev' in fresh.stdout
+    assert [s[2].get('board') for s in seen if s[1] == '/v1/accounts/pair'] == [None, True], seen
     assert cloud._load_state_from_dir(tmp_path / 'loom')['brnrd_url'] == env['BRNRD_URL']
 
 
@@ -342,7 +351,9 @@ def test_setup_turns_the_onboarding_list_into_asks_the_first_wake_shows(tmp_path
     assert own.sender == 'resident' and not own.says and not own.parent
     asks = [w for w in found.values() if w.parent == own.id]
     assert [w.line for w in sorted(asks, key=lambda w: w.born)][0] == 'What should I call you?'
-    assert len(asks) == 3 and {w.sender for w in asks} == {'resident'}
+    # gh is not signed in here, so the backup offer was left off: brnrd asks it later.
+    assert [w.line for w in asks][3:] == [setup_channel.LATER['repo']]
+    assert len(asks) == 4 and {w.sender for w in asks} == {'resident'}
     assert not [f for f in read_facts(home) if f.kind == 'wish' and not f.by.startswith('loom:')]
     # They wait on the person, and the home thread's next body wakes with them.
     heads = waits_on(found, main_snapshot(home))
@@ -354,7 +365,7 @@ def test_setup_turns_the_onboarding_list_into_asks_the_first_wake_shows(tmp_path
     listed.write_text(listed.read_text() + '- Which language do you write in?\n')
     assert setup_channel.main(argv) == 0
     lines = [w.line for w in wishes(read_facts(home)).values() if w.parent == own.id]
-    assert len(lines) == 4 and lines.count('What should I call you?') == 1
+    assert len(lines) == 5 and lines.count('What should I call you?') == 1
 
 
 def test_pairing_prompt_says_the_person_writes_first(tmp_path):
@@ -609,3 +620,75 @@ def test_the_code_is_typed_by_a_person_never_hex():
     assert setup_channel._says_code(' k7q m9x ', 'K7Q-M9X')
     assert setup_channel._says_code('/start K7Q-M9X', 'K7Q-M9X')
     assert not setup_channel._says_code('/start', 'K7Q-M9X')
+
+
+def test_the_offers_start_on_and_enter_keeps_them(capsys):
+    rows = [('repo', 'Back up', ''), ('app', 'App', ''), ('board', 'Board', '')]
+    assert setup_channel.checklist(rows, keys=iter(['\r'])) == {'repo', 'app', 'board'}
+    # Down once, space: the App goes off; up past the top wraps to the board.
+    assert setup_channel.checklist(rows, keys=iter(['\x1b[B', ' ', '\r'])) == {'repo', 'board'}
+    assert setup_channel.checklist(rows, keys=iter(['\x1b[A', ' ', '\n'])) == {'repo', 'app'}
+    assert 'Enter confirms' in capsys.readouterr().out
+
+
+def test_an_offer_that_cannot_be_had_shows_off_with_its_reason_and_cannot_be_switched_on(capsys):
+    rows = [('repo', 'Back up', 'needs gh signed in'), ('app', 'App', '')]
+    assert setup_channel.checklist(rows, keys=iter([' ', '\r'])) == {'app'}
+    assert setup_channel.checklist(rows[:1], keys=iter([])) == set()
+    out = capsys.readouterr().out
+    assert 'needs gh signed in' in out and out.count('Enter confirms') == 1  # the lone dead row asks nothing
+
+
+def test_piped_setup_keeps_the_offers_on_enter_and_numbers_leave_them_out(monkeypatch):
+    import io
+    rows = [('repo', 'Back up', ''), ('app', 'App', ''), ('board', 'Board', '')]
+    monkeypatch.setattr('sys.stdin', io.StringIO('\n'))
+    assert setup_channel.checklist(rows) == {'repo', 'app', 'board'}
+    monkeypatch.setattr('sys.stdin', io.StringIO('1, 3\n'))
+    assert setup_channel.checklist(rows) == {'app'}
+
+
+def test_cloud_setup_offers_backup_app_and_board_and_brnrd_asks_what_was_left_off(tmp_path, monkeypatch):
+    import io
+    from brr.loom.runtime.ledger import read_facts
+    from brr.loom.runtime.wishes import wishes
+    paired, made = [], []
+    monkeypatch.setattr(setup_channel, '_gh_login', lambda: ('ada', ''))
+    monkeypatch.setattr(setup_channel, 'back_up_self', lambda home, login: made.append(login) or ('u', True))
+    monkeypatch.setattr(setup_channel, 'pair', lambda *a, **kw: paired.append(kw['env']))
+    # Piped: Enter for the body, then leave the App (2) out.
+    monkeypatch.setattr('sys.stdin', io.StringIO('2\n'))
+    argv = ['--home', str(tmp_path), '--kind', 'relay', '--name', 'cloud', '--person', 'ada']
+    assert setup_channel.main(argv) == 0
+    assert made == ['ada'] and paired == [{'BRNRD_SETUP_BOARD': '1'}]
+    lines = {w.line for w in wishes(read_facts(Home(tmp_path))).values()}
+    assert setup_channel.LATER['app'] in lines
+    assert not lines & {setup_channel.LATER['repo'], setup_channel.LATER['board']}
+
+
+def test_an_own_bot_setup_offers_only_the_backup(tmp_path):
+    from brr.loom.runtime.selfrepo import init_self
+    home = home_at(tmp_path)
+    init_self(tmp_path, person='ada')
+    assert [k for k, _, _ in setup_channel.offers(home, 'telegram', 'ada')] == ['repo']
+    assert [k for k, _, _ in setup_channel.offers(home, 'relay', 'ada')] == ['repo', 'app', 'board']
+    subprocess.run(['git', '-C', str(tmp_path / 'self'), 'remote', 'add', 'origin', 'https://x/y.git'], check=True)
+    assert setup_channel.offers(home, 'telegram', 'ada') == []
+
+
+def test_the_backup_adopts_only_a_private_repo(tmp_path, monkeypatch):
+    from brr import home_link
+    from brr.loom.runtime.selfrepo import init_self
+    home = home_at(tmp_path)
+    init_self(tmp_path, person='ada')
+    created = []
+    monkeypatch.setattr(home_link, '_repo_view', lambda owner, name: {'visibility': 'PUBLIC'})
+    with pytest.raises(ValueError, match='not private'):
+        setup_channel.back_up_self(home, 'ada')
+    monkeypatch.setattr(home_link, '_repo_view', lambda owner, name: None)
+    monkeypatch.setattr(home_link, '_repo_create', lambda owner, name: created.append(f'{owner}/{name}'))
+    url, _pushed = setup_channel.back_up_self(home, 'ada')
+    assert created == ['ada/brnrd-self'] and url == 'https://github.com/ada/brnrd-self.git'
+    got = subprocess.run(['git', '-C', str(tmp_path / 'self'), 'remote', 'get-url', 'origin'],
+                         capture_output=True, text=True).stdout.strip()
+    assert got == url

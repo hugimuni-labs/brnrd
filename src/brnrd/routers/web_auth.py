@@ -30,6 +30,7 @@ from brnrd.routers.config_approval import decide_core as decide_config_change
 from brnrd.routers.pairing import (
     approve_core,
     initiator_proof_ok,
+    pair_board,
     pair_kind,
     pair_requester,
     pair_suggested_forge,
@@ -448,6 +449,7 @@ def connect_context_api(code: str, request: Request, db: Session = Depends(get_d
             "suggested_repo_full_name": suggested,
             "suggested_forge": suggested_forge,
             "kind": pair_kind(pair) if pair is not None else "",
+            "board": pair_board(pair) if pair is not None else False,
             "requester": pair_requester(pair) if pair is not None else {"hostname": "", "os_user": ""},
         }
     )
@@ -528,9 +530,19 @@ def connect_approve_api(
                 )
             repo_id = repo.id
     try:
-        approve_core(db, account_id, code, repo_id, approve_secret)
+        repo_id = approve_core(db, account_id, code, repo_id, approve_secret)
     except HTTPException as exc:
         return JSONResponse({"ok": False, "notice": str(exc.detail)}, status_code=exc.status_code)
+    board = (payload or {}).get("board")
+    approved_pair = _get_pair_row(db, code)
+    if isinstance(board, bool) and approved_pair is not None and pair_kind(approved_pair) == "loom":
+        # The board box on a loom's approve page: the signed-in person's answer, same as /v1/loom/consent.
+        from .loom import answer_board
+
+        repo = db.get(Repo, repo_id)
+        if repo is not None:
+            answer_board(db, repo, board)
+            db.commit()
     return JSONResponse(
         {
             "ok": True,

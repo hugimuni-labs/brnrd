@@ -230,3 +230,19 @@ test('isLoomPair approves a computer only for a loom that named its self repo', 
 	assert.equal(isLoomPair({ kind: 'loom', suggested_repo_full_name: '' }), false);
 	assert.equal(isLoomPair(null), false);
 });
+
+test('approveConnect sends the board box only when it is a loom pair', async () => {
+	const bodies: unknown[] = [];
+	const impl = (async (_url: string, init: RequestInit) => {
+		bodies.push(JSON.parse(String(init.body)));
+		return new Response(JSON.stringify({ ok: true, notice: 'ok' }), { status: 200 });
+	}) as unknown as typeof fetch;
+	await approveConnect('BR-1', '', 'proof', impl, true);
+	await approveConnect('BR-1', '', 'proof', impl, false);
+	await approveConnect('BR-1', '', 'proof', impl);
+	assert.deepEqual(bodies, [
+		{ approve_secret: 'proof', board: true },
+		{ approve_secret: 'proof', board: false },
+		{ approve_secret: 'proof' }
+	]);
+});

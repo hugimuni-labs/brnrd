@@ -61,6 +61,15 @@ def pair_kind(pair: PairRequest) -> str:
     return "loom" if pair_capabilities(pair).get("kind") == "loom" else ""
 
 
+def pair_board(pair: PairRequest) -> bool:
+    """Whether the terminal of a loom pair asked to show the board on brnrd.dev.
+
+    Only the box's starting tick: the yes is the signed-in person's approve
+    click with the box still ticked, never this field.
+    """
+    return pair_kind(pair) == "loom" and pair_capabilities(pair).get("board") is True
+
+
 def pair_suggested_forge(pair: PairRequest) -> str:
     """``"github"`` or ``"local"`` for the suggested repo above, or ``""``
     when there is no suggestion at all. Display-only — `_resolve_or_create_
@@ -145,6 +154,8 @@ def start_pair(
             for k, v in payload.model_dump().items()
             if isinstance(v, str) and v.strip()
         }
+        if payload.board:
+            caps["board"] = True
         if caps:
             capabilities_json = json.dumps(caps)
     db.add(

@@ -87,6 +87,9 @@ class PairStartRequest(BaseModel):
     # computer, and the repo is the loom's storage, never shown or picked.
     # Display-only, like `forge`.
     kind: str = ""
+    # A loom's terminal asked to show its board on brnrd.dev: the approve
+    # page's board box starts ticked. The yes is the signed-in click.
+    board: bool = False
 
 
 class PairStarted(BaseModel):

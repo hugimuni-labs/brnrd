@@ -98,7 +98,7 @@ def qr_code(link):
                      for row in rows)
 
 
-def pair(home, kind, name, person, *, timeout=180, out=print, qr=None):
+def pair(home, kind, name, person, *, timeout=180, out=print, qr=None, env=None):
     if not all(re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9._-]*', v) for v in (name, person)):
         raise ValueError('Channel and person names use letters, digits, dots, dashes or underscores')
     if name in instances(home):
@@ -106,7 +106,8 @@ def pair(home, kind, name, person, *, timeout=180, out=print, qr=None):
     folder = resolve(home, kind, 'connectors')
     if not (folder / 'out').is_file():
         raise ValueError(f'{kind} is an input pipe, not a messaging channel')
-    env = environment(home, name)
+    extra, env = env or {}, environment(home, name)
+    env.update(extra)
     state = Path(env['BRNRD_STATE'])
     setup = folder / 'setup'
     if setup.is_file():
@@ -285,15 +286,160 @@ def _channel_name(home, kind):
     return next(n for n in (kind, *(f'{kind}-{i}' for i in range(2, 100))) if n not in taken)
 
 
+SELF_REPO = 'brnrd-self'
+APP_URL = 'https://github.com/apps/brnrd-dev/installations/new'
+#: What brnrd asks later for an offer setup left off, in the person's chat; one line each, never twice.
+LATER = {
+    'repo': "Back up my memory to a private GitHub repo? (setup left it off)",
+    'app': "Install the brnrd-dev GitHub App, so brnrd.dev can reach your repos? (setup left it off)",
+    'board': "Show my board on brnrd.dev? (setup left it off; you switch it on signed in, in brnrd.dev settings)",
+}
+
+
+def _gh_login():
+    """``(login, '')`` for the account gh is signed in as here, else ``(None, why not)``."""
+    from brr import home_link
+    if not home_link.gh_available():
+        return None, 'needs the GitHub CLI (gh): https://cli.github.com'
+    login = home_link.detect_identity()
+    return (login, '') if login else (None, 'needs gh signed in: run gh auth login, then brnrd setup channel')
+
+
+def offers(home, kind, login=None, why=''):
+    """What setup switches on unless the person says no: ``(key, label, why not)`` rows.
+
+    A row with a reason cannot be picked and starts off. The repo row goes once
+    the self has an origin; the App and the board rows only on a cloud path
+    that still signs in, where the approve page is still ahead.
+    """
+    from . import gates
+    from .selfrepo import git
+    rows = []
+    if not git(home.root / 'self', 'remote', 'get-url', 'origin', check=False).stdout.strip():
+        where = f' ({login}/{SELF_REPO})' if login else ''
+        rows.append(('repo', f"Back up brnrd's memory to a private GitHub repo{where}", why))
+    if kind == 'relay' and gates.state_dir(home.root, load_config(home.root)) is None:
+        rows.append(('app', 'Let brnrd.dev reach your GitHub repos (the brnrd-dev GitHub App)', ''))
+        rows.append(('board', 'Show your board on brnrd.dev (you confirm on the approve page)', ''))
+    return rows
+
+
+def _row(row, on, at=None, number=None):
+    _, label, why = row
+    box = style.dim('[ ]') if why else (f"[{style.check()}]" if on else '[ ]')
+    lead = f"{number}." if number is not None else (style.accent('›') if at else ' ')
+    return f"    {lead} {box} {style.dim(label) if why else label}" + (f" {style.dim('· ' + why)}" if why else '')
+
+
+def checklist(rows, *, keys=None):
+    """Every pickable row starts on: Enter confirms, arrows move, space switches one.
+
+    ``keys`` stands in for a terminal (tests); without a terminal it reads one
+    line instead: Enter keeps all, numbers leave those out. Returns the keys on.
+    """
+    on = [not why for _, _, why in rows]
+    if not rows:
+        return set()
+    tty = keys is not None or sys.stdin.isatty()
+    if not any(on):  # nothing to pick: say why, ask nothing
+        for row in rows:
+            print(_row(row, False))
+        return set()
+    if not tty:
+        for i, row in enumerate(rows):
+            print(_row(row, on[i], number=i + 1))
+        for token in _ask('Enter to confirm, or the numbers to leave out:').replace(',', ' ').split():
+            if token.isdigit() and 1 <= int(token) <= len(rows):
+                on[int(token) - 1] = False
+        return {row[0] for row, picked in zip(rows, on) if picked}
+    print(f"  {style.dim('Enter confirms · ↑ ↓ move · space switches one off or on')}")
+    at = 0
+
+    def draw(again):
+        if again:
+            sys.stdout.write(f"\x1b[{len(rows)}A")
+        for i, row in enumerate(rows):
+            sys.stdout.write("\x1b[2K" + _row(row, on[i], at=i == at) + "\n")
+        sys.stdout.flush()
+
+    draw(False)
+    restore = None
+    if keys is None:
+        import termios
+        import tty as tty_mode
+        fd = sys.stdin.fileno()
+        saved = termios.tcgetattr(fd)
+        restore = lambda: termios.tcsetattr(fd, termios.TCSADRAIN, saved)  # noqa: E731
+        tty_mode.setcbreak(fd)
+        keys = iter(lambda: os.read(fd, 3).decode(errors='ignore'), None)
+    try:
+        for key in keys:
+            if key in ('\r', '\n', ''):
+                break
+            if key in ('\x1b[A', 'k'):
+                at = (at - 1) % len(rows)
+            elif key in ('\x1b[B', 'j'):
+                at = (at + 1) % len(rows)
+            elif key == ' ' and not rows[at][2]:
+                on[at] = not on[at]
+            draw(True)
+    finally:
+        if restore:
+            restore()
+    return {row[0] for row, picked in zip(rows, on) if picked}
+
+
+def back_up_self(home, login):
+    """A private ``login/brnrd-self`` as the self's origin, pushed once; the loom's mirror keeps it current.
+
+    An existing repo of that name is adopted only when GitHub calls it private:
+    the self holds people's pages.
+    """
+    from brr import home_link
+    from .selfrepo import git
+    found = home_link._repo_view(login, SELF_REPO)
+    if found and str(found.get('visibility', '')).upper() != 'PRIVATE':
+        raise ValueError(f'{login}/{SELF_REPO} exists and is not private; brnrd never pushes its memory there')
+    if not found:
+        home_link._repo_create(login, SELF_REPO)
+    url = f'https://github.com/{login}/{SELF_REPO}.git'
+    git(home.root / 'self', 'remote', 'add', 'origin', url)
+    pushed = git(home.root / 'self', '-c', 'credential.helper=', '-c', 'credential.helper=!gh auth git-credential',
+                 'push', '-u', 'origin', 'main', check=False)
+    return url, pushed.returncode == 0
+
+
+def _take_offers(home, picked, rows, login):
+    """Do the picked offers that need no page; say what each did. Returns the keys left off."""
+    for key, label, _why in rows:
+        if key not in picked:
+            continue
+        if key == 'repo':
+            try:
+                url, pushed = back_up_self(home, login)
+            except (ValueError, OSError, subprocess.SubprocessError, RuntimeError) as exc:
+                print(f"  {style.cross()} backup not set up: {exc}")
+                picked = picked - {'repo'}
+                continue
+            _ok(f"memory backs up to {url.removesuffix('.git')}" + ('' if pushed else ' (first push waits for the loom)'))
+        elif key == 'app':
+            _ok(f"install the GitHub App: {APP_URL}")
+            if sys.stdout.isatty():
+                import webbrowser
+                webbrowser.open(APP_URL)
+    return [key for key, _, _ in rows if key not in picked]
+
+
 ONBOARDING_WISH = 'brnrd knows the person it works for'
 
 
-def onboarding_asks(home):
+def onboarding_asks(home, also=()):
     """``core/onboarding.md``'s list, as asks on the home thread: what brnrd
     asks a new person, carried like any ask and answered in chat.
 
     Each ``- `` line is one ask under one wish, in the file's order. The list
-    is the self's to edit; a line already asked is never asked twice. Returns
+    is the self's to edit; ``also`` adds lines after it (what setup left
+    off). A line already asked is never asked twice. Returns
     the ask ids written. The loom writes them as the resident's own: the
     person said nothing yet, and a person's word is only a letter they sent.
     """
@@ -303,6 +449,7 @@ def onboarding_asks(home):
     listed = home.root / 'self/core/onboarding.md'
     lines = [line[2:].strip() for line in listed.read_text().splitlines()
              if line.startswith('- ') and line[2:].strip()] if listed.is_file() else []
+    lines += [line for line in also if line not in lines]
     if not lines:
         return []
     by, thread = f'loom:{home.install_id()}', home.main_thread()
@@ -482,9 +629,17 @@ def main(argv=None):
         # A letter lands only on a thread on the self's main: seed it before pairing.
         if init_self(home.root, person=person).startswith('initialized '):
             _ok(IDENTITY_NOTE)
-        onboarding_asks(home)
+        login, why = _gh_login()
+        rows = offers(home, kind, login, why)
+        picked = set()
+        if rows:
+            _step('brnrd will also')
+            picked = checklist(rows)
+        left = _take_offers(home, picked, rows, login)
+        onboarding_asks(home, also=[LATER[key] for key in left])
         _step(f'Connect {CHOICES.get(kind, kind).split(",")[0]}')
-        paired = pair(home, kind, name, person, timeout=args.timeout)
+        paired = pair(home, kind, name, person, timeout=args.timeout,
+                      env={'BRNRD_SETUP_BOARD': '1' if 'board' in picked else ''})
         if paired and args.wait > 0:
             _step('Say hello: send brnrd any message in that chat')
             first_letter(home, person, timeout=args.wait)
