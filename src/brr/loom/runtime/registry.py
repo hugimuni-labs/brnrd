@@ -79,7 +79,7 @@ REGISTRY = (
     _kind("pr.opened",         "pr",      "thread repo number url head",                       "strand",        "global"),
     _kind("pr.merged",         "pr",      "thread repo number head merge_commit",              "strand",        "global"),
     # Read by the body's table, owned elsewhere, not enforced here.
-    _kind("lease",             "thread",  "thread strand gen install router_gen shell core repos parent?", "loom", "global", once=True),
+    _kind("lease",             "thread",  "thread strand gen install router_gen shell core repos parent? pin?", "loom", "global", once=True),
     _kind("released",          "thread",  "thread strand gen why install router_gen?",        "loom",        "global",  once=True),
     _kind("shown",             "letter",  "strand gen ids",                                   "loom strand", "global"),
     _kind("molt",              "letter",  "strand gen why fresh?",                            "strand",      "global"),
@@ -93,6 +93,7 @@ REGISTRY = (
     _kind("lease.fenced",      "loom",    "install gen why",                                  "loom",        "global"),
     _kind("lease.handed",      "loom",    "install gen prefer to",                            "loom",        "global",  once=True),
     _kind("machines.prefer",   "loom",    "install from",                                     "person",      "global"),
+    _kind("machines.pin",      "loom",    "thread install? from",                             "person",      "global"),
     _kind("self.healed",       "loom",    "thread commit",                                    "loom",        "global",  once=True),
     _kind("library.problem",   "loom",    "install name problem text since",                  "loom",        "machine"),
     _kind("library.cleared",   "loom",    "install name problem",                             "loom",        "machine"),

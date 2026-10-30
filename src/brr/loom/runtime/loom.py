@@ -1362,6 +1362,10 @@ _FENCED = ("fenced: this install lost the inbox lease and another may lead; "
            "land what you have and stop, the thread wakes again where the lease is")
 
 
+_AWAY = ("this thread is pinned to install {}: land what you have and stop, "
+         "it wakes again on that machine")
+
+
 def _fenced(home, facts) -> bool:
     """A lease streak is open on this install: the router fenced and has not
     taken the inbox lease back (``Router._fence``, ``Router._recovered``).
@@ -1392,7 +1396,11 @@ def _observe_body(home, facts, strand, thread, gen, bodies, *, choice=None, forc
     lease = fact_for(facts, "lease", strand, gen).data
     start = fact_for(facts, "body.started", strand, gen)
     closed = read_thread(home, thread).get("status") in CLOSED
-    fenced = _fenced(home, facts)
+    from .router import pinned_to
+    pin = pinned_to(facts, thread)
+    away = pin not in (None, home.install_id())
+    # A thread pinned here runs whoever leads, so losing inbox does not fence it.
+    fenced = _fenced(home, facts) and pin is None
     default = choice or ("fake", "haiku")
     shell, core = lease.get("shell", default[0]), lease.get("core", default[1])
     if isinstance(facts, LedgerView):
@@ -1433,7 +1441,7 @@ def _observe_body(home, facts, strand, thread, gen, bodies, *, choice=None, forc
     # A stop on record with the body still alive is a signal that was never
     # sent or did not land: prove again, every tick, until the lock is gone.
     if alive and (state.name == "stopping"
-                  or (closed or fenced) and state.name == "leaving" and now >= state.deadline):
+                  or (closed or fenced or away) and state.name == "leaving" and now >= state.deadline):
         body = bodies.get(strand)
         proven = _proven_body(room, pid, str(start.data.get("lstart") or "") if start else "",
                               body.proc if body else None, alive=alive)
@@ -1441,11 +1449,12 @@ def _observe_body(home, facts, strand, thread, gen, bodies, *, choice=None, forc
     fuel = fuels(home, shell)
     context = SimpleNamespace(thread=thread, shell=shell, core=core, pid=pid, empty=empty, fuel=fuel,
                               why=(closing_commit(home, thread)[1] or f"thread {thread} settled") if closed
-                              else _FENCED if fenced else "", failure="", repos=lease.get("repos"))
+                              else _FENCED if fenced else _AWAY.format(pin) if away else "",
+                              failure="", repos=lease.get("repos"))
     o = Observation(strand, gen, alive, closed, "refreshing" if gauge is None else "empty" if empty
                     else "ok" if gauge["windows"] else "unknown",
                     now, proven, until=until, force=force, stop_grace=config.stop_grace,
-                    woken="/".join(woken) if woken else "", fenced=fenced, held=held)
+                    woken="/".join(woken) if woken else "", fenced=fenced, held=held, away=away)
     if TABLE[row_for(facts, o)].next == "parked" and not fenced:
         park = fact_for(facts, "body.parked", strand, gen)
         _park_notice(home, facts, thread, (shell, core),
