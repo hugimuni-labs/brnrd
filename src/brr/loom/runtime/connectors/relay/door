@@ -14,4 +14,6 @@ state = cloud._load_state_from_dir(gate)
 # The server mints the bot's own code and hands it ours when the link is used.
 door = cloud._request(state['brnrd_url'], 'POST', '/v1/daemons/door', token=state['token'],
                       json=dict(code=sys.argv[1]), retry=False)
-print(json.dumps(dict(name=door['name'], link=door['link'])))
+# Typed into the shared bot, only the server's own code pairs (the link carries it).
+minted = door['link'].partition('?start=')[2]
+print(json.dumps(dict(name=door['name'], link=door['link'], code=minted or sys.argv[1], qr=False)))

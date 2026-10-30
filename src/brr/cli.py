@@ -309,7 +309,7 @@ def build_parser() -> argparse.ArgumentParser:
     # The loom setup remains off the daemon help until cut-over. The old
     # `setup <gate>` spelling still fails with its existing migration pointer.
     p = sub.add_parser("setup")
-    p.add_argument("step", nargs="?", default="channel")
+    p.add_argument("step", nargs="?")
     p.add_argument("--home")
     p.add_argument("--kind")
     p.add_argument("--name")
@@ -6952,10 +6952,11 @@ def cmd_config_unset(args):
 
 
 def cmd_setup_channel(args):
-    if args.step != "channel":
+    if args.step not in (None, "channel"):
         return _retired_command("setup", "brnrd gate setup <gate>")(args)
     from .loom.runtime.setup_channel import main
-    argv = [args.step]
+    # A bare `brnrd setup` on a set-up home only shows its state; `channel` adds one.
+    argv = [args.step] if args.step else []
     for key in ('home', 'kind', 'name', 'person', 'timeout', 'wait'):
         value = getattr(args, key, None)
         if value is not None:

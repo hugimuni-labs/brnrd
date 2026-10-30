@@ -182,8 +182,9 @@ class DaemonRegistered(BaseModel):
 
 
 class DaemonDoorStart(BaseModel):
-    # The loom's own pairing code (`setup_channel.pair`: 8 hex digits).
-    code: str = Field(pattern=r"^[0-9a-f]{8}$")
+    # The loom's own pairing code (`setup_channel.pairing_code`: `K7Q-M9X`;
+    # 8 hex digits from a loom older than that).
+    code: str = Field(pattern=r"^(?:[0-9a-f]{8}|[A-HJKMNP-Z2-9]{3}-[A-HJKMNP-Z2-9]{3})$")
 
 
 class DaemonDoor(BaseModel):
