@@ -20,6 +20,7 @@ pytest.importorskip("multipart")
 
 from fastapi.testclient import TestClient  # noqa: E402
 
+from _helpers import approve_pair  # noqa: E402
 from brnrd import create_app, run_release_requests, run_respawn_requests  # noqa: E402
 from brnrd.config import Settings  # noqa: E402
 from brnrd.models import Account, Daemon, RunReleaseRequest, RunRespawnRequest  # noqa: E402
@@ -301,11 +302,7 @@ def test_mark_consumed_is_account_scoped_for_both():
 def _pair_daemon(client: TestClient, token: str, repo_id: str) -> str:
     account_headers = {"Authorization": f"Bearer {token}"}
     pair = client.post("/v1/accounts/pair").json()
-    client.post(
-        f"/v1/accounts/pair/{pair['pair_code']}/approve",
-        json={"repo_id": repo_id, "approve_secret": pair["approve_secret"]},
-        headers=account_headers,
-    )
+    approve_pair(client, pair['pair_code'], {"repo_id": repo_id, "approve_secret": pair["approve_secret"]}, headers=account_headers)
     paired = client.get(
         f"/v1/accounts/pair/{pair['pair_code']}",
         params={"poll_secret": pair["poll_secret"]},

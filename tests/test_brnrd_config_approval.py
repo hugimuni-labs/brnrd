@@ -24,7 +24,7 @@ from sqlalchemy import select  # noqa: E402
 from brnrd import create_app  # noqa: E402
 from brnrd.config import Settings  # noqa: E402
 from brnrd.models import ConfigChangeRequest, Event  # noqa: E402
-from _helpers import brnrd_account_headers, brnrd_client  # noqa: E402
+from _helpers import approve_pair, brnrd_account_headers, brnrd_client  # noqa: E402
 
 
 _client = brnrd_client
@@ -39,11 +39,7 @@ def _repo_and_daemon(client: TestClient) -> tuple[str, dict[str, str], dict[str,
         headers=account_headers,
     ).json()
     pair = client.post("/v1/accounts/pair").json()
-    client.post(
-        f"/v1/accounts/pair/{pair['pair_code']}/approve",
-        json={"repo_id": repo["repo_id"], "approve_secret": pair["approve_secret"]},
-        headers=account_headers,
-    )
+    approve_pair(client, pair['pair_code'], {"repo_id": repo["repo_id"], "approve_secret": pair["approve_secret"]}, headers=account_headers)
     paired = client.get(
         f"/v1/accounts/pair/{pair['pair_code']}",
         params={"poll_secret": pair["poll_secret"]},

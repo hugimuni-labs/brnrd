@@ -12,7 +12,7 @@ pytest.importorskip("multipart")
 
 from fastapi.testclient import TestClient  # noqa: E402
 
-from _helpers import PUBLISH_EVERYTHING, brnrd_client  # noqa: E402
+from _helpers import approve_pair, brnrd_client, PUBLISH_EVERYTHING  # noqa: E402
 from brnrd.models import Account, GitHubInstallation, GitHubInstalledRepo, Repo  # noqa: E402
 from brnrd.oauth import GitHubIdentity  # noqa: E402
 from brnrd.routers.accounts import account_for_github_identity, issue_session_token  # noqa: E402
@@ -197,6 +197,37 @@ def test_dashboard_repos_api_carries_the_machines_summary():
 
     warm = client.get("/v1/dashboard/repos").json()
     assert warm["machines"] == {"paired": True, "any_enabled_repo": True}
+
+
+def test_dashboard_repos_api_machines_summary_is_account_scoped_not_cross_tenant():
+    """Two accounts, one database — each session's `machines` summary counts
+    only its own account's daemons (moved here from the retired
+    `GET /v1/machines` suite; same `_machine_views` query)."""
+    from brnrd.models import Daemon
+
+    client = _client()
+    _login(client, github_id="1", login="Gurio")
+    gurio_account_id = _account_id(client, login="Gurio")
+    _login(client, github_id="2", login="Other")
+    with client.app.state.SessionLocal() as db:
+        db.add(
+            Daemon(
+                id="dmn-gurio",
+                account_id=gurio_account_id,
+                repo_id=None,
+                token_id="tok-gurio",
+                daemon_name="gurio-box",
+                online=True,
+            )
+        )
+        db.commit()
+
+    other = client.get("/v1/dashboard/repos").json()
+    assert other["machines"] == {"paired": False, "any_enabled_repo": False}
+
+    _login(client, github_id="1", login="Gurio")
+    gurio = client.get("/v1/dashboard/repos").json()
+    assert gurio["machines"] == {"paired": True, "any_enabled_repo": False}
 
 
 def test_dashboard_repos_api_serves_one_pairing_command_to_a_cold_account():
@@ -1393,11 +1424,7 @@ def test_put_live_runs_stores_spawn_max_concurrent():
     account_headers = {"Authorization": f"Bearer {account_token}"}
 
     pair = client.post("/v1/accounts/pair").json()
-    client.post(
-        f"/v1/accounts/pair/{pair['pair_code']}/approve",
-        json={"repo_id": repo_id, "approve_secret": pair["approve_secret"]},
-        headers=account_headers,
-    )
+    approve_pair(client, pair['pair_code'], {"repo_id": repo_id, "approve_secret": pair["approve_secret"]}, headers=account_headers)
     paired = client.get(
         f"/v1/accounts/pair/{pair['pair_code']}",
         params={"poll_secret": pair["poll_secret"]},
@@ -1765,11 +1792,7 @@ def _daemon_client():
     repo_id = _create_repo(client, account_token)
     account_headers = {"Authorization": f"Bearer {account_token}"}
     pair = client.post("/v1/accounts/pair").json()
-    client.post(
-        f"/v1/accounts/pair/{pair['pair_code']}/approve",
-        json={"repo_id": repo_id, "approve_secret": pair["approve_secret"]},
-        headers=account_headers,
-    )
+    approve_pair(client, pair['pair_code'], {"repo_id": repo_id, "approve_secret": pair["approve_secret"]}, headers=account_headers)
     paired = client.get(
         f"/v1/accounts/pair/{pair['pair_code']}",
         params={"poll_secret": pair["poll_secret"]},
@@ -2336,11 +2359,7 @@ def test_put_live_runs_carries_room_edge_and_lifecycle():
     account_headers = {"Authorization": f"Bearer {account_token}"}
 
     pair = client.post("/v1/accounts/pair").json()
-    client.post(
-        f"/v1/accounts/pair/{pair['pair_code']}/approve",
-        json={"repo_id": repo_id, "approve_secret": pair["approve_secret"]},
-        headers=account_headers,
-    )
+    approve_pair(client, pair['pair_code'], {"repo_id": repo_id, "approve_secret": pair["approve_secret"]}, headers=account_headers)
     paired = client.get(
         f"/v1/accounts/pair/{pair['pair_code']}",
         params={"poll_secret": pair["poll_secret"]},

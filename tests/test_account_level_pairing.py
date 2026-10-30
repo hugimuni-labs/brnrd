@@ -28,7 +28,7 @@ from brnrd import inbox as inbox_service  # noqa: E402
 from brnrd.app import _maybe_derive_telegram_bot_username  # noqa: E402
 from brnrd.config import Settings, _derived_telegram_usernames  # noqa: E402
 from brnrd.models import ChannelRoute, Event, Repo, TgPairCode  # noqa: E402
-from _helpers import brnrd_account_headers  # noqa: E402
+from _helpers import brnrd_account_headers, repo_telegram_pair  # noqa: E402
 
 _SECRET = "webhook-secret"
 _HDR = {"X-Telegram-Bot-Api-Secret-Token": _SECRET}
@@ -516,9 +516,7 @@ def test_repo_scoped_code_still_pins(env):
     headers = _account(client)
     _login_session(client, headers)
     repo_id = _repo(client, headers, "classic")
-    code = client.post(
-        "/v1/accounts/pair/telegram", json={"repo_id": repo_id}, headers=headers
-    ).json()["pair_code"]
+    code = repo_telegram_pair(client, repo_id, headers=headers).json()["pair_code"]
 
     _post(client, _message(1009, f"/start {code}"))
 

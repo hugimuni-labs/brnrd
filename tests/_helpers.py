@@ -297,6 +297,54 @@ def brnrd_account_headers(
     return {"Authorization": f"Bearer {token}"}
 
 
+def approve_pair(client, code: str, body: dict, *, headers: dict[str, str]):
+    """Approve a daemon pair code the way the browser does: ``POST /v1/connect/{code}``.
+
+    That route reads the session cookie, not the bearer header, so the
+    session token behind ``headers`` is sent as the cookie for this one
+    request (the client's own jar is left alone, which lets two accounts
+    take turns in one test).
+    """
+    token = headers["Authorization"].split(" ", 1)[1]
+    cookie = client.app.state.settings.session_cookie
+    return client.post(f"/v1/connect/{code}", json=body, headers={"Cookie": f"{cookie}={token}"})
+
+
+class _RepoPairResponse:
+    """``POST /v1/repos/{id}/telegram-pair`` read back in the old mint's shape.
+
+    The repo-scoped mint now lives behind the session-gated repo-actions
+    route, which names its fields ``pairing_code`` / ``action_url``; the
+    tests that read a code or deep link care about the code, not the key.
+    """
+
+    def __init__(self, response):
+        self.status_code = response.status_code
+        self.text = response.text
+        raw = response.json()
+        self._body = (
+            {
+                "pair_code": raw.get("pairing_code"),
+                "instructions": raw.get("instructions"),
+                "deep_link": raw.get("action_url"),
+            }
+            if response.status_code == 200
+            else raw
+        )
+
+    def json(self):
+        return self._body
+
+
+def repo_telegram_pair(client, repo_id: str, *, headers: dict[str, str]):
+    """Mint a repo-scoped Telegram/WhatsApp pair code (``POST /v1/repos/{id}/telegram-pair``)."""
+    token = headers["Authorization"].split(" ", 1)[1]
+    cookie = client.app.state.settings.session_cookie
+    return _RepoPairResponse(
+        client.post(f"/v1/repos/{repo_id}/telegram-pair", headers={"Cookie": f"{cookie}={token}"})
+    )
+
+
 def brnrd_client(*, base_url: str = "https://testserver", **overrides) -> "TestClient":
     """A bare-minimum brnrd app + GitHub-oauth-configured ``TestClient``.
 
@@ -345,11 +393,7 @@ def brnrd_repo_and_daemon(client: "TestClient") -> tuple[dict[str, str], dict[st
         headers=account_headers,
     ).json()
     pair = client.post("/v1/accounts/pair").json()
-    client.post(
-        f"/v1/accounts/pair/{pair['pair_code']}/approve",
-        json={"repo_id": repo["repo_id"], "approve_secret": pair["approve_secret"]},
-        headers=account_headers,
-    )
+    approve_pair(client, pair['pair_code'], {"repo_id": repo["repo_id"], "approve_secret": pair["approve_secret"]}, headers=account_headers)
     paired = client.get(
         f"/v1/accounts/pair/{pair['pair_code']}",
         params={"poll_secret": pair["poll_secret"]},

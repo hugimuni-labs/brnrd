@@ -30,7 +30,7 @@ from brnrd import create_app, ids, inbox as inbox_service  # noqa: E402
 from brnrd.config import Settings  # noqa: E402
 from brnrd.models import ChannelRoute, Event, Repo, TgPairCode  # noqa: E402
 from brnrd.platforms import whatsapp as wa  # noqa: E402
-from _helpers import brnrd_account_headers  # noqa: E402
+from _helpers import approve_pair, brnrd_account_headers, repo_telegram_pair  # noqa: E402
 
 _APP_SECRET = "whatsapp-app-secret"
 _VERIFY_TOKEN = "verify-me"
@@ -85,18 +85,12 @@ def _pair_code(client, headers, repo_id):
     platform-agnostic) endpoint — ``TgPairCode`` carries no platform column,
     so the same code a WhatsApp user texts in works here too (see
     routers/webhooks.py's WhatsApp section docstring)."""
-    return client.post(
-        "/v1/accounts/pair/telegram", json={"repo_id": repo_id}, headers=headers
-    ).json()["pair_code"]
+    return repo_telegram_pair(client, repo_id, headers=headers).json()["pair_code"]
 
 
 def _daemon_headers(client, acc, repo_id):
     pair = client.post("/v1/accounts/pair").json()
-    client.post(
-        f"/v1/accounts/pair/{pair['pair_code']}/approve",
-        json={"repo_id": repo_id, "approve_secret": pair["approve_secret"]},
-        headers=acc,
-    )
+    approve_pair(client, pair['pair_code'], {"repo_id": repo_id, "approve_secret": pair["approve_secret"]}, headers=acc)
     token = client.get(
         f"/v1/accounts/pair/{pair['pair_code']}",
         params={"poll_secret": pair["poll_secret"]},

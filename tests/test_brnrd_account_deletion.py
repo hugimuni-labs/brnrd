@@ -308,10 +308,14 @@ def test_delete_account_sweeps_every_store_but_retains_the_ledger(monkeypatch):
     # The session token used to *make* this request must not survive it —
     # the Token sweep has to catch tokens with no repo_id (issue_session_token
     # never sets one), not just repo-scoped ones. Bearer, not the cookie:
-    # /v1/accounts/repos reads only Authorization (`require_account`), so this
+    # POST /v1/accounts/repos reads only Authorization (`require_account`), so this
     # actually proves the token row is gone rather than just that no cookie
     # was sent.
-    denied = client.get("/v1/accounts/repos", headers={"Authorization": f"Bearer {token}"})
+    denied = client.post(
+        "/v1/accounts/repos",
+        json={"repo_full_name": "Gurio/after-erasure"},
+        headers={"Authorization": f"Bearer {token}"},
+    )
     assert denied.status_code == 401
     # And the cookie-based dashboard seam agrees.
     denied_cookie = client.get("/v1/dashboard/repos")

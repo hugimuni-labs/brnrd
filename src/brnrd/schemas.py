@@ -36,29 +36,6 @@ class RepoOut(BaseModel):
     publish_layers: str | None = None
 
 
-class RepoList(BaseModel):
-    repos: list[RepoOut]
-
-
-class GitHubInstallationOut(BaseModel):
-    installation_id: str
-    target_login: str
-    target_type: str
-    last_synced_at: datetime | None = None
-
-
-class GitHubInstalledRepoOut(BaseModel):
-    repo_full_name: str
-    forge_repo_id: str | None = None
-    default_branch: str | None = None
-    is_private: bool = False
-
-
-class GitHubInstallationsList(BaseModel):
-    installations: list[GitHubInstallationOut]
-    installed_repos: list[GitHubInstalledRepoOut]
-
-
 class PairStartRequest(BaseModel):
     """What the connecting daemon already knows about its own checkout.
 
@@ -100,19 +77,6 @@ class PairStarted(BaseModel):
     # existing API clients already present back at approve.
     approve_secret: str
     expires_at: datetime
-
-
-class PairApprove(BaseModel):
-    repo_id: str
-    # Defaulted rather than required so a client that sends none gets the
-    # explicit 403 ("open the full link your terminal printed") from
-    # `approve_core` instead of a 422 that reads like a malformed request.
-    # Absent and wrong are the same answer either way.
-    approve_secret: str = ""
-
-
-class TelegramPairStart(BaseModel):
-    repo_id: str
 
 
 class TelegramPairStarted(BaseModel):
@@ -225,32 +189,6 @@ class PublishingCredential(BaseModel):
 
 class PublishingCredentialRequest(BaseModel):
     repo_full_name: str
-
-
-class DaemonDeregister(BaseModel):
-    daemon_name: str = Field(min_length=1, max_length=128)
-
-
-class MachineRepoOut(BaseModel):
-    """One repo a machine currently declares that it serves."""
-
-    repo_id: str
-    repo_full_name: str
-
-
-class MachineOut(BaseModel):
-    """`GET /v1/machines` row — design-machines-and-guests.md R1, #1365."""
-
-    daemon_id: str
-    daemon_name: str
-    online: bool
-    last_seen: datetime | None = None
-    enabled_repos: list[MachineRepoOut] = Field(default_factory=list)
-
-
-class MachinesOut(BaseModel):
-    generated_at: datetime
-    machines: list[MachineOut]
 
 
 class EventOut(BaseModel):

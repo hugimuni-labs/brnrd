@@ -18,7 +18,7 @@ from brnrd import create_app, ids  # noqa: E402
 from brnrd.app import _maybe_derive_telegram_bot_username  # noqa: E402
 from brnrd.config import Settings, _derived_telegram_usernames  # noqa: E402
 from brnrd.models import ChannelRoute, Daemon, Event, Repo, TgPairCode  # noqa: E402
-from _helpers import brnrd_account_headers  # noqa: E402
+from _helpers import approve_pair, brnrd_account_headers, repo_telegram_pair  # noqa: E402
 
 _SECRET = "webhook-secret"
 _HDR = {"X-Telegram-Bot-Api-Secret-Token": _SECRET}
@@ -85,9 +85,7 @@ def _repo(client, headers, name="demo"):
 
 
 def _tg_pair_code(client, headers, repo_id):
-    return client.post(
-        "/v1/accounts/pair/telegram", json={"repo_id": repo_id}, headers=headers
-    ).json()["pair_code"]
+    return repo_telegram_pair(client, repo_id, headers=headers).json()["pair_code"]
 
 
 def _message(
@@ -119,11 +117,7 @@ def _message(
 
 def _daemon_headers(client, acc, repo_id):
     pair = client.post("/v1/accounts/pair").json()
-    client.post(
-        f"/v1/accounts/pair/{pair['pair_code']}/approve",
-        json={"repo_id": repo_id, "approve_secret": pair["approve_secret"]},
-        headers=acc,
-    )
+    approve_pair(client, pair['pair_code'], {"repo_id": repo_id, "approve_secret": pair["approve_secret"]}, headers=acc)
     token = client.get(
         f"/v1/accounts/pair/{pair['pair_code']}",
         params={"poll_secret": pair["poll_secret"]},
@@ -373,9 +367,7 @@ def test_invalid_bot_username_mints_no_deep_link(monkeypatch):
     acc = _account(client)
     rid = _repo(client, acc, name="myrepo")
 
-    r = client.post(
-        "/v1/accounts/pair/telegram", json={"repo_id": rid}, headers=acc
-    )
+    r = repo_telegram_pair(client, rid, headers=acc)
     assert r.status_code == 200
     body = r.json()
     assert body["deep_link"] is None
@@ -389,9 +381,7 @@ def test_valid_bot_username_still_mints_deep_link(monkeypatch):
     acc = _account(client)
     rid = _repo(client, acc, name="myrepo")
 
-    r = client.post(
-        "/v1/accounts/pair/telegram", json={"repo_id": rid}, headers=acc
-    )
+    r = repo_telegram_pair(client, rid, headers=acc)
     assert r.status_code == 200
     body = r.json()
     assert body["deep_link"] == f"https://t.me/brnrd_bot?start={body['pair_code']}"
@@ -428,7 +418,7 @@ def test_derived_username_wins_over_invalid_env_and_mints_deep_link(monkeypatch)
 
     acc = _account(client)
     rid = _repo(client, acc, name="myrepo")
-    r = client.post("/v1/accounts/pair/telegram", json={"repo_id": rid}, headers=acc)
+    r = repo_telegram_pair(client, rid, headers=acc)
     assert r.status_code == 200
     body = r.json()
     assert body["deep_link"] == f"https://t.me/brnrd_bot?start={body['pair_code']}"
@@ -444,7 +434,7 @@ def test_getme_unreachable_falls_back_to_valid_env(monkeypatch):
 
     acc = _account(client)
     rid = _repo(client, acc, name="myrepo")
-    r = client.post("/v1/accounts/pair/telegram", json={"repo_id": rid}, headers=acc)
+    r = repo_telegram_pair(client, rid, headers=acc)
     assert r.status_code == 200
     body = r.json()
     assert body["deep_link"] == f"https://t.me/brnrd_bot?start={body['pair_code']}"
@@ -460,7 +450,7 @@ def test_getme_and_env_both_invalid_yields_empty(monkeypatch):
 
     acc = _account(client)
     rid = _repo(client, acc, name="myrepo")
-    r = client.post("/v1/accounts/pair/telegram", json={"repo_id": rid}, headers=acc)
+    r = repo_telegram_pair(client, rid, headers=acc)
     assert r.status_code == 200
     body = r.json()
     assert body["deep_link"] is None
@@ -1512,9 +1502,7 @@ def test_telegram_pair_returns_deep_link_when_username_set():
     client = TestClient(create_app(settings))
     acc = _account(client)
     rid = _repo(client, acc)
-    body = client.post(
-        "/v1/accounts/pair/telegram", json={"repo_id": rid}, headers=acc
-    ).json()
+    body = repo_telegram_pair(client, rid, headers=acc).json()
     code = body["pair_code"]
     assert code.startswith("PK-")
     # @-prefix stripped; the pair code rides as the tap-to-open start= param.
@@ -1528,9 +1516,7 @@ def test_telegram_pair_omits_deep_link_without_username(env):
     _, client, _ = env  # fixture Settings sets no telegram_bot_username
     acc = _account(client)
     rid = _repo(client, acc)
-    body = client.post(
-        "/v1/accounts/pair/telegram", json={"repo_id": rid}, headers=acc
-    ).json()
+    body = repo_telegram_pair(client, rid, headers=acc).json()
     assert body["deep_link"] is None
     assert f"/start {body['pair_code']}" in body["instructions"]
     assert f"For WhatsApp, text `{body['pair_code']}` by itself" in body["instructions"]

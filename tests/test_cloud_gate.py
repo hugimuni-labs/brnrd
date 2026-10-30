@@ -22,7 +22,7 @@ from brnrd.inbox import CapturingForwarder  # noqa: E402
 from brr import claude_status  # noqa: E402
 from brr import protocol  # noqa: E402
 from brr.gates import cloud  # noqa: E402
-from _helpers import PUBLISH_EVERYTHING, brnrd_account_headers, init_git_repo  # noqa: E402
+from _helpers import approve_pair, brnrd_account_headers, init_git_repo, PUBLISH_EVERYTHING  # noqa: E402
 
 
 class _StopLoop(BaseException):
@@ -75,11 +75,7 @@ def _account_and_project(client):
 
 def _handshake(client, acc_headers, pid):
     pair = client.post("/v1/accounts/pair").json()
-    client.post(
-        f"/v1/accounts/pair/{pair['pair_code']}/approve",
-        json={"repo_id": pid, "approve_secret": pair["approve_secret"]},
-        headers=acc_headers,
-    )
+    approve_pair(client, pair['pair_code'], {"repo_id": pid, "approve_secret": pair["approve_secret"]}, headers=acc_headers)
     paired = client.get(
         f"/v1/accounts/pair/{pair['pair_code']}",
         params={"poll_secret": pair["poll_secret"]},
@@ -239,11 +235,7 @@ def test_connect_registers_token_for_dashboard_publishes(tmp_path, monkeypatch):
         nonlocal approved
         if method == "GET" and path.startswith("/v1/accounts/pair/") and not approved:
             approved = True
-            response = client.post(
-                f"/v1/accounts/pair/{pair['pair_code']}/approve",
-                json={"repo_id": repo_id, "approve_secret": pair["approve_secret"]},
-                headers=account_headers,
-            )
+            response = approve_pair(client, pair['pair_code'], {"repo_id": repo_id, "approve_secret": pair["approve_secret"]}, headers=account_headers)
             assert response.status_code == 200
         result = routed(base_url, method, path, **kwargs)
         if method == "POST" and path == "/v1/accounts/pair":
@@ -678,9 +670,12 @@ def test_loop_publishes_local_activity_snapshot(tmp_path, monkeypatch):
 
     cloud._dashboard_publish_tick(brr_dir, inbox_dir)
 
-    listing = client.get("/v1/accounts/activity", headers=acc)
+    listing = client.get(
+        "/v1/dashboard/activity",
+        headers={"Cookie": f"brnrd_session={acc['Authorization'].split(' ', 1)[1]}"},
+    )
     assert listing.status_code == 200
-    rows = {row["id"]: row for row in listing.json()["activity"]}
+    rows = {row["id"]: row for row in listing.json()["rows"]}
     assert rows["run:run-cloud-activity"]["runner"]["shell"] == "codex"
     assert rows["run:run-cloud-activity"]["phase"] == "coding"
     assert rows["run:run-cloud-activity"]["branch"] == "brr/activity"
@@ -2141,7 +2136,10 @@ def test_dashboard_publish_tick_publishes_all_eight_snapshots(tmp_path, monkeypa
 
     cloud._dashboard_publish_tick(brr_dir, inbox_dir)
 
-    listing = client.get("/v1/accounts/activity", headers=acc)
+    listing = client.get(
+        "/v1/dashboard/activity",
+        headers={"Cookie": f"brnrd_session={acc['Authorization'].split(' ', 1)[1]}"},
+    )
     assert listing.status_code == 200
     with client.app.state.SessionLocal() as db:
         daemon = db.query(DaemonModel).filter(DaemonModel.repo_id == pid).one()

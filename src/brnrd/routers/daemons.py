@@ -1511,21 +1511,6 @@ def post_pack(request: Request, payload: schemas.PackRelayPost, principal: Princ
     return schemas.PackRelayAck(token=token, render_url=f"{base}/r/{token}", expires_at=expires_at)
 
 
-@router.post("/deregister")
-def deregister(payload: schemas.DaemonDeregister, principal: Principal = Depends(require_daemon), db: Session = Depends(get_db)):
-    daemon = db.execute(
-        select(Daemon).where(
-            Daemon.account_id == principal.account_id,
-            Daemon.daemon_name == payload.daemon_name,
-        )
-    ).scalar_one_or_none()
-    if daemon is not None:
-        daemon.online = False
-        daemon.last_seen_at = datetime.now(timezone.utc)
-        db.commit()
-    return {"ok": True}
-
-
 @router.post("/revoke")
 def revoke(principal: Principal = Depends(require_daemon), db: Session = Depends(get_db)):
     """Retire the calling token: the server half of a disconnect.

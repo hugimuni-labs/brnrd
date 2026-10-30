@@ -46,7 +46,7 @@ from brnrd.platforms import github_app as github_app_platform  # noqa: E402
 from brnrd.routers import github_app as github_app_router  # noqa: E402
 from brnrd.routers import webhooks as webhook_routes  # noqa: E402
 from brr.gates.github import parse as gh_parse  # noqa: E402
-from _helpers import brnrd_account_headers  # noqa: E402
+from _helpers import approve_pair, brnrd_account_headers  # noqa: E402
 from _mention_vectors import MENTION, MENTION_VECTOR_IDS, MENTION_VECTORS  # noqa: E402
 
 _SECRET = "github-webhook-secret"
@@ -191,11 +191,7 @@ def _repo(client, headers, repo="owner/repo"):
 
 def _daemon_headers(client, acc, repo_id):
     pair = client.post("/v1/accounts/pair").json()
-    client.post(
-        f"/v1/accounts/pair/{pair['pair_code']}/approve",
-        json={"repo_id": repo_id, "approve_secret": pair["approve_secret"]},
-        headers=acc,
-    )
+    approve_pair(client, pair['pair_code'], {"repo_id": repo_id, "approve_secret": pair["approve_secret"]}, headers=acc)
     token = client.get(
         f"/v1/accounts/pair/{pair['pair_code']}",
         params={"poll_secret": pair["poll_secret"]},
@@ -546,7 +542,7 @@ def _opened_payload(
 
 
 def test_repo_create_list_is_idempotent(env):
-    _, client, _ = env
+    app, client, _ = env
     acc = _account(client)
 
     first = client.post(
@@ -563,9 +559,8 @@ def test_repo_create_list_is_idempotent(env):
     assert second.status_code == 201, second.text
     assert second.json()["repo_id"] == first.json()["repo_id"]
 
-    listing = client.get("/v1/accounts/repos", headers=acc).json()
-    assert len(listing["repos"]) == 1
-    assert listing["repos"][0]["repo_full_name"] == "owner/repo"
+    with app.state.SessionLocal() as db:
+        assert list(db.execute(select(Repo.repo_full_name)).scalars()) == ["owner/repo"]
 
 
 def test_github_webhook_rejects_bad_signature(env):

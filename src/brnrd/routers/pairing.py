@@ -231,12 +231,6 @@ def approve_core(db: Session, account_id: str, code: str, repo_id: str, approve_
     return repo.id
 
 
-@router.post("/{code}/approve", response_model=schemas.PairStatus)
-def approve_pair(code: str, payload: schemas.PairApprove, principal: Principal = Depends(require_account), db: Session = Depends(get_db)):
-    repo_id = approve_core(db, principal.account_id, code, payload.repo_id, payload.approve_secret)
-    return schemas.PairStatus(status="approved", account_id=principal.account_id, repo_id=repo_id)
-
-
 def _telegram_pair_response(settings: Any, repo: Repo | None, code: str, expires_at: datetime) -> schemas.TelegramPairStarted:
     # #1463 — token-derived (getMe) when available, env as fallback. #1242 —
     # an invalid-shape username (e.g. the hyphenated GitHub login spelling)
@@ -326,11 +320,6 @@ def telegram_pair_for_connect(
             expires = expires.replace(tzinfo=timezone.utc)
         return _telegram_pair_response(settings, repo, existing.code, expires)
     return telegram_pair_core(db, settings, account_id, repo_id)
-
-
-@router.post("/telegram", response_model=schemas.TelegramPairStarted)
-def start_telegram_pair(payload: schemas.TelegramPairStart, request: Request, principal: Principal = Depends(require_account), db: Session = Depends(get_db)):
-    return telegram_pair_core(db, request.app.state.settings, principal.account_id, payload.repo_id)
 
 
 @router.get("/{code}", response_model=schemas.PairStatus)

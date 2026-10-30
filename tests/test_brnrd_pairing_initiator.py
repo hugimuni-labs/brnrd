@@ -27,7 +27,7 @@ from sqlalchemy import select  # noqa: E402
 from brnrd import create_app  # noqa: E402
 from brnrd.config import Settings  # noqa: E402
 from brnrd.models import PairRequest, Repo, Token  # noqa: E402
-from _helpers import brnrd_account_headers  # noqa: E402
+from _helpers import approve_pair, brnrd_account_headers  # noqa: E402
 
 
 @pytest.fixture()
@@ -111,11 +111,7 @@ def test_approve_without_the_initiator_proof_is_refused(client):
     headers, repo_id = _account(client, github_id="1", login="owner", repo="Gurio/laptop")
     pair = _start_pair(client)
 
-    r = client.post(
-        f"/v1/accounts/pair/{pair['pair_code']}/approve",
-        json={"repo_id": repo_id},
-        headers=headers,
-    )
+    r = approve_pair(client, pair['pair_code'], {"repo_id": repo_id}, headers=headers)
     assert r.status_code == 403, r.text
     assert _pair_row(client, pair["pair_code"]).status == PairRequest.STATUS_PENDING
     assert _daemon_tokens(client) == []
@@ -125,11 +121,7 @@ def test_approve_with_a_wrong_initiator_proof_is_refused(client):
     headers, repo_id = _account(client, github_id="1", login="owner", repo="Gurio/laptop")
     pair = _start_pair(client)
 
-    r = client.post(
-        f"/v1/accounts/pair/{pair['pair_code']}/approve",
-        json={"repo_id": repo_id, "approve_secret": "not-the-one"},
-        headers=headers,
-    )
+    r = approve_pair(client, pair['pair_code'], {"repo_id": repo_id, "approve_secret": "not-the-one"}, headers=headers)
     assert r.status_code == 403, r.text
     assert _pair_row(client, pair["pair_code"]).status == PairRequest.STATUS_PENDING
 
@@ -141,11 +133,7 @@ def test_approve_with_the_initiator_proof_still_works(client):
     headers, repo_id = _account(client, github_id="1", login="owner", repo="Gurio/laptop")
     pair = _start_pair(client)
 
-    r = client.post(
-        f"/v1/accounts/pair/{pair['pair_code']}/approve",
-        json={"repo_id": repo_id, "approve_secret": pair["approve_secret"]},
-        headers=headers,
-    )
+    r = approve_pair(client, pair['pair_code'], {"repo_id": repo_id, "approve_secret": pair["approve_secret"]}, headers=headers)
     assert r.status_code == 200, r.text
     polled = _poll(client, pair).json()
     assert polled["status"] == "paired"
@@ -166,11 +154,7 @@ def test_a_pair_row_carrying_no_proof_cannot_be_approved_at_all(client):
         row.approve_secret_hash = ""
         db.commit()
 
-    r = client.post(
-        f"/v1/accounts/pair/{pair['pair_code']}/approve",
-        json={"repo_id": repo_id, "approve_secret": pair["approve_secret"]},
-        headers=headers,
-    )
+    r = approve_pair(client, pair['pair_code'], {"repo_id": repo_id, "approve_secret": pair["approve_secret"]}, headers=headers)
     assert r.status_code == 403, r.text
     assert _pair_row(client, pair["pair_code"]).status == PairRequest.STATUS_PENDING
 
@@ -200,11 +184,7 @@ def test_the_hijack_is_closed_end_to_end(client):
 
     # [attacker] has the code — the whole premise of the finding — and tries
     # to bind it to their own repo/account.
-    hijack = client.post(
-        f"/v1/accounts/pair/{pair['pair_code']}/approve",
-        json={"repo_id": attacker_repo},
-        headers=attacker_headers,
-    )
+    hijack = approve_pair(client, pair['pair_code'], {"repo_id": attacker_repo}, headers=attacker_headers)
     assert hijack.status_code == 403, hijack.text
 
     # [victim] polls: still pending, no token, nothing bound.
@@ -214,11 +194,7 @@ def test_the_hijack_is_closed_end_to_end(client):
     # [victim] the human at the terminal opens the printed link (which
     # carries the proof) and approves — the flow still completes, bound to
     # the *victim's* account.
-    ok = client.post(
-        f"/v1/accounts/pair/{pair['pair_code']}/approve",
-        json={"repo_id": victim_repo, "approve_secret": pair["approve_secret"]},
-        headers=victim_headers,
-    )
+    ok = approve_pair(client, pair['pair_code'], {"repo_id": victim_repo, "approve_secret": pair["approve_secret"]}, headers=victim_headers)
     assert ok.status_code == 200, ok.text
     polled = _poll(client, pair).json()
     assert polled["status"] == "paired"
@@ -245,14 +221,10 @@ def test_a_pair_code_can_only_be_approved_once(client):
     pair = _start_pair(client)
     body = {"repo_id": repo_id, "approve_secret": pair["approve_secret"]}
 
-    first = client.post(f"/v1/accounts/pair/{pair['pair_code']}/approve", json=body, headers=headers)
+    first = approve_pair(client, pair['pair_code'], body, headers=headers)
     assert first.status_code == 200, first.text
 
-    again = client.post(
-        f"/v1/accounts/pair/{pair['pair_code']}/approve",
-        json={"repo_id": second_repo, "approve_secret": pair["approve_secret"]},
-        headers=headers,
-    )
+    again = approve_pair(client, pair['pair_code'], {"repo_id": second_repo, "approve_secret": pair["approve_secret"]}, headers=headers)
     assert again.status_code == 409, again.text
 
     # One token, and the binding is still the first approve's.
@@ -268,17 +240,9 @@ def test_a_second_account_cannot_rebind_an_approved_pair(client):
         client, github_id="2", login="attacker", repo="Attacker/box"
     )
     pair = _start_pair(client)
-    assert client.post(
-        f"/v1/accounts/pair/{pair['pair_code']}/approve",
-        json={"repo_id": repo_id, "approve_secret": pair["approve_secret"]},
-        headers=owner_headers,
-    ).status_code == 200
+    assert approve_pair(client, pair['pair_code'], {"repo_id": repo_id, "approve_secret": pair["approve_secret"]}, headers=owner_headers).status_code == 200
 
-    r = client.post(
-        f"/v1/accounts/pair/{pair['pair_code']}/approve",
-        json={"repo_id": attacker_repo, "approve_secret": pair["approve_secret"]},
-        headers=attacker_headers,
-    )
+    r = approve_pair(client, pair['pair_code'], {"repo_id": attacker_repo, "approve_secret": pair["approve_secret"]}, headers=attacker_headers)
     assert r.status_code == 409, r.text
     polled = _poll(client, pair).json()
     assert polled["repo_id"] == repo_id
@@ -313,9 +277,5 @@ def test_a_row_written_without_the_column_defaults_to_unapprovable(client):
     assert _pair_row(client, "BR-OLDX").approve_secret_hash == ""
 
     headers, repo_id = _account(client, github_id="1", login="owner", repo="Gurio/laptop")
-    r = client.post(
-        "/v1/accounts/pair/BR-OLDX/approve",
-        json={"repo_id": repo_id, "approve_secret": "anything"},
-        headers=headers,
-    )
+    r = approve_pair(client, "BR-OLDX", {"repo_id": repo_id, "approve_secret": "anything"}, headers=headers)
     assert r.status_code == 403, r.text
