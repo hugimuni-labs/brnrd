@@ -7,10 +7,17 @@ When the time is up it writes ``loom/samples/<stamp>.collapsed``: one
 ``thread;a;b;c count`` line per distinct stack, the thread's name first and
 then root first, as flamegraph.pl and speedscope read it. `ps -M` shows a
 thread's CPU but not its Python name; the first frame gives it one. Nothing runs until a request lands, and one sample runs at a time.
+
+``loom/heap.request`` (any content) asks for the heap instead: the next pass
+writes ``loom/samples/<stamp>.heap``, the gc-tracked objects counted and sized
+by type, then the largest containers with the dict key that holds each. Two
+reads an hour apart name what grows (2026-10-30: 1.4 GB in 11 h, swapped out,
+and each full gc paged it back in under the GIL).
 """
 
 from __future__ import annotations
 
+import gc
 import sys
 import threading
 import time
@@ -54,12 +61,34 @@ def write(path: Path, stacks: Counter) -> None:
     tmp.replace(path)
 
 
+def heap(top: int = 40, largest: int = 20) -> str:
+    """The tracked heap by type, then its largest containers and who holds them."""
+    objects = gc.get_objects()
+    counts, sizes = Counter(), Counter()
+    for obj in objects:
+        name = type(obj).__qualname__
+        counts[name] += 1
+        sizes[name] += sys.getsizeof(obj)
+    lines = [f"tracked {len(objects)} objects, {sum(sizes.values())} bytes shallow"]
+    lines += [f"type {name} {count} {sizes[name]}" for name, count in counts.most_common(top)]
+    big = sorted((obj for obj in objects if isinstance(obj, (list, dict, set, tuple))),
+                 key=len, reverse=True)[:largest]
+    del objects
+    for obj in big:
+        held = [f"{type(ref).__qualname__}[{key!r}]" for ref in gc.get_referrers(obj)
+                if isinstance(ref, dict) for key, value in ref.items() if value is obj]
+        first = type(next(iter(obj))).__qualname__ if obj else "-"
+        lines.append(f"largest {type(obj).__qualname__} len {len(obj)} of {first} held by {' '.join(held[:3]) or '?'}")
+    return "".join(f"{line}\n" for line in lines)
+
+
 class Sampler:
     def __init__(self, home, log):
         self.home, self.log = home, log
         self.worker: threading.Thread | None = None
 
     def step(self) -> None:
+        self._heap()
         request = self.home.root / "loom" / "sample.request"
         if not request.is_file() or (self.worker is not None and self.worker.is_alive()):
             return
@@ -81,3 +110,16 @@ class Sampler:
 
         self.worker = threading.Thread(target=run, name="loom-sampler", daemon=True)
         self.worker.start()
+
+    def _heap(self) -> None:
+        request = self.home.root / "loom" / "heap.request"
+        if not request.is_file():
+            return
+        request.unlink()
+        stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+        path = self.home.root / "loom" / "samples" / f"{stamp}.heap"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_suffix(".tmp")
+        tmp.write_text(heap())
+        tmp.replace(path)
+        self.log(self.home, f"sample: heap -> {path}")

@@ -489,3 +489,19 @@ def test_body_held_dry_woken_on_another_body_ends_molted_and_the_next_gen_runs_t
         loom.halt()
         kill_bodies(loom)
     assert not loom.errors
+
+
+def test_a_child_an_earlier_image_spawned_is_waited_on_by_pid():
+    """A re-exec keeps its children but drops their Popen; the loom still reaps them."""
+    import os
+    import time
+    from brr.loom.runtime.loom import _wait_inherited
+    pid = os.posix_spawn("/bin/sh", ["sh", "-c", "exit 3"], dict(os.environ))
+    deadline = time.monotonic() + 5
+    code = None
+    while code is None and time.monotonic() < deadline:
+        code = _wait_inherited(pid)
+        time.sleep(0.01)
+    assert code == 3
+    assert _wait_inherited(pid) is None  # reaped: nothing left to wait on
+    assert _wait_inherited(1) is None    # never ours
