@@ -250,6 +250,11 @@ def exit_cause(facts: list[Fact], o: Observation, *, owed: bool) -> str:
         return "molted"
     if o.closed:
         return "settled"
+    # A body sent away by the lease or a pin left for that, not for its letters.
+    if o.fenced:
+        return "fenced"
+    if o.away:
+        return "moved"
     if not owed:
         return "idle"
     return "paced" if o.gauge == "empty" else "failed"

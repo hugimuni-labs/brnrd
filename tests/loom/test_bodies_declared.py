@@ -301,6 +301,8 @@ def test_exit_cause_uses_the_post_drain_ledger_in_contract_order():
     assert exit_cause([], o, owed=False) == "idle"
     assert exit_cause([], replace(o, gauge="ok"), owed=True) == "failed"
     assert exit_cause([], replace(o, closed=True), owed=True) == "settled"
+    assert exit_cause([], replace(o, fenced=True), owed=True) == "fenced"
+    assert exit_cause([], replace(o, away=True), owed=False) == "moved"
     facts = [Fact(kind="lease", by="loom:aaaa", data={"thread": "work", "strand": "s", "gen": 1}),
              Fact(kind="molt", by="strand:s", data={"strand": "s", "gen": 1})]
     assert exit_cause(facts, replace(o, closed=True), owed=True) == "molted"
