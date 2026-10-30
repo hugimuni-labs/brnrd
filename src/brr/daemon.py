@@ -13146,7 +13146,11 @@ def _push_ahead_repos_if_due(
         with _ahead_push_lock:
             if key in _ahead_push_inflight:
                 continue
-            if now - _ahead_push_last_attempt.get(key, 0.0) < interval:
+            # Never attempted is due. A 0.0 default read monotonic time as
+            # "attempted at boot", which skipped the first push on any host
+            # (a fresh CI VM) less than one interval past boot.
+            last = _ahead_push_last_attempt.get(key)
+            if last is not None and now - last < interval:
                 continue
             _ahead_push_last_attempt[key] = now
             _ahead_push_inflight.add(key)
