@@ -155,7 +155,7 @@ def read_command(root: Path, source: str, tail: list[str],
 
 def _declared(home, thread: str, name: str) -> str:
     from .adapters import repos, seat_text
-    for found, source in repos(seat_text(home, thread)):
+    for found, source in repos(seat_text(home, thread), home=home):
         if found == name:
             return source
     raise PublishError(
@@ -218,7 +218,7 @@ def unlanded(home, facts, strand: str, thread: str) -> list[str]:
             ahead = _ahead(clone, [f"refs/heads/strand/{strand}"], ["--remotes=origin"])
             if ahead:
                 lines.append(f"self: {ahead} commit(s) on strand/{strand} not on main, in {clone}")
-        for name, _source in repos(seat_text(home, thread)):
+        for name, _source in repos(seat_text(home, thread), home=home):
             left = unpublished(facts, thread, name, room / name)
             if left:
                 lines.append(
