@@ -22,7 +22,7 @@ from sqlalchemy import select  # noqa: E402
 from brnrd import create_app, migrations  # noqa: E402
 from brnrd.config import Settings  # noqa: E402
 from brnrd.models import ChannelRoute  # noqa: E402
-from _helpers import brnrd_account_headers  # noqa: E402
+from _helpers import brnrd_account_headers, repo_telegram_pair  # noqa: E402
 
 _SECRET = "webhook-secret"
 _HDR = {"X-Telegram-Bot-Api-Secret-Token": _SECRET}
@@ -64,9 +64,7 @@ def _repo(client, headers, name="demo"):
 
 
 def _tg_pair_code(client, headers, repo_id):
-    return client.post(
-        "/v1/accounts/pair/telegram", json={"repo_id": repo_id}, headers=headers
-    ).json()["pair_code"]
+    return repo_telegram_pair(client, repo_id, headers=headers).json()["pair_code"]
 
 
 def _message(chat_id, text, *, user_id=42, message_id=1):

@@ -26,7 +26,7 @@ from sqlalchemy import select  # noqa: E402
 from brnrd import create_app  # noqa: E402
 from brnrd.config import Settings  # noqa: E402
 from brnrd.models import Account, Event  # noqa: E402
-from _helpers import brnrd_account_headers, brnrd_client  # noqa: E402
+from _helpers import brnrd_account_headers, brnrd_client, repo_telegram_pair  # noqa: E402
 
 WEBHOOK_SECRET = "whsec_test"
 
@@ -266,9 +266,7 @@ def test_telegram_over_limit_gets_one_line_reply_not_silence(monkeypatch):
     client = TestClient(create_app(settings))
     headers = _account(client)
     repo_id = _connect(client, headers, "demo").json()["repo_id"]
-    code = client.post(
-        "/v1/accounts/pair/telegram", json={"repo_id": repo_id}, headers=headers
-    ).json()["pair_code"]
+    code = repo_telegram_pair(client, repo_id, headers=headers).json()["pair_code"]
 
     def _msg(text, message_id):
         return {

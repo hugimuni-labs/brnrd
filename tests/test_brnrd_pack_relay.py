@@ -20,7 +20,7 @@ from brnrd import create_app  # noqa: E402
 from brnrd.config import Settings  # noqa: E402
 from brnrd.db import Base  # noqa: E402
 from brnrd.pack_relay import PackRelayStore  # noqa: E402
-from _helpers import brnrd_account_headers  # noqa: E402
+from _helpers import approve_pair, brnrd_account_headers  # noqa: E402
 
 _PACK = {
     "schema_version": "0.1-test",
@@ -62,11 +62,7 @@ def _daemon_headers(client):
         headers=acc,
     ).json()["repo_id"]
     pair = client.post("/v1/accounts/pair").json()
-    client.post(
-        f"/v1/accounts/pair/{pair['pair_code']}/approve",
-        json={"repo_id": rid, "approve_secret": pair["approve_secret"]},
-        headers=acc,
-    )
+    approve_pair(client, pair['pair_code'], {"repo_id": rid, "approve_secret": pair["approve_secret"]}, headers=acc)
     token = client.get(
         f"/v1/accounts/pair/{pair['pair_code']}",
         params={"poll_secret": pair["poll_secret"]},

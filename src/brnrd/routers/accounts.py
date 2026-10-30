@@ -43,36 +43,6 @@ def repo_out(repo: Repo) -> schemas.RepoOut:
     )
 
 
-def activity_out(row: ActivityRecord) -> schemas.ActivityRecordOut:
-    try:
-        runner = json.loads(row.runner_json or "{}")
-    except ValueError:
-        runner = {}
-    try:
-        links = json.loads(row.links_json or "{}")
-    except ValueError:
-        links = {}
-    return schemas.ActivityRecordOut(
-        id=row.record_id,
-        repo_id=row.repo_id,
-        kind=row.kind,
-        source=row.source,
-        conversation_key=row.conversation_key,
-        summary=row.summary,
-        runner=runner if isinstance(runner, dict) else {},
-        status=row.status,
-        phase=row.phase,
-        branch=row.branch,
-        pr_number=row.pr_number,
-        started_at=row.started_at,
-        updated_at=row.updated_at,
-        scheduled_for=row.scheduled_for,
-        defer_until=row.defer_until,
-        links=links if isinstance(links, dict) else {},
-        reported_at=row.reported_at,
-    )
-
-
 def account_for_github_identity(db: Session, identity: GitHubIdentity) -> Account:
     # w-57 (2026-08-16): never writes `Account.email` — brnrd stopped
     # collecting it. Deliberately not even ``account.email = identity.email``
@@ -154,73 +124,6 @@ def create_repo(payload: schemas.RepoCreate, request: Request, principal: Princi
     except Exception as exc:
         print(f"[brnrd] github marker sync failed for {repo.repo_full_name}: {exc}")
     return repo_out(repo)
-
-
-@router.get("/repos", response_model=schemas.RepoList)
-def list_repos(principal: Principal = Depends(require_account), db: Session = Depends(get_db)):
-    rows = db.execute(select(Repo).where(Repo.account_id == principal.account_id).order_by(Repo.repo_full_name)).scalars()
-    return schemas.RepoList(repos=[repo_out(row) for row in rows])
-
-
-@router.get("/activity", response_model=schemas.ActivityList)
-def list_activity(repo_id: str | None = Query(default=None), principal: Principal = Depends(require_account), db: Session = Depends(get_db)):
-    repo_rows = list(
-        db.execute(
-            select(Repo).where(Repo.account_id == principal.account_id)
-        ).scalars()
-    )
-    repo_ids = {row.id for row in repo_rows}
-    if repo_id:
-        if repo_id not in repo_ids:
-            raise HTTPException(status_code=404, detail="repo not found")
-        repo_ids = {repo_id}
-    if not repo_ids:
-        return schemas.ActivityList(activity=[])
-    rows = db.execute(
-        select(ActivityRecord)
-        .where(ActivityRecord.repo_id.in_(repo_ids))
-        .order_by(ActivityRecord.updated_at.desc().nullslast(), ActivityRecord.reported_at.desc())
-    ).scalars()
-    rows = dedupe_activity_records(fresh_activity_records(rows))
-    return schemas.ActivityList(activity=[activity_out(row) for row in rows])
-
-
-@router.get("/github/installations", response_model=schemas.GitHubInstallationsList)
-def list_github_installations(principal: Principal = Depends(require_account), db: Session = Depends(get_db)):
-    installations = list(
-        db.execute(
-            select(GitHubInstallation).where(GitHubInstallation.account_id == principal.account_id).order_by(GitHubInstallation.target_login)
-        ).scalars()
-    )
-    installed_repos: list[GitHubInstalledRepo] = []
-    for installation in installations:
-        installed_repos.extend(
-            db.execute(
-                select(GitHubInstalledRepo)
-                .where(GitHubInstalledRepo.github_installation_id == installation.id)
-                .order_by(GitHubInstalledRepo.repo_full_name)
-            ).scalars()
-        )
-    return schemas.GitHubInstallationsList(
-        installations=[
-            schemas.GitHubInstallationOut(
-                installation_id=i.installation_id,
-                target_login=i.target_login,
-                target_type=i.target_type,
-                last_synced_at=i.last_synced_at,
-            )
-            for i in installations
-        ],
-        installed_repos=[
-            schemas.GitHubInstalledRepoOut(
-                repo_full_name=r.repo_full_name,
-                forge_repo_id=r.forge_repo_id,
-                default_branch=r.default_branch,
-                is_private=r.is_private,
-            )
-            for r in installed_repos
-        ],
-    )
 
 
 @router.post("/delete", response_model=schemas.AccountDeletionOut)

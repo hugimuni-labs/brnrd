@@ -22,7 +22,7 @@ from brnrd import create_app, migrations  # noqa: E402
 from brnrd.config import Settings  # noqa: E402
 from brnrd.inbox import CapturingForwarder  # noqa: E402
 from brnrd.models import Event  # noqa: E402
-from _helpers import brnrd_account_headers  # noqa: E402
+from _helpers import approve_pair, brnrd_account_headers  # noqa: E402
 
 # 40 days, comfortably past the 2**31-1 ms (~24.855 day) horizon that
 # overflows a 32-bit INTEGER.
@@ -58,11 +58,7 @@ def _connect(client, headers, repo_id):
     pair = client.post("/v1/accounts/pair").json()
     code, secret = pair["pair_code"], pair["poll_secret"]
     client.get(f"/v1/accounts/pair/{code}", params={"poll_secret": secret})
-    approve = client.post(
-        f"/v1/accounts/pair/{code}/approve",
-        json={"repo_id": repo_id, "approve_secret": pair["approve_secret"]},
-        headers=headers,
-    )
+    approve = approve_pair(client, code, {"repo_id": repo_id, "approve_secret": pair["approve_secret"]}, headers=headers)
     assert approve.status_code == 200, approve.text
     paired = client.get(
         f"/v1/accounts/pair/{code}", params={"poll_secret": secret}

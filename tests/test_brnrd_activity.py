@@ -19,7 +19,7 @@ from brnrd.config import Settings  # noqa: E402
 from brnrd.models import ActivityRecord  # noqa: E402
 from brnrd.oauth import GitHubIdentity  # noqa: E402
 from brnrd.routers.accounts import account_for_github_identity, issue_session_token  # noqa: E402
-from _helpers import PUBLISH_EVERYTHING, brnrd_account_headers, brnrd_client, brnrd_repo_and_daemon  # noqa: E402
+from _helpers import approve_pair, brnrd_account_headers, brnrd_client, brnrd_repo_and_daemon, PUBLISH_EVERYTHING  # noqa: E402
 
 
 _client = brnrd_client
@@ -30,11 +30,7 @@ _repo_and_daemon = brnrd_repo_and_daemon
 
 def _pair_daemon(client: TestClient, account_headers: dict[str, str], repo_id: str) -> dict[str, str]:
     pair = client.post("/v1/accounts/pair").json()
-    approved = client.post(
-        f"/v1/accounts/pair/{pair['pair_code']}/approve",
-        json={"repo_id": repo_id, "approve_secret": pair["approve_secret"]},
-        headers=account_headers,
-    )
+    approved = approve_pair(client, pair['pair_code'], {"repo_id": repo_id, "approve_secret": pair["approve_secret"]}, headers=account_headers)
     assert approved.status_code == 200
     paired = client.get(
         f"/v1/accounts/pair/{pair['pair_code']}",
@@ -110,11 +106,14 @@ def test_daemon_activity_snapshot_is_account_readable():
     assert posted.status_code == 200, posted.text
     assert len(posted.json()["activity"]) == 2
 
-    listing = client.get("/v1/accounts/activity", headers=account_headers)
+    _login_cookie(client)
+    listing = client.get("/v1/dashboard/activity")
     assert listing.status_code == 200
-    rows = listing.json()["activity"]
+    body = listing.json()
+    rows = body["rows"]
     assert {row["id"] for row in rows} == {"run:run-1", "respawn:evt-2"}
-    assert all(row["repo_id"] == repo_id for row in rows)
+    assert [repo["id"] for repo in body["repos"]] == [repo_id]
+    assert {row["repo_label"] for row in rows} == {body["repos"][0]["label"]}
     assert rows[0]["runner"]["shell"] == "codex"
 
 
@@ -297,11 +296,7 @@ def test_activity_views_collapse_repeat_snapshots_across_daemon_tokens():
     assert client.put("/v1/daemons/activity", json=snapshot, headers=daemon_headers).status_code == 200
 
     pair = client.post("/v1/accounts/pair").json()
-    client.post(
-        f"/v1/accounts/pair/{pair['pair_code']}/approve",
-        json={"repo_id": repo_id, "approve_secret": pair["approve_secret"]},
-        headers=account_headers,
-    )
+    approve_pair(client, pair['pair_code'], {"repo_id": repo_id, "approve_secret": pair["approve_secret"]}, headers=account_headers)
     paired = client.get(
         f"/v1/accounts/pair/{pair['pair_code']}",
         params={"poll_secret": pair["poll_secret"]},
@@ -314,11 +309,10 @@ def test_activity_views_collapse_repeat_snapshots_across_daemon_tokens():
     ).status_code == 200
     assert client.put("/v1/daemons/activity", json=snapshot, headers=second_headers).status_code == 200
 
-    listing = client.get("/v1/accounts/activity", headers=account_headers)
-    assert listing.status_code == 200
-    assert [row["id"] for row in listing.json()["activity"]] == ["run:dup"]
-
     _login_cookie(client)
+    listing = client.get("/v1/dashboard/activity")
+    assert listing.status_code == 200
+    assert [row["id"] for row in listing.json()["rows"]] == ["run:dup"]
 
     activity_api = client.get("/v1/dashboard/activity", params={"kind": "run"})
     assert activity_api.status_code == 200
@@ -396,11 +390,11 @@ def test_activity_reads_hide_stale_rows_and_keep_fresh_rows():
     ).status_code == 200
     _backdate_activity(client, "run:stale")
 
-    listing = client.get("/v1/accounts/activity", headers=account_headers)
-    assert listing.status_code == 200
-    assert {row["id"] for row in listing.json()["activity"]} == {"run:fresh"}
-
     _login_cookie(client)
+    listing = client.get("/v1/dashboard/activity")
+    assert listing.status_code == 200
+    assert {row["id"] for row in listing.json()["rows"]} == {"run:fresh"}
+
     dashboard_api = client.get("/v1/dashboard/activity", params={"repo_id": repo_id})
     assert dashboard_api.status_code == 200
     assert {row["id"] for row in dashboard_api.json()["rows"]} == {"run:fresh"}

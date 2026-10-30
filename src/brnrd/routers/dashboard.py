@@ -1032,12 +1032,11 @@ def _installed_repo_out(row: GitHubInstalledRepo, *, connected_names: set[str]) 
 def _machines_summary_out(db: Session, account_id: str) -> dict[str, Any]:
     """Account-level machine presence, for ColdStart's gate (#1365).
 
-    A compact summary rather than the full `GET /v1/machines` list — the
+    A compact summary rather than a full per-machine list — the
     same account-scoped `_machine_views` query threaded onto this payload
     instead of a second round-trip, since the cold-start block only ever
     needs two bits: *has anything paired* and *does any paired machine
-    carry an enabled repo*. The full per-machine listing (name, liveness,
-    which repos) is `GET /v1/machines`'s job, not this summary's.
+    carry an enabled repo*. The per-machine detail (name, liveness, which repos) is not carried here.
     """
     views = _machine_views(db, account_id)
     return {

@@ -14,7 +14,7 @@ from brnrd import create_app  # noqa: E402
 from brnrd.config import Settings  # noqa: E402
 from brnrd.inbox import CapturingForwarder  # noqa: E402
 from brnrd.models import Daemon  # noqa: E402
-from _helpers import PUBLISH_EVERYTHING, brnrd_account_headers  # noqa: E402
+from _helpers import approve_pair, brnrd_account_headers, PUBLISH_EVERYTHING  # noqa: E402
 
 SNAPSHOT = {
     "v": 1,
@@ -53,11 +53,7 @@ def _repo(client, headers, name="demo", publish_layers=PUBLISH_EVERYTHING):
 def _relay_token(client, headers, repo_id):
     """A paired daemon token that never calls /register — the loom's shape."""
     pair = client.post("/v1/accounts/pair").json()
-    approve = client.post(
-        f"/v1/accounts/pair/{pair['pair_code']}/approve",
-        json={"repo_id": repo_id, "approve_secret": pair["approve_secret"]},
-        headers=headers,
-    )
+    approve = approve_pair(client, pair['pair_code'], {"repo_id": repo_id, "approve_secret": pair["approve_secret"]}, headers=headers)
     assert approve.status_code == 200, approve.text
     paired = client.get(f"/v1/accounts/pair/{pair['pair_code']}", params={"poll_secret": pair["poll_secret"]}).json()
     return {"Authorization": f"Bearer {paired['daemon_token']}"}

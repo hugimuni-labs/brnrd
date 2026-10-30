@@ -18,10 +18,10 @@ from brnrd import create_app  # noqa: E402
 from brnrd import inbox as inbox_service  # noqa: E402
 from brnrd.config import Settings  # noqa: E402
 from brnrd.inbox import CapturingForwarder  # noqa: E402
-from brnrd.models import Event  # noqa: E402
+from brnrd.models import Event, Repo  # noqa: E402
 from brnrd.routers import daemons as daemon_routes  # noqa: E402
 from sqlalchemy import select  # noqa: E402
-from _helpers import brnrd_account_headers  # noqa: E402
+from _helpers import approve_pair, brnrd_account_headers  # noqa: E402
 
 
 @pytest.fixture()
@@ -90,11 +90,7 @@ def _connect(client, headers, repo_id):
     pending = client.get(f"/v1/accounts/pair/{code}", params={"poll_secret": secret})
     assert pending.json()["status"] == "pending"
 
-    approve = client.post(
-        f"/v1/accounts/pair/{code}/approve",
-        json={"repo_id": repo_id, "approve_secret": pair["approve_secret"]},
-        headers=headers,
-    )
+    approve = approve_pair(client, code, {"repo_id": repo_id, "approve_secret": pair["approve_secret"]}, headers=headers)
     assert approve.status_code == 200, approve.text
 
     paired = client.get(
@@ -150,10 +146,6 @@ def test_full_round_trip(env):
     assert item.event_id == event_id
     assert item.body == "all done"
     assert item.reply_to == {"chat": 7}
-
-    assert client.post(
-        "/v1/daemons/deregister", json={"daemon_name": "laptop"}, headers=dmn
-    ).status_code == 200
 
 
 def test_response_records_metadata_only(env):
@@ -698,7 +690,7 @@ def test_delivery_failure_keeps_event_queued_then_recovers():
 
 
 def test_repo_create_is_idempotent(env):
-    _, client, _ = env
+    app, client, _ = env
     acc = _account(client)
     first = client.post(
         "/v1/accounts/repos", json={"repo_full_name": "Gurio/same"}, headers=acc
@@ -707,16 +699,16 @@ def test_repo_create_is_idempotent(env):
         "/v1/accounts/repos", json={"repo_full_name": "Gurio/same"}, headers=acc
     ).json()
     assert first["repo_id"] == second["repo_id"]
-    listing = client.get("/v1/accounts/repos", headers=acc).json()
-    names = [r["repo_full_name"] for r in listing["repos"]]
+    with app.state.SessionLocal() as db:
+        names = list(db.execute(select(Repo.repo_full_name)).scalars())
     assert names == ["Gurio/same"]
 
 
 def test_github_account_starts_with_no_repos(env):
-    _, client, _ = env
+    app, client, _ = env
     acc = _account(client, email="seed@b.com")
-    listing = client.get("/v1/accounts/repos", headers=acc).json()
-    assert listing["repos"] == []
+    with app.state.SessionLocal() as db:
+        assert list(db.execute(select(Repo.repo_full_name)).scalars()) == []
 
 
 def test_password_account_endpoints_are_not_exposed(env):

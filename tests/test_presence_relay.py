@@ -19,7 +19,7 @@ from brnrd import create_app  # noqa: E402
 from brnrd.config import Settings  # noqa: E402
 from brnrd.models import ChannelRoute, Event  # noqa: E402
 from brnrd.routers import daemons as daemons_router  # noqa: E402
-from _helpers import PUBLISH_EVERYTHING, brnrd_account_headers  # noqa: E402
+from _helpers import approve_pair, brnrd_account_headers, PUBLISH_EVERYTHING, repo_telegram_pair  # noqa: E402
 
 _TG_SECRET = "webhook-secret"
 _TG_HDR = {"X-Telegram-Bot-Api-Secret-Token": _TG_SECRET}
@@ -72,9 +72,7 @@ def _repo(client, headers, name="demo"):
 
 
 def _tg_pair_code(client, headers, repo_id):
-    return client.post(
-        "/v1/accounts/pair/telegram", json={"repo_id": repo_id}, headers=headers,
-    ).json()["pair_code"]
+    return repo_telegram_pair(client, repo_id, headers=headers).json()["pair_code"]
 
 
 def _tg_message(chat_id, text, *, message_id=1, user_id=42, username="ada_l"):
@@ -104,9 +102,7 @@ def test_whatsapp_read_status_records_read_at(env, monkeypatch):
     app, client, _, _ = env
     acc = _account(client)
     rid = _repo(client, acc)
-    code = client.post(
-        "/v1/accounts/pair/telegram", json={"repo_id": rid}, headers=acc,
-    ).json()["pair_code"]
+    code = repo_telegram_pair(client, rid, headers=acc).json()["pair_code"]
     monkeypatch.setattr(
         "brnrd.routers.webhooks._hub_signature_ok", lambda secret, body, sig: True,
     )
@@ -137,11 +133,7 @@ def test_whatsapp_read_status_records_read_at(env, monkeypatch):
 
 def _daemon_headers(client, acc, repo_id):
     pair = client.post("/v1/accounts/pair").json()
-    client.post(
-        f"/v1/accounts/pair/{pair['pair_code']}/approve",
-        json={"repo_id": repo_id, "approve_secret": pair["approve_secret"]},
-        headers=acc,
-    )
+    approve_pair(client, pair['pair_code'], {"repo_id": repo_id, "approve_secret": pair["approve_secret"]}, headers=acc)
     token = client.get(
         f"/v1/accounts/pair/{pair['pair_code']}", params={"poll_secret": pair["poll_secret"]},
     ).json()["daemon_token"]

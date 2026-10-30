@@ -89,20 +89,6 @@ def create_config_change_request(
     return schemas.ConfigChangeRequestOut(request_id=row.id, status=row.status, approve_url=approve_url)
 
 
-@router.get("/{request_id}", response_model=schemas.ConfigChangeRequestOut)
-def get_config_change_request(
-    request_id: str,
-    principal: Principal = Depends(require_daemon),
-    db: Session = Depends(get_db),
-):
-    row = db.execute(
-        select(ConfigChangeRequest).where(ConfigChangeRequest.id == request_id)
-    ).scalar_one_or_none()
-    if row is None or row.repo_id != principal.repo_id:
-        raise HTTPException(status_code=404, detail="unknown config-change request")
-    return schemas.ConfigChangeRequestOut(request_id=row.id, status=row.status, approve_url=None)
-
-
 def decide_core(db: Session, account_id: str, request_id: str, *, approve: bool) -> ConfigChangeRequest:
     """Apply a browser decision; used by the session-gated web route.
 

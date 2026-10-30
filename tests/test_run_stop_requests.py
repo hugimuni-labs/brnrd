@@ -18,6 +18,7 @@ pytest.importorskip("multipart")
 
 from fastapi.testclient import TestClient  # noqa: E402
 
+from _helpers import approve_pair  # noqa: E402
 from brnrd import create_app, run_stop_requests  # noqa: E402
 from brnrd.config import Settings  # noqa: E402
 from brnrd.models import Account, Daemon, RunStopRequest  # noqa: E402
@@ -215,11 +216,7 @@ def test_live_runs_publish_hands_down_pending_stops_and_retires_acked():
     account_headers = {"Authorization": f"Bearer {token}"}
 
     pair = client.post("/v1/accounts/pair").json()
-    client.post(
-        f"/v1/accounts/pair/{pair['pair_code']}/approve",
-        json={"repo_id": repo_id, "approve_secret": pair["approve_secret"]},
-        headers=account_headers,
-    )
+    approve_pair(client, pair['pair_code'], {"repo_id": repo_id, "approve_secret": pair["approve_secret"]}, headers=account_headers)
     paired = client.get(
         f"/v1/accounts/pair/{pair['pair_code']}",
         params={"poll_secret": pair["poll_secret"]},
