@@ -109,8 +109,9 @@ class Home:
             return self._install
         path = self.root / "loom" / "install-id"
         if path.is_file():
-            value = path.read_text().strip()
-            return check_install(value)
+            # Written once, never rewritten: read it once per Home.
+            self._install = check_install(path.read_text().strip())
+            return self._install
         path.parent.mkdir(parents=True, exist_ok=True)
         value = secrets.token_hex(2)
         try:
