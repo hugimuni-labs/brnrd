@@ -1,0 +1,27 @@
+#!/usr/bin/env python3
+"""Print the chats bound to this brnrd.dev account, addressed as ``in`` writes them.
+
+A chat binds to the account, not to a loom (`GET /v1/daemons/chats`), so a
+computer set up anew finds the person's chats here instead of pairing again.
+Each row is ``{"from", "platform", "who"}``: ``from`` is the verified sender
+as ``in`` puts it on a letter. Only a verified sender is listed.
+"""
+import json
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).parent))
+from common import cloud, settings
+
+_, _, gate = settings()
+if gate is None:
+    sys.exit('not signed in to brnrd.dev')
+state = cloud._load_state_from_dir(gate)
+chats = cloud._request(state['brnrd_url'], 'GET', '/v1/daemons/chats', token=state['token'], retry=False)
+rows = []
+for chat in chats.get('chats') or ():
+    # WhatsApp: in names the sender by its chat (the person's own wa_id).
+    user = chat['chat_id'] if chat['platform'] == 'whatsapp' else chat['principal_id']
+    rows.append(dict(platform=chat['platform'], who=chat.get('principal_display') or user,
+                     **{'from': f"{chat['platform']}:{user}"}))
+print(json.dumps(rows))

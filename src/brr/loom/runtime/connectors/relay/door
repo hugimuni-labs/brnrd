@@ -1,5 +1,10 @@
 #!/usr/bin/env python3
-"""Print where a person opens brnrd.dev's shared bot to send a pairing code: {"name", "link"}."""
+"""Print where a person opens brnrd.dev's shared bot to bind a chat: {"name", "link", "code"}.
+
+With no argument the link binds the chat to the account, and ``bound`` reads
+it back. With the loom's own pairing code (an older setup) the server hands
+that code to the loom as the chat's first message.
+"""
 import json
 import sys
 from pathlib import Path
@@ -11,9 +16,10 @@ _, _, gate = settings()
 if gate is None:
     sys.exit('not signed in to brnrd.dev')
 state = cloud._load_state_from_dir(gate)
+code = sys.argv[1] if len(sys.argv) > 1 else None
 # The server mints the bot's own code and hands it ours when the link is used.
 door = cloud._request(state['brnrd_url'], 'POST', '/v1/daemons/door', token=state['token'],
-                      json=dict(code=sys.argv[1]), retry=False)
+                      json=dict(code=code) if code else {}, retry=False)
 # Typed into the shared bot, only the server's own code pairs (the link carries it).
 minted = door['link'].partition('?start=')[2]
-print(json.dumps(dict(name=door['name'], link=door['link'], code=minted or sys.argv[1], qr=False)))
+print(json.dumps(dict(name=door['name'], link=door['link'], code=minted or code, qr=False)))
