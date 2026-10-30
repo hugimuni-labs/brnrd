@@ -13146,7 +13146,11 @@ def _push_ahead_repos_if_due(
         with _ahead_push_lock:
             if key in _ahead_push_inflight:
                 continue
-            if now - _ahead_push_last_attempt.get(key, 0.0) < interval:
+            # A repo never attempted is due: defaulting its last attempt to 0.0
+            # read monotonic time as wall time, so within `interval` of boot (a
+            # fresh CI runner) the first push was skipped as "not yet due".
+            last = _ahead_push_last_attempt.get(key)
+            if last is not None and now - last < interval:
                 continue
             _ahead_push_last_attempt[key] = now
             _ahead_push_inflight.add(key)

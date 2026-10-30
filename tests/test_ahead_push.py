@@ -196,6 +196,18 @@ def test_push_ahead_by_zero_pushes_nothing(tmp_path, monkeypatch):
     assert calls == []
 
 
+def test_push_ahead_first_attempt_is_due_soon_after_boot(tmp_path, monkeypatch):
+    # time.monotonic() counts from boot. A repo never attempted must be due even
+    # when the clock still reads under the interval (a CI runner seconds old);
+    # main went red on this at c2488b3a.
+    _spy_push_branch(monkeypatch)
+    ctx, cfg, repo = _account_context(tmp_path)
+    brr_dir = gitops.shared_brr_dir(repo)
+
+    assert daemon._push_ahead_repos_if_due(brr_dir, ctx, cfg, now=5.0) == ["account home"]
+    _wait_for_ahead_push_threads()
+
+
 def test_push_ahead_no_remote_is_silent(tmp_path, monkeypatch):
     calls = _spy_push_branch(monkeypatch)
     ctx, cfg, repo = _account_context(tmp_path)
