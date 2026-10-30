@@ -421,7 +421,31 @@ def test_unchanged_inputs_skip_the_assemble_until_reassemble(tmp_path, monkeypat
     now[0] += snapshot.ASSEMBLE_EVERY
     publisher.step(config, router)
     assert len(assembled) == 2
+    # The loom's own lease heartbeat is not a change the board shows.
+    append(home, Fact(kind="router.renewed", by="loom", id="router.renewed:test:1:1",
+                      data={"install": "test", "gen": 1, "until": now[0] + 60}))
+    now[0] += snapshot.ASSEMBLE_EVERY
+    publisher.step(config, router)
+    assert len(assembled) == 2
     # Nothing moves, but the clock-read sections are refreshed every REASSEMBLE.
     now[0] += snapshot.REASSEMBLE
     publisher.step(config, router)
     assert len(assembled) == 3
+
+
+def test_the_publisher_folds_the_readers_view_not_a_copy(tmp_path, monkeypatch):
+    from brr.loom.runtime.config import load_config
+    from brr.loom.runtime.ledger import LedgerView
+    from brr.loom.runtime.router import Router
+    root = tmp_path / "home"
+    write_thread(root, "web", README, "answer-fast", wait="0")
+    (root / "loom/gates").mkdir(parents=True)
+    (root / "loom/gates/cloud.json").write_text(json.dumps({"brnrd_url": "https://board.test", "token": "tok"}))
+    monkeypatch.setattr(cloud, "_request", Cloud())
+    seen = []
+    real = snapshot.assemble
+    monkeypatch.setattr(snapshot, "assemble", lambda home, facts, *a: seen.append(facts) or real(home, facts, *a))
+    home = Home(root)
+    router = Router(home)
+    snapshot.Publisher(home, lambda *a: None).step(load_config(root), router)
+    assert isinstance(seen[0], LedgerView) and seen[0] is router.reader.ordered

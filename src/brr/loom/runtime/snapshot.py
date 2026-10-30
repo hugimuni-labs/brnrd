@@ -379,16 +379,18 @@ class Publisher:
             from .lifecycle import main_tip
             from .selfrepo import SelfError
             self.assembled = now
-            router.reader.refresh(self.home)
+            # The reader's own view, not a copy: its fold resumes from the
+            # last delta and its projections key on semantic_revision, which
+            # the loom's own router.renewed heartbeat (6 a minute) never moves.
+            facts = router.reader.refresh(self.home)
             try:
                 tip = main_tip(self.home.root / "self")
             except (SelfError, OSError):
                 tip = None
-            inputs = (router.reader.revision, tip, config)
+            inputs = (id(facts), facts.semantic_revision, tip, config)
             if inputs == self.inputs and now - self.full < REASSEMBLE:
                 return self._after(gate, now)
             self.inputs, self.full = inputs, now
-            facts = router.reader.read(self.home)
             with projection_cache(router.projections):
                 doc = assemble(self.home, facts, config, self.guard)
             if digest(doc) != self.sum:
