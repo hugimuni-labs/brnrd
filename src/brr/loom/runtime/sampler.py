@@ -1,11 +1,12 @@
 """A live profile of the loop without root: ``loom/sample.request`` asks for one.
 
 The file holds a number of seconds (default 60, at most 600). The loop's
-next pass removes it and starts a daemon thread that reads the main thread's
-frame through ``sys._current_frames()`` every ``INTERVAL`` seconds. When the
-time is up it writes ``loom/samples/<stamp>.collapsed``: one ``a;b;c count``
-line per distinct stack, root first, as flamegraph.pl and speedscope read
-it. Nothing runs until a request lands, and one sample runs at a time.
+next pass removes it and starts a daemon thread that reads every other
+thread's frame through ``sys._current_frames()`` every ``INTERVAL`` seconds.
+When the time is up it writes ``loom/samples/<stamp>.collapsed``: one
+``thread;a;b;c count`` line per distinct stack, the thread's name first and
+then root first, as flamegraph.pl and speedscope read it. `ps -M` shows a
+thread's CPU but not its Python name; the first frame gives it one. Nothing runs until a request lands, and one sample runs at a time.
 """
 
 from __future__ import annotations
@@ -31,15 +32,17 @@ def _stack(frame) -> str:
     return ";".join(reversed(names))
 
 
-def collect(ident: int, seconds: float, interval: float = INTERVAL) -> tuple[Counter, int]:
-    stacks, taken = Counter(), 0
+def collect(seconds: float, interval: float = INTERVAL) -> tuple[Counter, int]:
+    stacks, taken, me = Counter(), 0, threading.get_ident()
     deadline = time.monotonic() + seconds
     while time.monotonic() < deadline:
-        frame = sys._current_frames().get(ident)
-        if frame is not None:
-            stacks[_stack(frame)] += 1
-            taken += 1
-        del frame
+        names = {t.ident: t.name for t in threading.enumerate()}
+        frames = sys._current_frames()
+        for ident, frame in frames.items():
+            if ident != me:
+                stacks[f"{names.get(ident, ident)};{_stack(frame)}"] += 1
+        taken += 1
+        del frames, frame
         time.sleep(interval)
     return stacks, taken
 
@@ -69,11 +72,10 @@ class Sampler:
             return
         stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
         path = self.home.root / "loom" / "samples" / f"{stamp}.collapsed"
-        ident = threading.main_thread().ident
-        self.log(self.home, f"sample: main thread for {seconds:g}s -> {path}")
+        self.log(self.home, f"sample: every thread for {seconds:g}s -> {path}")
 
         def run():
-            stacks, taken = collect(ident, seconds)
+            stacks, taken = collect(seconds)
             write(path, stacks)
             self.log(self.home, f"sample: wrote {taken} samples, {len(stacks)} stacks to {path}")
 
