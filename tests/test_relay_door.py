@@ -190,3 +190,16 @@ def test_a_chat_reaches_the_setup_loom_over_an_old_daemons_pinned_busier_repo(en
 
     events = client.get("/v1/daemons/inbox", params={"since": 0, "wait": 0}, headers=loom).json()["events"]
     assert [(e["body"], e["repo_label"]) for e in events if e["body"] == "hello"] == [("hello", "Gurio/brr")]
+
+
+def test_a_codeless_door_still_carries_a_server_code_and_a_bare_start_binds_nothing(env):
+    client, _ = env
+    _account, daemon, _repo = brnrd_repo_and_daemon(client)
+    door = client.post("/v1/daemons/door", json={}, headers=daemon).json()
+    server_code = door["link"].removeprefix("https://t.me/brnrd_bot?start=")
+    assert server_code and server_code != door["link"]
+
+    _start(client, 781, "/start")
+    _start(client, 782, "/start NOT-A-CODE", message_id=8)
+
+    assert client.get("/v1/daemons/chats", headers=daemon).json() == {"chats": []}
