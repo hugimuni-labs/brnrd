@@ -290,6 +290,12 @@ def test_person_is_told_once_when_fuel_parks_their_letter(tmp_path, monkeypatch)
     assert not loom.errors
 
 
+def _start_lines(starts):
+    # the fake body opens before it writes: an existing file is not yet a start
+    text = starts.read_text() if starts.is_file() else ""
+    return text if text.endswith("\n") else ""
+
+
 def _claude_starts(starts):
     return f"import pathlib, time\nwith pathlib.Path({str(starts)!r}).open('a') as out:\n    out.write('claude\\n')\ntime.sleep(30)"
 
@@ -304,7 +310,7 @@ def test_parked_body_starts_when_its_gauge_refills_before_until(tmp_path, monkey
         time.sleep(0.5)  # parked ticks read the gauge and stay parked
         assert not _started(loom)
         home.fuel.write_text("100")  # the plan was upgraded; the reset is hours away
-        wait_until(lambda: starts.is_file(), 10, loom.dump)
+        wait_until(lambda: _start_lines(starts), 10, loom.dump)
         assert starts.read_text() == "claude\n"
         assert _leases(loom) == [(1, "claude", "echo")]
     finally:
@@ -331,7 +337,7 @@ def test_letter_during_park_is_told_and_wake_starts_the_leased_body(tmp_path, mo
         time.sleep(0.3)
         assert [m["re"] for m in home.sent] == ["telegram:42:park", "telegram:42:again"]
         home.person.says("wake", "  /WAKE ")
-        wait_until(lambda: starts.is_file(), 10, loom.dump)
+        wait_until(lambda: _start_lines(starts), 10, loom.dump)
         assert starts.read_text() == "claude\n"
         assert _leases(loom) == [(1, "claude", "echo")]
         owed = {str(letter.data["id"]) for letter in mail(home.root, loom.facts(), "inbox")}
@@ -351,7 +357,7 @@ def test_wake_naming_another_body_moves_the_parked_thread_there(tmp_path, monkey
     try:
         wait_until(lambda: any(f.kind == "body.parked" for f in loom.facts()), 10, loom.dump)
         home.person.says("move", "wake spare/x")
-        wait_until(lambda: home.starts.is_file(), 10, loom.dump)
+        wait_until(lambda: _start_lines(home.starts), 10, loom.dump)
         assert home.starts.read_text() == "spare\n"
         assert _leases(loom) == [(1, "claude", "echo"), (2, "spare", "x")]
         ended = [f for f in loom.facts() if f.kind == "attempt.ended"]
@@ -471,7 +477,7 @@ def test_body_held_dry_woken_on_another_body_ends_molted_and_the_next_gen_runs_t
         home.person.says("again", "are you there?")
         wait_until(lambda: any(m["re"] == "telegram:42:again" for m in home.sent), 10, loom.dump)
         home.person.says("move", "wake spare/x")
-        wait_until(lambda: home.starts.is_file(), 15, loom.dump)
+        wait_until(lambda: _start_lines(home.starts), 15, loom.dump)
         assert home.starts.read_text() == "spare\n"
         assert log.read_text().splitlines()[before:] == ["left"]
         assert _leases(loom) == [(1, "claude", "echo"), (2, "spare", "x")]
