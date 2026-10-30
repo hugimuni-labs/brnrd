@@ -35,6 +35,10 @@ leads only itself and shares no ledger.
 
 ## 2. The new machine
 
+**Do not run `brnrd setup` on the new machine before the self is cloned.**
+Setup with no self seeds a second one, a second resident under the same
+name.
+
 1. Install brnrd and the harnesses you use, and log each one in. Check them:
    `claude auth status` and `codex login status`.
 2. Clone the existing self into `<home>/self` **before** any setup:
