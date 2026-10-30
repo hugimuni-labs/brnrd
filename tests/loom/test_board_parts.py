@@ -54,6 +54,23 @@ def test_parts_are_hashed_stably_and_a_letter_moves_only_its_thread(parts):
     assert [r["body"] for r in parts.parts["thread/web"]["letters"]] == ["first", "second"]
 
 
+def test_the_looms_own_heartbeat_recomputes_nothing(parts, monkeypatch):
+    from brr.loom.runtime import board
+    root = parts.home.root
+    inject_letter(root, to="thread:web", body="first")
+    assert parts.step()
+    computed = []
+    real = board.compute
+    monkeypatch.setattr(board, "compute", lambda *a: computed.append(1) or real(*a))
+    append(parts.home, Fact(kind="router.renewed", by="loom", id="router.renewed:test:1:1",
+                            data={"install": "test", "gen": 1, "until": time.time() + 60}))
+    assert not parts.step()
+    assert computed == []
+    inject_letter(root, to="thread:web", body="second")
+    assert parts.step()
+    assert computed == [1]
+
+
 def test_a_wish_ships_in_its_thread_part_and_the_index_keeps_counts(parts):
     root = parts.home.root
     letter = inject_letter(root, to="thread:web", body="make it fast")

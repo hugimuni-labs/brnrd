@@ -518,9 +518,11 @@ class Parts:
         """One recompute when anything moved; True when a part's hash did."""
         facts = self.reader.refresh(self.home)
         moved = self.tape.read() | self._typed()
-        if self.reader.revision == self.revision and not moved:
+        # semantic_revision: the loom's own router.renewed heartbeat (6 a minute) is no change here.
+        revision = (id(facts), facts.semantic_revision)
+        if revision == self.revision and not moved:
             return False
-        self.revision = self.reader.revision
+        self.revision = revision
         with projection_cache(self.cache):
             parts = compute(self.home, facts, self.config_of(), self.tape.tools, self.tape.live, self.person,
                             self.typed)
