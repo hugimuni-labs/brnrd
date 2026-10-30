@@ -311,6 +311,8 @@ def kind_facts(facts, *kinds):
 # code from before the marker does not touch it: FULL_EVERY bounds that.
 MARKER = ".changed"
 FULL_EVERY = 2.0
+#: Bytes before a stream's cursor kept to tell an append from a longer rewrite.
+TAIL = 256
 
 
 def mark_changed(facts_root) -> None:
@@ -414,18 +416,28 @@ class LedgerReader:
                     streams[path] = prior
                     continue
                 changed = True
+                raw = None
                 if (prior is not None and prior[0][:2] == stamp[:2]
                         and stat.st_size > prior[0][2]):
-                    offset = prior[1]
-                else:
+                    # Grown in place is an append only if the bytes before the cursor
+                    # are still the ones read: a hand edit rewrites hand.jsonl longer.
+                    offset, tail = prior[1], prior[3]
+                    handle.seek(offset - len(tail))
+                    raw = handle.read()
+                    if raw.startswith(tail):
+                        raw = raw[len(tail):]
+                    else:
+                        raw = None
+                if raw is None:
                     offset = 0
                     repair = repair or prior is not None
-                handle.seek(offset)
-                raw = handle.read()
+                    handle.seek(0)
+                    raw = handle.read()
                 complete = raw[:raw.rfind(b"\n") + 1]
                 added = [Fact.from_row(json.loads(line))
                          for line in complete.decode().splitlines() if line.strip()]
-                streams[path] = (stamp, offset + len(complete), str(path))
+                tail = ((prior[3] if prior is not None and offset else b"") + complete)[-TAIL:]
+                streams[path] = (stamp, offset + len(complete), str(path), tail)
                 additions.extend(added)
         if changed:
             if repair:
