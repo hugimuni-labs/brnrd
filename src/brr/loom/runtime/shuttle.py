@@ -23,6 +23,7 @@ from pathlib import Path
 
 from .gitlease import LEDGERS, GitLeaseAuthority
 from .home import Home, check_install
+from .ledger import mark_changed
 
 SEGMENT = 1 << 20
 HEARTBEAT = 60.0
@@ -224,10 +225,11 @@ class Shuttle:
             if have is not None and raw.startswith(have):
                 with path.open("ab") as handle:
                     handle.write(raw[len(have):])
-                continue
-            tmp = folder / f".{name}.tmp"
-            tmp.write_bytes(raw)
-            os.replace(tmp, path)
+            else:
+                tmp = folder / f".{name}.tmp"
+                tmp.write_bytes(raw)
+                os.replace(tmp, path)
+            mark_changed(folder.parent)
 
     def caught_up(self, holder: str, sha: str) -> bool:
         """The previous holder's ledger at ``sha`` is in our folder for it."""

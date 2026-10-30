@@ -303,6 +303,30 @@ def kind_facts(facts, *kinds):
     return [f for f in facts if f.kind in kinds]
 
 
+# Every write into ledger/facts touches this after its bytes are down, so a
+# reader that sees it unchanged skips stat-ing every stream. A writer running
+# code from before the marker does not touch it: FULL_EVERY bounds that.
+MARKER = ".changed"
+FULL_EVERY = 2.0
+
+
+def mark_changed(facts_root) -> None:
+    path = os.path.join(str(facts_root), MARKER)
+    try:
+        os.utime(path, ns=(time.time_ns(), time.time_ns()))
+    except FileNotFoundError:
+        with open(path, "a"):
+            pass
+
+
+def _marker(root: str):
+    try:
+        st = os.stat(os.path.join(root, MARKER))
+    except OSError:
+        return None
+    return st.st_ino, st.st_mtime_ns, st.st_ctime_ns
+
+
 def _names(directory, *, dirs=False):
     try:
         with os.scandir(directory) as entries:
@@ -327,13 +351,24 @@ class LedgerReader:
         self.listing = (None, [])
         self.ordered = LedgerView()
         self.revision = 0
+        self.seen = (None, None, 0.0)
 
     def read(self, home: Home) -> list[Fact]:
         return list(self.refresh(home))
 
     def refresh(self, home: Home) -> LedgerView:
-        # Path.glob plus a Path sort costs more than the stats below; keep the parts order.
         root = str(home.root / "ledger" / "facts")
+        # Read before the scan: a write landing during it moves the marker again.
+        marker, now = _marker(root), time.monotonic()
+        if (marker is not None and self.seen[:2] == (root, marker)
+                and now - self.seen[2] < FULL_EVERY):
+            return self.ordered
+        view = self._scan(root)
+        self.seen = (root, marker, now)
+        return view
+
+    def _scan(self, root: str) -> LedgerView:
+        # Path.glob plus a Path sort costs more than the stats below; keep the parts order.
         names = sorted((directory, name) for directory in _names(root, dirs=True)
                        for name in _names(f"{root}/{directory}") if name.endswith(".jsonl"))
         if self.listing[0] != (root, names):
@@ -532,6 +567,7 @@ def append(home: Home, fact: Fact) -> Fact:
                 handle.write(line + "\n")
                 handle.flush()
                 os.fsync(handle.fileno())
+            mark_changed(directory.parent)
             return stored
         finally:
             fcntl.flock(lock.fileno(), fcntl.LOCK_UN)

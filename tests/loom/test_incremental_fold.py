@@ -122,14 +122,41 @@ def test_reader_and_locked_writer_refresh_external_suffixes_and_partial_tails(tm
         out.write(b'{partial')
     append(home, f('router.renewed', 4, {'gen': 1}))
     assert reader.refresh(home) == read_facts(home)
-    # A stream that appears, or one replaced under the same size, is still read.
+    # A stream that appears, or one replaced under the same size, is still read
+    # once its writer marks the ledger changed, as append and the shuttle do.
     other = home.facts_dir() / 's-abcd-other.jsonl'
     other.write_text(json.dumps(f('router.renewed', 5, {'gen': 1}).row()) + '\n')
+    ledger.mark_changed(home.facts_dir().parent)
     assert reader.refresh(home) == read_facts(home)
     other.write_text(json.dumps(f('router.renewed', 6, {'gen': 1}).row()) + '\n')
+    ledger.mark_changed(home.facts_dir().parent)
     assert [x.id for x in reader.refresh(home)] == [x.id for x in read_facts(home)]
     other.unlink()
+    ledger.mark_changed(home.facts_dir().parent)
     assert reader.refresh(home) == read_facts(home)
+
+
+def test_an_unchanged_ledger_costs_one_stat_and_an_unmarked_write_waits_for_the_full_scan(tmp_path, monkeypatch):
+    from brr.loom.runtime import ledger
+    home = Home(tmp_path)
+    reader = LedgerReader()
+    append(home, f('router', 1, {'gen': 1}))
+    reader.refresh(home)
+    stats = []
+    real = ledger.os.stat
+    monkeypatch.setattr(ledger.os, 'stat', lambda p, *a, **k: (stats.append(str(p)), real(p, *a, **k))[1])
+    reader.refresh(home)
+    assert [p for p in stats if p.endswith('.jsonl')] == []
+    # A writer from before the marker appends without touching it.
+    clock = [ledger.time.monotonic()]
+    monkeypatch.setattr(ledger.time, 'monotonic', lambda: clock[0])
+    reader.refresh(home)
+    with (home.facts_dir() / 'loom.jsonl').open('a') as out:
+        out.write(json.dumps(f('router.renewed', 2, {'gen': 1}).row()) + '\n')
+    assert len(reader.refresh(home)) == 1
+    clock[0] += ledger.FULL_EVERY
+    assert reader.refresh(home) == read_facts(home)
+    assert len(read_facts(home)) == 2
 
 
 def test_renewal_delta_never_iterates_history_after_warmup(tmp_path, monkeypatch):
