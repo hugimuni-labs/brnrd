@@ -1,4 +1,4 @@
-"""loom/sample.request makes the loop sample its own main thread, without root."""
+"""loom/sample.request makes the loop sample its own threads, without root."""
 import time
 from types import SimpleNamespace
 
@@ -21,8 +21,26 @@ def test_a_request_samples_the_main_thread_into_collapsed_stacks(tmp_path):
     assert len(written) == 1
     lines = written[0].read_text().splitlines()
     assert lines and all(line.rsplit(" ", 1)[1].isdigit() for line in lines)
-    assert any("test_a_request_samples_the_main_thread" in line for line in lines)
+    assert any(line.startswith("MainThread;") and "test_a_request_samples_the_main_thread" in line
+               for line in lines)
+    assert not any(line.startswith("loom-sampler;") for line in lines)
     assert any(text.startswith("sample: wrote") for text in logged)
+
+
+def test_a_sample_names_each_thread_it_reads(tmp_path):
+    import threading
+    stop = threading.Event()
+    def spin():
+        while not stop.is_set():
+            sum(range(1000))
+    other = threading.Thread(target=spin, name="loom-spin", daemon=True)
+    other.start()
+    try:
+        stacks, taken = sampler.collect(0.2)
+    finally:
+        stop.set()
+        other.join(5)
+    assert taken and any(stack.startswith("loom-spin;") and "spin" in stack for stack in stacks)
 
 
 def test_no_request_starts_nothing_and_a_bad_one_is_dropped(tmp_path):
