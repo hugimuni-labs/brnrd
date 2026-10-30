@@ -128,6 +128,30 @@ def test_a_seat_names_a_library_repo_by_name(tmp_path: Path) -> None:
     assert "kept widget: Ada's file://" in wake
 
 
+def test_a_seat_naming_a_library_repo_publishes_to_its_source(tmp_path: Path) -> None:
+    """Publish resolves ``repo: <name>`` through the library, as the wake does."""
+    from brr.loom.runtime.publish import publish
+    from test_project_repos import _note
+
+    root = _home(tmp_path)
+    bare, _work = _source(tmp_path)
+    assert _add(root, "widget", f"file://{bare}", "--kind", "known", "--whose", "Ada",
+                "--for", "her widget") == 0
+    _seat(root, "work", ["widget"])
+    home = Home(root)
+    _tick(home, {}, Router(home))
+    assert _started(root), _log(root)
+    room = _room(root)
+    try:
+        checkout = room / "widget"
+        _note(checkout, room, "fix.txt", "fixed\n")
+        commit = git(checkout, "rev-parse", "HEAD").stdout.strip()
+        publish(room, "widget")
+        assert git(bare, "rev-parse", "refs/heads/loom/work").stdout.strip() == commit
+    finally:
+        _kill(read_facts(home))
+
+
 def test_a_seat_naming_no_library_entry_starts_no_body(tmp_path: Path) -> None:
     root = _home(tmp_path)
     _seat(root, "work", ["widget"])
