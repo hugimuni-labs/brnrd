@@ -35,6 +35,9 @@ export interface ConnectContext {
 	// "loom" when a loom paired its self repo: the page approves a computer
 	// and never shows the repository. Optional: older backends omit it.
 	kind?: string;
+	// A loom's terminal asked to show its board on brnrd.dev: the board box
+	// starts ticked. The yes is the approve click with the box ticked.
+	board?: boolean;
 }
 
 /** A loom pair approves a computer: no repository panel, no picker, no doors after. */
@@ -114,11 +117,14 @@ export async function approveConnect(
 	code: string,
 	repoId: string = '',
 	approveProof: string = '',
-	fetchImpl: typeof fetch = fetch
+	fetchImpl: typeof fetch = fetch,
+	board: boolean | null = null
 ): Promise<ApproveResult> {
-	const sent: Record<string, string> = {};
+	const sent: Record<string, string | boolean> = {};
 	if (repoId) sent.repo_id = repoId;
 	if (approveProof) sent.approve_secret = approveProof;
+	// A loom pair's board box; absent for every other pair.
+	if (board !== null) sent.board = board;
 	const res = await fetchImpl(`/v1/connect/${encodeURIComponent(code)}`, {
 		method: 'POST',
 		credentials: 'include',

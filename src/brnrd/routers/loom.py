@@ -240,15 +240,24 @@ async def loom_consent_answer(request: Request, db: Session = Depends(get_db)) -
     looms = _loom_repos(db, account_id)
     if not looms:
         return JSONResponse({"error": "no loom on this account"}, status_code=404)
-    now = datetime.now(timezone.utc)
     for repo in {repo.id: repo for repo, _ in looms}.values():
-        lanes, slices = publish_scope._repo_scopes(repo.publish_layers)
-        lanes = set(lanes) | {BOARD_LANE} if send else set(lanes) - {BOARD_LANE}
-        # The slices stand for the corpus lane; a bare "corpus" token would widen a partial consent to every slice.
-        tokens = sorted(lanes - {"corpus"}) + sorted(slices)
-        layers = publish_scope.normalize_publish_layers(",".join(tokens) or None)
-        publish_scope.purge_removed_scope(db, repo=repo, new_publish_layers=layers)
-        repo.publish_layers, repo.updated_at = layers, now
-        db.merge(BoardConsent(repo_id=repo.id, answered_at=now))
+        answer_board(db, repo, send)
     db.commit()
     return JSONResponse({"state": "granted" if send else "declined"})
+
+
+def answer_board(db: Session, repo: Repo, send: bool) -> None:
+    """Add or drop the board lane on ``repo`` and stamp the answer; the caller commits.
+
+    A signed-in person's answer only: the consent prompt here, and the box on
+    the approve page a loom pair opens (``connect_approve_api``).
+    """
+    now = datetime.now(timezone.utc)
+    lanes, slices = publish_scope._repo_scopes(repo.publish_layers)
+    lanes = set(lanes) | {BOARD_LANE} if send else set(lanes) - {BOARD_LANE}
+    # The slices stand for the corpus lane; a bare "corpus" token would widen a partial consent to every slice.
+    tokens = sorted(lanes - {"corpus"}) + sorted(slices)
+    layers = publish_scope.normalize_publish_layers(",".join(tokens) or None)
+    publish_scope.purge_removed_scope(db, repo=repo, new_publish_layers=layers)
+    repo.publish_layers, repo.updated_at = layers, now
+    db.merge(BoardConsent(repo_id=repo.id, answered_at=now))

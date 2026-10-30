@@ -731,6 +731,36 @@ def test_connect_context_says_a_loom_pair_approves_a_computer(client, monkeypatc
     assert client.get("/v1/connect/BR-NOPE").json()["kind"] == ""
 
 
+def test_a_loom_approve_with_the_board_box_ticked_is_the_board_consent(client, monkeypatch):
+    """The terminal only ticks the box; the signed-in approve click with it ticked is the yes."""
+    from brnrd.models import BoardConsent
+    from brnrd.routers.loom import BOARD_LANE
+
+    _login_web(client, monkeypatch)
+    asked = client.post("/v1/accounts/pair", json={"repo_full_name": "local/self-a1b2c3", "forge": "local",
+                                                   "kind": "loom", "board": True}).json()
+    assert client.get(f"/v1/connect/{asked['pair_code']}").json()["board"] is True
+    plain = client.post("/v1/accounts/pair", json={"repo_full_name": "Gurio/box", "board": True}).json()
+    assert client.get(f"/v1/connect/{plain['pair_code']}").json()["board"] is False
+
+    approve = client.post(f"/v1/connect/{asked['pair_code']}",
+                          json={"approve_secret": asked["approve_secret"], "board": True})
+    assert approve.status_code == 200 and approve.json()["ok"] is True
+    with client.app.state.SessionLocal() as db:
+        repo = db.execute(select(Repo).where(Repo.repo_full_name == "local/self-a1b2c3")).scalar_one()
+        assert BOARD_LANE in (repo.publish_layers or "")
+        assert db.get(BoardConsent, repo.id) is not None
+
+    unticked = client.post("/v1/accounts/pair", json={"repo_full_name": "local/self-d4e5f6", "forge": "local",
+                                                      "kind": "loom", "board": True}).json()
+    client.post(f"/v1/connect/{unticked['pair_code']}",
+                json={"approve_secret": unticked["approve_secret"], "board": False})
+    with client.app.state.SessionLocal() as db:
+        repo = db.execute(select(Repo).where(Repo.repo_full_name == "local/self-d4e5f6")).scalar_one()
+        assert BOARD_LANE not in (repo.publish_layers or "")
+        assert db.get(BoardConsent, repo.id) is not None  # answered no: the dashboard does not ask again
+
+
 def test_connect_context_reports_suggested_repo_from_pair_capabilities(client, monkeypatch):
     """2026-08-06: a daemon pairing from inside a git checkout reports its
     own repo (`gates.cloud._repo_capabilities`) on the initial
