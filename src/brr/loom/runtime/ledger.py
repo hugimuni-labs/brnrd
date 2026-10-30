@@ -5,6 +5,7 @@ from __future__ import annotations
 import fcntl
 import json
 import os
+import threading
 import time
 from collections import defaultdict, OrderedDict
 from datetime import datetime
@@ -90,14 +91,16 @@ def read_file(path: Path) -> list[Fact]:
 
 
 def read_facts(home: Home) -> list[Fact]:
-    """Union every install's folder. Appending stays inside the caller's own."""
+    """Union every install's folder. Appending stays inside the caller's own.
+
+    The process's one fold of this home, rescanned now and copied: a copy is
+    a list of pointers, a refold was ~200 MB and ~5 s (2026-10-30: the loom
+    held several at once, swapped them out, and gc paged them back in).
+    """
     root = home.root / "ledger" / "facts"
     if not root.is_dir():
         return []
-    streams = [read_file(path) for path in sorted(root.glob("*/*.jsonl"))]
-    if not streams:
-        return []
-    return union(*streams)
+    return list(shared_reader(home).now(home))
 
 
 def fact_order(fact):
@@ -352,20 +355,32 @@ class LedgerReader:
         self.ordered = LedgerView()
         self.revision = 0
         self.seen = (None, None, 0.0)
+        # One scan at a time: the loop, the board and every read_facts share a reader.
+        self.lock = threading.Lock()
 
     def read(self, home: Home) -> list[Fact]:
         return list(self.refresh(home))
 
     def refresh(self, home: Home) -> LedgerView:
         root = str(home.root / "ledger" / "facts")
-        # Read before the scan: a write landing during it moves the marker again.
-        marker, now = _marker(root), time.monotonic()
-        if (marker is not None and self.seen[:2] == (root, marker)
-                and now - self.seen[2] < FULL_EVERY):
-            return self.ordered
-        view = self._scan(root)
-        self.seen = (root, marker, now)
-        return view
+        with self.lock:
+            # Read before the scan: a write landing during it moves the marker again.
+            marker, now = _marker(root), time.monotonic()
+            if (marker is not None and self.seen[:2] == (root, marker)
+                    and now - self.seen[2] < FULL_EVERY):
+                return self.ordered
+            view = self._scan(root)
+            self.seen = (root, marker, now)
+            return view
+
+    def now(self, home: Home) -> LedgerView:
+        """``refresh`` without the marker's grace: every stream is stat'ed now."""
+        root = str(home.root / "ledger" / "facts")
+        with self.lock:
+            marker, now = _marker(root), time.monotonic()
+            view = self._scan(root)
+            self.seen = (root, marker, now)
+            return view
 
     def _scan(self, root: str) -> LedgerView:
         # Path.glob plus a Path sort costs more than the stats below; keep the parts order.
@@ -429,6 +444,16 @@ class LedgerReader:
             self.revision += 1
         self.streams = streams
         return self.ordered
+
+
+_SHARED: dict[str, LedgerReader] = {}
+_SHARED_LOCK = threading.Lock()
+
+
+def shared_reader(home: Home) -> LedgerReader:
+    """The process's one reader of a home's ledger."""
+    with _SHARED_LOCK:
+        return _SHARED.setdefault(str(home.root / "ledger" / "facts"), LedgerReader())
 
 
 class WriterIndex:

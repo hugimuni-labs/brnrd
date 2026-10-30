@@ -498,14 +498,14 @@ class Tools:
 class Parts:
     """The parts, recomputed whole on their own thread when the ledger or a tape moved (design §D7).
 
-    Its own ledger reader and projection cache keep it apart from the loop: the loop never waits on a
-    board, and a board never sees a tick's half-written state. ``changed`` wakes the event streams.
+    It shares the process's ledger reader (one fold, not two), but keeps its own projection cache: a
+    board never sees a tick's half-written state. ``changed`` wakes the event streams.
     """
 
     def __init__(self, home: Home, config_of, log=None, person: str | None = None):
-        from .ledger import LedgerReader
+        from .ledger import shared_reader
         self.home, self.config_of, self.log, self.person = home, config_of, log, person
-        self.reader, self.cache, self.tape = LedgerReader(), {}, Tools(home)
+        self.reader, self.cache, self.tape = shared_reader(home), {}, Tools(home)
         self.parts: dict[str, dict] = {}
         self.hashes: dict[str, str] = {}
         self.revision = None
