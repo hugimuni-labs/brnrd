@@ -16,7 +16,7 @@ from brr.daemon2.leases import Lease, LocalLeaseAuthority
 
 from .config import LoomConfig, granting_window, load_config, loom_clock
 from .home import HOME_THREAD, Home, is_channel, mint
-from .ledger import LedgerConflict, LedgerReader, LedgerView, kind_facts
+from .ledger import LedgerConflict, LedgerView, kind_facts, shared_reader
 from .project import (
     fold, holder, is_notice, reply_channels, sender_threads,
 )
@@ -138,7 +138,7 @@ def heir_of(home: Home, facts, letters, thread: str, gen: int) -> str | None:
 class Router:
     def __init__(self, home: Home, config: LoomConfig | None = None):
         self.home = home
-        self.reader = LedgerReader()
+        self.reader = shared_reader(home)
         self.projections = {}
         self.projection_revision = -1
         self.config = config if config is not None else load_config(home.root)
