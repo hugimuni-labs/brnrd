@@ -365,3 +365,27 @@ def test_loose_scratch_dirs_never_keep_a_room_but_a_loose_file_by_their_name_doe
     (room / "runs").rmdir()
     (room / "runs").write_text("a file, not scratch")
     assert reap.loose(room) == ["runs"]
+
+
+def test_a_clone_another_room_borrows_objects_from_goes_only_once_the_borrower_holds_its_own(tmp_path):
+    # 2026-10-30: s-ae66-k7xzbz/brnrd was a `git clone --shared` of s-ae66-fko75x/brnrd;
+    # reaping fko75x (clean, nothing unpushed) left k7xzbz with bad objects.
+    home = Home(tmp_path / "home", install="0001")
+    init_self(home.root, person="test")
+    _project(tmp_path, home, [("0001-old", 3), ("0001-latest", 3)])
+    lender = home.room("0001-old") / "widget"
+    borrower = home.room("0001-latest") / "borrow"
+    git(home.root, "clone", "-q", "--shared", str(lender), str(borrower))
+    alternates = borrower / ".git" / "objects" / "info" / "alternates"
+    assert str(lender) in alternates.read_text()
+    assert reap.borrowers(home, home.room("0001-old")) == [(borrower, [str(lender / ".git" / "objects")])]
+    assert reap.borrowers(home, borrower) == []
+
+    lines = []
+    reap.Reaper(home, lambda _home, line: lines.append(line)).reap()
+    assert not lender.exists()
+    assert list(_reaped(home)) == ["rooms/0001-old/widget"]
+    assert not alternates.exists() or str(lender) not in alternates.read_text()
+    assert git(borrower, "fsck", "--connectivity-only", check=False).returncode == 0
+    assert git(borrower, "log", "--oneline", "-1").stdout.strip()
+    assert any(line.startswith(f"unlent {lender}") for line in lines)
