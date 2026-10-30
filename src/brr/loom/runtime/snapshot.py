@@ -32,6 +32,9 @@ WISHES = 100
 
 # Cadence, in seconds of ``clock``: tests replace both.
 ASSEMBLE_EVERY = 3
+# An unchanged ledger, main and config still reassemble this often: presence,
+# fuel and ages read the clock and files the ledger does not hold.
+REASSEMBLE = 30
 DEBOUNCE = 10
 IDLE = 60
 clock = time.monotonic
@@ -362,6 +365,7 @@ class Publisher:
         self.home, self.log, self.guard = home, log, guard
         self.doc = self.sum = self.sent = None
         self.assembled = self.changed = self.attempted = None
+        self.inputs, self.full = None, 0.0
         self.worker: threading.Thread | None = None
         self.failing: tuple[Exception, object] | None = None
 
@@ -372,12 +376,26 @@ class Publisher:
             return
         now = clock()
         if self.assembled is None or now - self.assembled >= ASSEMBLE_EVERY:
+            from .lifecycle import main_tip
+            from .selfrepo import SelfError
             self.assembled = now
+            router.reader.refresh(self.home)
+            try:
+                tip = main_tip(self.home.root / "self")
+            except (SelfError, OSError):
+                tip = None
+            inputs = (router.reader.revision, tip, config)
+            if inputs == self.inputs and now - self.full < REASSEMBLE:
+                return self._after(gate, now)
+            self.inputs, self.full = inputs, now
             facts = router.reader.read(self.home)
             with projection_cache(router.projections):
                 doc = assemble(self.home, facts, config, self.guard)
             if digest(doc) != self.sum:
                 self.doc, self.sum, self.changed = doc, digest(doc), now
+        self._after(gate, now)
+
+    def _after(self, gate: Path, now) -> None:
         if self.doc is not None and not (self.worker and self.worker.is_alive()):
             self._push(gate, now)
         if self.failing is not None:

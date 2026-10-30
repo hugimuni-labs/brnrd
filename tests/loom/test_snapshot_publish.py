@@ -68,6 +68,8 @@ def board(tmp_path, monkeypatch):
     real = snapshot.assemble
     monkeypatch.setattr(snapshot, "clock", lambda: now[0])
     monkeypatch.setattr(snapshot, "ASSEMBLE_EVERY", 0)
+    # These tests count assembles; the unchanged-input skip has its own test.
+    monkeypatch.setattr(snapshot, "REASSEMBLE", 0)
     # The loop's gauge sweep would ask this machine's real shells.
     monkeypatch.setattr(usage, "_refresh", lambda *a, **k: None)
     monkeypatch.setattr(snapshot, "assemble", lambda *a: assembled.append(real(*a)) or assembled[-1])
@@ -391,3 +393,35 @@ def test_wishes_carry_their_words_results_and_the_answer_newer_than_them(tmp_pat
                    "state": "heard", "origin": "said", "at": "2026-10-19T10:03:00Z"}
     assert done["state"] == "accepted" and "answer" not in done
     assert done["verdict"] == {"as": "accepted", "evidence": "word", "at": "2026-10-19T10:09:00Z"}
+
+
+def test_unchanged_inputs_skip_the_assemble_until_reassemble(tmp_path, monkeypatch):
+    from brr.loom.runtime.config import load_config
+    from brr.loom.runtime.router import Router
+    root = tmp_path / "home"
+    write_thread(root, "web", README, "answer-fast", wait="0")
+    (root / "loom/gates").mkdir(parents=True)
+    (root / "loom/gates/cloud.json").write_text(json.dumps({"brnrd_url": "https://board.test", "token": "tok"}))
+    monkeypatch.setattr(cloud, "_request", Cloud())
+    now = [1000.0]
+    monkeypatch.setattr(snapshot, "clock", lambda: now[0])
+    assembled = []
+    real = snapshot.assemble
+    monkeypatch.setattr(snapshot, "assemble", lambda *a: assembled.append(real(*a)) or assembled[-1])
+    home = Home(root)
+    router, config = Router(home), load_config(root)
+    publisher = snapshot.Publisher(home, lambda *a: None)
+    publisher.step(config, router)
+    assert len(assembled) == 1
+    now[0] += snapshot.ASSEMBLE_EVERY
+    publisher.step(config, router)
+    assert len(assembled) == 1
+    # A fact moves the ledger's revision: the next step assembles.
+    inject_letter(root, to="thread:web", body="hello")
+    now[0] += snapshot.ASSEMBLE_EVERY
+    publisher.step(config, router)
+    assert len(assembled) == 2
+    # Nothing moves, but the clock-read sections are refreshed every REASSEMBLE.
+    now[0] += snapshot.REASSEMBLE
+    publisher.step(config, router)
+    assert len(assembled) == 3
