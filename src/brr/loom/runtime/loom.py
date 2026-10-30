@@ -2296,6 +2296,8 @@ def run(root: Path | str, *, adapter: str = "fake", core: str = "haiku",
         keeper = Keeper(home, _log)
         from .reap import Reaper
         reaper = Reaper(home, _log)
+        from .cpu import CpuWatch
+        cpu = CpuWatch()
         from .sampler import Sampler
         sampler = Sampler(home, _log)
         from .receipts import source_root
@@ -2331,6 +2333,7 @@ def run(root: Path | str, *, adapter: str = "fake", core: str = "haiku",
                 health.guard("library", keeper.step, backoff=False)
                 health.guard("sample", sampler.step, backoff=False)
                 health.guard("disk", reaper.disk, backoff=False)
+                health.guard("cpu", cpu.step, backoff=False)
                 health.guard("reap", reaper.step, backoff=False)
                 if spa is not None:  # the board's build follows the checkout; a failed one stays degraded
                     health.guard("spa", spa.step, backoff=False)
