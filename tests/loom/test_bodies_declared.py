@@ -155,6 +155,8 @@ def test_seeded_sequences_check_ledger_prefixes_and_reach_every_row():
     # gauge changes and a crash between end and drain, across generations.
     for seed in range(20):
         rng = random.Random(seed)
+        # Pins draw from their own stream, so main's walk still reaches its rows.
+        pins = random.Random(-seed - 1)
         body = MemoryBody(rng, coverage)
         for _ in range(350):
             state = state_of(body.facts, body.strand, body.gen, alive=body.alive).name
@@ -170,7 +172,7 @@ def test_seeded_sequences_check_ledger_prefixes_and_reach_every_row():
                 body.alive = True
             closed = rng.random() < 0.65
             fenced = rng.random() < 0.15
-            away = rng.random() < 0.05
+            away = pins.random() < 0.05
             gauge = rng.choice(["ok", "ok", "unknown", "refreshing", "empty"])
             failure = "spawn failed" if state in STARTABLE and not body.alive and rng.random() < 0.1 else ""
             # A live body asleep in its stop hook is woken the same way.
@@ -188,7 +190,7 @@ def test_table_rendering_matches_checked_in_page():
     from pathlib import Path
     page = Path(__file__).resolve().parents[2] / "src/brr/loom/runtime/bodies.md"
     assert render_table() == page.read_text().strip()
-    assert len(TABLE) == 24
+    assert len(TABLE) == 25
 
 
 def test_an_unlisted_pair_logs_and_raises(caplog):
