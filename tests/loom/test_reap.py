@@ -385,7 +385,7 @@ def test_a_clone_another_room_borrows_objects_from_goes_only_once_the_borrower_h
     reap.Reaper(home, lambda _home, line: lines.append(line)).reap()
     assert not lender.exists()
     assert list(_reaped(home)) == ["rooms/0001-old/widget"]
-    assert not alternates.exists() or str(lender) not in alternates.read_text()
     assert git(borrower, "fsck", "--connectivity-only", check=False).returncode == 0
+    assert not alternates.exists() or str(lender) not in alternates.read_text()
     assert git(borrower, "log", "--oneline", "-1").stdout.strip()
     assert any(line.startswith(f"unlent {lender}") for line in lines)

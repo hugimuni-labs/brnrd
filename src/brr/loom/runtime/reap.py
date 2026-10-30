@@ -379,7 +379,7 @@ def borrowers(home, path: Path) -> list[tuple[Path, list[str]]]:
     rooms = home.root / "rooms"
     for alternates in sorted([*rooms.glob("*/*/.git/objects/info/alternates"),
                               *rooms.glob("*/*/.brr/worktrees/*/.git/objects/info/alternates")]):
-        repo = alternates.parents[2]
+        repo = alternates.parents[3]
         if repo.resolve().is_relative_to(inside):
             continue
         try:
