@@ -338,3 +338,25 @@ def test_thread_input_reuse_keeps_gauge_liveness_time_and_main_fresh(tmp_path, m
         git(home.root / 'self', 'add', 'threads')
         _commit(home.root / 'self', 'settle: cached input invalidation' + LABEL)
         assert row()['now'].startswith('settled')
+
+
+def test_main_tip_rereads_the_ref_only_when_main_moves(tmp_path: Path, monkeypatch) -> None:
+    import brr.loom.runtime.lifecycle as lifecycle
+    root = _home(tmp_path)
+    repo = root / "self"
+    home, router, bodies = Home(root), Router(Home(root)), {}
+    tick_once(home, bodies, "fake", "haiku", router)
+    reads: list = []
+    real = lifecycle._read_tip
+    monkeypatch.setattr(lifecycle, "_read_tip", lambda r: reads.append(r) or real(r))
+    before = main_tip(repo)
+    for _ in range(3):
+        tick_once(home, bodies, "fake", "haiku", router)
+    assert reads == []
+    (repo / "threads/w-3/README.md").write_text("# thread 3, moved\n")
+    git(repo, "add", "-A")
+    git(repo, "commit", "-m", "move" + LABEL)
+    after = main_tip(repo)
+    assert after != before
+    assert after == git(repo, "rev-parse", "main").stdout.strip()
+    assert len(reads) == 1

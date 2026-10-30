@@ -1,5 +1,6 @@
 """Thread decisions are README commits, landed through the self's existing door."""
 
+import os
 import re
 from pathlib import Path
 from typing import Callable
@@ -290,9 +291,32 @@ _READMES = {}
 _SHA = re.compile(r"[0-9a-f]{40}(?:[0-9a-f]{24})?")
 
 
+_TIPS = {}
+
+
+def _ref_stat(path: Path):
+    try:
+        st = os.stat(path)
+    except OSError:
+        return None
+    return st.st_ino, st.st_mtime_ns, st.st_size
+
+
 def main_tip(repo: Path) -> str:
     """The commit main names. Read from the ref itself when it can be: the
-    tick asks many times, and a git process each time was most of its cost."""
+    tick asks many times, and a git process each time was most of its cost.
+    The ref files are reread only when one is replaced or rewritten: git
+    renames a new ref into place, so its inode or mtime always moves."""
+    key = (_ref_stat(repo / ".git/refs/heads/main"), _ref_stat(repo / ".git/packed-refs"))
+    cached = _TIPS.get(repo)
+    if cached and cached[0] == key and (key[0] or key[1]):
+        return cached[1]
+    tip = _read_tip(repo)
+    _TIPS[repo] = (key, tip)
+    return tip
+
+
+def _read_tip(repo: Path) -> str:
     try:
         loose = (repo / ".git/refs/heads/main").read_text().strip()
         if _SHA.fullmatch(loose):
