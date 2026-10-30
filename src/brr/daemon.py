@@ -13146,9 +13146,9 @@ def _push_ahead_repos_if_due(
         with _ahead_push_lock:
             if key in _ahead_push_inflight:
                 continue
-            # A repo never attempted is due: defaulting its last attempt to 0.0
-            # read monotonic time as wall time, so within `interval` of boot (a
-            # fresh CI runner) the first push was skipped as "not yet due".
+            # Never attempted is due. A 0.0 default read monotonic time as
+            # "attempted at boot", which skipped the first push on any host
+            # (a fresh CI VM) less than one interval past boot.
             last = _ahead_push_last_attempt.get(key)
             if last is not None and now - last < interval:
                 continue
