@@ -95,10 +95,7 @@
 	let approvedLoom = $state(false);
 	// The board box on a loom pair: starts as the terminal left it; the
 	// approve click with it ticked is the person's yes.
-	let showBoard = $state(false);
-	$effect(() => {
-		showBoard = context?.board === true;
-	});
+	let showBoard = $derived(context?.board === true);
 
 	async function loadContext(c: string): Promise<void> {
 		contextError = null;
@@ -349,8 +346,8 @@
 								bind:checked={showBoard}
 							/>
 							<span
-								>Show this computer's board on brnrd.dev: its threads, wishes and asks, seen only when
-								you are signed in. Change it any time in settings.</span
+								>Show this computer's board on brnrd.dev: its threads, wishes and asks, seen only
+								when you are signed in. Change it any time in settings.</span
 							>
 						</label>
 						<button
