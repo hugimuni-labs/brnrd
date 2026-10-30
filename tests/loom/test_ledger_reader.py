@@ -170,3 +170,17 @@ def test_a_stream_rewritten_longer_in_place_is_read_again_not_as_an_append(tmp_p
     with path.open('ab') as handle:
         handle.write(row('three'))
     assert [f.id for f in reader.read(home)] == [f.id for f in read_facts(home)]
+
+
+def test_a_built_view_keeps_only_each_generations_newest_renewal(tmp_path):
+    """router.renewed was 69% of the live ledger (2026-10-30); a fold keeps one per (install, gen)."""
+    def renewed(ident, gen, millis):
+        return (json.dumps(Fact(kind='router.renewed', by='loom:ae66', id=ident,
+                                data={'install': 'ae66', 'gen': gen, 'until': millis},
+                                hlc=(millis, 0, 'ae66')).row()) + '\n').encode()
+    home = Home(tmp_path)
+    path = home.facts_dir() / 'loom.jsonl'
+    path.write_bytes(renewed('r1a', 1, 1000) + renewed('r1b', 1, 2000)
+                     + renewed('r2a', 2, 3000) + renewed('r2b', 2, 4000) + row('note'))
+    assert [f.id for f in LedgerReader().read(home)] == ['r1b', 'r2b', 'note']
+    assert len(read_facts(home)) == 5  # the files keep every renewal

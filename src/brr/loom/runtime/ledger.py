@@ -108,6 +108,23 @@ def fact_order(fact):
                          0, fact.by), fact.id)
 
 
+def newest_renewals(facts) -> list:
+    """``facts`` with each (install, gen)'s ``router.renewed`` cut to its newest.
+
+    A renewal only says its lease was alive until ``until``; the router reads
+    the newest per generation (``_prior_visible``) and nothing names one in
+    ``after``. On 2026-10-30 they were 107k of the ledger's 155k facts. The
+    files keep every one; only a built view drops the superseded.
+    """
+    facts = list(facts)
+    newest = {(f.data.get("install"), f.data.get("gen")): f.id
+              for f in facts if f.kind == "router.renewed"}
+    if len(newest) == sum(1 for f in facts if f.kind == "router.renewed"):
+        return facts
+    return [f for f in facts if f.kind != "router.renewed"
+            or newest[(f.data.get("install"), f.data.get("gen"))] == f.id]
+
+
 class LedgerView(list):
     """Canonical process-local ledger, with an explicit revision and delta.
 
@@ -214,6 +231,8 @@ class LedgerView(list):
         if not delta:
             self.delta = ()
             return
+        if not len(self):  # a first load builds the view: cut renewals as a rebuild does
+            delta = newest_renewals(delta)
         if repair:
             duplicates = self.duplicates
             ordered = union(self, delta, duplicates=duplicates)
