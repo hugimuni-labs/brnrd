@@ -1880,6 +1880,38 @@ def _hand_collect(x, command, step):
     if body:
         x.values["code"] = _collect_exit(body)
         body.close_log()
+    elif x.c.pid:
+        # A re-exec keeps its children but not their Popen: wait on the pid,
+        # or the body stays <defunct> under the loom for good (2026-10-30: ~130).
+        x.values["code"] = _wait_inherited(x.c.pid)
+
+
+def _wait_inherited(pid: int) -> int | None:
+    """The exit code of a child this image did not spawn, once it has exited."""
+    try:
+        done, status = os.waitpid(pid, os.WNOHANG)
+    except ChildProcessError:  # not ours: a loom started fresh, not re-executed
+        return None
+    return os.waitstatus_to_exitcode(status) if done else None
+
+
+def _reap_inherited() -> int:
+    """Wait on every exited child an earlier image left; returns how many.
+
+    Only in the loom's own process before it spawns anything: there no Popen
+    exists yet whose status this could take.
+    """
+    main = sys.modules.get("__main__")
+    if getattr(getattr(main, "__spec__", None), "name", "") != "brr.loom.runtime.__main__":
+        return 0
+    out = subprocess.run(["ps", "-A", "-o", "pid=,ppid=,stat="], capture_output=True,
+                         text=True, timeout=10, check=False).stdout
+    reaped = 0
+    for line in out.splitlines():
+        fields = line.split()
+        if len(fields) == 3 and fields[1] == str(os.getpid()) and fields[2].startswith("Z"):
+            reaped += _wait_inherited(int(fields[0])) is not None
+    return reaped
 
 
 def _hand_drain(x, command, step):
@@ -2213,6 +2245,8 @@ def run(root: Path | str, *, adapter: str = "fake", core: str = "haiku",
     try:
         if stop is not None and stop.is_set():
             return
+        if reaped := _reap_inherited():
+            _log(home, f"reaped {reaped} exited children an earlier image left")
         home.install_id()
         from . import ledger
         ledger.ON_CONTENDED = _free_ledger
