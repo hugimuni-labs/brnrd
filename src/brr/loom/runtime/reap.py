@@ -53,7 +53,9 @@ LOG_KEEP = 3
 FLOOR_BYTES = 5 * 1024 ** 3
 # What the loom and the harness put at a room's root; checkouts are read by leftovers.
 # lib/ holds links into a person's own folders; nothing here follows a link.
-PLUMBING = {"self", "port", ".body", ".starting", ".claude", ".pytest-tmp", "delegates", "lib"}
+PLUMBING = {"self", "port", ".body", ".starting", ".claude", ".pytest-tmp", "delegates", "lib", "tmp"}
+# Scratch dirs a body leaves at the root that nobody settles: loose, but never a reason to keep.
+DISPOSABLE = {"shots", "runs", "cache-probes", "scratch"}
 # Reasons only a body can settle; the rest are the loom's or time's.
 BODY_REASONS = ("loose files", "leftovers in", "a stash in")
 KEPT = "loom/reap-kept.json"
@@ -65,9 +67,9 @@ PRUNE_TIMEOUT = 600
 class DiskFloor(Exception):
     """Free space under the floor; ``grade`` counts the halvings of the floor it is below."""
 
-    def __init__(self, free: int, least: int, plain: int | None = None):
+    def __init__(self, free: int, least: int, plain: int | None = None, swap: str = ""):
         held = f" ({plain >> 20} MB before macOS purges)" if plain is not None and plain != free else ""
-        super().__init__(f"{free >> 20} MB free on the home's volume{held}, under the floor of {least >> 20} MB")
+        super().__init__(f"{free >> 20} MB free on the home's volume{held}, under the floor of {least >> 20} MB{swap}")
         self.grade, mark = 0, least // 2
         while free < mark and self.grade < 8:
             self.grade, mark = self.grade + 1, mark // 2
@@ -140,6 +142,40 @@ def space(path: Path) -> tuple[int, int, int]:
     return max(usage.free, important(path) or 0), usage.free, usage.total
 
 
+SWAP_SHARE = 0.25
+
+
+def _run(*command: str) -> str:
+    try:
+        return subprocess.run(command, capture_output=True, text=True, timeout=30).stdout
+    except (OSError, subprocess.SubprocessError):
+        return ""
+
+
+def swap(path: Path) -> str:
+    """On darwin, the disk the swapfiles hold, and when that is a quarter of what is in use, the
+    process with the largest footprint. Only named: a person's process is theirs to stop.
+
+    ``vm.swapusage``'s total is the swapfiles' bytes; the VM volume's statvfs reads the whole
+    APFS container, so it cannot say."""
+    if sys.platform != "darwin":
+        return ""
+    found = re.search(r"total = ([\d.]+)M", _run("sysctl", "-n", "vm.swapusage"))
+    if not found:
+        return ""
+    held = int(float(found.group(1)) * 2 ** 20)
+    note = f"; swap holds {held >> 20} MB"
+    usage = shutil.disk_usage(path)
+    if held <= SWAP_SHARE * (usage.total - usage.free):
+        return note
+    rows = [line.split() for line in _run("top", "-l", "1", "-o", "mem", "-n", "1",
+                                          "-stats", "pid,command,mem").splitlines() if line.strip()]
+    if not rows or len(rows[-1]) < 3 or not rows[-1][0].isdigit():
+        return note
+    pid, *command, mem = rows[-1]
+    return note + f", the largest footprint is pid {pid} {' '.join(command)} at {mem}"
+
+
 def floor(path: Path) -> tuple[int, int]:
     """``(free, floor)`` in bytes for the volume holding the home at ``path``; the share is ``disk_floor_pct``.
 
@@ -154,6 +190,7 @@ def loose(room: Path) -> list[str]:
     """Root entries that are neither plumbing nor a checkout: leftovers reads checkouts only."""
     return sorted(p.name for p in room.iterdir() if p.name not in PLUMBING
                   and not p.name.startswith(("self.broken-", ".self-clone-"))
+                  and not (p.name in DISPOSABLE and p.is_dir() and not p.is_symlink())
                   and not (p / ".git").exists())
 
 
@@ -346,7 +383,7 @@ class Reaper:
             self.next = 0.0  # Once per streak: the pass is not a tick-rate loop.
         self.below = free < least
         if self.below:
-            raise DiskFloor(free, least, space(self.home.root)[1])
+            raise DiskFloor(free, least, space(self.home.root)[1], swap(self.home.root))
 
     def step(self) -> None:
         """Until a pass succeeds again, raise the last pass's failure for the loop's guard."""

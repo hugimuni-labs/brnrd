@@ -221,6 +221,7 @@ def test_the_floor_reads_purgeable_space_as_free_and_the_dip_says_both(tmp_path,
     root = tmp_path / "home"
     write_thread(root, "inbox", "Brnrd", "inbox")
     reaper = Reaper(Home(root), lambda *_: None)
+    monkeypatch.setattr(reap, "swap", lambda _p: "")
     reading = {"plain": 11 * GB, "important": 17 * GB}
     monkeypatch.setattr(reap.shutil, "disk_usage",
                         lambda _p: SimpleNamespace(total=228 * GB, free=reading["plain"]))
@@ -244,3 +245,37 @@ def test_the_floor_reads_purgeable_space_as_free_and_the_dip_says_both(tmp_path,
 @pytest.mark.skipif(sys.platform != "darwin", reason="the purgeable reading is macOS's")
 def test_important_reads_this_volume_on_macos(tmp_path):
     assert reap.important(tmp_path) > 0
+
+
+def test_a_dip_names_swap_and_when_swap_is_large_the_process_behind_it(tmp_path, monkeypatch):
+    # 10-27: 12.4 GB of the drop was swap behind Safari's WebKit.Networking, and a body hunted rooms for it.
+    from types import SimpleNamespace
+
+    root = tmp_path / "home"
+    write_thread(root, "inbox", "Brnrd", "inbox")
+    reaper = Reaper(Home(root), lambda *_: None)
+    swapfiles = {"mb": "22528.00"}
+    monkeypatch.setattr(reap.sys, "platform", "darwin")
+    monkeypatch.setattr(reap.shutil, "disk_usage", lambda _p: SimpleNamespace(total=228 * GB, free=150 * GB))
+    monkeypatch.setattr(reap, "floor", lambda _p: (4 * GB, 5 * GB))
+    monkeypatch.setattr(reap, "space", lambda _p: (4 * GB, 4 * GB, 228 * GB))
+    ran = []
+
+    def run(command, **_kw):
+        ran.append(command[0])
+        if command[0] == "sysctl":
+            return SimpleNamespace(stdout=f"total = {swapfiles['mb']}M  used = 11721.75M  free = 566.25M  (encrypted)\n")
+        return SimpleNamespace(stdout="Processes: 612 total\n\nPID    COMMAND          MEM\n57632  com.apple.WebKit 12G\n")
+
+    monkeypatch.setattr(reap.subprocess, "run", run)
+    with pytest.raises(reap.DiskFloor) as dip:
+        reaper.disk()
+    assert str(dip.value).endswith("; swap holds 22528 MB, the largest footprint is pid 57632 com.apple.WebKit at 12G")
+
+    swapfiles["mb"], ran[:] = "2048.00", []   # a quarter of the 78 GB in use is 19.5 GB: swap is named, nobody is
+    with pytest.raises(reap.DiskFloor) as dip:
+        reaper.disk()
+    assert str(dip.value).endswith("; swap holds 2048 MB") and ran == ["sysctl"]
+
+    monkeypatch.setattr(reap.sys, "platform", "linux")
+    assert reap.swap(root) == ""

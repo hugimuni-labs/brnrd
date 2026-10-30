@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -198,3 +199,11 @@ def test_the_shim_passes_every_other_call(tmp_path, monkeypatch, args):
     proc = subprocess.run(["gh", *args], env=_env(_room(tmp_path, "home-token")),
                           capture_output=True, text=True, timeout=5)
     assert (proc.returncode, proc.stdout) == (0, "home-token\n")
+
+
+def test_a_bodys_scratch_is_its_room(tmp_path):
+    room = _room(tmp_path, None)
+    env = _env(room)
+    out = subprocess.run([sys.executable, "-c", "import tempfile; print(tempfile.gettempdir())"],
+                         env=env, capture_output=True, text=True, check=True).stdout.strip()
+    assert Path(out).resolve() == (room / "tmp").resolve()
