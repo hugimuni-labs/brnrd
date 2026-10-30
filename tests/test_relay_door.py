@@ -203,3 +203,102 @@ def test_a_codeless_door_still_carries_a_server_code_and_a_bare_start_binds_noth
     _start(client, 782, "/start NOT-A-CODE", message_id=8)
 
     assert client.get("/v1/daemons/chats", headers=daemon).json() == {"chats": []}
+
+
+def _stub_brnrd(tmp_path, chats_after_door):
+    """A brnrd.dev that lists ``chats_after_door`` once a codeless door was minted (none before, unless it is pre-bound)."""
+    from brr.gates import cloud
+    from brr.loom.runtime.config import seed_config, set_value
+
+    seen = []
+
+    class Server(http.server.BaseHTTPRequestHandler):
+        def _reply(self, body):
+            raw = json.dumps(body).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(raw)))
+            self.end_headers()
+            self.wfile.write(raw)
+
+        def do_GET(self):
+            seen.append(("GET", self.path, None))
+            doored = any(path == "/v1/daemons/door" for _, path, _ in seen)
+            self._reply({"chats": chats_after_door if doored or chats_after_door is PRE else []})
+
+        def do_POST(self):
+            size = int(self.headers.get("Content-Length") or 0)
+            seen.append(("POST", self.path, json.loads(self.rfile.read(size))))
+            self._reply({"name": "@brnrd_bot", "link": "https://t.me/brnrd_bot?start=PK-AB12"})
+
+        def log_message(self, *_):
+            pass
+
+    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Server)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    seed_config(tmp_path)
+    cloud._save_state_to_dir(tmp_path / "loom", dict(brnrd_url=f"http://127.0.0.1:{server.server_port}",
+                                                    token="bd_tok", since=0))
+    set_value(tmp_path, "relay_state", str(tmp_path / "loom"))
+    return server, seen
+
+
+_ADA = {"id": "cr_1", "platform": "telegram", "chat_id": "778", "topic_id": None, "principal_id": "42",
+        "principal_display": "@ada_l", "chat_title": None, "paired_at": "2026-10-30T12:00:00Z"}
+PRE = [_ADA]
+
+
+def test_setup_uses_a_chat_already_bound_to_the_account_without_a_code(tmp_path):
+    """Arseni 9924: a chat bound once per account; setup only connects the computer."""
+    from brr.loom.runtime import connector, setup_channel
+    from brr.loom.runtime.config import load_config
+    from brr.loom.runtime.home import Home
+
+    server, seen = _stub_brnrd(tmp_path, PRE)
+    said = []
+    try:
+        key = setup_channel.pair(Home(tmp_path), "relay", "cloud", "ada", timeout=5, out=said.append, qr=False)
+    finally:
+        server.shutdown()
+    assert key == "cloud:telegram:42"
+    # Nothing minted, nothing to type: the binding is the server's.
+    assert [(m, p) for m, p, _ in seen] == [("GET", "/v1/daemons/chats")]
+    assert "cloud=relay" in load_config(tmp_path).connectors
+    # The letter `in` writes from that chat comes from the person.
+    assert connector._sender(Home(tmp_path), "cloud", "telegram:42") == "person:ada"
+    assert any("Telegram chat is bound" in line and "@ada_l" in line for line in said)
+
+
+def test_setup_with_no_bound_chat_shows_the_account_door_and_reads_the_binding_back(tmp_path, monkeypatch):
+    from brr.loom.runtime import connector, setup_channel
+    from brr.loom.runtime.home import Home
+
+    monkeypatch.setattr(setup_channel, "BOUND_POLL_S", 0.01)
+    server, seen = _stub_brnrd(tmp_path, [dict(_ADA, platform="whatsapp", chat_id="4915112345678",
+                                               principal_id="+4915112345678", principal_display=None)])
+    said = []
+    try:
+        key = setup_channel.pair(Home(tmp_path), "relay", "cloud", "ada", timeout=5, out=said.append, qr=False)
+    finally:
+        server.shutdown()
+    # The door carries no loom code: the chat binds to the account, not to this computer.
+    assert ("POST", "/v1/daemons/door", {}) in seen
+    assert "https://t.me/brnrd_bot?start=PK-AB12" in said[0] and "PK-AB12" in said[0]
+    # WhatsApp's sender is its chat, as `in` writes it.
+    assert key == "cloud:whatsapp:4915112345678"
+    assert connector._sender(Home(tmp_path), "cloud", "whatsapp:4915112345678") == "person:ada"
+
+
+def test_setup_gives_up_when_no_chat_is_bound_in_time(tmp_path, monkeypatch):
+    from brr.loom.runtime import setup_channel
+    from brr.loom.runtime.config import load_config
+    from brr.loom.runtime.home import Home
+
+    monkeypatch.setattr(setup_channel, "BOUND_POLL_S", 0.01)
+    server, _seen = _stub_brnrd(tmp_path, [])
+    try:
+        with pytest.raises(TimeoutError):
+            setup_channel.pair(Home(tmp_path), "relay", "cloud", "ada", timeout=0.2, out=lambda _: None, qr=False)
+    finally:
+        server.shutdown()
+    assert not load_config(tmp_path).connectors

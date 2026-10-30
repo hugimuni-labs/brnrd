@@ -21,18 +21,19 @@ from .port import _front, parse_frontmatter
 from .selfrepo import IDENTITY_NOTE, SelfError, init_self
 
 
-def _door(folder, env, code):
+def _door(folder, env, code=None):
     """An optional door's ``{name, link}``: the bot, and a link that sends the code by itself.
 
     Two optional keys: ``code``, what to type into that bot when it is not
     ours (a shared bot knows only the code its server minted), and ``qr``,
-    false where a picture of the link is not offered.
+    false where a picture of the link is not offered. With no ``code`` the
+    door binds the chat where the connector's ``bound`` reads it back.
     """
     if not (folder / 'door').is_file():
         return None
     try:
         # Its stderr is kept: a broken door falls back to the plain code, never a traceback.
-        result = subprocess.run([str(folder / 'door'), code], env=env, stdout=subprocess.PIPE,
+        result = subprocess.run([str(folder / 'door'), *([code] if code else [])], env=env, stdout=subprocess.PIPE,
                                 stderr=subprocess.PIPE, text=True, timeout=30)
         door = json.loads(result.stdout) if result.returncode == 0 else None
     except (OSError, subprocess.SubprocessError, ValueError):
@@ -41,8 +42,84 @@ def _door(folder, env, code):
             and isinstance(door.get('link'), str)):
         return None
     if not isinstance(door.get('code'), str) or not door['code']:
+        if not code:
+            return None
         door['code'] = code
     return door
+
+
+def _bound(folder, env):
+    """The chats a connector's server already binds to this person, or None when it keeps none.
+
+    A ``bound`` executable prints ``[{"from", "platform", "who"}]``, ``from``
+    the sender as ``in`` writes it. Such a chat needs no code: the server
+    verified who it is when it was bound.
+    """
+    if not (folder / 'bound').is_file():
+        return None
+    result = subprocess.run([str(folder / 'bound')], env=env, stdout=subprocess.PIPE,
+                            stderr=subprocess.PIPE, text=True, timeout=30)
+    try:
+        rows = json.loads(result.stdout) if result.returncode == 0 else None
+    except ValueError:
+        rows = None
+    if not (isinstance(rows, list) and all(isinstance(r, dict) and isinstance(r.get('from'), str)
+                                           and r['from'] for r in rows)):
+        why = (result.stderr.strip().splitlines() or [f'bound exited {result.returncode}'])[-1]
+        raise ValueError(f'Could not read which chats are bound: {why}')
+    return rows
+
+
+def _enroll(home, kind, name, person, keys):
+    """Save ``keys`` as ``person``'s and enable the channel; the config is written last."""
+    channels = home.root / 'self/people' / person / 'channels.toml'
+    previous = read_array(channels, 'channels')
+    added = [key for key in keys if key not in previous]
+    if added:
+        atomic_write(channels, 'channels = ' + json.dumps([*previous, *added]) + '\n')
+    # Commit the config last: a failed pairing never enables input.
+    seed_config(home.root)
+    set_value(home.root, 'connectors', [*load_config(home.root).connectors, f'{name}={kind}'])
+
+
+#: How a platform reads in a sentence.
+PLATFORMS = {'telegram': 'Telegram', 'whatsapp': 'WhatsApp'}
+
+
+def _bind(home, kind, name, person, folder, env, chats, *, timeout, out, qr):
+    """The account path: a chat already bound is used as it is; else a link binds one, read back.
+
+    No code reaches the loom here: the server binds the chat on the
+    person's tap and ``bound`` lists it. The first letter is the proof.
+    """
+    if not chats:
+        door = _door(folder, env)
+        if door is None:
+            raise ValueError('brnrd.dev gave no link to bind a chat; nothing was enabled. Run brnrd setup again.')
+        shown = door.get('qr', True) is not False
+        picture = qr_code(door['link']) if shown and (sys.stdout.isatty() if qr is None else qr) else ''
+        also = ", or scan the code below with your phone's camera" if picture else ''
+        out(f"Open {door['link']} where you use the app and press Start{also}. Or open {door['name']} "
+            f"yourself and send the code {door['code']}. Waiting up to {timeout:g}s.")
+        if picture:
+            out(picture)
+        deadline = time.monotonic() + timeout
+        while not chats:
+            if time.monotonic() >= deadline:
+                raise TimeoutError('No chat was bound in time; channel was not enabled')
+            time.sleep(BOUND_POLL_S)
+            chats = _bound(folder, env)
+    keys = [f"{name}:{chat['from']}" for chat in chats]
+    _enroll(home, kind, name, person, keys)
+    for chat in chats:
+        where = PLATFORMS.get(chat.get('platform'), chat.get('platform') or kind)
+        out(f"your {where} chat is bound to your brnrd account (as {chat.get('who') or chat['from']}); "
+            f"saved it for {person}")
+    return keys[0]
+
+
+#: How often the unbound path asks the server whether the tap has bound a chat.
+BOUND_POLL_S = 2.0
 
 
 def _instructions(door, code, timeout, scan=False):
@@ -114,6 +191,9 @@ def pair(home, kind, name, person, *, timeout=180, out=print, qr=None, env=None)
         sys.stdout.flush()  # the connector writes to the same terminal, after what is already said
         if subprocess.run([str(setup)], env=env).returncode != 0:
             raise ValueError('Nothing was enabled; run brnrd again when you have it.')
+    chats = _bound(folder, env)
+    if chats is not None:
+        return _bind(home, kind, name, person, folder, env, chats, timeout=timeout, out=out, qr=qr)
     code = pairing_code()
     # Use the normal drop directory: unrelated letters survive pairing for the
     # loom to ingest once enabled. The connector advances its usual cursor.
@@ -173,14 +253,8 @@ def pair(home, kind, name, person, *, timeout=180, out=print, qr=None, env=None)
                 path.unlink()
                 if path.with_suffix('.d').exists():
                     shutil.rmtree(path.with_suffix('.d'))
-                channels = home.root / 'self/people' / person / 'channels.toml'
-                previous = read_array(channels, 'channels')
                 key = f'{name}:{chat}'
-                if key not in previous:
-                    atomic_write(channels, 'channels = ' + json.dumps([*previous, key]) + '\n')
-                # Commit the config last: a failed pairing never enables input.
-                seed_config(home.root)
-                set_value(home.root, 'connectors', [*load_config(home.root).connectors, f'{name}={kind}'])
+                _enroll(home, kind, name, person, [key])
                 out(f'heard you as {chat}; saved {key} for {person}')
                 return key
             if child is not None and child.poll() is not None:
