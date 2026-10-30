@@ -420,7 +420,7 @@ class Router:
         install = home.install_id()
         ours = (None, install) if holding else (install,)
         threads = [t for t in _routable(home, facts) if pinned_to(facts, t) in ours]
-        if not threads:
+        if not threads and not holding:
             return facts
         armed = self.armed if holding else (lambda: True)
         facts = _closures(home, facts, threads)
