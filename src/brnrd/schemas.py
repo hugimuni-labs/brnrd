@@ -151,7 +151,8 @@ class DaemonRegistered(BaseModel):
 class DaemonDoorStart(BaseModel):
     # The loom's own pairing code (`setup_channel.pairing_code`: `K7Q-M9X`;
     # 8 hex digits from a loom older than that).
-    code: str = Field(pattern=r"^(?:[0-9a-f]{8}|[A-HJKMNP-Z2-9]{3}-[A-HJKMNP-Z2-9]{3})$")
+    # None: bind the chat to the account (`GET /v1/daemons/chats` reads it back).
+    code: str | None = Field(default=None, pattern=r"^(?:[0-9a-f]{8}|[A-HJKMNP-Z2-9]{3}-[A-HJKMNP-Z2-9]{3})$")
 
 
 class DaemonDoor(BaseModel):
@@ -159,6 +160,23 @@ class DaemonDoor(BaseModel):
     the shape a connector's `door` prints."""
     name: str
     link: str
+
+
+class DaemonChat(BaseModel):
+    """One chat bound to the account: where to write (``platform``,
+    ``chat_id``, ``topic_id``) and who it is (the verified sender)."""
+    id: str
+    platform: str
+    chat_id: str
+    topic_id: str | None = None
+    principal_id: str
+    principal_display: str | None = None
+    chat_title: str | None = None
+    paired_at: datetime
+
+
+class DaemonChats(BaseModel):
+    chats: list[DaemonChat]
 
 
 class DaemonWhoami(BaseModel):

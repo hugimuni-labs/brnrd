@@ -24,10 +24,10 @@ from sqlalchemy.orm import Session
 
 from brnrd import publish_scope, schemas
 from brnrd.auth import get_db
+from brnrd.looms import loom_repos as _loom_repos
 from brnrd.models import Account, BoardConsent, Daemon, LoomPart, Repo
 
 from ._session import _account_id, _json_body
-from .daemons import LOOM_DAEMON_NAME
 from .dashboard import enqueue_loom_letter
 
 router = APIRouter(prefix="/v1/loom", tags=["loom"])
@@ -177,21 +177,6 @@ async def loom_letter(request: Request, db: Session = Depends(get_db)) -> JSONRe
 
 #: The one publish lane a loom's board rides (`PUT /v1/daemons/loom{,/parts}`).
 BOARD_LANE = "activity"
-
-
-def _loom_repos(db: Session, account_id: str) -> list[tuple[Repo, Daemon]]:
-    """The account's loom repos with their loom daemon, the last seen first.
-
-    A loom's first push makes its daemon row even when the push is refused, so a
-    loom that never got a yes is found here too.
-    """
-    rows = db.execute(
-        select(Repo, Daemon)
-        .join(Daemon, Daemon.repo_id == Repo.id)
-        .where(Repo.account_id == account_id, Daemon.daemon_name == LOOM_DAEMON_NAME)
-        .order_by(Daemon.last_seen_at.desc())
-    ).all()
-    return [(repo, daemon) for repo, daemon in rows]
 
 
 def _iso(at: datetime | None) -> str | None:
