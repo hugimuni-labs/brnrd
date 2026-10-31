@@ -19,13 +19,18 @@ from brr.loom.runtime.publish import remote_command
 class Mint:
     """A brnrd.dev that mints one App token per POST and counts them."""
 
-    def __init__(self, expires_in: float = 3600):
-        self.minted, self.expires_in = [], expires_in
+    def __init__(self, expires_in: float = 3600, gateway_blips: int = 0):
+        self.minted, self.expires_in, self.blips = [], expires_in, gateway_blips
         mint = self
 
         class Handler(BaseHTTPRequestHandler):
             def do_POST(self):
                 assert self.path == gates.MINT_PATH
+                if mint.blips:
+                    mint.blips -= 1
+                    self.send_response(503)
+                    self.end_headers()
+                    return
                 assert self.headers["Authorization"] == "Bearer acct"
                 token = f"ghs_{len(mint.minted) + 1}"
                 mint.minted.append(token)
@@ -113,6 +118,22 @@ def test_a_body_starts_with_a_token_good_for_most_of_an_hour(tmp_path, mint, shi
     assert env["GH_TOKEN"] == "ghs_1"
     # The shim and publish keep the cache's own margin: no second mint.
     assert resolve_secret(spec(root)) == "ghs_1" and mint.minted == ["ghs_1"]
+
+
+def test_the_verbs_stdout_is_the_token_alone_through_a_gateway_retry(tmp_path, shim):
+    """The gh shim takes all of forge-token's stdout as GH_TOKEN: a retry line there corrupts it."""
+    import subprocess
+    mint = Mint(gateway_blips=1)
+    try:
+        root = tmp_path / "home"
+        connected(root, mint.url)
+        out = subprocess.run(spec(root).removeprefix("command: "), shell=True,
+                             capture_output=True, text=True, timeout=60)
+    finally:
+        mint.server.shutdown()
+    assert out.returncode == 0, out.stderr
+    assert out.stdout == "ghs_1\n"
+    assert "retry 1/" in out.stderr
 
 
 def test_the_verb_fails_closed_without_a_gate(tmp_path, shim):
