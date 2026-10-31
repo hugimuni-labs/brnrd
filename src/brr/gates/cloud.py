@@ -13,6 +13,7 @@ import shutil
 import subprocess
 import tempfile
 import threading
+import sys
 import time
 from pathlib import Path
 from typing import Any, Callable, Mapping
@@ -327,7 +328,9 @@ def _request(base_url: str, method: str, path: str, *, token: str | None = None,
                 "`brnrd account connect`."
             ) from exc
         if resp.status_code in _RETRY_STATUSES and sleep_s is not None:
-            print(f"[brnrd:cloud] {method} {path} -> {resp.status_code} (gateway); retry {attempt + 1}/{len(sleeps)} in {sleep_s:.0f}s")
+            # stderr: `brnrd runtime forge-token` prints the token on stdout,
+            # and the gh shim takes all of stdout as GH_TOKEN.
+            print(f"[brnrd:cloud] {method} {path} -> {resp.status_code} (gateway); retry {attempt + 1}/{len(sleeps)} in {sleep_s:.0f}s", file=sys.stderr)
             time.sleep(sleep_s)
             continue
         break
