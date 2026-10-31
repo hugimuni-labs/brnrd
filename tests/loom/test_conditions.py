@@ -32,6 +32,7 @@ def disk(tmp_path, monkeypatch):
     monkeypatch.setattr(health, "time", clock)
     monkeypatch.setattr(reap, "floor", lambda _path: (free["bytes"], 12 * GB))
     monkeypatch.setattr(reap, "space", lambda _path: (free["bytes"], free["bytes"], 228 * GB))
+    monkeypatch.setattr(reap, "DISK_EVERY", 0.0)  # every guard reads the volume, as the scripted minutes need
     reaper = Reaper(home, lambda *_: None)
 
     def guard(health_):
