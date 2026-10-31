@@ -2315,6 +2315,7 @@ def run(root: Path | str, *, adapter: str = "fake", core: str = "haiku",
                 if time.monotonic() >= next_usage:
                     health.guard("usage", _read_usage, home, usage, backoff=False)
                     next_usage = time.monotonic() + usage.REFRESH_INTERVAL
+                health.guard("gauge", usage.check_stuck, backoff=False)
                 # Inputs, publisher, mirror and reap pace their own retries; only the tick backs off.
                 # Connectors run only on the router lease's holder: a second
                 # install ingesting too would answer every letter twice.
