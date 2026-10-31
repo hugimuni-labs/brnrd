@@ -442,9 +442,8 @@ class Reaper:
 
     def disk(self) -> None:
         # The free-space query (CoreFoundation, config, statvfs) at every 0.2 s tick was a share of the idle loom.
-        now = time.monotonic()
-        if now >= self.disk_due:
-            self.disk_due = now + DISK_EVERY
+        if DISK_EVERY <= 0 or time.monotonic() >= self.disk_due:
+            self.disk_due = time.monotonic() + DISK_EVERY if DISK_EVERY > 0 else 0.0
             free, least = floor(self.home.root)
             if free < least and not self.below:
                 self.next = 0.0  # Once per streak: the pass is not a tick-rate loop.
