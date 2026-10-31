@@ -17,7 +17,9 @@ def test_self_refusal_stays_owed_and_one_notice_repairs_home(tmp_path, fault):
     recipe = clone / "core/loom/wake"
     if fault == "plan":
         # A home owns its recipe, including the pre-clipping recipe from 4401.
-        recipe.write_text(recipe.read_text().replace("readme = clip(readme, excess, limit) or readme", "readme = readme"))
+        text = recipe.read_text()
+        assert "    if excess:\n" in text
+        recipe.write_text(text.replace("    if excess:\n", "    if False:\n", 1))
         path = clone / "threads/work/README.md"
         path.write_text(path.read_text() + "\n## Plan\n- [ ] " + "x" * 30000 + "\n")
     else:
