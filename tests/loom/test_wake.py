@@ -378,9 +378,33 @@ def test_a_fat_thread_readme_is_cut_and_the_letter_still_wakes(tmp_path: Path) -
     cut = wake(clone, "w-1", owed, LOOM_BUDGET_BYTES=str(limit))
     assert cut.returncode == 0, cut.stderr
     assert len(cut.stdout.encode("utf-8")) <= limit
-    assert "row 0 " in cut.stdout and "row 79 " not in cut.stdout
-    assert "the file is whole on disk: trim it]" in cut.stdout
-    assert cut.stdout.rstrip().endswith("the ask")
+    # The Plan is a whole section: it folds to its title before anything is cut from the end.
+    assert "## Plan\n[the wake folded this section's" in cut.stdout and "row 0 " not in cut.stdout
+    assert "# Headline" in cut.stdout and cut.stdout.rstrip().endswith("the ask")
+
+
+def test_the_wake_folds_sections_last_first_and_never_now(tmp_path: Path) -> None:
+    # 10-31, gen 241: the cut from the README's end took Now, the part a successor boots into.
+    home = tmp_path / "home"
+    assert cli(["init", "--home", str(home)]).returncode == 0
+    self_dir = home / "self"
+    rows = lambda tag: "".join(f"- {tag} {i} " + "y" * 60 + "\n" for i in range(30))
+    write_thread(self_dir, "w-1", "Headline\n\n## Now\n\n" + rows("now") + "\n## Plan\n\n" + rows("plan")
+                 + "\n## Decisions\n\n" + rows("decision"))
+    commit(self_dir, "three sections")
+    clone = selfrepo.room(home, "s1")
+    owed = tmp_path / "owed.json"
+    owed.write_text(json.dumps([{"id": "letter:x", "from": "person:a", "body": "the ask"}]), encoding="utf-8")
+    full = wake(clone, "w-1", owed, LOOM_BUDGET_BYTES="100000")
+    assert full.returncode == 0, full.stderr
+    one = wake(clone, "w-1", owed, LOOM_BUDGET_BYTES=str(len(full.stdout.encode("utf-8")) - 1000))
+    assert one.returncode == 0, one.stderr
+    assert "now 29 " in one.stdout and "plan 29 " in one.stdout and "decision 0 " not in one.stdout
+    assert "## Decisions\n[the wake folded this section's" in one.stdout
+    both = wake(clone, "w-1", owed, LOOM_BUDGET_BYTES=str(len(full.stdout.encode("utf-8")) - 3000))
+    assert both.returncode == 0, both.stderr
+    assert "now 29 " in both.stdout and "plan 0 " not in both.stdout and "decision 0 " not in both.stdout
+    assert "the wake cut" not in both.stdout and both.stdout.rstrip().endswith("the ask")
 
 
 def test_room_is_a_clone_and_reused(tmp_path: Path) -> None:

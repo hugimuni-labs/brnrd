@@ -214,3 +214,17 @@ def test_one_stop_shows_every_miss_at_once_until_each_is_cleared(body):
     assert "what is left" not in third and "has not said how it ends" not in third
     assert third.startswith("the stop holds on 1 thing") and "--note" in third
     assert not list((seat / "port/out").glob("asked-*.md"))
+
+
+def test_a_delivered_wish_folds_to_one_tail_line_in_the_wake(body):
+    # 10-31, gen 241: delivered wishes came in whole and crowded the README out.
+    home, seat = body
+    done = heard(home, seat, "Ship the switch")
+    command(home, seat, "wish", done, "--left", "wait for CI")
+    command(home, seat, "wish", done, "--result", "pr:https://example.com/9", "--line", "Shipped", "--deliver")
+    live = heard(home, seat, "Paint the board")
+    command(home, seat, "wish", live, "--left", "pick a palette")
+    shown = wake(seat)
+    assert f"delivered, awaiting acceptance: {done} (https://example.com/9)" in shown
+    assert "wait for CI" not in shown and "pick a palette" in shown
+    assert sum(done in line for line in shown.splitlines()) == 1

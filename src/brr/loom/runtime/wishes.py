@@ -569,9 +569,16 @@ def wake_wishes(facts: Iterable[Fact], thread: str, plan_rows=()) -> str:
         section += (f"reopened {reopen.at[5:16].replace('T', ' ')}: {d['wish']} placed by "
                     f"{reopen.by.removeprefix('strand:')} on a thread {d['was']}"
                     + (f" as: {_short(d['why'], 120)}" if d.get("why") else "") + "\n")
+    # A delivered wish waits only on its acceptance; its result is the receipt, so
+    # it folds to one tail line instead of crowding the README out of the wake.
+    done = [w for w in rows if w.state == "delivered"]
+    rows = [w for w in rows if w.state != "delivered"]
     section += "".join(line + "\n" for w in rows[:20] for line in wish_tree(w, bodies, plan_rows))
     if len(rows) > 20:
         section += f"+{len(rows) - 20} more · wishes --thread {thread}\n"
+    if done:
+        section += "delivered, awaiting acceptance: " + " · ".join(
+            f"{w.id} ({_short(w.results[-1]['ref'] if w.results else '-', 60)})" for w in done) + "\n"
     return section
 
 

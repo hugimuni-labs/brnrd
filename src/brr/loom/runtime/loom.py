@@ -368,7 +368,7 @@ def notice(home: Home, facts: list[Fact], kind: str, subject: str, what: str, ca
            thread: str | None = None, about: Fact | None = None, stands: bool = False,
            taint: bool = False, channel: str | None = None,
            source_strand: str | None = None, passive: bool = False,
-           draft_only: bool = False) -> bool | Fact:
+           draft_only: bool = False, supersedes: bool = False) -> bool | Fact:
     """The one writer of loom notices: what the loom cannot settle, a body is told.
 
     A notice is an owed letter from ``loom``, so it is shown at every
@@ -376,6 +376,8 @@ def notice(home: Home, facts: list[Fact], kind: str, subject: str, what: str, ca
     a condition met on every tick writes one letter. It goes to ``thread``
     when a body can run there, else to the home thread. The last lines always name
     the handle. ``stands`` ties it to ``about``: the two settle together.
+    ``supersedes`` is for a kind whose body restates the whole condition: the
+    new notice settles every earlier one of its kind, so a wake carries one.
     """
     ident = notice_id(kind, subject)
     if (ident in facts.by_id if isinstance(facts, LedgerView) else any(fact.id == ident for fact in facts)):
@@ -415,7 +417,27 @@ def notice(home: Home, facts: list[Fact], kind: str, subject: str, what: str, ca
     except LedgerConflict:
         return False
     _log(home, f"notice {ident} to {data['to']}: {what}")
+    if supersedes:
+        _supersede(home, facts, kind, ident)
     return True
+
+
+def _supersede(home: Home, facts, kind: str, ident: str) -> None:
+    """Settle the earlier notices of ``kind`` that nobody settled: ``ident`` restates them."""
+    prefix = notice_id(kind, "").rsplit("-", 1)[0] + "-"
+    ids = {fact.id for fact in facts}
+    settled = {fact.data.get("re") for fact in facts if fact.kind == "letter" and fact.data.get("re")}
+    for fact in list(facts):
+        old = fact.id
+        if (fact.kind != "letter" or old == ident or not old.startswith(prefix)
+                or not is_notice(fact) or old in settled or f"letter.disposed:{old}" in ids):
+            continue
+        disposition = {"id": old, "outcome": "done", "reason": f"superseded by {ident}"}
+        try:
+            facts.append(_record(home, "letter.disposed", {"dispositions": [disposition]},
+                                 f"letter.disposed:{old}"))
+        except LedgerConflict:
+            pass
 
 
 def _closures(home: Home, facts: list[Fact], threads: list[str]) -> list[Fact]:

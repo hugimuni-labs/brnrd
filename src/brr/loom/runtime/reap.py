@@ -625,7 +625,7 @@ class Reaper:
                        f"- {strand} (thread {threads.get(strand, '?')}): {why}"
                        for strand, why in sorted(settle.items())),
                    "then clear the room with `python -m brr.loom.runtime reap <strand> --force"
-                   " --why \"<what you did with it>\"`")
+                   " --why \"<what you did with it>\"`", supersedes=True)
         # Told rooms stay told while kept; a room that leaves and comes back is new again.
         atomic_write(path, json.dumps({"kept": settle, "told": sorted(set(settle) & (told | new))},
                                       sort_keys=True) + "\n")
