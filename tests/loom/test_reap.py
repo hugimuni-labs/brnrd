@@ -194,6 +194,36 @@ def test_rooms_kept_for_a_body_reach_inbox_once_their_thread_at_wake_and_force_c
     assert json.loads((home.root / reap.KEPT).read_text()) == {"kept": {}, "told": []}
 
 
+def test_a_new_rooms_kept_notice_settles_the_one_it_restates(tmp_path):
+    # 10-31, gen 241: four rooms-kept notices, each repeating the last list, all owed at wake.
+    from brr.loom.runtime.lifecycle import main_snapshot
+    from brr.loom.runtime.owners import letters_for
+    home = Home(tmp_path / "home", install="0001")
+    init_self(home.root, person="test")
+    write_thread(home.root, "brnrd", "Brnrd", "quit-now", wait="0")
+    (_ended(home, "one", "0001-one", 8) / "a.md").write_text("draft a")
+    reaper = reap.Reaper(home, lambda *_: None)
+    reaper.reap()
+    # An older notice naming a room that is still on disk but no longer listed is not restated.
+    home.room("0001-ghost").mkdir(parents=True)
+    append(home, Fact(kind="letter", by="loom:0001", id="loom/rooms-kept-0000000000", data={
+        "id": "loom/rooms-kept-0000000000", "from": "loom", "to": f"thread:{home.main_thread()}",
+        "body": "1 rooms are kept\n- 0001-ghost (thread ghost): loose files: c.md"}))
+    (_ended(home, "two", "0001-two", 8) / "b.md").write_text("draft b")
+    reaper.reap()
+    facts = read_facts(home)
+    assert not any(f.id == "letter.disposed:loom/rooms-kept-0000000000" for f in facts)
+    notices = [f for f in facts if f.kind == "letter" and f.id.startswith("loom/rooms-kept-")
+               and f.id != "loom/rooms-kept-0000000000"]
+    assert len(notices) == 2
+    first, latest = sorted(notices, key=lambda f: "0001-two" in f.data["body"])
+    assert "0001-one" in latest.data["body"] and "0001-two" in latest.data["body"]
+    [gone] = [f for f in facts if f.id == f"letter.disposed:{first.id}"]
+    assert gone.data["dispositions"][0]["reason"] == f"superseded by {latest.id}"
+    owed = [f.id for f in letters_for(facts, main_snapshot(home), home.main_thread())]
+    assert latest.id in owed and first.id not in owed
+
+
 def _project(tmp_path, home, strands):
     """Strands of one thread whose seat declares ``widget``; each released ``days`` ago, oldest lease first."""
     from brr.loom.runtime.repos import prepare_repos

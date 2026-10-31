@@ -11,7 +11,8 @@ When LOOM_CORE names a file, the core (identity, stance and role) is written the
 and left out of stdout: a body that has a system slot carries it there, where
 automated turns and compaction do not wear it down. The budget still counts it.
 The tree is cut from the bottom, and a narrowed wake says how many entries
-were left out. Then the thread's README is cut from its end, and says so: it
+were left out. Then the thread's README folds whole `## ` sections but `## Now` to their
+titles, last first, and only then is cut from its end; each cut says so: it
 is the one part the waking body can fix, so it never costs a letter. The
 identity, the stance, the role, the notes and the occasion are never cut.
 """
@@ -168,6 +169,42 @@ def occasion(path: Path) -> str:
     return "".join(chunks)
 
 
+def fold(readme: str, excess: int) -> str:
+    """The README with whole ``## `` sections folded to their titles, last first, until
+    ``excess`` bytes are saved. The spec above the first section and ``## Now`` are never
+    folded: they are what the thread is for and what its successor boots into. Each fold
+    says so; what is still over is cut from the end."""
+    lines = readme.splitlines(keepends=True)
+    starts = [i for i, line in enumerate(lines) if line.startswith("## ")]
+    if not starts:
+        return readme
+    bounds = list(zip(starts, starts[1:] + [len(lines)]))
+    now = [b for b in bounds if lines[b[0]].strip().lower() == "## now"]
+    order = [b for b in reversed(bounds) if b not in now]
+    folded: dict[int, str] = {}
+    saved = 0
+    for start, end in order:
+        if saved >= excess:
+            break
+        body = "".join(lines[start + 1:end])
+        size = len(body.encode("utf-8"))
+        note = f"[the wake folded this section's {size} bytes to its title; it is whole on disk]\n"
+        if size <= len(note.encode("utf-8")):
+            continue
+        folded[start] = note
+        saved += size - len(note.encode("utf-8"))
+    out = []
+    skip = -1
+    for i, line in enumerate(lines):
+        if i < skip:
+            continue
+        out.append(line)
+        if i in folded:
+            out.append(folded[i])
+            skip = next(end for start, end in bounds if start == i)
+    return "".join(out)
+
+
 def clip(readme: str, excess: int, limit: int) -> str:
     """The README less ``excess`` bytes from its end, cut at a line, with a receipt."""
     data = readme.encode("utf-8")
@@ -196,7 +233,11 @@ def fixed_text(root: Path, thread: str, loom: str, owed: Path, excess: int = 0, 
     readme_path = root / "threads" / thread / "README.md"
     readme = read_exact(readme_path, f"threads/{thread}/README.md")
     if excess:
-        readme = clip(readme, excess, limit) or readme
+        size = len(readme.encode("utf-8"))
+        readme = fold(readme, excess)
+        rest = excess - (size - len(readme.encode("utf-8")))
+        if rest > 0:
+            readme = clip(readme, rest, limit) or readme
     parts = [
         core_text(root),
         section(f"threads/{thread}/README.md", readme),

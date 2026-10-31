@@ -616,6 +616,11 @@ class Reaper:
         except (OSError, ValueError, AttributeError):
             told = set()
         new = set(settle) - told
+
+        def covers(old) -> bool:
+            # An earlier notice is restated only if each room it names is listed again or gone.
+            named = re.findall(r"^- (\S+) \(thread ", str(old.data.get("body", "")), re.M)
+            return all(name in settle or not self.home.room(name).exists() for name in named)
         if new:
             facts = read_facts(self.home)
             threads = sender_threads(facts)
@@ -625,7 +630,7 @@ class Reaper:
                        f"- {strand} (thread {threads.get(strand, '?')}): {why}"
                        for strand, why in sorted(settle.items())),
                    "then clear the room with `python -m brr.loom.runtime reap <strand> --force"
-                   " --why \"<what you did with it>\"`")
+                   " --why \"<what you did with it>\"`", supersedes=covers)
         # Told rooms stay told while kept; a room that leaves and comes back is new again.
         atomic_write(path, json.dumps({"kept": settle, "told": sorted(set(settle) & (told | new))},
                                       sort_keys=True) + "\n")

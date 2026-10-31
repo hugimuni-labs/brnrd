@@ -569,7 +569,10 @@ def wake_wishes(facts: Iterable[Fact], thread: str, plan_rows=()) -> str:
         section += (f"reopened {reopen.at[5:16].replace('T', ' ')}: {d['wish']} placed by "
                     f"{reopen.by.removeprefix('strand:')} on a thread {d['was']}"
                     + (f" as: {_short(d['why'], 120)}" if d.get("why") else "") + "\n")
-    section += "".join(line + "\n" for w in rows[:20] for line in wish_tree(w, bodies, plan_rows))
+    # A delivered wish waits only on its acceptance; its result is the receipt, so
+    # it takes its one line, without the tree, instead of crowding the README out.
+    section += "".join(line + "\n" for w in rows[:20]
+                       for line in ([wish_line(w)] if w.state == "delivered" else wish_tree(w, bodies, plan_rows)))
     if len(rows) > 20:
         section += f"+{len(rows) - 20} more · wishes --thread {thread}\n"
     return section
