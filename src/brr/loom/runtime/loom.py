@@ -984,6 +984,10 @@ def _stamp_router(fact: Fact, facts: list[Fact]) -> None:
         fact.data["router_gen"] = max(gens)
 
 
+#: Outboxes last read with nothing to ingest, by their (inode, mtime) then.
+_EMPTY_OUT: dict[str, tuple[int, int]] = {}
+
+
 def _ingest(home: Home, facts: list[Fact] | None = None, ttl: float | None = None) -> list[Fact]:
     if facts is None:
         facts = read_facts(home)
@@ -991,18 +995,34 @@ def _ingest(home: Home, facts: list[Fact] | None = None, ttl: float | None = Non
         from .config import load_config
         ttl = load_config(home.root).router_ttl
     rooms = home.root / "rooms"
-    if not rooms.is_dir():
+    try:
+        with os.scandir(rooms) as entries:
+            names = sorted(e.name for e in entries if e.is_dir())
+    except (FileNotFoundError, NotADirectoryError):
         return facts
-    for room in sorted(path for path in rooms.iterdir() if path.is_dir()):
-        out = room / "port" / "out"
-        if not out.is_dir():
+    base = str(rooms)
+    for name in names:
+        # Hundreds of rooms, five ticks a second: an outbox unchanged since it held nothing costs one stat.
+        out = f"{base}/{name}/port/out"
+        try:
+            st = os.stat(out)
+        except OSError:
             continue
-        strand = room.name
+        stamp = (st.st_ino, st.st_mtime_ns)
+        if _EMPTY_OUT.get(out) == stamp:
+            continue
+        room = rooms / name
+        strand = name
         if not _may_ingest(home, strand, facts, ttl):
             continue
         paths = _port_files(room)
-        if not paths:
+        if not any(path.suffix == ".md" or path.name.startswith("taint-") and path.suffix == ".json"
+                   for path in paths):
+            # A stamp read in the last second can still move inside the same tick (coarse clocks).
+            if time.time_ns() - st.st_mtime_ns > 1_000_000_000:
+                _EMPTY_OUT[out] = stamp
             continue
+        _EMPTY_OUT.pop(out, None)
         gen = _strand_gen(facts, strand)
         for path in paths:
             try:
@@ -2320,10 +2340,10 @@ def run(root: Path | str, *, adapter: str = "fake", core: str = "haiku",
         keeper = Keeper(home, _log)
         from .reap import Reaper
         reaper = Reaper(home, _log)
-        from .cpu import CpuWatch
-        cpu = CpuWatch()
         from .sampler import Sampler
         sampler = Sampler(home, _log)
+        from .cpu import CpuWatch
+        cpu = CpuWatch(on_high=sampler.start)
         from .receipts import source_root
         updater = Updater(home, _log, source_root())
         router.watcher = Watcher(home.root / "loom" / "prs.json")

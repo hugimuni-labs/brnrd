@@ -47,7 +47,7 @@ def test_a_moved_tree_builds_and_swaps_only_on_success(checkout):
 
     (frontend / "build").mkdir()
     (frontend / "build" / "200.html").write_text("stale, unstamped")
-    spa = SpaBuild(frontend, lambda text: None, run)
+    spa = SpaBuild(frontend, lambda text: None, run, every=0)
     settle(spa)
     assert calls == [["npm", "run", "build"]]  # node_modules is newer than the lock: no npm ci
     assert (frontend / "build" / "200.html").read_text() == "shell 1"
@@ -87,5 +87,19 @@ def test_a_newer_lock_installs_first(checkout):
 
     import os
     os.utime(frontend / "node_modules" / ".package-lock.json", (0, 0))
-    settle(SpaBuild(frontend, lambda text: None, run))
+    settle(SpaBuild(frontend, lambda text: None, run, every=0))
     assert calls == ["ci", "run"]
+
+
+def test_head_is_read_once_per_interval_not_every_tick(checkout, monkeypatch):
+    root, frontend = checkout
+    clock, reads = [0.0], []
+    spa = SpaBuild(frontend, lambda text: None, lambda *a, **k: None, every=30, clock=lambda: clock[0])
+    monkeypatch.setattr(spa, "wanted", lambda: reads.append(clock[0]) or spa.built())
+    for _ in range(10):
+        spa.step()
+        clock[0] += 0.2
+    assert reads == [0.0]
+    clock[0] = 30.0
+    spa.step()
+    assert reads == [0.0, 30.0]

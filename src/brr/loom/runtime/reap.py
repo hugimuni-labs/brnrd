@@ -148,6 +148,8 @@ def space(path: Path) -> tuple[int, int, int]:
 
 
 SWAP_SHARE = 0.25
+#: Seconds between free-space reads by the loop's ``disk`` step.
+DISK_EVERY = 10.0
 
 
 def _run(*command: str) -> str:
@@ -434,16 +436,22 @@ class Reaper:
         self.log = log
         self.next = 0.0
         self.below = False
+        self.disk_due, self.floor_error = 0.0, None
         self.worker: threading.Thread | None = None
         self.failing: tuple[Exception, object] | None = None
 
     def disk(self) -> None:
-        free, least = floor(self.home.root)
-        if free < least and not self.below:
-            self.next = 0.0  # Once per streak: the pass is not a tick-rate loop.
-        self.below = free < least
-        if self.below:
-            raise DiskFloor(free, least, space(self.home.root)[1], swap(self.home.root))
+        # The free-space query (CoreFoundation, config, statvfs) at every 0.2 s tick was a share of the idle loom.
+        if DISK_EVERY <= 0 or time.monotonic() >= self.disk_due:
+            self.disk_due = time.monotonic() + DISK_EVERY if DISK_EVERY > 0 else 0.0
+            free, least = floor(self.home.root)
+            if free < least and not self.below:
+                self.next = 0.0  # Once per streak: the pass is not a tick-rate loop.
+            self.below = free < least
+            self.floor_error = (DiskFloor(free, least, space(self.home.root)[1], swap(self.home.root))
+                                if self.below else None)
+        if self.floor_error is not None:
+            raise self.floor_error
 
     def step(self) -> None:
         """Until a pass succeeds again, raise the last pass's failure for the loop's guard."""
