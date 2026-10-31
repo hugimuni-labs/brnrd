@@ -95,9 +95,14 @@ def _refresh(path, script, after=0) -> None:
     except (OSError, ValueError, KeyError, TypeError, subprocess.TimeoutExpired):
         windows = []
     finally:
-        if proc is not None and proc.poll() is None:
-            os.killpg(proc.pid, signal.SIGKILL)
-            proc.wait()
+        try:
+            if proc is not None and proc.poll() is None:
+                os.killpg(proc.pid, signal.SIGKILL)
+                # A child stuck in the kernel ignores SIGKILL: leave it rather
+                # than hold the gauge on an unbounded wait.
+                proc.wait(timeout=5)
+        except (OSError, subprocess.TimeoutExpired):
+            pass
         try:
             if attempted:
                 atomic_write(path, json.dumps({"at": at, "windows": windows, **({"error": error} if error else {})}) + "\n")

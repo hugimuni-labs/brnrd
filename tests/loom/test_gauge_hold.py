@@ -170,3 +170,36 @@ def test_a_blocked_refresh_reads_unknown_past_its_deadline_and_the_body_starts(t
     assert path not in usage._REFRESHING and path not in usage._STARTED
     health.guard('gauge', usage.check_stuck, backoff=False)
     assert [f.data['step'] for f in kind_facts(read_facts(home), 'loom.recovered')] == ['gauge']
+
+
+def test_a_refresh_whose_child_will_not_die_still_ends(tmp_path, monkeypatch):
+    # The kill is the refresh's last act: an unkillable child, or a group
+    # already gone, must not keep the gauge refreshing for the process's life.
+    import subprocess as sp
+    import threading
+    gauge(tmp_path, WINDOWS)
+    home = Home(tmp_path)
+    path = (tmp_path / 'loom/usage/gauge.json').resolve()
+    waits = []
+    class Child:
+        pid = 1 << 22
+        returncode = None
+        def communicate(self, timeout):
+            raise sp.TimeoutExpired('usage', timeout)
+        def poll(self):
+            return None
+        def wait(self, timeout=None):
+            waits.append(timeout)
+            raise sp.TimeoutExpired('usage', timeout)
+    for kill in (lambda pid, sig: None, lambda pid, sig: (_ for _ in ()).throw(ProcessLookupError())):
+        monkeypatch.setattr(usage.subprocess, 'Popen', lambda *a, **k: Child())
+        monkeypatch.setattr(usage.os, 'killpg', kill)
+        assert usage.reading(home, 'gauge') is None
+        deadline = time.monotonic() + 5
+        while path in usage._REFRESHING and time.monotonic() < deadline:
+            threading.Event().wait(.01)
+        assert path not in usage._REFRESHING
+        assert json.loads(path.read_text())['windows'] == []
+        path.unlink()
+        path.with_suffix('.lock').write_text('0')
+    assert waits == [5]
