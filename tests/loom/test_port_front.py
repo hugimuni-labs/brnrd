@@ -53,3 +53,33 @@ def test_an_idle_outbox_is_skipped_until_a_file_lands(ledger, monkeypatch):
     _ingest(home)
     assert len(listed) == 2 and not list(out.glob("*.md"))
     assert "landed" in [f.data.get("why") for f in read_facts(home) if f.kind == "note"]
+
+
+def test_an_outbox_holding_a_file_is_never_skipped_and_a_rename_into_a_skipped_one_lands(ledger, monkeypatch):
+    """The skip covers only an outbox that held nothing to ingest: a reply already there is read every
+    pass, so rewriting it in place cannot hide it; a reply arriving later is a new entry (every writer
+    renames a temp file in), which moves the directory's mtime."""
+    import os
+    from brr.loom.runtime import loom as looming
+    home, seat = ledger
+    out = seat / "port" / "out"
+    out.mkdir(parents=True, exist_ok=True)
+    held = out / "reply.md"
+    held.write_text("---\nkind: note\n")  # half-written: refused would move it, so keep it unparsed
+    monkeypatch.setattr(looming, "_reject", lambda *a: None)
+    os.utime(out, (os.stat(out).st_atime, os.stat(out).st_mtime - 5))
+    listed = []
+    real = looming._port_files
+    monkeypatch.setattr(looming, "_port_files", lambda room: listed.append(room) or real(room))
+    _ingest(home)
+    _ingest(home)
+    assert len(listed) == 2  # it held a file: listed every pass
+    held.unlink()
+    (out / "draft.md.1.2.tmp").write_text("not yet")
+    os.utime(out, (os.stat(out).st_atime, os.stat(out).st_mtime - 5))
+    _ingest(home)
+    _ingest(home)
+    assert len(listed) == 3  # only a temp file: skipped once read
+    command(home, seat, "send", "--re", "p-test/none", "--to", "thread:work", "--note", "late")
+    _ingest(home)
+    assert "late" in [f.data.get("why") for f in read_facts(home) if f.kind == "note"]
