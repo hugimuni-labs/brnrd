@@ -123,3 +123,50 @@ def test_body_exit_requires_newer_known_fuel(tmp_path, monkeypatch):
     assert json.loads(path.read_text())['at'] > exited
     observation, _ = loom._observe_body(home, facts, 's', 'work', 1, {})
     assert observation.gauge == 'ok'
+
+
+def test_a_blocked_refresh_reads_unknown_past_its_deadline_and_the_body_starts(tmp_path, monkeypatch):
+    # 2026-10-31: one refresh never returned and every wanted body stayed
+    # pending from 09:35Z until the 20:06Z reboot.
+    import threading
+    from brr.loom.runtime import bodies, lifecycle
+    from brr.loom.runtime.health import Health
+    from brr.loom.runtime.ledger import kind_facts, read_facts
+    gauge(tmp_path, WINDOWS)
+    home = Home(tmp_path)
+    path = (tmp_path / 'loom/usage/gauge.json').resolve()
+    blocked, release = threading.Event(), threading.Event()
+    def popen(*args, **kwargs):
+        blocked.set()
+        release.wait(10)
+        raise OSError('released')
+    monkeypatch.setattr(usage.subprocess, 'Popen', popen)
+    monkeypatch.setattr(loom, 'body_alive', lambda room: False)
+    monkeypatch.setattr(lifecycle, 'read_thread', lambda *a: {'status': 'open'})
+    facts = [Fact(by='loom:aaaa', kind='lease', data={'strand': 's', 'gen': 1,
+                                                       'shell': 'gauge', 'core': 'echo'})]
+    try:
+        observation, _ = loom._observe_body(home, facts, 's', 'work', 1, {})
+        assert observation.gauge == 'refreshing'
+        assert blocked.wait(5)
+        assert bodies.TABLE[bodies.row_for(facts, observation)].next == 'wanted'
+        health = Health(home, [], lambda *a: None)
+        health.guard('gauge', usage.check_stuck, backoff=False)
+        assert not kind_facts(read_facts(home), 'loom.degraded')
+        usage._STARTED[path] -= usage.STUCK_AFTER  # two minutes on
+        observation, _ = loom._observe_body(home, facts, 's', 'work', 1, {})
+        assert observation.gauge == 'unknown'
+        assert bodies.TABLE[bodies.row_for(facts, observation)].next == 'running'
+        health.guard('gauge', usage.check_stuck, backoff=False)
+        degraded = kind_facts(read_facts(home), 'loom.degraded')
+        assert [f.data['step'] for f in degraded] == ['gauge']
+        assert 'usage refresh stuck' in degraded[0].data['error'] and 'gauge for 12' in degraded[0].data['error']
+        assert path in usage._REFRESHING  # no second refresh joined the blocked one
+    finally:
+        release.set()
+    deadline = time.monotonic() + 5
+    while path in usage._REFRESHING and time.monotonic() < deadline:
+        threading.Event().wait(.01)
+    assert path not in usage._REFRESHING and path not in usage._STARTED
+    health.guard('gauge', usage.check_stuck, backoff=False)
+    assert [f.data['step'] for f in kind_facts(read_facts(home), 'loom.recovered')] == ['gauge']
