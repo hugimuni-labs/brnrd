@@ -84,3 +84,15 @@ def test_the_guard_writes_a_cpu_degradation_and_its_recovery(tmp_path):
     assert len(degraded) == 1 and "past 30%" in degraded[0].data["error"]
     tick(900, 0.05)
     assert any(f.kind == "loom.recovered" and f.data["step"] == "cpu" for f in read_facts(home))
+
+
+def test_a_streak_starts_one_profile_and_each_raise_names_it():
+    clock, started = Clock(), []
+    watch = CpuWatch(clock=lambda: clock.now, usage=lambda: clock.cpu,
+                     on_high=lambda: started.append(1) or "loom/samples/x.collapsed")
+    watch.step()
+    high = clock.run(watch, 900, 0.9)
+    assert started == [1] and str(high).endswith("; profile loom/samples/x.collapsed")
+    assert clock.run(watch, 900, 0.1) is None
+    clock.run(watch, 900, 0.9)
+    assert started == [1, 1]  # a new streak, a new profile

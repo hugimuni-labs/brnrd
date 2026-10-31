@@ -102,6 +102,7 @@ def test_under_the_disk_floor_the_loop_degrades_and_recovers(tmp_path, monkeypat
     write_thread(root, "brnrd", "Brnrd", "brnrd")
     free = [1]
     monkeypatch.setattr(reap, "floor", lambda path: (free[0], 2))
+    monkeypatch.setattr(reap, "DISK_EVERY", 0.0)
     looming = Loom(root, tick=0.01)
     looming.start()
     try:

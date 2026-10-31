@@ -34,3 +34,22 @@ def test_a_single_line_is_written_byte_for_byte_as_before():
 @pytest.mark.parametrize("value", ['"quoted"', "a\n---\nb", "x\\ny"])
 def test_a_value_that_would_break_the_frontmatter_round_trips(value):
     assert parse_frontmatter(_front({"kind": "molt", "why": value}))["why"] == value
+
+
+def test_an_idle_outbox_is_skipped_until_a_file_lands(ledger, monkeypatch):
+    import os
+    from brr.loom.runtime import loom as looming
+    home, seat = ledger
+    out = seat / "port" / "out"
+    out.mkdir(parents=True, exist_ok=True)
+    os.utime(out, (os.stat(out).st_atime, os.stat(out).st_mtime - 5))
+    listed = []
+    real = looming._port_files
+    monkeypatch.setattr(looming, "_port_files", lambda room: listed.append(room) or real(room))
+    _ingest(home)
+    _ingest(home)
+    assert len(listed) == 1  # the second pass costs one stat
+    command(home, seat, "send", "--re", "p-test/none", "--to", "thread:work", "--note", "landed")
+    _ingest(home)
+    assert len(listed) == 2 and not list(out.glob("*.md"))
+    assert "landed" in [f.data.get("why") for f in read_facts(home) if f.kind == "note"]

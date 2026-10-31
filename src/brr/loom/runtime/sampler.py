@@ -7,6 +7,8 @@ When the time is up it writes ``loom/samples/<stamp>.collapsed``: one
 ``thread;a;b;c count`` line per distinct stack, the thread's name first and
 then root first, as flamegraph.pl and speedscope read it. `ps -M` shows a
 thread's CPU but not its Python name; the first frame gives it one. Nothing runs until a request lands, and one sample runs at a time.
+:class:`~.cpu.CpuWatch` also starts one when its window first goes past the limit, so a
+``cpu`` degradation names a profile of the loop while it is hot.
 
 ``loom/heap.request`` (any content) asks for the heap instead: the next pass
 writes ``loom/samples/<stamp>.heap``, the gc-tracked objects counted and sized
@@ -99,6 +101,12 @@ class Sampler:
         except ValueError:
             self.log(self.home, f"sample: {text!r} is not a number of seconds; nothing sampled")
             return
+        self.start(seconds)
+
+    def start(self, seconds: float = DEFAULT) -> Path | None:
+        """Sample every thread for ``seconds`` off the loop; None while a sample already runs."""
+        if self.worker is not None and self.worker.is_alive():
+            return None
         stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
         path = self.home.root / "loom" / "samples" / f"{stamp}.collapsed"
         self.log(self.home, f"sample: every thread for {seconds:g}s -> {path}")
@@ -110,6 +118,7 @@ class Sampler:
 
         self.worker = threading.Thread(target=run, name="loom-sampler", daemon=True)
         self.worker.start()
+        return path
 
     def _heap(self) -> None:
         request = self.home.root / "loom" / "heap.request"
