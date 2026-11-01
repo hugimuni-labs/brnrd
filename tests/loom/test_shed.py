@@ -1,4 +1,4 @@
-"""Shedding: a mostly idle scroll makes the stop ask, and shed gates the README."""
+"""Shedding is the body's call: the loom states facts about the README and never says a shed is due."""
 
 import json
 import time
@@ -8,8 +8,8 @@ import pytest
 
 from brr.daemon2.facts import Fact
 from brr.loom.runtime import jack, shed
-from brr.loom.runtime.jack import _set_state, _state, execute
-from brr.loom.runtime.port import PortError, render_boundary
+from brr.loom.runtime.jack import _state, execute
+from brr.loom.runtime.port import render_boundary
 
 STRAND = "s-ab12-aaaaaa"
 
@@ -54,22 +54,7 @@ def _turn(room, stdin):
     return execute("stop", room, stdin)
 
 
-def test_the_bar_is_noise_share_and_growth_scaled_by_pace():
-    quiet = {"boot": 40_000, "turns": [[True, 60_000], [False, 90_000], [False, 120_000]]}
-    assert shed.bars(quiet, 60_000, 1.0)[:2] == (pytest.approx(2 / 3), 80_000)
-    assert shed.due(quiet, 60_000, 1.0)
-    # Slack raises the bar, at most to double; 80k is under 120k.
-    assert not shed.due(quiet, 60_000, 0.2)
-    busy = {"boot": 40_000, "turns": [[True, 60_000], [True, 90_000], [False, 300_000]]}
-    assert not shed.due(busy, 60_000, 3.0)
-    assert not shed.due({"boot": 40_000, "turns": [[False, 300_000]] * 2}, 60_000, 1.0)
-    # Past the backstop, any share.
-    assert shed.due({"boot": 40_000, "turns": [[True, 700_000]]}, 60_000, 1.0)
-    assert shed.news(quiet, 60_000, 0.9).startswith("shed: q 0.7 · x 80k/66k")
-    assert shed.news(quiet, 60_000, 0.2) == ""
-
-
-def test_a_turn_acted_only_when_it_wrote_beyond_its_settlement(room, tmp_path):
+def test_a_turn_records_the_context_and_no_tally(room, tmp_path):
     stdin = _transcript(tmp_path, 40_000, 50_000)
     execute("start", room, "")
     _fact(room, "note", re="a/b", why="ack")
@@ -79,67 +64,58 @@ def test_a_turn_acted_only_when_it_wrote_beyond_its_settlement(room, tmp_path):
     execute("post", room, json.dumps({"tool_name": "Bash"}))
     _fact(room, "letter", to="thread:inbox", body="hi")
     execute("stop", room, stdin)
-    assert [acted for acted, _ in _state(room)["turns"]] == [False, True]
-    assert _state(room)["boot"] == 40_001 and _state(room)["turns"][-1][1] == 50_001
+    # The letter is left behind for the README only as routing; the context is plain cost.
+    assert _state(room)["context"] == 50_001 and "turns" not in _state(room)
 
 
-def test_a_quiet_stop_asks_once_and_a_held_thread_is_never_asked(room, tmp_path, monkeypatch):
-    stdin = _transcript(tmp_path, 40_000, 200_000)
+def test_a_quiet_heavy_stop_never_says_a_shed_is_due(room, tmp_path):
+    # 5557: the value of a context can't be measured from outside it.
+    stdin = _transcript(tmp_path, 40_000, 700_000)
     execute("start", room, "")
-    for _ in range(3):
-        out = _turn(room, stdin)
-    asked = json.loads(out)
-    assert asked["decision"] == "block" and "shed due: q 1.0 · x 160k/60k" in asked["reason"]
-    assert "threads/work/README.md" in asked["reason"] and _state(room)["shed_due_at"]
-    # Stopping again with no call is let through, as for every stop list.
-    assert execute("stop", room, stdin) == ""
-    (room.parent.parent / "loom").mkdir(exist_ok=True)
-    (room.parent.parent / "loom" / "config.toml").write_text('shed_hold = ["work"]\n')
-    assert _turn(room, stdin) == ""
+    for _ in range(4):
+        assert _turn(room, stdin) == ""
+    assert "shed_due_at" not in _state(room)
 
-
-def test_decline_once_then_the_ask_cannot_be_declined(room, tmp_path):
-    with pytest.raises(PortError, match="nothing to decline"):
-        shed.decline(room, "mid-decision")
-    stdin = _transcript(tmp_path, 40_000, 200_000)
-    execute("start", room, "")
-    for _ in range(3):
-        _turn(room, stdin)
-    shed.decline(room, "two turns from a PR")
-    assert "shed due" not in _turn(room, stdin)
-    _turn(room, stdin)
-    again = json.loads(_turn(room, stdin))["reason"]
-    assert "\n\nshed due again: " in again and "(two turns from a PR)" in again and "--decline" not in again
-    with pytest.raises(PortError, match="declined once already"):
-        shed.decline(room, "still busy")
-
-
-def test_shed_refuses_a_readme_its_successor_cannot_boot_into(room):
+def test_readme_facts_name_size_and_closed_citations_and_ask_nothing(room):
     readme = room / "self" / "threads" / "work" / "README.md"
-    open_pr = Fact(kind="pr.opened", by=f"strand:{STRAND}", id="p1",
-                   data={"thread": "work", "repo": "brnrd", "number": 7, "url": "https://x/pull/7", "head": "h"})
+    readme.write_text("# Work\n\n## Now\n- PR #7 in review\n- #5 merged, w-aaaaaaaaaaaa next\n")
     merged = [Fact(kind=k, by=f"strand:{STRAND}", id=f"p{k}", data={"thread": "work", "repo": "brnrd", "number": 5,
                                                                       "url": "u", "head": "h", "merge_commit": "c"})
               for k in ("pr.opened", "pr.merged")]
-    state = {"shed_due_at": time.time(), "shed_readme": shed.readme_hash(room, "work")}
-    found = shed.refusals(room, "work", [open_pr, *merged], state)
-    assert any("unchanged since the shed came due" in x for x in found)
-    assert any("open PR https://x/pull/7" in x for x in found)
-    readme.write_text("# Work\n\n## Plan\n| step | state |\n|---|---|\n| B | merged #5 |\n| C | next, w-aaaaaaaaaaaa |\n")
-    found = shed.refusals(room, "work", [open_pr, *merged], state)
-    assert any("no `## Now` block" in x for x in found)
-    assert not any("unchanged" in x for x in found)
-    readme.write_text("# Work\n\n## Now\n- PR #7 in review\n\n## Plan\n| step | state |\n|---|---|\n"
-                      "| B | merged #5 |\n| C | next, w-aaaaaaaaaaaa |\n")
-    found = shed.refusals(room, "work", [open_pr, *merged], state)
-    assert found == ["dead row (every id it cites is closed): prune it or move it to a topic: | B | merged #5 |"]
+    said = shed.readme_facts(room, "work", merged)
+    assert said == f"README: {len(readme.read_bytes())} B · cites 1 closed: #5 merged"
+    assert shed.readme_facts(room, "gone", merged) == ""
 
+
+def test_a_cited_closure_names_its_readme_place_until_the_readme_moves(room):
+    readme = room / "self" / "threads" / "work" / "README.md"
+    readme.write_text("# Work\n\n## Boot and shed\n- PR #7 in review\n")
+    old = time.time() - 60
+    import os
+    os.utime(readme, (old, old))
+    began = datetime.fromtimestamp(old - 60, timezone.utc).isoformat()
+    merged = Fact(kind="pr.merged", by="loom:ab12", id="m7", at=datetime.now(timezone.utc).isoformat(),
+                  data={"number": 7, "repo": "brnrd", "thread": "work", "merge_commit": "c"})
+    assert shed.cited_line(room, "work", [merged], began) == 'cited: #7 merged · README "Boot and shed" (l.4)'
+    readme.write_text("# Work\n\n## Boot and shed\n- #7 merged; next is C\n")
+    assert shed.cited_line(room, "work", [merged], began) == ""
+    assert shed.cited_line(room, "work", [merged], datetime.now(timezone.utc).isoformat()) == ""
+
+
+def test_a_long_park_states_the_stakes_and_a_short_one_says_nothing():
+    now = datetime(2026, 11, 1, 1, 0, tzinfo=timezone.utc)
+    assert shed.long_wait("letter:s-ab12-aaaaaa/x7c53", now)
+    assert shed.long_wait("at:2026-11-01T03:00:00+00:00", now)
+    assert not shed.long_wait("at:2026-11-01T01:20:00+00:00", now)
+    assert not shed.long_wait("ci:o/r@abc", now) and not shed.long_wait("file:/x", now)
+    line = shed.rest_line("letter:a/b", 134_000)
+    assert line.startswith("resting until letter:a/b. Context 134k. What isn't in the README is lost on any end")
+    assert line.endswith("Shedding here is yours to call.") and "due" not in line
 
 def test_a_broken_tally_never_ends_the_stop(room, tmp_path, monkeypatch):
     def broken(*args):
         raise OSError("no git")
     monkeypatch.setattr(shed, "heads", broken)
-    monkeypatch.setattr(shed, "ask", broken)
     execute("start", room, "")
     assert _turn(room, _transcript(tmp_path, 40_000)) == ""
     assert "no git" in (room / "port" / "shed-errors.log").read_text()

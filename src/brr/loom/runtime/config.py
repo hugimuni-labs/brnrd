@@ -100,12 +100,6 @@ KEYS: tuple[Key, ...] = (
     Key("thread_budget", "positive", 2_000_000,
         "Weighted tokens a thread opened by another thread may spend before its strand is told, at "
         "every boundary, to write to its parent for more. `send --budget` overrides it."),
-    Key("shed_excess", "positive", 60_000,
-        "Context tokens a body grows past its boot before a mostly-idle scroll makes a shed due; "
-        "fast quota pace lowers it, slack raises it, at most to double."),
-    Key("shed_hold", "names", ("home",),
-        "Threads whose bodies are never asked to shed; \"home\" names the home thread. "
-        "Set to [] to release them."),
     Key("stop_grace", "seconds", DEFAULT_STOP_GRACE,
         "Seconds a settled thread's body may take to land and exit before it is signalled."),
     Key("router_ttl", "positive", DEFAULT_TTL,
@@ -328,6 +322,11 @@ def read_array(path: Path, key: str) -> list[str]:
     return values
 
 
+#: Keys a release removed: still accepted in a file, and ignored. The shed
+#: trigger they tuned is gone (boot-review design v2): a body sheds by choice.
+RETIRED = frozenset({"shed_excess", "shed_hold"})
+
+
 def load_config_report(root: Path | str) -> tuple[LoomConfig, frozenset[str]]:
     """The effective config and the keys the file set (the rest are defaults)."""
     path = config_path(root)
@@ -335,6 +334,8 @@ def load_config_report(root: Path | str) -> tuple[LoomConfig, frozenset[str]]:
     values: dict[str, object] = {}
     for name, value in found.items():
         key = BY_NAME.get(name)
+        if key is None and name in RETIRED:
+            continue  # read and ignored for a release, so a file that names it still loads
         if key is None:
             near = difflib.get_close_matches(name, list(BY_NAME), n=1)
             hint = f" (did you mean {near[0]}?)" if near else f" (known: {', '.join(BY_NAME)})"

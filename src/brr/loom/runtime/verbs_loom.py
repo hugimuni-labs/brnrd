@@ -7,7 +7,7 @@ import os
 import sys
 from pathlib import Path
 
-from .home import Home, resolve_home, strand_of_room
+from .home import Home, home_of_room, resolve_home, strand_of_room
 from .jack import run as run_jack
 from .ledger import read_facts
 from .loom import pending_bodies, run as run_loom
@@ -178,28 +178,38 @@ def _send(argv: list[str]) -> int:
 
 
 def _molt(argv: list[str]) -> int:
-    """``shed``, and ``molt`` for one release: hand the seat on, or decline once."""
+    """``shed``, and ``molt`` for one release: hand the seat on. The stakes and
+    the README's facts come first, on stderr, so the choice is an informed one."""
     parser = argparse.ArgumentParser(prog="python -m brr.loom.runtime shed")
     parser.add_argument("--room")
-    parser.add_argument("--why")
-    parser.add_argument("--decline", metavar="REASON")
+    parser.add_argument("--why", required=True)
     parser.add_argument("--fresh", action="store_true")
     args = parser.parse_args(argv)
-    if (args.why is None) == (args.decline is None):
-        parser.error("give --why to shed, or --decline with a reason")
     room = _room(args.room)
     try:
-        if args.decline is not None:
-            from .shed import decline
-            decline(room, args.decline)
-            sys.stdout.write("declined\n")
-            return 0
+        if not args.fresh:
+            sys.stderr.write(_shed_stakes(room))
         fact_id = write_molt(room, args.why, fresh=args.fresh)
     except (PortError, SelfError, ValueError, OSError) as exc:
         sys.stderr.write(f"{exc}\n")
         return 1
     sys.stdout.write(fact_id + "\n")
     return 0
+
+
+def _shed_stakes(room) -> str:
+    """What the successor boots into, said once more before the seat goes."""
+    from .jack import _state
+    from .ledger import read_facts
+    from .project import sender_threads
+    from .shed import STAKES, readme_facts
+    try:
+        facts = read_facts(home_of_room(room))
+        thread = sender_threads(facts).get(strand_of_room(room)) or ""
+        said = readme_facts(room, thread, facts, _state(room).get("readme_base") or "") if thread else ""
+    except Exception:  # noqa: BLE001 - facts inform the shed; they never block it
+        said = ""
+    return f"{STAKES}\n" + (f"{said}\n" if said else "")
 
 
 def _settle(argv: list[str]) -> int:

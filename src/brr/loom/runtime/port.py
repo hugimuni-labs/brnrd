@@ -279,7 +279,7 @@ def render_boundary(strand: str, gen: int, thread: str, letters: list[Fact],
                     budget: str = "", over: str = "", repaired: str = "",
                     degraded: str = "", face: str = "", left: str = "", moved: str = "",
                     library: str = "", forge: str = "", band: str = "", top: str = "",
-                    done: str = "", room: str = "") -> str:
+                    done: str = "", room: str = "", cited: str = "") -> str:
     """Shown letters keep their first line, reply context and attachments when compacted.
 
     ``budget`` sits before the plan: the jack compares what follows `` · plan ``,
@@ -306,6 +306,9 @@ def render_boundary(strand: str, gen: int, thread: str, letters: list[Fact],
     if moved:
         # Its own line too: the jack shows a new one once, at the next post.
         lines.insert(2, moved)
+    if cited:
+        # A closure the README cites (boot-review §3a): shown once, never a step.
+        lines.insert(2, cited)
     if face:
         # Its own line, never after `` · plan``: a proposal is not news that wakes a held body.
         lines.insert(2, face)
@@ -932,14 +935,6 @@ def write_molt(room: Path, why: str, *, fresh: bool = False) -> str:
         raise PortError("shed: reply to each person letter you hold first, even with just an ack:\n" + "\n".join(
             f'  brnrd runtime send --re {ident} --to {channel} "…"   (from {letter.data.get("from") or letter.by})'
             for ident, (letter, channel) in held.items()))
-    if not fresh:
-        from .jack import _state
-        from .shed import refusals
-        refused = refusals(room, thread, facts, _state(room))
-        if refused:
-            # The successor boots into this README; gen 233's was committed unread.
-            raise PortError("shed: the README isn't one a successor can boot into yet:\n" + "\n".join(
-                f"  - {why}" for why in refused) + "\nfix each, then shed again.")
     clone = resolve_clone(room)
     path = f"threads/{thread}/README.md"
     if not fresh and git(clone, "diff", "HEAD", "--quiet", "--", path, check=False).returncode:

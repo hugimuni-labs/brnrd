@@ -629,7 +629,7 @@ def _prepare(home: Home, strand: str, thread: str, gen: int,
         "You forget what is not written: keep this thread's README true (spec, decisions) and "
         "land self commits with `brnrd runtime send-self --room .`; what is left on a wish lives "
         "on it: `wish <w-id> --left \"<step>\" …`, the whole list, latest wins (`--left same` "
-        "when nothing moved), and the stop asks for it once a wish moved. When the stop says a shed is due, read this README as your successor will, rewrite it to the state, then `shed --why \"<one line>\"` and end the turn (or `shed --decline \"<reason>\"`, once); work done: "
+        "when nothing moved), and the stop asks for it once a wish moved. To shed: `shed --why \"<one line>\"`, then end the turn; work done: "
         "`settle <thread> --why \"…\"`. A letter from `loom` is a notice yours to settle; its "
         "last lines say how (core/loom/README.md, Notices). Stamp what someone wants with "
         "`send --wish`; open a thread only for one: `send --to thread:<new> --wish <w-id>` or "
@@ -1760,12 +1760,29 @@ def _render_boundary(home, facts, strand, gen, context):
         degraded=degraded_line(facts, home.install_id()), room=room_line(facts),
         library=problem_line(facts, home.install_id()),
         moved=moved_line(facts, strand, gen, home.install_id()),
+        cited=_cited(home, facts, strand, gen, context.thread),
         face=proposal_line(propose(facts, strand, gen, context.thread)),
         left=_left(facts, context.thread, strand),
         **_pull(home, facts, context.thread, strand, home.room(strand)),
         **_budget(home, context.thread, facts),
     )
     return text
+
+
+def _cited(home, facts, strand, gen, thread):
+    """``cited:`` for a boundary: closures since this gen began that its README cites."""
+    from .bodies import fact_for
+    from .shed import cited_line
+    began = fact_for(facts, "body.started", strand, gen)
+    if began is None or not thread:
+        return ""
+    try:
+        closures = [f for kind in ("pr.merged", "pr.closed", "wish.result", "wish.verdict")
+                    for f in kind_facts(facts, kind)]
+        return cited_line(home.room(strand), thread, closures, began.at)
+    except Exception as exc:  # noqa: BLE001 - information only; never costs a boundary
+        _log(home, f"cited: skipped ({type(exc).__name__}: {exc})")
+        return ""
 
 
 _PAUSE_LOOKED: dict[Path, float] = {}
