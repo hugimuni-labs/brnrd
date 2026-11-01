@@ -687,12 +687,15 @@ def person_channel(home: Home, person: str | None) -> tuple[str, str]:
 
 
 def person_of(home: Home, person: str | None) -> tuple[str, str, str]:
-    """``(name, instance, user)``: who the board writes as, and the channel it writes through."""
+    """``(name, instance, user)``: who the board writes as, and the channel it writes through.
+
+    A ``web`` door (the page itself) comes first: a letter typed here is answered here, not in a chat.
+    """
     enabled = instances(home)
     for path in sorted((home.root / "self/people").glob("*/channels.toml")):
         if person and path.parent.name != person:
             continue
-        for entry in read_array(path, "channels"):
+        for entry in sorted(read_array(path, "channels"), key=lambda e: enabled.get(e.partition(":")[0]) != "web"):
             instance, _, user = entry.partition(":")
             if instance in enabled and user and ":" not in user:
                 channel_parts(f"channel:{instance}/{user}", home)
@@ -702,11 +705,16 @@ def person_of(home: Home, person: str | None) -> tuple[str, str, str]:
 
 def spa_root() -> Path | None:
     """The SvelteKit build the loopback serves: ``BRNRD_FRONTEND_DIR`` (as the cloud's ``brnrd.spa``), else the
-    checkout's ``src/frontend/build``; ``None`` until ``npm run build`` has written one. Read per request, so a
-    rebuild lands without a re-exec."""
+    checkout's ``src/frontend/build``, else the one a wheel ships (``frontend/``, built by release.yml); ``None``
+    until one exists. Read per request, so a rebuild lands without a re-exec."""
     configured = os.environ.get("BRNRD_FRONTEND_DIR")
-    root = Path(configured).expanduser() if configured else Path(__file__).resolve().parents[3] / "frontend" / "build"
-    return root.resolve() if root.is_dir() else None
+    if configured:
+        root = Path(configured).expanduser()
+        return root.resolve() if root.is_dir() else None
+    for root in (Path(__file__).resolve().parents[3] / "frontend" / "build", Path(__file__).resolve().parent / "frontend"):
+        if root.is_dir():
+            return root.resolve()
+    return None
 
 
 def spa_file(root: Path, url_path: str) -> Path | None:

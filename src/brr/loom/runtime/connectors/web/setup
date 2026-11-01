@@ -1,0 +1,24 @@
+#!/usr/bin/env python3
+"""Switch the board page on: ``board_port`` gets a free loopback port, unless it already has one."""
+import socket
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).parent))
+from common import PORT, home, link, port
+from brr.loom.runtime.config import seed_config, set_value
+
+
+def free(wanted):
+    with socket.socket() as probe:
+        try:
+            probe.bind(('127.0.0.1', wanted))
+        except OSError:
+            probe.bind(('127.0.0.1', 0))
+        return probe.getsockname()[1]
+
+
+if port() is None:
+    seed_config(home())
+    set_value(home(), 'board_port', str(free(PORT)))
+    print(f'  The page opens at {link(port())} once brnrd runs (brnrd loom install).')

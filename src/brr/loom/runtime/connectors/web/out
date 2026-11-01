@@ -1,0 +1,12 @@
+#!/usr/bin/env python3
+"""A reply to the page is already on it: the board reads each thread's letters from the ledger.
+
+So nothing is sent; the receipt is the letter's own id.
+"""
+import json
+import sys
+from pathlib import Path
+from brr.loom.runtime.port import parse_frontmatter
+
+letter = parse_frontmatter(Path(sys.argv[1]).read_text())
+print(json.dumps({'ids': [letter['id']]}))
