@@ -131,7 +131,7 @@ def _start(client, chat_id, text, *, user_id=42, message_id=7):
 def test_a_codeless_door_binds_the_chat_to_the_account_and_the_loom_reads_it_back(env):
     client, _ = env
     _account, daemon, _repo = brnrd_repo_and_daemon(client)
-    assert client.get("/v1/daemons/chats", headers=daemon).json() == {"chats": []}
+    assert client.get("/v1/daemons/chats", headers=daemon).json() == {"chats": [], "login": "octocat"}
     door = client.post("/v1/daemons/door", json={}, headers=daemon).json()
     _start(client, 778, "/start " + door["link"].removeprefix("https://t.me/brnrd_bot?start="))
 
@@ -142,7 +142,7 @@ def test_a_codeless_door_binds_the_chat_to_the_account_and_the_loom_reads_it_bac
     assert client.get("/v1/daemons/inbox", params={"since": 0, "wait": 0}, headers=daemon).json()["events"] == []
 
     assert client.delete(f"/v1/daemons/chats/{chats[0]['id']}", headers=daemon).status_code == 200
-    assert client.get("/v1/daemons/chats", headers=daemon).json() == {"chats": []}
+    assert client.get("/v1/daemons/chats", headers=daemon).json()["chats"] == []
     assert client.delete(f"/v1/daemons/chats/{chats[0]['id']}", headers=daemon).status_code == 404
 
 
@@ -162,7 +162,8 @@ def test_another_accounts_daemon_neither_sees_nor_unbinds_the_chat(env):
     token = client.get(f"/v1/accounts/pair/{pair['pair_code']}", params={"poll_secret": pair["poll_secret"]}).json()["daemon_token"]
     theirs = {"Authorization": f"Bearer {token}"}
 
-    assert client.get("/v1/daemons/chats", headers=theirs).json() == {"chats": []}
+    # Their web chat is their own login: the approver's, never the other account's.
+    assert client.get("/v1/daemons/chats", headers=theirs).json() == {"chats": [], "login": "mallory"}
     assert client.delete(f"/v1/daemons/chats/{chat['id']}", headers=theirs).status_code == 404
     assert len(client.get("/v1/daemons/chats", headers=daemon).json()["chats"]) == 1
 
@@ -202,10 +203,10 @@ def test_a_codeless_door_still_carries_a_server_code_and_a_bare_start_binds_noth
     _start(client, 781, "/start")
     _start(client, 782, "/start NOT-A-CODE", message_id=8)
 
-    assert client.get("/v1/daemons/chats", headers=daemon).json() == {"chats": []}
+    assert client.get("/v1/daemons/chats", headers=daemon).json()["chats"] == []
 
 
-def _stub_brnrd(tmp_path, chats_after_door):
+def _stub_brnrd(tmp_path, chats_after_door, login=None):
     """A brnrd.dev that lists ``chats_after_door`` once a codeless door was minted (none before, unless it is pre-bound)."""
     from brr.gates import cloud
     from brr.loom.runtime.config import seed_config, set_value
@@ -224,7 +225,8 @@ def _stub_brnrd(tmp_path, chats_after_door):
         def do_GET(self):
             seen.append(("GET", self.path, None))
             doored = any(path == "/v1/daemons/door" for _, path, _ in seen)
-            self._reply({"chats": chats_after_door if doored or chats_after_door is PRE else []})
+            self._reply({"chats": chats_after_door if doored or chats_after_door is PRE else [],
+                         **({"login": login} if login else {})})
 
         def do_POST(self):
             size = int(self.headers.get("Content-Length") or 0)
@@ -302,3 +304,44 @@ def test_setup_gives_up_when_no_chat_is_bound_in_time(tmp_path, monkeypatch):
     finally:
         server.shutdown()
     assert not load_config(tmp_path).connectors
+
+
+def test_setup_enrols_the_approvers_web_chat_and_another_accounts_stays_a_stranger(tmp_path):
+    """cloud-enrol: the account that approved this computer writes its web
+    chat as ``loom:<login>``; setup saves it beside the phone chat, and a
+    letter from any other login is a stranger the loom never answers."""
+    from brr.loom.runtime import connector, setup_channel
+    from brr.loom.runtime.home import Home, atomic_write
+
+    server, seen = _stub_brnrd(tmp_path, PRE, login="Gurio")
+    said = []
+    try:
+        key = setup_channel.pair(Home(tmp_path), "relay", "cloud", "ada", timeout=5, out=said.append, qr=False)
+    finally:
+        server.shutdown()
+    # The phone chat stays first: it is the one the board writes to.
+    assert key == "cloud:telegram:42"
+    assert [(m, p) for m, p, _ in seen] == [("GET", "/v1/daemons/chats")]
+    home = Home(tmp_path)
+    atomic_write(tmp_path / "self/people/mallory/channels.toml", 'channels = ["cloud:telegram:7"]\n')
+    assert connector._sender(home, "cloud", "loom:Gurio") == "person:ada"
+    assert connector.person_dm(home, "channel:cloud/loom:Gurio") == "person:ada"
+    assert connector._sender(home, "cloud", "loom:mallory") == "stranger:cloud:loom:mallory"
+    assert connector.person_dm(home, "channel:cloud/loom:mallory") is None
+    assert any("brnrd.dev chat (Gurio)" in line for line in said)
+
+
+def test_a_web_chat_alone_still_offers_the_phone_door(tmp_path, monkeypatch):
+    """The web chat is saved, but it is not a phone chat: with only it, the door is still shown."""
+    from brr.loom.runtime import connector, setup_channel
+    from brr.loom.runtime.home import Home
+
+    monkeypatch.setattr(setup_channel, "BOUND_POLL_S", 0.01)
+    server, seen = _stub_brnrd(tmp_path, [_ADA], login="Gurio")
+    try:
+        key = setup_channel.pair(Home(tmp_path), "relay", "cloud", "ada", timeout=5, out=lambda _: None, qr=False)
+    finally:
+        server.shutdown()
+    assert ("POST", "/v1/daemons/door", {}) in seen
+    assert key == "cloud:telegram:42"
+    assert connector._sender(Home(tmp_path), "cloud", "loom:Gurio") == "person:ada"
