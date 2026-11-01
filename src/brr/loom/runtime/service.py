@@ -473,6 +473,10 @@ def _print_status(*, state: str, pid: int | None, home: Path | None) -> None:
     print(f"pid: {pid if pid else '-'}")
     print(f"home: {home if home else '-'}")
     print(_body_line(home))
+    from .memory import held
+    hold = held(home)
+    if hold:
+        print(f"held: {hold}")
     print(_log_line(home))
 
 

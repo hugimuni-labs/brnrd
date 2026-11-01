@@ -4,8 +4,11 @@ On 2026-10-31 an 8 GB iMac hung with 8.7 GB of swap and was hard-rebooted;
 every new body is another few hundred MB on a machine already paging. On
 darwin, :func:`reading` asks the kernel for ``kern.memorystatus_vm_pressure_level``
 (1 normal, 2 warn, 4 critical) and ``vm.swapusage`` through ``sysctlbyname``,
-no fork. The floor holds at critical, and at warn while swap is more than
-``SWAP_FULL`` used. :func:`pressed` is what a start reads: a wanted body records
+no fork. The floor holds at critical, and at warn once more than
+``memory_swap_gb`` of swap is used. Not a share of swap: macOS grows
+``vm.swapusage``'s total on demand, so used over total sat past 75% all day on
+the 8 GB iMac (2026-11-01) and held every start at 3.3-3.8 GB of a 4 GB total;
+the 10-31 hang came at 8.7 GB. :func:`pressed` is what a start reads: a wanted body records
 ``body.pending`` and waits, a parked one stays parked, a live one is untouched,
 and an operator's ``--force`` still starts (bodies.py). :class:`MemoryFloor`'s
 step raises :class:`MemoryPressure` for the loop's guard, which writes
@@ -22,7 +25,8 @@ import time
 from pathlib import Path
 
 NORMAL, WARN, CRITICAL = 1, 2, 4
-SWAP_FULL = 0.75
+#: GB of swap used past which warn holds; config ``memory_swap_gb`` sets it.
+SWAP_GB = 6.0
 #: Seconds between kernel reads; a start inside that reads the last one.
 EVERY = 5.0
 
@@ -35,6 +39,9 @@ class MemoryPressure(Exception):
         held = (f"; swap {swap[1] >> 20} of {swap[0] >> 20} MB used" if swap and swap[0] else "")
         super().__init__(f"memory pressure {name}{held}: no new body starts until it clears")
         self.level, self.swap, self.grade = level, swap, int(level >= CRITICAL)
+        swapped = f", swap {swap[1] / (1 << 30):.1f} GB" if swap else ""
+        #: What ``brnrd loom status`` and setup's finale say while the floor holds.
+        self.held = f"memory pressure {name}{swapped}, no new body starts"
 
 
 class _XswUsage(ctypes.Structure):
@@ -68,12 +75,12 @@ def reading() -> tuple[int, tuple[int, int] | None] | None:
         return None
 
 
-def judge(read) -> MemoryPressure | None:
-    """The floor's verdict on one reading: critical holds, warn holds with swap past ``SWAP_FULL``."""
+def judge(read, swap_gb: float = SWAP_GB) -> MemoryPressure | None:
+    """The floor's verdict on one reading: critical holds, warn holds with more than ``swap_gb`` swapped."""
     if read is None:
         return None
     level, swap = read
-    full = bool(swap and swap[0] and swap[1] > SWAP_FULL * swap[0])
+    full = bool(swap and swap[1] > swap_gb * (1 << 30))
     return MemoryPressure(level, swap) if level >= CRITICAL or level >= WARN and full else None
 
 
@@ -90,8 +97,17 @@ def pressed(root: Path, config=None) -> MemoryPressure | None:
     key, now = str(root), time.monotonic()
     last = _LAST.get(key)
     if last is None or EVERY <= 0 or now - last[0] >= EVERY:
-        last = _LAST[key] = (now, judge(reading()))
+        last = _LAST[key] = (now, judge(reading(), config.memory_swap_gb))
     return last[1]
+
+
+def held(root: Path | None) -> str:
+    """The floor's hold for the home at ``root`` in words, or "" when nothing is held."""
+    try:
+        found = pressed(root) if root is not None else None
+    except Exception:
+        return ""
+    return found.held if found is not None else ""
 
 
 class MemoryFloor:

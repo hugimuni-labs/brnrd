@@ -1504,7 +1504,8 @@ def _observe_body(home, facts, strand, thread, gen, bodies, *, choice=None, forc
                     now, proven, until=until, force=force, stop_grace=config.stop_grace,
                     woken="/".join(woken) if woken else "", fenced=fenced, held=held, away=away,
                     pressed=squeeze is not None)
-    if TABLE[row_for(facts, o)].next == "parked" and not fenced:
+    row = TABLE[row_for(facts, o)]
+    if row.next == "parked" and not fenced:
         park = fact_for(facts, "body.parked", strand, gen)
         _park_notice(home, facts, thread, (shell, core),
                      (empty["name"], empty["left_pct"], until) if empty else
@@ -1515,7 +1516,30 @@ def _observe_body(home, facts, strand, thread, gen, bodies, *, choice=None, forc
         shown = fold(facts).shown.get(strand, set())
         _park_notice(home, facts, thread, (shell, core), (empty["name"], empty["left_pct"], until),
                      [(letter, channel) for letter, channel in dms if letter.id not in shown], held=True)
+    elif row.observed == "memory pressed" and row.next == "wanted":
+        _memory_word(home, facts, thread, _person_dms(home, facts, thread))
     return o, context
+
+
+MEMORY_WORD = "Heard you. This machine is short on memory; I'll answer as soon as it clears."
+
+
+def _memory_word(home, facts, thread, letters):
+    """Tell each person whose letter waits on the memory floor, once a hold episode.
+
+    The episode is the guard's (health.py): dips of one condition share it, so a
+    flapping floor says nothing new, and a loom restart inside it keeps it. The
+    guard writes its streak after this tick's bodies; the word waits one tick.
+    """
+    from .health import open_streaks
+    streak = next((f for f in reversed(open_streaks(facts, home.install_id()))
+                   if f.data.get("step") == "memory"), None)
+    if streak is None:
+        return
+    episode = str(streak.data.get("episode") or streak.data.get("since"))
+    for letter, channel in letters:
+        notice(home, facts, "memory", f"{channel} {episode}", MEMORY_WORD,
+               f"Your letter is kept on thread {thread}.", about=letter, channel=channel, passive=True)
 
 
 def _held_dry(room: Path) -> bool:

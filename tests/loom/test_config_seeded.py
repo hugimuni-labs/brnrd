@@ -27,7 +27,7 @@ def _home(tmp_path: Path, text: str | None = None) -> Path:
 
 def test_declaration_is_the_dataclass():
     assert [f.name for f in dataclasses.fields(load_config(Path("/nonexistent")))] == [k.name for k in KEYS]
-    assert len(KEYS) == 21
+    assert len(KEYS) == 22
 
 
 def test_a_retired_key_still_loads_and_is_ignored(tmp_path):

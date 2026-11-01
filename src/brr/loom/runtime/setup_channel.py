@@ -316,6 +316,12 @@ def first_letter(home, person, *, timeout=600, out=print, running=None, sleep=ti
             told = True
         sleep(.5)
     if landed:
+        from .memory import held
+        hold = held(home.root)
+        if hold:
+            raise TimeoutError(f'Your message reached brnrd, but this machine is short on memory '
+                               f'({hold}); it is answered as soon as that clears. '
+                               'See `brnrd loom status`.')
         raise TimeoutError('Your message reached brnrd, but nothing has started reading it yet; '
                            'see `brnrd loom status`.')
     raise TimeoutError("No message from you reached brnrd; the chat is paired, so once "

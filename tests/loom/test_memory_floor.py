@@ -7,8 +7,9 @@ import pytest
 from brr.loom.runtime import memory
 from brr.loom.runtime.home import Home
 from brr.loom.runtime.ledger import inject_letter, read_facts
+from brr.loom.runtime.loom import MEMORY_WORD
 
-from _step import Loom, wait_until, write_thread
+from _step import Loom, mail, wait_until, write_thread
 
 GB = 1024 ** 3
 
@@ -22,15 +23,50 @@ def kernel(monkeypatch):
     return read
 
 
-@pytest.mark.parametrize("level, used, holds", [
-    (memory.NORMAL, 4.0, False),
-    (memory.WARN, 3.0, False),
-    (memory.WARN, 3.1, True),
-    (memory.CRITICAL, 0.0, True),
+@pytest.mark.parametrize("level, total, used, holds", [
+    (memory.NORMAL, 8, 8.0, False),
+    # macOS grows the swap total on demand: 3.8 of 4 GB is the 11-01 iMac at work, not short.
+    (memory.WARN, 4, 3.8, False),
+    (memory.WARN, 8, 6.0, False),
+    (memory.WARN, 8, 7.0, True),
+    (memory.CRITICAL, 4, 0.0, True),
 ])
-def test_the_floor_holds_at_critical_and_at_warn_with_swap_past_three_quarters(level, used, holds):
-    assert (memory.judge((level, (4 * GB, int(used * GB)))) is not None) is holds
+def test_the_floor_holds_at_critical_and_at_warn_past_an_absolute_swap(level, total, used, holds):
+    assert (memory.judge((level, (total * GB, int(used * GB)))) is not None) is holds
     assert memory.judge(None) is None
+
+
+def test_memory_swap_gb_moves_the_warn_bar(tmp_path, kernel):
+    from brr.loom.runtime.config import load_config
+    root = tmp_path / "home"
+    write_thread(root, "work", "# work", "quit-now", wait="0")
+    kernel["now"] = (memory.WARN, (8 * GB, 3 * GB))
+    assert memory.pressed(root) is None
+    with (root / "loom/config.toml").open("a") as cfg:
+        cfg.write("memory_swap_gb = 2\n")
+    assert load_config(root).memory_swap_gb == 2
+    assert memory.pressed(root) is not None
+
+
+def test_a_person_held_by_the_floor_hears_one_word_per_episode(tmp_path, monkeypatch, kernel):
+    from test_lifecycle import _parked_home
+    kernel["now"] = (memory.WARN, (8 * GB, 7 * GB))
+    home = _parked_home(tmp_path, monkeypatch, left="70")
+    looming = Loom(home.root)
+    looming.start()
+    try:
+        wait_until(lambda: len(home.sent) == 1, 10, looming.dump)
+        assert home.sent[0]["to"] == "telegram:42"
+        assert home.sent[0]["re"] == "telegram:42:park"
+        assert MEMORY_WORD in home.sent[0]["body"]
+        home.person.says("again", "are you there?")
+        wait_until(lambda: len(mail(home.root, looming.facts(), "inbox")) >= 2, 10, looming.dump)
+        time.sleep(0.5)  # more ticks under the floor, a second letter in the same episode
+        assert len(home.sent) == 1
+        assert not any(f.kind == "body.started" for f in looming.facts())
+    finally:
+        looming.halt()
+    assert not looming.errors
 
 
 def test_a_pressed_kernel_holds_a_wanted_body_and_clear_pressure_starts_it(tmp_path, kernel):
@@ -80,3 +116,15 @@ def test_the_kernel_read_is_one_of_its_levels():
     level, swap = memory.reading()
     assert level in {memory.NORMAL, memory.WARN, memory.CRITICAL}
     assert swap is None or swap[1] <= swap[0]
+
+
+def test_status_names_the_hold(tmp_path, kernel, capsys):
+    from brr.loom.runtime import service
+    root = tmp_path / "home"
+    write_thread(root, "work", "# work", "quit-now", wait="0")
+    kernel["now"] = (memory.WARN, (8 * GB, 7 * GB))
+    service._print_status(state="running", pid=1, home=root)
+    assert "held: memory pressure warn, swap 7.0 GB, no new body starts" in capsys.readouterr().out
+    kernel["now"] = (memory.WARN, (4 * GB, int(3.8 * GB)))
+    service._print_status(state="running", pid=1, home=root)
+    assert "held:" not in capsys.readouterr().out
