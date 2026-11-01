@@ -59,7 +59,7 @@ SCOPES = ("global", "machine")
 
 REGISTRY = (
     #     kind                resource   fields                                              writer         scope
-    _kind("body.pending",      "body",    "strand gen shell core",                            "loom",        "machine", once=True),
+    _kind("body.pending",      "body",    "strand gen shell core why?",                       "loom",        "machine", once=True),
     _kind("body.parked",       "body",    "strand gen shell core window left_pct until",      "loom",        "machine"),
     _kind("body.started",      "body",    "strand gen pid shell core readme lstart",          "loom",        "machine", once=True),
     _kind("body.leaving",      "body",    "strand gen deadline",                              "loom",        "machine"),

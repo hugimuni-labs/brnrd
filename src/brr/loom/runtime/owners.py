@@ -368,7 +368,8 @@ def thread_axes(facts, main, ownership=None):
         elif body and body.kind in {'body.pending', 'body.parked'}:
             cause = 'paced' if body.kind == 'body.parked' else 'pending'
             reset = body.data.get('until')
-            restart = f'reset {reset}' if reset is not None else 'loom: gauge reading'
+            restart = (f'reset {reset}' if reset is not None else 'loom: memory pressure clears'
+                       if body.data.get('why') else 'loom: gauge reading')
             control = f'{override}: threads --force {thread}' if reset is not None else 'loom'
         elif held and (not end or (end.data['strand'], end.data['gen']) != held):
             cause, restart, control = 'body', 'current body', '—'
