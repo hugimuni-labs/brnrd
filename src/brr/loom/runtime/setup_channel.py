@@ -18,7 +18,7 @@ from .config import load_config, read_array, seed_config, set_value
 from .connector import addressed, environment, instances
 from .home import Home, atomic_write, channel_parts, resolve_home
 from .port import _front, parse_frontmatter
-from .selfrepo import IDENTITY_NOTE, SelfError, init_self
+from .selfrepo import IDENTITY_NOTE, SelfError, init_self, restore_self
 
 
 def _door(folder, env, code=None):
@@ -82,11 +82,31 @@ def _enroll(home, kind, name, person, keys):
     set_value(home.root, 'connectors', [*load_config(home.root).connectors, f'{name}={kind}'])
 
 
+#: Telegram's reason for not writing (its error description, lowercased) → what the person does.
+NOT_SENT = {
+    'blocked by the user': "the bot is blocked in your Telegram: open its chat and press Restart (or Unblock)",
+    "can't initiate conversation": "open the bot's chat in Telegram and press Start, so it may write to you",
+    'user is deactivated': 'that Telegram account is deactivated; pair from the account you use',
+}
+
+
+def _what_to_do(why, bot):
+    """One sentence on making the bot able to write, from Telegram's own reason."""
+    low = why.lower()
+    for said, do in NOT_SENT.items():
+        if said in low:
+            return do
+    if '403' in why:
+        return (f"Telegram would not let {bot or 'the bot'} write to you: open its chat, press Start "
+                "(Restart if you stopped it), then write to it once more")
+    return ''
+
+
 #: How a platform reads in a sentence.
 PLATFORMS = {'telegram': 'Telegram', 'whatsapp': 'WhatsApp'}
 
 
-def _bind(home, kind, name, person, folder, env, chats, *, timeout, out, qr):
+def _bind(home, kind, name, person, folder, env, chats, *, timeout, out, qr, links):
     """The account path: a chat already bound is used as it is; else a link binds one, read back.
 
     No code reaches the loom here: the server binds the chat on the
@@ -104,8 +124,14 @@ def _bind(home, kind, name, person, folder, env, chats, *, timeout, out, qr):
         shown = door.get('qr', True) is not False
         picture = qr_code(door['link']) if shown and (sys.stdout.isatty() if qr is None else qr) else ''
         also = ", or scan the code below with your phone's camera" if picture else ''
-        out(f"Open {door['link']} where you use the app and press Start{also}. Or open {door['name']} "
-            f"yourself and send the code {door['code']}. Waiting up to {timeout:g}s.")
+        # The same code binds on either app: the link fills it in, typed it is the whole message.
+        whatsapp = (f"open {door['whatsapp']} and send the text it fills in" if door.get('whatsapp') else
+                    f"text {door['code']} by itself to brnrd's WhatsApp number")
+        out(f"No chat is bound to your brnrd account yet. Bind one, or both:\n"
+            f"  Telegram: open {door['link']} where you use the app and press Start{also}, "
+            f"or open {door['name']} yourself and send the code {door['code']}.\n"
+            f"  WhatsApp: {whatsapp}.\n"
+            f"Waiting up to {timeout:g}s.")
         if picture:
             out(picture)
         deadline = time.monotonic() + timeout
@@ -122,6 +148,10 @@ def _bind(home, kind, name, person, folder, env, chats, *, timeout, out, qr):
         where = PLATFORMS.get(chat.get('platform'), chat.get('platform') or kind)
         out(f"your {where} chat is bound to your brnrd account (as {chat.get('who') or chat['from']}); "
             f"saved it for {person}")
+    for chat in [*chats, *web]:
+        if chat.get('link'):
+            links.append((PLATFORMS.get(chat.get('platform'), 'brnrd.dev' if chat.get('platform') == 'loom'
+                                        else chat.get('platform') or kind), chat['link']))
     return keys[0]
 
 
@@ -182,7 +212,13 @@ def qr_code(link):
                      for row in rows)
 
 
-def pair(home, kind, name, person, *, timeout=180, out=print, qr=None, env=None):
+def pair(home, kind, name, person, *, timeout=180, out=print, qr=None, env=None, links=None):
+    """Pair ``name`` and enrol it for ``person``; returns the chat's key.
+
+    ``links`` gathers ``(where, link)`` for each chat now enabled, for
+    setup's last step to show.
+    """
+    links = [] if links is None else links
     if not all(re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9._-]*', v) for v in (name, person)):
         raise ValueError('Channel and person names use letters, digits, dots, dashes or underscores')
     if name in instances(home):
@@ -200,7 +236,7 @@ def pair(home, kind, name, person, *, timeout=180, out=print, qr=None, env=None)
             raise ValueError('Nothing was enabled; run brnrd again when you have it.')
     chats = _bound(folder, env)
     if chats is not None:
-        return _bind(home, kind, name, person, folder, env, chats, timeout=timeout, out=out, qr=qr)
+        return _bind(home, kind, name, person, folder, env, chats, timeout=timeout, out=out, qr=qr, links=links)
     code = pairing_code()
     # Use the normal drop directory: unrelated letters survive pairing for the
     # loom to ingest once enabled. The connector advances its usual cursor.
@@ -208,6 +244,15 @@ def pair(home, kind, name, person, *, timeout=180, out=print, qr=None, env=None)
     drop.mkdir(parents=True, exist_ok=True)
     command = folder / 'in'
     child = subprocess.Popen([str(command), str(drop)], env=env) if command.is_file() else None
+
+    def stop():
+        if child is not None and child.poll() is None:
+            child.terminate()
+            try:
+                child.wait(timeout=2)
+            except subprocess.TimeoutExpired:
+                child.kill()
+                child.wait()
     door = _door(folder, env, code)
     shown = door and door.get('qr', True) is not False
     picture = qr_code(door['link']) if shown and (sys.stdout.isatty() if qr is None else qr) else ''
@@ -250,7 +295,9 @@ def pair(home, kind, name, person, *, timeout=180, out=print, qr=None, env=None)
                     # server's own reason) and go on.
                     why = (result.stderr.strip().splitlines() or [f'{kind}/out exited {result.returncode}'])[-1]
                     sent = 'was not sent' if result.returncode == 3 else 'may or may not have been sent'
-                    out(f"Your code arrived, so this chat is paired, but the 'Paired ✓' answer {sent}: {why}")
+                    do = _what_to_do(why, door and door['name'])
+                    out(f"Your code arrived, so this chat is paired, but the 'Paired ✓' answer {sent}: {why}"
+                        + (f". To fix it, {do}." if do else ''))
                 else:
                     # A zero exit is a receipt only with the same output grammar.
                     receipt = json.loads(result.stdout)
@@ -261,7 +308,12 @@ def pair(home, kind, name, person, *, timeout=180, out=print, qr=None, env=None)
                 if path.with_suffix('.d').exists():
                     shutil.rmtree(path.with_suffix('.d'))
                 key = f'{name}:{chat}'
+                # Stop reading the bot first: once enabled, the loom's own in
+                # reads it, and two readers make Telegram refuse one (409).
+                stop()
                 _enroll(home, kind, name, person, [key])
+                if door:
+                    links.append((PLATFORMS.get(kind, kind), door['link'].partition('?')[0]))
                 out(f'heard you as {chat}; saved {key} for {person}')
                 return key
             if child is not None and child.poll() is not None:
@@ -269,13 +321,7 @@ def pair(home, kind, name, person, *, timeout=180, out=print, qr=None, env=None)
             time.sleep(.05)
         raise TimeoutError('No matching direct message arrived; channel was not enabled')
     finally:
-        if child is not None and child.poll() is None:
-            child.terminate()
-            try:
-                child.wait(timeout=2)
-            except subprocess.TimeoutExpired:
-                child.kill()
-                child.wait()
+        stop()
         # The code said twice (the start link, then typed) leaves a second
         # copy; once the loom polls this channel it would be a stray letter.
         for path in drop.glob('*.md'):
@@ -386,7 +432,7 @@ def _gh_login():
     return (login, '') if login else (None, 'needs gh signed in: run gh auth login, then brnrd setup channel')
 
 
-def offers(home, kind, login=None, why=''):
+def offers(home, kind, login=None, why='', repo=SELF_REPO):
     """What setup switches on unless the person says no: ``(key, label, why not)`` rows.
 
     A row with a reason cannot be picked and starts off. The repo row goes once
@@ -397,7 +443,7 @@ def offers(home, kind, login=None, why=''):
     from .selfrepo import git
     rows = []
     if not git(home.root / 'self', 'remote', 'get-url', 'origin', check=False).stdout.strip():
-        where = f' ({login}/{SELF_REPO})' if login else ''
+        where = f' ({login}/{repo})' if login else ''
         rows.append(('repo', f"Back up brnrd's memory to a private GitHub repo{where}", why))
     if kind == 'relay' and gates.state_dir(home.root, load_config(home.root)) is None:
         rows.append(('app', 'Let brnrd.dev reach your GitHub repos (the brnrd-dev GitHub App)', ''))
@@ -470,34 +516,98 @@ def checklist(rows, *, keys=None):
     return {row[0] for row, picked in zip(rows, on) if picked}
 
 
-def back_up_self(home, login):
-    """A private ``login/brnrd-self`` as the self's origin, pushed once; the loom's mirror keeps it current.
+def _gh_git(*args):
+    """``git`` with gh's credential and no prompt: a repo the person can read, never a password asked."""
+    return subprocess.run(['git', '-c', 'credential.helper=', '-c', 'credential.helper=!gh auth git-credential',
+                           *args], capture_output=True, text=True, timeout=60,
+                          env={**os.environ, 'GIT_TERMINAL_PROMPT': '0'})
 
-    An existing repo of that name is adopted only when GitHub calls it private:
-    the self holds people's pages.
+
+def _repo_url(login, name):
+    return f'https://github.com/{login}/{name}.git'
+
+
+def _holds_a_self(url):
+    """Has ``url`` a ``main``? An empty repo is adoptable; one with history is a self already."""
+    found = _gh_git('ls-remote', '--heads', url, 'main')
+    if found.returncode != 0:
+        raise ValueError(f"could not read {url.removesuffix('.git')}: "
+                         + (found.stderr.strip().splitlines() or ['git ls-remote failed'])[-1])
+    return bool(found.stdout.strip())
+
+
+def backup_repo(home, login, *, ask=None):
+    """The backup repo's name, after offering to restore brnrd's memory from an earlier install's.
+
+    A private ``login/brnrd-self`` with history is that memory, and it is
+    the person's: restoring is the default. Declined, setup never seeds
+    over it and picks the next free name (``brnrd-self-2``, ...), so the
+    mirror never meets a history it diverged from. A home with a self
+    already, or no gh login, asks nothing.
+    """
+    from brr import home_link
+    if (home.root / 'self/.git').exists() or not login:
+        return SELF_REPO
+    ask = ask or _ask
+    asked = False
+    for name in (SELF_REPO, *(f'{SELF_REPO}-{i}' for i in range(2, 20))):
+        found = home_link._repo_view(login, name)
+        if not found:
+            return name
+        if str(found.get('visibility', '')).upper() != 'PRIVATE':
+            continue  # never brnrd's memory, and never pushed to
+        url = _repo_url(login, name)
+        try:
+            holds = _holds_a_self(url)
+        except ValueError as exc:
+            # Unread is not empty: a new name is safe, a push over a memory is not.
+            print(f"  {style.dot()} {exc}; this install backs up to a new repo")
+            continue
+        if not holds:
+            return name  # private and empty: adopted as it is
+        if not asked:
+            asked = True
+            _step('brnrd remembers you')
+            print(f"  {style.dot()} {login}/{name} holds brnrd's memory from an earlier install.")
+            if ask('Restore it here? (yes/no)', 'yes').lower() in ('y', 'yes'):
+                sha = restore_self(home.root, url)
+                _ok(f"memory restored from {login}/{name} ({sha})")
+                return name
+            print(f"  {style.dot()} kept as it is; this install backs up to a new repo")
+    raise ValueError(f'{login} has {SELF_REPO} up to -19 taken; back up by hand: git remote add origin <url>')
+
+
+def back_up_self(home, login, repo=SELF_REPO):
+    """A private ``login/<repo>`` as the self's origin, pushed once; the loom's mirror keeps it current.
+
+    An existing repo of that name is adopted only when GitHub calls it private
+    (the self holds people's pages) and it is empty: one with history is
+    another install's memory, never pushed over.
     """
     from brr import home_link
     from .selfrepo import git
-    found = home_link._repo_view(login, SELF_REPO)
+    found = home_link._repo_view(login, repo)
+    url = _repo_url(login, repo)
     if found and str(found.get('visibility', '')).upper() != 'PRIVATE':
-        raise ValueError(f'{login}/{SELF_REPO} exists and is not private; brnrd never pushes its memory there')
+        raise ValueError(f'{login}/{repo} exists and is not private; brnrd never pushes its memory there')
+    if found and _holds_a_self(url):
+        raise ValueError(f'{login}/{repo} already holds a self; brnrd never pushes over it')
     if not found:
-        home_link._repo_create(login, SELF_REPO)
-    url = f'https://github.com/{login}/{SELF_REPO}.git'
+        home_link._repo_create(login, repo)
     git(home.root / 'self', 'remote', 'add', 'origin', url)
     pushed = git(home.root / 'self', '-c', 'credential.helper=', '-c', 'credential.helper=!gh auth git-credential',
                  'push', '-u', 'origin', 'main', check=False)
     return url, pushed.returncode == 0
 
 
-def _take_offers(home, picked, rows, login):
+def _take_offers(home, picked, rows, login, repo=SELF_REPO):
     """Do the picked offers that need no page; say what each did. Returns the keys left off."""
     for key, label, _why in rows:
         if key not in picked:
             continue
         if key == 'repo':
             try:
-                url, pushed = back_up_self(home, login)
+                url, pushed = back_up_self(home, login, repo)
             except (ValueError, OSError, subprocess.SubprocessError, RuntimeError) as exc:
                 print(f"  {style.cross()} backup not set up: {exc}")
                 picked = picked - {'repo'}
@@ -699,6 +809,9 @@ def main(argv=None):
         if not args.kind:
             _ok(CHOICES.get(kind, kind).split(',')[0])
         name = args.name or _channel_name(home, kind)
+        login, why = _gh_login()
+        # Before any seed: an earlier install's memory is restored, never seeded over.
+        repo = backup_repo(home, login)
         people = sorted(p.name for p in (home.root / 'self/people').glob('*') if p.is_dir())
         if args.person or len(people) == 1:
             person = args.person or people[0]
@@ -710,19 +823,21 @@ def main(argv=None):
         # A letter lands only on a thread on the self's main: seed it before pairing.
         if init_self(home.root, person=person).startswith('initialized '):
             _ok(IDENTITY_NOTE)
-        login, why = _gh_login()
-        rows = offers(home, kind, login, why)
+        rows = offers(home, kind, login, why, repo)
         picked = set()
         if rows:
             _step('brnrd will also')
             picked = checklist(rows)
-        left = _take_offers(home, picked, rows, login)
+        left = _take_offers(home, picked, rows, login, repo)
         onboarding_asks(home, also=[LATER[key] for key in left])
         _step(f'Connect {CHOICES.get(kind, kind).split(",")[0]}')
-        paired = pair(home, kind, name, person, timeout=args.timeout,
+        links = []
+        paired = pair(home, kind, name, person, timeout=args.timeout, links=links,
                       env={'BRNRD_SETUP_BOARD': '1' if 'board' in picked else ''})
         if paired and args.wait > 0:
-            _step('Say hello: send brnrd any message in that chat')
+            _step('Say hello: send brnrd any message in ' + ('one of your chats' if len(links) > 1 else 'that chat'))
+            for where, link in links:
+                print(f"    {where}: {style.accent(link)}")
             first_letter(home, person, timeout=args.wait)
     except (ValueError, OSError, TimeoutError, subprocess.SubprocessError, SelfError) as exc:
         raise SystemExit(str(exc)) from None

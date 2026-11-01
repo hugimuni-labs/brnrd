@@ -2,7 +2,8 @@
 """Print where a person opens brnrd.dev's shared bot to bind a chat: {"name", "link", "code"}.
 
 With no argument the link binds the chat to the account, and ``bound`` reads
-it back. With the loom's own pairing code (an older setup) the server hands
+it back; ``whatsapp``, when brnrd.dev has a number, is the same code as a
+WhatsApp link. With the loom's own pairing code (an older setup) the server hands
 that code to the loom as the chat's first message.
 """
 import json
@@ -22,4 +23,7 @@ door = cloud._request(state['brnrd_url'], 'POST', '/v1/daemons/door', token=stat
                       json=dict(code=code) if code else {}, retry=False)
 # Typed into the shared bot, only the server's own code pairs (the link carries it).
 minted = door['link'].partition('?start=')[2]
-print(json.dumps(dict(name=door['name'], link=door['link'], code=minted or code, qr=False)))
+found = dict(name=door['name'], link=door['link'], code=minted or code, qr=False)
+if door.get('whatsapp'):
+    found['whatsapp'] = door['whatsapp']
+print(json.dumps(found))
