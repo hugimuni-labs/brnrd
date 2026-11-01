@@ -1,9 +1,9 @@
-// proof-draft (v44hse5kpf): a half-typed draft survives a newer page. While he writes, the page holds and says so;
-// leaving the box takes the reload with the draft and its armed wish back; an empty box reloads at once. In vite dev
+// proof-draft (v44hse5kpf, 4a46d017): a newer page never reloads by itself, hidden tab or not, empty box or not; a
+// tiny update mark takes it on a click, with the draft and its armed wish back. In vite dev
 // SvelteKit's `updated` never fires, so the spec sets `__board.newer` as `updated.current` would: this covers the
 // policy, not the version poll.
 import { after, before, test } from 'node:test';
-import assert from 'node:assert/strict';
+import assert, { equal, ok } from 'node:assert/strict';
 import { open } from './harness.mjs';
 
 const WISH = 'w-test-armed01';
@@ -25,37 +25,43 @@ const reloaded = (act) => Promise.all([B.page.waitForEvent('load', { timeout: 20
 
 const draft = `Not quite on &charlie, I think: half a thought ${Date.now() % 1000}`;
 
-test('a newer page waits while he writes, and says so', async () => {
+test('a newer page never reloads by itself: not while he writes, not on blur, not hidden', async () => {
 	await mark();
 	await B.page.locator('#say').click();
 	await B.page.keyboard.type(draft);
 	await B.page.evaluate((w) => (window.__board.armed = w), WISH);
 	await newer();
+	await B.page.locator('header').click();
+	await B.page.evaluate(() => {
+		Object.defineProperty(document, 'hidden', { value: true, configurable: true });
+		document.dispatchEvent(new Event('visibilitychange'));
+	});
 	await B.page.waitForTimeout(1500);
 	const s = await state();
-	assert.ok(s.same, 'the page reloaded under him');
+	assert.ok(s.same, 'the page reloaded by itself');
 	assert.equal(s.text, draft);
-	assert.match(s.live, /newer page/);
+	assert.equal(await B.page.locator('#update').textContent(), 'update');
 });
 
-test('leaving the box takes the reload; the draft and its wish come back', async () => {
-	await reloaded(() => B.page.locator('header').click());
+test('the update mark takes the page; the draft and its wish come back', async () => {
+	await reloaded(() => B.page.locator('#update').click());
 	await ready();
 	const s = await state();
-	assert.ok(!s.same, 'no reload on blur');
+	assert.ok(!s.same, 'no reload on the click');
 	assert.equal(s.text, draft);
 	assert.equal(s.armed, WISH);
-	assert.doesNotMatch(s.live, /newer page/);
+	equal(await B.page.locator('#update').count(), 0);
+	assert.deepEqual(B.errors, []);
 });
 
-test('an empty box reloads at once, and nothing comes back', async () => {
-	await B.page.locator('#say').fill('');
-	await B.page.locator('header').click();
+test('a failed fetch with a newer page out makes the mark loud, and still no reload', async () => {
 	await mark();
-	await reloaded(newer);
-	await ready();
-	const s = await state();
-	assert.ok(!s.same);
-	assert.equal(s.text, '');
-	assert.deepEqual(B.errors, []);
+	await B.page.evaluate(() => {
+		window.__board.newer = true;
+		window.__board.error = 'Error: HTTP 500';
+	});
+	await B.page.waitForTimeout(500);
+	ok((await state()).same);
+	ok(await B.page.locator('#update.loud').count());
+	await B.page.evaluate(() => (window.__board.error = ''));
 });

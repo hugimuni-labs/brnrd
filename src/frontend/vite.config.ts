@@ -2,6 +2,31 @@ import tailwindcss from '@tailwindcss/vite';
 import adapter from '@sveltejs/adapter-static';
 import { sveltekit } from '@sveltejs/kit/vite';
 import { defineConfig } from 'vite';
+import { createHash } from 'node:crypto';
+import { readdirSync, readFileSync } from 'node:fs';
+import { join, relative } from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+// The page's version is what the page is made of, so a backend-only deploy is not a newer page (every push to main
+// rebuilds the image; the build time made each one a reload). Read from the files, not git: the image's build
+// stage has no .git.
+function frontendTree(): string {
+	const root = fileURLToPath(new URL('.', import.meta.url));
+	const h = createHash('sha256');
+	const walk = (d: string): string[] =>
+		readdirSync(d, { withFileTypes: true })
+			.flatMap((e) => (e.isDirectory() ? walk(join(d, e.name)) : [join(d, e.name)]))
+			.filter((f) => !/\.test\.ts$/.test(f));
+	for (const f of [
+		...['src', 'static'].flatMap((d) => walk(join(root, d))).sort(),
+		join(root, 'package-lock.json'),
+		join(root, 'vite.config.ts')
+	]) {
+		h.update(relative(root, f) + '\0');
+		h.update(readFileSync(f));
+	}
+	return h.digest('hex').slice(0, 16);
+}
 
 export default defineConfig({
 	plugins: [
@@ -42,7 +67,7 @@ export default defineConfig({
 			// bootstrap shell (backend keeps looking for 'index.html'). See
 			// /tmp/brnrd-unfurl.md for the precise two-file fix this needs.
 			// The board takes a newer build while it is open (Board.svelte, `updated`); 60 s is board.html's cadence.
-			version: { pollInterval: 60_000 },
+			version: { name: frontendTree(), pollInterval: 60_000 },
 			// The loom builds into a fresh dir and swaps it in only once the build succeeds (brr loom/runtime/spabuild.py).
 			adapter: adapter({
 				pages: process.env.BRNRD_SPA_OUT || 'build',

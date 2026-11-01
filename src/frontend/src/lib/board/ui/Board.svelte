@@ -76,17 +76,16 @@
 		});
 	});
 
-	// A newer page (v44hse5kpf, 4912): reload at once, unless the box has focus and holds text; then say so, and
-	// leaving the box takes it. The draft and its armed wish ride sessionStorage across the reload either way.
+	// A newer page (v44hse5kpf, 4912; his steer 4a46d017): never reloaded for him. A tiny `update` mark beside the
+	// connection takes it on a click, the draft and its armed wish riding sessionStorage across; a fetch failing on
+	// old code makes the mark loud, and still waits for his click.
 	$effect(() => {
 		if (updated.current) b.newer = true;
 	});
-	$effect(() => {
-		if (b.newer && !(b.writing && b.draft.trim())) {
-			b.keep();
-			location.reload();
-		}
-	});
+	const update = () => {
+		b.keep();
+		location.reload();
+	};
 
 	onMount(() => {
 		// e2e reads the board's state here (src/frontend/e2e), as the board.html proofs read its globals
@@ -113,9 +112,13 @@
 				'?'}{#if b.model?.via}
 				via {b.model.via}{/if}</span
 		>
-		<span id="live" class="dim" class:off={b.live === 'offline'}
-			>{b.error || (b.newer ? 'a newer page · leave the box to take it' : b.live)}</span
-		>
+		<span id="live" class="dim" class:off={b.live === 'offline'}>{b.error || b.live}</span>
+		{#if b.newer}<button
+				id="update"
+				class:loud={!!b.error}
+				title="a newer page is out: load it (the draft stays)"
+				onclick={update}>update</button
+			>{/if}
 		<label id="internal" class="dim"
 			><input type="checkbox" bind:checked={b.showAll} onchange={() => b.persist()} /> show internal</label
 		>
