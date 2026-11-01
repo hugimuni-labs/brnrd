@@ -1,5 +1,6 @@
 // The stamps under a letter (board.html stampsHtml): each strand that picked it up, no disposition yet, chatter, a
-// channel send's state, every stamp of each wish citing it, and the wish it stamps.
+// channel send's state, one line per wish citing it (its state now, short id, thread; 10010: the history repeated per
+// citing letter buried the card, and lives in the dissect panel and the title), and the wish it stamps.
 import { hm } from './text.ts';
 import type { Letter } from './types.ts';
 
@@ -26,13 +27,19 @@ export function stamps(l: Letter): LetterStamp[] {
 			cls: l.sent.state === 'sent' ? 'read' : 'heard',
 			text: `to channel · ${l.sent.state}`
 		});
-	for (const w of l.wishes || [])
-		for (const s of w.stamps)
-			out.push({
-				cls: s.stamp,
-				text: `${s.stamp} · ${w.wish.slice(-6)} ${hm(s.at)}`,
-				title: w.line + (s.ref ? '\n' + s.ref : '')
-			});
+	const seen = new Set<string>();
+	for (const w of l.wishes || []) {
+		if (seen.has(w.wish)) continue;
+		seen.add(w.wish);
+		out.push({
+			cls: w.state,
+			text: [w.state, w.wish.slice(-6), w.thread].filter(Boolean).join(' · '),
+			title: [
+				w.line,
+				...w.stamps.map((s) => `${s.stamp} ${hm(s.at)}${s.ref ? ' ' + s.ref : ''}`)
+			].join('\n')
+		});
+	}
 	if (l.wish) out.push({ cls: 'heard', text: `stamps ${l.wish.slice(-6)}` });
 	return out;
 }

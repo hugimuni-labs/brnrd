@@ -476,10 +476,17 @@ test('a letter stamps who picked it up first, then its disposition, its send and
 		wishes: [
 			{
 				wish: 'w-abc123',
+				thread: 'web-main',
 				line: 'make it',
 				state: 'read',
-				stamps: [{ stamp: 'read', at: '2026-10-27T10:03:00Z', ref: 'brnrd#1' }]
-			}
+				stamps: [
+					{ stamp: 'heard', at: '2026-10-27T09:00:00Z' },
+					{ stamp: 'read', at: '2026-10-27T10:03:00Z', ref: 'brnrd#1' },
+					{ stamp: 'read', at: '2026-10-27T10:04:00Z' }
+				]
+			},
+			// the same wish again, as two citing letters list it (10010): one line, not its history twice
+			{ wish: 'w-abc123', thread: 'web-main', line: 'make it', state: 'read', stamps: [] }
 		],
 		wish: 'w-zzz999'
 	});
@@ -489,11 +496,14 @@ test('a letter stamps who picked it up first, then its disposition, its send and
 			['read', 'picked up · inbox1 10-27 10:01'],
 			['heard', 'chatter'],
 			['heard', 'to channel · failed'],
-			['read', 'read · abc123 10-27 10:03'],
+			['read', 'read · abc123 · web-main'],
 			['heard', 'stamps zzz999']
 		]
 	);
-	equal(stamps(l)[3].title, 'make it\nbrnrd#1');
+	equal(
+		stamps(l)[3].title,
+		'make it\nheard 10-27 09:00\nread 10-27 10:03 brnrd#1\nread 10-27 10:04'
+	);
 	deepEqual(stamps(L('l2', '2026-10-27T10:00:00Z')), []);
 });
 
