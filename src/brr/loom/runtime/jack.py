@@ -394,21 +394,8 @@ def _shed(room: Path, fn, *args, default=None):
         return default
 
 
-def _shed_news(room: Path, stdin_text: str, state: dict) -> str:
-    """The shed numbers once two of the three bars are crossed, said when they change."""
-    from . import shed
-    from .config import load_config
-    if not state.get("turns"):
-        return ""
-    said = shed.news(state, int(load_config(home_of_room(room).root).shed_excess), shed.pace(room))
-    if not said or said == state.get("shed_said"):
-        return ""
-    _set_state(room, shed_said=said)
-    return said
-
-
 def _turn(room: Path, stdin_text: str) -> None:
-    """At a stop: the turn that ends here, ``[acted, context]``, joins the tally."""
+    """At a stop: what the turn that ends here left behind for the README, and the context's size."""
     from . import shed
     state = _state(room)
     if not state.get("turn_open"):
@@ -416,8 +403,7 @@ def _turn(room: Path, stdin_text: str) -> None:
     heads = shed.heads(room)
     moved = [name for name, head in heads.items() if head != (state.get("heads") or {}).get(name)]
     did = [*shed.acts(room, float(state.get("turn_at") or 0)), *(f"{name} HEAD" for name in moved)]
-    acted = bool(did)
-    boot, now = shed.contexts(stdin_text, state.get("boot"))
+    _, now = shed.contexts(stdin_text, 0)
     # Acts since the README last changed, letters aside (routing is not state).
     readme = shed.readme_hash(room, os.environ.get("BRNRD_THREAD") or "")
     if readme != state.get("readme_seen"):
@@ -427,8 +413,8 @@ def _turn(room: Path, stdin_text: str) -> None:
     else:
         kept = state.get("readme_acts") or []
     unread = [*kept, *(x for x in did if x != "letter" and x not in kept)]
-    _set_state(room, turns=[*(state.get("turns") or []), [acted, now]], heads=heads,
-               boot=boot or state.get("boot"), turn_open=False, readme_seen=readme, readme_acts=unread)
+    _set_state(room, heads=heads, context=now or state.get("context") or 0,
+               turn_open=False, readme_seen=readme, readme_acts=unread)
 
 
 def _opened(room: Path) -> None:
@@ -630,10 +616,11 @@ def execute(event: str, room: Path, stdin_text: str) -> str:
         _set_state(room, stop_blocks=0, boundary_at=time.time(), held_at=None, turn_open=True)
         (room / "port" / DISPLACED).unlink(missing_ok=True)
     elif event == "start":
-        from .shed import heads, readme_hash
+        from .shed import base, heads, readme_hash
         _set_state(room, boundary_at=time.time(), turn_open=True, turn_at=time.time(),
                    heads=_shed(room, heads, room, default={}),
-                   readme_seen=_shed(room, readme_hash, room, os.environ.get("BRNRD_THREAD") or ""))
+                   readme_seen=_shed(room, readme_hash, room, os.environ.get("BRNRD_THREAD") or ""),
+                   readme_base=_shed(room, base, room, default=""))
     text = _boundary_text(room)
     parsed = parse_boundary(text)
     opened = [[line.split()[1], line.split()[2], _ageless(line.rpartition(" · owed ")[2])]
@@ -642,6 +629,7 @@ def execute(event: str, room: Path, stdin_text: str) -> str:
                  if line.startswith("status:")), "")
     face = next((line for line in text.splitlines() if line.startswith("face? ")), "")
     moved = next((line for line in text.splitlines() if line.startswith("moved: ")), "")
+    cited = next((line for line in text.splitlines() if line.startswith("cited: ")), "")
     band = _ageless(next((line for line in text.splitlines() if line.startswith("asks: ")), ""))
     if event == "start":
         broken = _guards(room)[1]
@@ -653,7 +641,7 @@ def execute(event: str, room: Path, stdin_text: str) -> str:
             return ""
         if parsed.ids:
             _shown(room, parsed)
-        _set_state(room, opened=opened, plan=plan, face=face, moved=moved, band=band,
+        _set_state(room, opened=opened, plan=plan, face=face, moved=moved, band=band, cited=cited,
                    **dict(zip(("said", "told"), _news(text, {}, True)[1:])))
         return text if text.endswith("\n") else text + "\n"
     if event == "post":
@@ -665,9 +653,10 @@ def execute(event: str, room: Path, stdin_text: str) -> str:
         face_changed = bool(face) and face != state.get("face", "")
         # The loom's code moved under a seated body: said once, at the next post.
         moved_changed = bool(moved) and moved != state.get("moved", "")
+        # A closure the README cites, while the body still holds the event (design §3a).
+        cited_changed = bool(cited) and cited != state.get("cited", "")
         # An ask turning moved or stale is the cue to raise or drop it (requests R4).
         band_changed = bool(band) and band != state.get("band", "")
-        weight = _shed(room, _shed_news, room, stdin_text, state, default="")
         paused = describe(read_paused_record(room / "port"))
         hook = _hook_event(stdin_text)
         # Past its allocation a strand is told at every boundary, not once.
@@ -681,18 +670,18 @@ def execute(event: str, room: Path, stdin_text: str) -> str:
         news, said, told = _news(text, state, plan_changed)
         _set_state(room, said=said, told=told)
         if not parsed.ids and not settled_changed and not opened_changed and not plan_changed \
-                and not face_changed and not moved_changed and not band_changed:
+                and not face_changed and not moved_changed and not band_changed and not cited_changed:
             news = ""
         if not news:
             if parsed.ids:
                 _shown(room, parsed)
-            _set_state(room, opened=opened, plan=plan, face=face, moved=moved, band=band)
+            _set_state(room, opened=opened, plan=plan, face=face, moved=moved, band=band, cited=cited)
             if parsed.settled is not None:
                 _set_state(room, settled=parsed.settled)
-            if not weight and not paused and not over and not guarded and not left:
+            if not paused and not over and not guarded and not left:
                 return ""
             return _json({"hookSpecificOutput": {"hookEventName": hook, "additionalContext": "\n".join(
-                filter(None, (guarded, paused, weight, over, left)))}})
+                filter(None, (guarded, paused, over, left)))}})
         text = news
         if over:
             text = over + "\n" + text
@@ -700,15 +689,13 @@ def execute(event: str, room: Path, stdin_text: str) -> str:
             text = left + "\n" + text
         if guarded:
             text = guarded + "\n" + text
-        if weight:
-            text = weight + "\n" + text
         if paused:
             text = paused + "\n" + text
         if settled_changed:
             _set_state(room, settled=parsed.settled)
         if parsed.ids:
             _shown(room, parsed)
-        _set_state(room, opened=opened, plan=plan, face=face, moved=moved, band=band)
+        _set_state(room, opened=opened, plan=plan, face=face, moved=moved, band=band, cited=cited)
         return _json({"hookSpecificOutput": {
             "hookEventName": hook, "additionalContext": text}})
     if _state(room).get("molted") or _order(room) == "end" or parsed.settled is not None:
@@ -767,12 +754,7 @@ def _stop_block(room: Path, text: str, plan: str) -> str:
     sections = [section for section in sections if section]
     state = _state(room)
     if not sections:
-        from .shed import ask
-        due, record = _shed(room, ask, room, state, os.environ.get("BRNRD_THREAD") or "", default=("", {}))
-        if record:
-            _set_state(room, **record)
-        sections = [due or _readme_miss(room, state)]
-        sections = [section for section in sections if section]
+        sections = [section for section in [_readme_miss(room, state)] if section]
     count = int(state.get("stop_blocks") or 0)
     seen = "\n\n".join(sections)
     if (count >= 3) if _hand() else (count and seen == state.get("stop_said")):
@@ -812,7 +794,7 @@ TOP = """a letter of theirs says an order word and no wish was put on top for it
 README = """before resting: since threads/{thread}/README.md last changed this body did {did}. Any end can
 come while it rests, and the README is what its successor boots into. Rewrite it to the current state
 (a decision with its why, `## Now`, a done row cut to its receipt; never a log line) and land it with
-`brnrd runtime send-self --room .`; or stop again: it still is."""
+`brnrd runtime send-self --room .`; or stop again: it still is.{facts}"""
 
 
 def _readme_miss(room: Path, state: dict) -> str:
@@ -822,7 +804,15 @@ def _readme_miss(room: Path, state: dict) -> str:
     if not did or not thread:
         return ""
     _set_state(room, readme_acts=[])
-    return README.format(did=", ".join(did), thread=thread)
+    facts = _shed(room, _readme_facts, room, thread, state, default="")
+    return README.format(did=", ".join(did), thread=thread, facts=f"\n  {facts}" if facts else "")
+
+
+def _readme_facts(room: Path, thread: str, state: dict) -> str:
+    """What the README gained and lost since this gen booted; information, never a step."""
+    from .ledger import read_facts
+    from .shed import readme_facts
+    return readme_facts(room, thread, read_facts(home_of_room(room)), state.get("readme_base") or "")
 
 
 # Long enough for the loom to render a fact written just before the stop.

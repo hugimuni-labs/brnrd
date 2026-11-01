@@ -189,6 +189,7 @@ def cmd_wish(args):
             _declare(args, "result")
         elif actions and kind == "wish.read" and by.startswith("strand:") and "wait" in data:
             _declare(args, "park")
+            _rest_line(args, data)
         if fact.kind == "wish" and args.id == "new":
             _related(home, fact.data["line"], facts, fact.data["thread"])
         print(fact.data["wish"])
@@ -240,6 +241,22 @@ def _tell_delivered(home, args, wish, result) -> None:
     body = (f"delivered &{wish.id}: {wish.line}\n{result['line']}: {result['ref']}\n"
             "Reply ok to accept, or say what is off.\n")
     write_send(room, to=chat, sender=strand_of_room(room), body=body)
+
+
+def _rest_line(args, data) -> None:
+    """A long park is where a shed is a judgement due: say the stakes once, on stderr."""
+    from .shed import long_wait, rest_line
+    wait = data.get("wait") or {}
+    condition = str(wait.get("on") or wait.get("condition") or "") if isinstance(wait, dict) else str(wait)
+    if not long_wait(condition):
+        return
+    from .jack import _state
+    from .verbs_loom import _room
+    try:
+        context = int(_state(_room(args.room)).get("context") or 0)
+    except Exception:  # noqa: BLE001 - the size is a courtesy; the park is already written
+        context = 0
+    print(rest_line(condition, context), file=sys.stderr)
 
 
 def _related(home, line, facts, thread) -> None:
