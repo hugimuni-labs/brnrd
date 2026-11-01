@@ -42,7 +42,7 @@
 	display: flex;
 	flex-direction: column;
 	font:
-		13px/1.45 ui-monospace,
+		12px/1.45 ui-monospace,
 		Menlo,
 		monospace;
 	color: #171717;
@@ -344,7 +344,7 @@
 	opacity: 0.6;
 }
 .brd .wishcard .wline {
-	font-size: 13px;
+	font-size: 12px;
 	margin: 4px 0 6px;
 }
 .brd .wishcard .steps {
@@ -607,7 +607,7 @@
 	font-size: 10px;
 }
 .brd .wc .wline {
-	font-size: 13px;
+	font-size: 12px;
 	margin: 4px 0 6px;
 }
 .brd .wc .res {
@@ -727,7 +727,7 @@
 	white-space: normal;
 }
 .brd .lg-tag {
-	font-size: 9px;
+	font-size: 10px;
 	letter-spacing: 0.5px;
 	color: #888;
 	margin-right: 4px;
@@ -1231,7 +1231,7 @@
 	background: var(--void);
 	color: var(--parch);
 	padding: 4px 6px 4px 8px;
-	font-size: 11.5px;
+	font-size: 11px;
 	line-height: 1.35;
 	cursor: pointer;
 	transition: background 0.12s steps(2);
@@ -1254,7 +1254,7 @@
 	}
 }
 .brd .call .k {
-	font-size: 9.5px;
+	font-size: 10px;
 	letter-spacing: 0.16em;
 	text-transform: uppercase;
 	color: var(--amber);
@@ -1277,7 +1277,7 @@
 }
 .brd .call button {
 	font: inherit;
-	font-size: 10.5px;
+	font-size: 10px;
 	padding: 0 8px;
 	line-height: 18px;
 	background: none;
@@ -1483,7 +1483,7 @@
 	outline-offset: 2px;
 }
 .brd .lab {
-	font-size: 9.5px;
+	font-size: 10px;
 	letter-spacing: 0.2em;
 	text-transform: uppercase;
 	color: var(--mute);
@@ -1581,7 +1581,7 @@
 }
 .brd .src {
 	margin: 0 0 2px 26px;
-	font-size: 9.5px;
+	font-size: 10px;
 	letter-spacing: 0.2em;
 	text-transform: uppercase;
 }
@@ -1710,7 +1710,7 @@
 	float: right;
 	margin-left: 8px;
 	color: var(--mute);
-	font-size: 9.5px;
+	font-size: 10px;
 	letter-spacing: 0.14em;
 	text-transform: uppercase;
 }
@@ -1759,7 +1759,7 @@
 	display: flex;
 	gap: 12px;
 	padding: 2px 0 0;
-	font-size: 10.5px;
+	font-size: 10px;
 }
 .brd .strip span {
 	color: var(--ice);
@@ -1779,7 +1779,7 @@
 	padding: 0 5px;
 	color: var(--quiet);
 	cursor: pointer;
-	font-size: 10.5px;
+	font-size: 10px;
 }
 .brd #bead .ch:hover {
 	color: var(--parch);
@@ -1940,7 +1940,7 @@
 	white-space: nowrap;
 	overflow: hidden;
 	text-overflow: ellipsis;
-	font-size: 11.5px;
+	font-size: 11px;
 }
 .brd .bline .dim {
 	margin-left: 6px;
@@ -1989,7 +1989,7 @@
 }
 .brd .stp {
 	padding: 0 6px 6px 10px;
-	font-size: 11.5px;
+	font-size: 11px;
 	white-space: normal;
 }
 .brd .stp-h {
@@ -2105,4 +2105,113 @@
 }
 .brd .heading .bytes.over {
 	color: #d33;
+}
+
+/* wvut8 2+3. A letter is a one-line head and two lines of body until a press selects it. Colour at rest is the
+   column hue only: the ground is #fff and #fafafa, the hue sits on the column rule, the letter edge and the state
+   words; fills, dot grids and the black now-bar go. */
+.brd .letter .body {
+	display: -webkit-box;
+	-webkit-box-orient: vertical;
+	-webkit-line-clamp: 2;
+	line-clamp: 2;
+	overflow: hidden;
+}
+.brd .letter.sel .body {
+	display: block;
+	overflow: visible;
+}
+.brd .letter:not(.collapsed) {
+	white-space: normal;
+}
+.brd .letter .body {
+	white-space: pre-wrap;
+}
+.brd .wc:not(.open) .wline {
+	display: -webkit-box;
+	-webkit-box-orient: vertical;
+	-webkit-line-clamp: 2;
+	line-clamp: 2;
+	overflow: hidden;
+}
+.brd .lg-sec.waits {
+	color: #171717;
+}
+.brd .lg-sec.waits::after,
+.brd .lg-row.waits {
+	border-color: var(--h);
+}
+.brd .lg-row.waits {
+	background: #fff;
+}
+.brd .letter small {
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+.brd .person,
+.brd .letter.in {
+	background: #fff;
+}
+.brd .letter.notice {
+	background: #fafafa;
+}
+.brd .stamp,
+.brd .stamp.heard,
+.brd .stamp.read,
+.brd .stamp.scoped,
+.brd .stamp.open {
+	border: 0;
+	padding: 0;
+	margin-right: 10px;
+	color: #888;
+	background: none;
+}
+.brd .stamp.delivered,
+.brd .stamp.accepted {
+	border: 0;
+	padding: 0;
+	background: none;
+	color: #171717;
+}
+.brd .stamp.open {
+	color: #171717;
+}
+.brd .badge,
+.brd .red .badge,
+.brd .badge.mine,
+.brd .badge.ready,
+.brd .badge.stall {
+	background: none;
+	color: var(--h);
+	padding: 0;
+	font-size: 11px;
+}
+.brd .why,
+.brd .red .why,
+.brd .why.mine,
+.brd .why.call,
+.brd .why.unans {
+	color: #555;
+}
+.brd .why.call {
+	border-left-color: var(--h);
+}
+.brd .column[data-b='your-call'],
+.brd .column.red {
+	background-image: none;
+}
+.brd .nowbar {
+	background: #fafafa;
+	color: #777;
+	border-top: 1px solid var(--h);
+}
+.brd .nowbar b {
+	color: #171717;
+}
+.brd .nowbar .stn {
+	color: var(--h);
+}
+.brd .nowbar:hover {
+	background: #f2f2f2;
 }

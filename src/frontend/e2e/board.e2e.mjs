@@ -100,6 +100,33 @@ test('a new letter in a part reaches its column within a second (design §D7)', 
 	console.log(`fact visible in ${Date.now() - t0} ms`);
 });
 
+test('a letter is a two-line head until a press opens it whole', async () => {
+	const parts = fixture();
+	parts['thread/echo'].letters.push({
+		id: 's-test-echo4/long',
+		at: at(91),
+		from: 's-test-echo4',
+		to: 'thread:echo',
+		body: Array.from({ length: 12 }, (_, i) => `line ${i} of a long report`).join('\n'),
+		threads: ['echo']
+	});
+	parts['thread/echo'].count++;
+	B.loom.set(reindex(parts));
+	const card = B.page.locator('[data-letter="s-test-echo4/long"]');
+	await card.waitFor();
+	const lines = () =>
+		card
+			.locator('.body')
+			.evaluate((e) => Math.round(e.clientHeight / parseFloat(getComputedStyle(e).lineHeight)));
+	assert.equal(await lines(), 2);
+	await card.locator('.body').click();
+	assert.equal(await lines(), 12);
+	await B.page.keyboard.press('Escape');
+	await card.locator('.body').click();
+	assert.equal(await lines(), 2);
+	await B.page.keyboard.press('Escape');
+});
+
 test('the inbox opens on its wishes, done above and open below; its heading turns it to letters', async () => {
 	const inbox = B.page.locator('[data-column="inbox"]');
 	const states = await inbox.locator('.wishpane .wc small').allInnerTexts();

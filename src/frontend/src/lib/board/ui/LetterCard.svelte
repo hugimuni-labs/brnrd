@@ -1,6 +1,7 @@
 <script lang="ts">
-	// One letter in a column. On the inbox an internal letter folds to one line until opened (or "show internal");
-	// a person letter opens its disposition (the wishes citing it, the letters answering it) on a press.
+	// One letter in a column: a one-line head and two lines of body until a press selects it (wvut8 2). On the inbox an
+	// internal letter folds to one line until opened (or "show internal"); a person letter opens its disposition (the
+	// wishes citing it, the letters answering it) on a press.
 	import type { Letter } from '../types.ts';
 	import { hm, hue, splitQuote } from '../text.ts';
 	import { inSide, internal, routes, sender } from '../sides.ts';
@@ -60,11 +61,9 @@
 						b.openBead('thread:' + t);
 					}}>{t}</button
 				>{/each}{/if}
-		<small
+		<small title="{l.at.slice(0, 19).replace('T', ' ')} UTC"
 			>{who} → {l.to || ''}{#if l.typed_by}
-				· <span class="typed">typed by {l.typed_by}</span>{/if}<br />{l.at
-				.slice(0, 19)
-				.replace('T', ' ')} UTC</small
+				· <span class="typed">typed by {l.typed_by}</span>{/if} · {hm(l.at)}</small
 		>
 		{#if q[0] != null}<!-- svelte-ignore a11y_no_static_element_interactions -->
 			<span
