@@ -27,9 +27,6 @@ body = {k: caps[k] for k in ('repo_full_name', 'git_remote', 'branch', 'default_
 body.update(cloud.requester())
 # The page asks to approve this computer; the self repo stays plumbing.
 body['kind'] = 'loom'
-# Setup's board offer: the approve page's board box starts ticked; the click is the yes.
-if os.environ.get('BRNRD_SETUP_BOARD'):
-    body['board'] = True
 try:
     pair = cloud.start_pair(url, body)
 except Exception as exc:
