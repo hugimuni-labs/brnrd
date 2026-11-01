@@ -424,11 +424,12 @@ class Router:
             return facts
         armed = self.armed if holding else (lambda: True)
         facts = _closures(home, facts, threads)
-        from .lifecycle import CLOSED, read_thread
+        from .lifecycle import CLOSED, landed_reader
         pending = []
         state = fold(facts)
+        read_thread = landed_reader(home)
         for thread in threads:
-            if read_thread(home, thread).get("status") in CLOSED:
+            if read_thread(thread).get("status") in CLOSED:
                 continue
             if not armed():
                 break

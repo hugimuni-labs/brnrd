@@ -47,6 +47,15 @@ def parse_done(text: str) -> list[tuple[str, str, str]]:
     return done
 
 
+def landed_reader(home: Home):
+    """``read_thread`` at main for a loop over many threads: main is pinned once
+    for the whole loop, not stat'ed again for each thread."""
+    if not (home.root / "self/.git").exists():
+        return lambda thread: read_thread(home, thread)
+    snapshot = main_snapshot(home)
+    return lambda thread: dict(snapshot.get(thread, {}))
+
+
 def read_thread(home: Home, thread: str, ref: str = "main") -> dict:
     """Read a landed README, never a room's unlanded status."""
     path = home.thread_dir(thread) / "README.md"
