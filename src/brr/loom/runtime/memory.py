@@ -8,7 +8,8 @@ no fork. The floor holds at critical, and at warn once more than
 ``memory_swap_gb`` of swap is used. Not a share of swap: macOS grows
 ``vm.swapusage``'s total on demand, so used over total sat past 75% all day on
 the 8 GB iMac (2026-11-01) and held every start at 3.3-3.8 GB of a 4 GB total;
-the 10-31 hang came at 8.7 GB. :func:`pressed` is what a start reads: a wanted body records
+the 10-31 hang came at 8.7 GB. :func:`pressed` is what a start reads, and only while another
+worker body is live (the inbox and a first worker always start): a wanted body records
 ``body.pending`` and waits, a parked one stays parked, a live one is untouched,
 and an operator's ``--force`` still starts (bodies.py). :class:`MemoryFloor`'s
 step raises :class:`MemoryPressure` for the loop's guard, which writes
@@ -41,7 +42,7 @@ class MemoryPressure(Exception):
         self.level, self.swap, self.grade = level, swap, int(level >= CRITICAL)
         swapped = f", swap {swap[1] / (1 << 30):.1f} GB" if swap else ""
         #: What ``brnrd loom status`` and setup's finale say while the floor holds.
-        self.held = f"memory pressure {name}{swapped}, no new body starts"
+        self.held = f"memory pressure {name}{swapped}, no second worker body starts"
 
 
 class _XswUsage(ctypes.Structure):

@@ -692,22 +692,3 @@ def test_the_backup_adopts_only_a_private_repo(tmp_path, monkeypatch):
     got = subprocess.run(['git', '-C', str(tmp_path / 'self'), 'remote', 'get-url', 'origin'],
                          capture_output=True, text=True).stdout.strip()
     assert got == url
-
-
-def test_setup_names_the_memory_hold_when_the_first_letter_waits_on_it(tmp_path, monkeypatch):
-    from brr.daemon2.facts import Fact
-    from brr.loom.runtime import memory
-    from brr.loom.runtime.ledger import append
-    home = home_at(tmp_path)
-    monkeypatch.setattr(memory, "reading", lambda: (memory.WARN, (8 << 30, 7 << 30)))
-    monkeypatch.setattr(memory, "EVERY", 0.0)
-    written = []
-
-    def ada_writes(_):
-        if not written:
-            written.append(append(home, Fact(kind='letter', by='test', id='letter:held',
-                                             data={'id': 'held', 'from': 'person:ada', 'to': 'thread:inbox'})))
-    with pytest.raises(TimeoutError, match=r'short on memory \(memory pressure warn, swap 7\.0 GB, '
-                                           r'no new body starts\)'):
-        setup_channel.first_letter(home, 'ada', timeout=.3, out=[].append, running=lambda: True,
-                                   sleep=ada_writes)
