@@ -109,8 +109,7 @@
 		<span id="open" style="color:#d33">{b.letters.filter((l) => l.open).length} open</span>
 		<span class="dim" id="at"
 			>loom {b.heard.slice(11, 19)}Z · {b.letters.length} letters · as {b.model?.person ||
-				'?'}{#if b.model?.via}
-				via {b.model.via}{/if}</span
+				'?'}</span
 		>
 		<span id="live" class="dim" class:off={b.live === 'offline'}>{b.error || b.live}</span>
 		{#if b.newer}<button
