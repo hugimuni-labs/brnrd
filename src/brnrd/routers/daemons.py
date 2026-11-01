@@ -305,19 +305,23 @@ def chats(principal: Principal = Depends(require_daemon), db: Session = Depends(
     A chat binds to the account, not to a loom (#1457), so a loom set up on
     a new computer finds the person's chats here instead of pairing again.
     Only a route with a verified sender is listed: the rest authorize
-    nobody (`webhooks._authorized`).
+    nobody (`webhooks._authorized`). ``login`` is the account's own web
+    chat: the token was minted for the account that approved the pairing,
+    and only that account's session can queue a composer letter into its
+    repos (`enqueue_loom_letter`), so it names the approver and no one else.
     """
     routes = db.execute(
         select(ChannelRoute)
         .where(ChannelRoute.account_id == principal.account_id, ChannelRoute.paired_principal_id.is_not(None))
         .order_by(ChannelRoute.created_at.desc())
     ).scalars()
+    account = db.get(Account, principal.account_id)
     return schemas.DaemonChats(chats=[
         schemas.DaemonChat(id=r.id, platform=r.platform, chat_id=r.channel_id, topic_id=r.topic_id,
                            principal_id=r.paired_principal_id, principal_display=r.paired_user_display,
                            chat_title=r.chat_title, paired_at=r.created_at)
         for r in routes
-    ])
+    ], login=account.github_login if account is not None else None)
 
 
 @router.delete("/chats/{route_id}")

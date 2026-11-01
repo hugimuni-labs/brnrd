@@ -177,6 +177,10 @@ class DaemonChat(BaseModel):
 
 class DaemonChats(BaseModel):
     chats: list[DaemonChat]
+    # The account's own brnrd.dev chat: the composer stamps its letters with
+    # this login (`enqueue_loom_letter`), and only this account's session can
+    # write them, so the loom enrols it as the approving person's.
+    login: str | None = None
 
 
 class DaemonWhoami(BaseModel):

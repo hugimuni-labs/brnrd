@@ -91,7 +91,12 @@ def _bind(home, kind, name, person, folder, env, chats, *, timeout, out, qr):
 
     No code reaches the loom here: the server binds the chat on the
     person's tap and ``bound`` lists it. The first letter is the proof.
+    The account's own web chat (platform ``loom``) is the approver's and
+    is saved too, but it is not a chat to write from a phone: the link is
+    still offered when it is the only one.
     """
+    web = [chat for chat in chats if chat.get('platform') == 'loom']
+    chats = [chat for chat in chats if chat.get('platform') != 'loom']
     if not chats:
         door = _door(folder, env)
         if door is None:
@@ -108,9 +113,11 @@ def _bind(home, kind, name, person, folder, env, chats, *, timeout, out, qr):
             if time.monotonic() >= deadline:
                 raise TimeoutError('No chat was bound in time; channel was not enabled')
             time.sleep(BOUND_POLL_S)
-            chats = _bound(folder, env)
-    keys = [f"{name}:{chat['from']}" for chat in chats]
+            chats = [chat for chat in _bound(folder, env) if chat.get('platform') != 'loom']
+    keys = [f"{name}:{chat['from']}" for chat in [*chats, *web]]
     _enroll(home, kind, name, person, keys)
+    for chat in web:
+        out(f"your brnrd.dev chat ({chat.get('who') or chat['from']}) is saved for {person}")
     for chat in chats:
         where = PLATFORMS.get(chat.get('platform'), chat.get('platform') or kind)
         out(f"your {where} chat is bound to your brnrd account (as {chat.get('who') or chat['from']}); "

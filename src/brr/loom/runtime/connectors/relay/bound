@@ -4,7 +4,10 @@
 A chat binds to the account, not to a loom (`GET /v1/daemons/chats`), so a
 computer set up anew finds the person's chats here instead of pairing again.
 Each row is ``{"from", "platform", "who"}``: ``from`` is the verified sender
-as ``in`` puts it on a letter. Only a verified sender is listed.
+as ``in`` puts it on a letter. Only a verified sender is listed. The last
+row, platform ``loom``, is the account's own brnrd.dev chat: ``in`` stamps
+its letters ``loom:<login>``, and only the account that approved this
+computer can write them.
 """
 import json
 import sys
@@ -24,4 +27,6 @@ for chat in chats.get('chats') or ():
     user = chat['chat_id'] if chat['platform'] == 'whatsapp' else chat['principal_id']
     rows.append(dict(platform=chat['platform'], who=chat.get('principal_display') or user,
                      **{'from': f"{chat['platform']}:{user}"}))
+if chats.get('login'):
+    rows.append({'platform': 'loom', 'who': chats['login'], 'from': f"loom:{chats['login']}"})
 print(json.dumps(rows))
