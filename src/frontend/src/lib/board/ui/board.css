@@ -64,6 +64,23 @@
 .brd #live.off {
 	color: #b00;
 }
+/* a newer page: a tiny mark, loud only when a fetch failed against it */
+.brd #update {
+	font: inherit;
+	font-size: 0.85em;
+	padding: 0 4px;
+	margin-left: 4px;
+	border: 1px solid #ccc;
+	border-radius: 3px;
+	background: none;
+	color: #777;
+	cursor: pointer;
+}
+.brd #update.loud {
+	border-color: #b00;
+	color: #b00;
+	font-weight: 600;
+}
 .brd #rail {
 	flex-shrink: 0;
 	height: 42px;

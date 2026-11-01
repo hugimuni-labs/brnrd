@@ -76,19 +76,16 @@
 		});
 	});
 
-	// A newer page (v44hse5kpf, 4912): a tab he is looking at never reloads under him; it says so, and takes the page
-	// once the tab is away (or at the next navigation, SvelteKit's own). The draft and its armed wish ride
-	// sessionStorage across the reload.
-	let away = $state(typeof document !== 'undefined' && document.hidden);
+	// A newer page (v44hse5kpf, 4912; his steer 4a46d017): never reloaded for him. A tiny `update` mark beside the
+	// connection takes it on a click, the draft and its armed wish riding sessionStorage across; a fetch failing on
+	// old code makes the mark loud, and still waits for his click.
 	$effect(() => {
 		if (updated.current) b.newer = true;
 	});
-	$effect(() => {
-		if (b.newer && away) {
-			b.keep();
-			location.reload();
-		}
-	});
+	const update = () => {
+		b.keep();
+		location.reload();
+	};
 
 	onMount(() => {
 		// e2e reads the board's state here (src/frontend/e2e), as the board.html proofs read its globals
@@ -99,8 +96,6 @@
 		return () => (clearInterval(faces), off());
 	});
 </script>
-
-<svelte:document onvisibilitychange={() => (away = document.hidden)} />
 
 <div class="brd" class:sheet={!!b.beadId}>
 	<header>
@@ -117,9 +112,13 @@
 				'?'}{#if b.model?.via}
 				via {b.model.via}{/if}</span
 		>
-		<span id="live" class="dim" class:off={b.live === 'offline'}
-			>{b.error || (b.newer ? 'a newer page · it loads while this tab is away' : b.live)}</span
-		>
+		<span id="live" class="dim" class:off={b.live === 'offline'}>{b.error || b.live}</span>
+		{#if b.newer}<button
+				id="update"
+				class:loud={!!b.error}
+				title="a newer page is out: load it (the draft stays)"
+				onclick={update}>update</button
+			>{/if}
 		<label id="internal" class="dim"
 			><input type="checkbox" bind:checked={b.showAll} onchange={() => b.persist()} /> show internal</label
 		>
