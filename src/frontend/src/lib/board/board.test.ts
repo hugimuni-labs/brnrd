@@ -164,13 +164,13 @@ test('calls: an open ask stands, verdicts fold into one counted line, a pending 
 	const s = stack(calls, pend, new Set(), false);
 	deepEqual(
 		s.shown.map((c) => c.wish),
-		['a']
+		[]
 	);
-	deepEqual(s.fold, { verdicts: 1, answered: 2 });
+	deepEqual(s.fold, { asks: 1, verdicts: 1, answered: 2 });
 	equal(stack(calls, pend, new Set(), true).shown.length, 4);
 	deepEqual(
 		stack(calls, [], new Set(['b']), false).shown.map((c) => c.wish),
-		['a', 'b']
+		['b']
 	);
 });
 

@@ -425,13 +425,11 @@
 }
 .brd footer {
 	flex-shrink: 0;
-	height: 26px;
 	border-top: 1px solid #aaa;
 	padding: 5px 16px;
 	color: #777;
 	font-size: 10px;
-	white-space: nowrap;
-	overflow: hidden;
+	line-height: 15px;
 }
 @media (max-width: 799px) {
 	.brd header {
