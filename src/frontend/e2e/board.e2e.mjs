@@ -56,13 +56,16 @@ test('a settled thread opens beside the stack and folds back', async () => {
 	await B.page.waitForSelector('[data-column="golf"]', { state: 'detached' });
 });
 
-test('the inbox stacks the calls: the open ask stands, the verdict and the answered one fold to a line', async () => {
+test('the inbox stacks the calls as one counted line that opens on a tap', async () => {
 	const calls = B.page.locator('[data-column="inbox"] .calls');
-	assert.equal(await calls.locator('.call').count(), 1);
-	assert.equal(await calls.locator('.call.ask [data-act="done"]').count(), 1);
-	assert.equal(await calls.locator('.cfold').innerText(), '▸ 1 verdict waits on you · 1 answered');
+	assert.equal(await calls.locator('.call').count(), 0);
+	assert.equal(
+		await calls.locator('.cfold').innerText(),
+		'▸ 1 asks you · 1 verdict waits on you · 1 answered'
+	);
 	await calls.locator('.cfold').click();
 	assert.equal(await calls.locator('.call').count(), 3);
+	assert.equal(await calls.locator('.call.ask [data-act="done"]').count(), 1);
 	assert.equal(await calls.locator('.call.shut').count(), 1);
 	assert.equal(await calls.locator('.call:not(.ask):not(.shut) [data-act="agree"]').count(), 1);
 	await calls.locator('.cfold').click();
