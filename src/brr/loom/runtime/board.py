@@ -452,16 +452,30 @@ def window(part: dict, before: str | None = None, until: str | None = None, most
 
 
 class Tools:
-    """Each room's tape, re-read only when its trace moved: a few stats per room per tick."""
+    """Each room's tape, re-read only when its trace moved: a few stats per room per tick.
 
-    def __init__(self, home: Home):
+    The rooms are listed again every ``every`` seconds; between listings only a room whose
+    tape moved within that span is stat'ed, so a home of hundreds of dead rooms costs a few
+    stats per tick, and a quiet room that wakes shows within ``every`` seconds.
+    """
+
+    EVERY = 2.0
+
+    def __init__(self, home: Home, every: float | None = None):
         self.home = home
+        self.every = self.EVERY if every is None else every
         self.tools, self.live, self.sig = {}, {}, {}
+        self.listed, self.ports, self.hot = None, [], {}
 
     def read(self) -> bool:
         """Re-read the rooms whose trace moved; True when any did. A codex room's calls come from its body.log."""
-        moved, sig = False, {}
-        for port in (self.home.root / "rooms").glob("*/port"):
+        now = time.monotonic()
+        whole = self.listed is None or now - self.listed >= self.every
+        if whole:
+            self.listed, self.ports = now, list((self.home.root / "rooms").glob("*/port"))
+            self.hot = {strand: at for strand, at in self.hot.items() if now - at < self.every}
+        moved, sig = False, {} if whole else dict(self.sig)
+        for port in self.ports if whole else [self.home.root / "rooms" / s / "port" for s in self.hot]:
             strand, stamp = port.parent.name, []
             for name in ("tools.jsonl", "body.log", ".paused.json"):
                 if name == "body.log" and stamp[0]:
@@ -473,10 +487,12 @@ class Tools:
                 except OSError:
                     stamp.append(None)
             if not (stamp[0] or stamp[1]):
+                sig.pop(strand, None)
                 continue
             sig[strand] = tuple(stamp)
             if self.sig.get(strand) == sig[strand]:
                 continue
+            self.hot[strand] = now
             rows = tooltrace.read(port.parent, limit=TOOLS)
             self.tools[strand] = [{"at": _iso(r["at"]), "end": r["end"] and _iso(r["end"]), "tool": r["tool"],
                                    "arg": r["arg"], "cmd": r.get("cmd", ""), "say": r.get("say", ""),

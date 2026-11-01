@@ -443,11 +443,12 @@ def _supersede(home: Home, facts, kind: str, ident: str, covers=True) -> None:
 
 
 def _closures(home: Home, facts: list[Fact], threads: list[str]) -> list[Fact]:
-    from .lifecycle import CLOSED, closing_commit, read_thread
+    from .lifecycle import CLOSED, closing_commit, landed_reader
     writers = sender_threads(facts)
     ids = facts.by_id if isinstance(facts, LedgerView) else {fact.id for fact in facts}
+    read_thread = landed_reader(home)
     for thread in threads:
-        data = read_thread(home, thread)
+        data = read_thread(thread)
         if data.get("status") not in CLOSED:
             continue
         commit, why, writer = closing_commit(home, thread)
@@ -2229,6 +2230,10 @@ def _hold_loop(home: Home, stop) -> int | None:
     return None
 
 
+#: Seconds between walks of the runtime source for a hand edit.
+SOURCE_EVERY = 5.0
+
+
 def _source_fingerprint():
     root = Path(__file__).parent
     return hashlib.sha256(repr([
@@ -2329,6 +2334,7 @@ def run(root: Path | str, *, adapter: str = "fake", core: str = "haiku",
         from . import usage
         config = load_config(home.root)
         fingerprint = _source_fingerprint()
+        next_source, source_moved = time.monotonic() + SOURCE_EVERY, False
         next_usage = 0
         from .router import Router
         router = Router(home, config)
@@ -2409,7 +2415,10 @@ def run(root: Path | str, *, adapter: str = "fake", core: str = "haiku",
                 # Only at an idle tick, and the re-exec follows in this same pass.
                 health.guard("update", updater.step, config, functools.partial(_idle, home),
                              backoff=False)
-            if updater.moved is not None or _source_fingerprint() != fingerprint:
+            # The walk of the runtime's source is paced; follow-main's moves need none of it.
+            if updater.moved is None and time.monotonic() >= next_source:
+                next_source, source_moved = time.monotonic() + SOURCE_EVERY, _source_fingerprint() != fingerprint
+            if updater.moved is not None or source_moved:
                 _log(home, "runtime source changed; re-executing loom")
                 inputs.close()
                 _shutdown(bodies)
