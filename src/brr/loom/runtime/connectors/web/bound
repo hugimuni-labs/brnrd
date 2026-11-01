@@ -1,0 +1,16 @@
+#!/usr/bin/env python3
+"""The page's one chat, as ``in`` writes it, once ``board_port`` is set; none while the page is off.
+
+The board's composer writes as ``local`` (``Parts.send``): only this
+computer can reach 127.0.0.1, so the sender needs no code to prove it.
+"""
+import json
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).parent))
+from common import USER, link, port
+
+at = port()
+print(json.dumps([] if at is None else
+                 [{'from': USER, 'platform': 'web', 'who': 'this computer', 'link': link(at)}]))

@@ -55,3 +55,6 @@ build/
 /.topics
 # PR screenshots ride the PR body, not the tree
 /docs/pr-assets/
+
+# The SvelteKit build release.yml copies into the wheel (board.spa_root).
+src/brr/loom/runtime/frontend/

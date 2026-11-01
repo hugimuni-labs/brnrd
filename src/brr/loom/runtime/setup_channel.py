@@ -105,7 +105,7 @@ def _what_to_do(why, bot):
 
 
 #: How a platform reads in a sentence.
-PLATFORMS = {'telegram': 'Telegram', 'whatsapp': 'WhatsApp'}
+PLATFORMS = {'telegram': 'Telegram', 'whatsapp': 'WhatsApp', 'web': 'In your browser'}
 
 
 def _bind(home, kind, name, person, folder, env, chats, *, timeout, out, qr, links):
@@ -147,6 +147,9 @@ def _bind(home, kind, name, person, folder, env, chats, *, timeout, out, qr, lin
     for chat in web:
         out(f"your brnrd.dev chat ({chat.get('who') or chat['from']}) is saved for {person}")
     for chat in chats:
+        if chat.get('platform') == 'web':
+            out(f"your page is {chat['link']}; saved it for {person}")
+            continue
         where = PLATFORMS.get(chat.get('platform'), chat.get('platform') or kind)
         out(f"your {where} chat is bound to your brnrd account (as {chat.get('who') or chat['from']}); "
             f"saved it for {person}")
@@ -375,7 +378,10 @@ def first_letter(home, person, *, timeout=600, out=print, running=None, sleep=ti
 CHOICES = {
     'relay': 'brnrd cloud: Telegram or WhatsApp through brnrd\'s own bot, and a chat on brnrd.dev',
     'telegram': 'Your own Telegram bot (two minutes, in the Telegram app)',
+    'web': 'A page on this computer, in your browser (nothing to sign in to)',
 }
+#: What a first setup starts with ticked: brnrd cloud, and the page, which needs nothing.
+START = ('relay', 'web')
 HIDDEN = {'fake'}
 
 
@@ -417,7 +423,9 @@ def door_states(home):
                 found[name] = (kind, None, str(exc))
                 continue
             where = ', '.join(sorted({PLATFORMS.get(c.get('platform'), c.get('platform') or '?') for c in chats}))
-            found[name] = (kind, bool(chats), f'{where} bound' if chats else 'no chat bound any more')
+            said = (f"at {chats[0]['link']}" if chats and chats[0].get('platform') == 'web' else
+                    f'{where} bound' if chats else 'no chat bound any more')
+            found[name] = (kind, bool(chats), said)
         elif (folder / 'door').is_file():
             door = _door(folder, env, 'status')
             found[name] = (kind, door is not None,
@@ -430,7 +438,7 @@ def door_states(home):
 def _choose_doors(home, kinds):
     """Which doors to connect, one or several: brnrd needs at least one to reach the person.
 
-    A first setup starts on brnrd cloud alone. Run again, a door that
+    A first setup starts on brnrd cloud and the page on this computer. Run again, a door that
     still reaches the person starts off (it needs nothing), and one that
     went dark starts on, so Enter mends it.
     """
@@ -445,13 +453,58 @@ def _choose_doors(home, kinds):
         rows.append((kind, CHOICES.get(kind, kind) + note, ''))
     start = {k for k in offered if k in states and states[k][0] is not True}
     if not states:
-        start = {offered[0]}
+        start = {k for k in START if k in offered} or {offered[0]}
     _step('How should brnrd reach you? Pick one or more')
     while True:
         picked = checklist(rows, start=start)
         if picked or any(live for live, _ in states.values()):
             return [k for k in offered if k in picked]
         print(f"  {style.cross()} brnrd needs at least one way to reach you; switch one on.")
+
+
+def _label(kind):
+    return CHOICES.get(kind, kind).split(':')[0].split(' (')[0].split(',')[0]
+
+
+def _walk_doors(home, doors, kinds, connect):
+    """Connect each ticked door in turn; ``(paired, missed)``. Any one can be skipped, none is a dead end.
+
+    Ctrl-C at a door asks once: go on, back to the list, or stop. A door that
+    fails or is skipped is missed; the others still reach the person. The page
+    on this computer comes last and needs nothing, so with it ticked setup
+    always ends connected; switched off and nothing else connected, the list
+    comes back once, with one line, then setup stops.
+    """
+    paired, done, tried, again = [], set(), [], True
+    queue = sorted(doors, key=lambda k: k == 'web')
+    while queue or (not done and again and 'web' in kinds and 'web' not in tried):
+        if not queue:
+            again = False
+            print(f"  {style.dot()} No door connected yet; pick again (the page on this computer needs nothing).")
+            queue = sorted(_choose_doors(home, kinds), key=lambda k: k == 'web')
+            continue
+        kind = queue.pop(0)
+        tried.append(kind)
+        _step(f"Connect {_label(kind)}")
+        print(f"  {style.dim('Ctrl-C skips this one')}")
+        try:
+            paired.append(connect(kind))
+            done.add(kind)
+        except (ValueError, TimeoutError) as exc:
+            print(f"  {style.cross()} {exc}")
+        except KeyboardInterrupt:
+            print()
+            answer = _ask('Skipped. Enter goes on, b goes back to the list, q stops setup:').lower()
+            if answer.startswith('q'):
+                raise
+            if answer.startswith('b'):
+                queue = sorted((k for k in _choose_doors(home, kinds) if k not in done), key=lambda k: k == 'web')
+    if not done:
+        raise ValueError('No door was connected, so brnrd cannot reach you yet; run brnrd setup again.')
+    missed = [k for k in dict.fromkeys(tried) if k not in done]
+    if done == {'web'} and missed:
+        print(f"  {style.dot()} brnrd reaches you on the page for now; add more: brnrd setup channel")
+    return paired, missed
 
 
 def _channel_name(home, kind):
@@ -865,7 +918,7 @@ def main(argv=None):
             return 0
         if not args.kind:
             for kind in doors:
-                _ok(CHOICES.get(kind, kind).split(':')[0].split(' (')[0])
+                _ok(_label(kind))
         login, why = _gh_login()
         # Before any seed: an earlier install's memory is restored, never seeded over.
         repo = backup_repo(home, login)
@@ -887,21 +940,16 @@ def main(argv=None):
             picked = checklist(rows)
         left = _take_offers(home, picked, rows, login, repo)
         onboarding_asks(home, also=[LATER[key] for key in left])
-        links, paired, missed = [], [], []
-        for kind in doors:
-            _step(f"Connect {CHOICES.get(kind, kind).split(':')[0].split(' (')[0]}")
-            name = args.name or _channel_name(home, kind)
-            try:
-                paired.append(pair(home, kind, name, person, timeout=args.timeout, links=links,
-                                   env={'BRNRD_SETUP_BOARD': '1' if kind == 'relay' and 'board' in picked else ''}))
-            except (ValueError, TimeoutError) as exc:
-                if len(doors) == 1:
-                    raise
-                # One door missed is not the setup failed: the others still reach the person.
-                print(f"  {style.cross()} {exc}")
-                missed.append(kind)
-        if not paired:  # every door missed; a missed one raised, so a listed one connected
-            raise ValueError('No door was connected, so brnrd cannot reach you yet; run brnrd setup again.')
+        links = []
+
+        def connect(kind):
+            return pair(home, kind, args.name or _channel_name(home, kind), person, timeout=args.timeout,
+                        links=links, env={'BRNRD_SETUP_BOARD': '1' if kind == 'relay' and 'board' in picked else ''})
+        if args.kind:  # one door named on the command line: it connects or setup says why
+            _step(f"Connect {_label(args.kind)}")
+            paired, missed = [connect(args.kind)], []
+        else:
+            paired, missed = _walk_doors(home, doors, kinds, connect)
         if missed:
             print(f"  {style.dot()} brnrd setup channel connects the rest later.")
         if any(paired) and args.wait > 0:

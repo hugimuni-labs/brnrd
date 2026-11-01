@@ -428,7 +428,7 @@ def test_guided_setup_asks_in_plain_words_and_derives_the_channel_name(tmp_path,
     monkeypatch.setattr(setup_channel.shutil, 'which', lambda name: f'/bin/{name}')
     monkeypatch.setattr('brr.loom.runtime.service._windows', lambda home, shell: None)
     monkeypatch.setattr('brr.loom.runtime.service._defaults', lambda: [('claude', ''), ('codex', '')])
-    # Piped answers: codex, then switch brnrd cloud off and the own bot on; nothing asks a name.
+    # Piped answers: codex, then switch brnrd cloud off and the own bot on (the page stays on); nothing asks a name.
     monkeypatch.setattr('sys.stdin', io.StringIO('2\n1 2\n'))
     assert setup_channel.main(['--home', str(tmp_path)]) == 0
     out = capsys.readouterr().out
@@ -437,7 +437,7 @@ def test_guided_setup_asks_in_plain_words_and_derives_the_channel_name(tmp_path,
     # The name is the resident's first question, not a form field.
     for gone in ('Channel kind', 'Name this channel', 'Your person name', 'fake', 'call you', 'Your name'):
         assert gone not in out
-    assert [a[1:] for a in calls] == [('telegram', 'telegram', 'sasha.petrova')]
+    assert [a[1:] for a in calls] == [('telegram', 'telegram', 'sasha.petrova'), ('web', 'web', 'sasha.petrova')]
     assert (tmp_path / 'loom' / 'preferences.toml').read_text().startswith('model.default = "codex"')
     assert load_config(tmp_path).body is None
 
@@ -779,8 +779,91 @@ def test_setup_refuses_zero_doors_and_connects_every_door_picked(tmp_path, monke
     monkeypatch.setattr(setup_channel, 'pair', lambda home, kind, name, person, **kw: calls.append(
         (kind, name, kw['env']['BRNRD_SETUP_BOARD'])))
     monkeypatch.setattr(setup_channel, '_take_offers', lambda home, picked, rows, login, repo: [])
-    # Switch brnrd cloud off (nothing left: refused), then from the start again add the own bot; the offers keep Enter.
-    monkeypatch.setattr('sys.stdin', io.StringIO('1\n2\n\n'))
+    # A first setup starts on brnrd cloud and the page. Switch both off (nothing left: refused), then from the
+    # start again add the own bot: all three doors are offered and each one ticked is walked in turn.
+    monkeypatch.setattr('sys.stdin', io.StringIO('1 3\n2\n\n'))
     assert setup_channel.main(['--home', str(tmp_path), '--person', 'ada']) == 0
-    assert 'at least one way to reach you' in capsys.readouterr().out
-    assert calls == [('relay', 'relay', '1'), ('telegram', 'telegram', '')]
+    out = capsys.readouterr().out
+    assert 'at least one way to reach you' in out
+    assert all(label in out for label in setup_channel.CHOICES.values())
+    assert calls == [('relay', 'relay', '1'), ('telegram', 'telegram', ''), ('web', 'web', '')]
+
+
+def test_the_web_door_needs_no_code_and_its_page_is_the_link_and_the_board_writes_through_it(tmp_path):
+    """The page on this computer as a door: setup gives it a loopback port, the board's letters come from it."""
+    from brr.loom.runtime import board
+    from brr.loom.runtime.selfrepo import init_self
+    home = home_at(tmp_path)
+    init_self(tmp_path, person='ada')
+    setup_channel._enroll(home, 'fake', 'desk', 'ada', ['desk:42'])
+    links = []
+    assert setup_channel.pair(home, 'web', 'web', 'ada', links=links) == 'web:local'
+    port = load_config(tmp_path).board_port
+    assert port and port.isdigit()
+    assert links == [('In your browser', f'http://127.0.0.1:{port}')]
+    assert setup_channel.door_states(home)['web'] == ('web', True, f'at http://127.0.0.1:{port}')
+    # Run again: the port stays, so the page keeps its address.
+    setup_channel.pair(home, 'web', 'web', 'ada')
+    assert load_config(tmp_path).board_port == port
+    # The page comes first though the chat was enrolled first: a letter typed there is answered there.
+    assert board.person_of(home, None) == ('ada', 'web', 'local')
+    board.Parts(home, lambda: load_config(tmp_path), None).send('hello')
+    connector.drain(home, 'web', tmp_path / 'loom/connectors/web/state/in', {})
+    from brr.loom.runtime.ledger import read_facts
+    letter = next(f for f in read_facts(home) if f.kind == 'letter')
+    assert letter.data['from'] == 'person:ada'
+
+
+def test_the_web_door_goes_dark_when_its_port_is_unset_and_setup_mends_it(tmp_path):
+    home = home_at(tmp_path)
+    setup_channel.pair(home, 'web', 'web', 'ada')
+    set_value(tmp_path, 'board_port', '')
+    assert setup_channel.door_states(home)['web'][1] is False
+    setup_channel.pair(home, 'web', 'web', 'ada')
+    assert setup_channel.door_states(home)['web'][1] is True
+
+
+def _walk(monkeypatch, tmp_path, answers, outcomes):
+    """``_walk_doors`` with piped answers; ``outcomes[kind]`` is a list of what each try at that door does."""
+    import io
+    monkeypatch.setattr('sys.stdin', io.StringIO(answers))
+    tried = []
+
+    def connect(kind):
+        tried.append(kind)
+        what = outcomes[kind].pop(0)
+        if isinstance(what, BaseException):
+            raise what
+        return what
+    kinds = ['fake', 'relay', 'telegram', 'web']
+    return tried, lambda doors: setup_channel._walk_doors(home_at(tmp_path), doors, kinds, connect)
+
+
+def test_a_door_skipped_with_ctrl_c_goes_on_and_the_page_still_connects(tmp_path, monkeypatch, capsys):
+    """9989: every door step can be skipped; with nothing else connected, the page is the door."""
+    tried, walk = _walk(monkeypatch, tmp_path, '\n', {'relay': [KeyboardInterrupt()], 'web': ['web:local']})
+    assert walk(['web', 'relay']) == (['web:local'], ['relay'])
+    assert tried == ['relay', 'web']  # the page last: it needs nothing, the others may
+    out = capsys.readouterr().out
+    assert 'Ctrl-C skips this one' in out and 'on the page for now; add more: brnrd setup channel' in out
+
+
+def test_back_goes_to_the_list_and_q_stops(tmp_path, monkeypatch):
+    # b: the list again (piped: switch the own bot on), and the walk goes on from the new picks, relay again included.
+    tried, walk = _walk(monkeypatch, tmp_path, 'b\n2\n', {'relay': [KeyboardInterrupt(), 'relay:1'],
+                                                         'telegram': ['telegram:1'], 'web': ['web:local']})
+    assert walk(['relay', 'web']) == (['relay:1', 'telegram:1', 'web:local'], [])
+    assert tried == ['relay', 'relay', 'telegram', 'web']
+    (tmp_path / 'q').mkdir()
+    tried, walk = _walk(monkeypatch, tmp_path / 'q', 'q\n', {'relay': [KeyboardInterrupt()]})
+    with pytest.raises(KeyboardInterrupt):
+        walk(['relay'])
+
+
+def test_with_the_page_switched_off_a_dead_end_brings_the_list_back_once(tmp_path, monkeypatch, capsys):
+    # Relay fails; the list comes back once (piped: Enter keeps its picks, relay again), it fails again: setup stops.
+    tried, walk = _walk(monkeypatch, tmp_path, '3\n', {'relay': [ValueError('no'), ValueError('no')]})
+    with pytest.raises(ValueError, match='No door was connected'):
+        walk(['relay'])
+    assert capsys.readouterr().out.count('No door connected yet; pick again') == 1
+    assert tried == ['relay', 'relay']
