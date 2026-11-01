@@ -800,22 +800,35 @@ def _read_fuel(root, shells, read, timeout=FUEL_TIMEOUT):
 
 
 def _choose_body(home):
-    """The harness brnrd thinks with: every one setup knows, found or not, with its fuel; asked when two are found."""
-    from .adapters import body_label, parse_body
+    """The harnesses brnrd thinks with, best first: every one setup knows, found or not, with its fuel.
+
+    Found ones are numbered in the person's order (``bodies.order``), else
+    ``bodies/order``'s. Enter keeps it; typed numbers are the new order, and
+    one left out is switched off. The first is ``model.default``; the loom
+    falls down the list when it is missing or out of fuel.
+    """
+    from .adapters import _preferences, body_label, body_order, default_order, parse_body, set_order
     from .service import _body_choice, _defaults, _windows, _write_body
-    _step('Which AI should brnrd think with?')
+    _step('Which AI should brnrd think with? Best first')
     seed_config(home.root)
     current = _body_choice(home.root)
     floor = load_config(home.root).hold_floor_pct
-    found, offered = [], []
-    known = _defaults()
-    if current and parse_body(current)[0] not in {shell for shell, _core in known}:
-        known.append((parse_body(current)[0], ''))
-    installed = [shell for shell, _core in known if shutil.which(shell)]
+    ranked = [shell for shell, _core in _defaults()]
+    chosen = _preferences(home)[1].get("bodies.order")
+    mine = [s for s in body_order(home) if s in ranked] if chosen else []
+    known = [*mine, *(s for s in ranked if s not in mine)]
+    if current and parse_body(current)[0] not in known:
+        known.append(parse_body(current)[0])
+    off = {s for s in known if chosen and s in ranked and s not in mine}
+    if current and parse_body(current)[0] in known and parse_body(current)[0] not in off:
+        known.remove(parse_body(current)[0])
+        known.insert(0, parse_body(current)[0])
+    installed = [shell for shell in known if shutil.which(shell)]
     if installed:
         print(f"    {style.dim('· checking ' + ', '.join(installed) + ' …')}", flush=True)
     readings = _read_fuel(home.root, installed, _windows)
-    for shell, core in known:
+    found, fueled = [], []
+    for shell in known:
         if not shutil.which(shell):
             print(f"    {style.dim('·')} {shell}: {style.dim('not installed')}")
             continue
@@ -828,31 +841,41 @@ def _choose_body(home):
             fuel = ' · '.join(f"{w['name']} {w['left_pct']:g}%" for w in windows) + ' left'
             if any(w['left_pct'] <= floor for w in windows):
                 fuel += style.dim(' (low: it waits until this refills)')
-        label = current if current and parse_body(current)[0] == shell else body_label(shell, core)
-        found.append(label)
-        offered.append(windows is not None and not any(w['left_pct'] <= floor for w in windows))
-        print(f"    {len(found)}. {shell}: {fuel}")
+        found.append(shell)
+        fueled.append(windows is not None and not any(w['left_pct'] <= floor for w in windows))
+        print(f"    {len(found)}. {shell}: {fuel}" + (style.dim(' (off)') if shell in off else ''))
     if not found:
         # Like the daemon-era runner rung: say it, keep going; pairing does not need it.
-        print(f"  {style.cross()} Neither claude nor codex is on PATH: install Claude Code "
+        print(f"  {style.cross()} No AI harness is on PATH: install Claude Code "
               '(https://claude.com/claude-code) or Codex, then run brnrd setup again')
         return
-    # Enter keeps the one already set, else the first with fuel.
-    pick = next((i for i, label in enumerate(found) if label == current), None)
-    if pick is None:
-        pick = next((i for i, ok in enumerate(offered) if ok), 0)
+    # Enter keeps the order, the one already set first, else the first with fuel; the ones off stay off.
+    keep = [i for i, shell in enumerate(found) if shell not in off]
+    if not current or parse_body(current)[0] not in found:
+        first = next((i for i in keep if fueled[i]), keep[0] if keep else 0)
+        keep = [first, *(i for i in keep if i != first)]
+    picked = keep or [0]
     if len(found) > 1:
         while True:
-            answer = _ask(f'Choose 1-{len(found)}:', str(pick + 1))
-            if answer.isdigit() and 1 <= int(answer) <= len(found):
+            answer = _ask('Enter keeps this order; or type the numbers best first (one left out is off):',
+                          ' '.join(str(i + 1) for i in picked))
+            tokens = answer.replace(',', ' ').split()
+            if tokens and all(t.isdigit() and 1 <= int(t) <= len(found) for t in tokens):
                 break
-            print(f"  {style.dot()} Type a number from the list.")
-        pick = int(answer) - 1
-    choice = found[pick]
+            print(f"  {style.dot()} Type numbers from the list, e.g. 2 1.")
+        picked = list(dict.fromkeys(int(t) - 1 for t in tokens))
+    order = [found[i] for i in picked]
+    head = order[0]
+    choice = current if current and parse_body(current)[0] == head else body_label(head, '')
     if choice != current:
         _write_body(home.root, choice)
+    # Ranked harnesses not installed here stay on the list, after the found ones: installed later, they just work.
+    rest = [s for s in default_order() if s not in found and s not in off]
+    set_order(home, [s for s in [*order, *rest] if s in ranked] or [head])
     _ok(f"{choice} (kept)" if choice == current else choice)
-    print(f"  {style.dim('Change it any time: brnrd setup, or model.default in loom/preferences.toml.')}")
+    if len(order) > 1:
+        print(f"  {style.dim('then ' + ', '.join(order[1:]) + ' when ' + head + ' is out of fuel or missing')}")
+    print(f"  {style.dim('Change it any time: brnrd setup, or bodies.order in loom/preferences.toml.')}")
 
 
 def _status(home):
@@ -882,7 +905,7 @@ def _status(home):
     else:
         print(f"  {style.dot()} not running: start it with `brnrd loom install`")
     if not dark:
-        print(f"  {style.dim('Add or mend a door: brnrd setup channel. Change the AI: model.default in loom/preferences.toml.')}")
+        print(f"  {style.dim('Add or mend a door: brnrd setup channel. Change the AI: brnrd setup channel.')}")
     return 0
 
 

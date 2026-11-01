@@ -169,12 +169,13 @@ def _preferred_default(home: Path) -> bool:
 
 
 def _defaults() -> list[tuple[str, str]]:
-    """The bodies install may pick, in order; an empty core is the harness's own pick.
+    """The bodies install may pick, in ``bodies/order``'s order; an empty core is the harness's own pick.
 
     codex's body reads the person's codex model at each run, else runs codex's
     own default, so codex needs no model named here to be offered.
     """
-    return [("claude", ""), ("codex", "")]
+    from .adapters import default_order
+    return [(shell, "") for shell in default_order()]
 
 
 def _windows(home: Path, shell: str) -> list[dict] | None:

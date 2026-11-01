@@ -505,3 +505,33 @@ def test_a_child_an_earlier_image_spawned_is_waited_on_by_pid():
     assert code == 3
     assert _wait_inherited(pid) is None  # reaped: nothing left to wait on
     assert _wait_inherited(1) is None    # never ours
+
+
+def test_a_preferred_body_missing_here_gives_way_to_the_next_on_the_list(tmp_path, monkeypatch):
+    """The priority list at birth: claude is preferred but not installed, so the thread is born on codex."""
+    import shutil
+    from brr.loom.runtime import adapters
+    from brr.loom.runtime.selfrepo import git
+    starts = tmp_path / "home/starts"
+    home = _parked_home(tmp_path, monkeypatch)
+    root = home.root
+    (root / "self/threads/inbox/seat").write_text("")  # no seat body: the person's preferences choose
+    git(root / "self", "commit", "-qam", "Let preferences choose.")
+    codex = root / "loom/bodies/codex/run"
+    codex.write_text(f"#!{sys.executable}\nimport pathlib, time\nwith pathlib.Path({str(starts)!r}).open('a') as out:\n"
+                     "    out.write('codex\\n')\ntime.sleep(30)\n")
+    adapters.prefer(Loom(root).home, "default", "claude/echo")
+    adapters.set_order(Loom(root).home, ["claude", "codex"])
+    real_which = shutil.which
+    monkeypatch.setattr(shutil, "which", lambda name, *a, **kw: (
+        f"/bin/{name}" if name == "codex" else None if name in {"claude", "grok", "vibe"} else real_which(name, *a, **kw)))
+    loom = Loom(root)
+    loom.start()
+    try:
+        wait_until(lambda: _start_lines(starts), 10, loom.dump)
+        assert starts.read_text() == "codex\n"
+        assert _leases(loom) == [(1, "codex", "")]
+    finally:
+        loom.halt()
+        kill_bodies(loom)
+    assert not loom.errors

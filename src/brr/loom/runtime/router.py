@@ -452,7 +452,7 @@ class Router:
                               "words for a person go to the reply address on their letter; "
                               "to run the thread here, empty its `for:`")
                 continue
-            from .adapters import RepoSeatError, at_birth, repos as seat_repos, seat_text
+            from .adapters import RepoSeatError, _entries, at_birth, fall_down, repos as seat_repos, seat_text
             from .repos import AuthorError, require_body_author
             try:
                 text = seat_text(home, thread)
@@ -465,7 +465,11 @@ class Router:
                 for letter, channel in _person_dms(home, facts, thread):
                     if letter.data.get("wake") and facts.index(letter) > freed:
                         _wake_letter(home, facts, thread, seated, letter, channel, parked=False)
-                choice = _wake_choice(facts, thread) or seated
+                woken = _wake_choice(facts, thread)
+                choice = woken or seated
+                if not woken and not any(key == "body" for key, _ in _entries(text)):
+                    # A preferred body that cannot run now gives way to the next on the person's list.
+                    choice = fall_down(home, choice, lambda shell: _can_run(home, shell))
                 declared = seat_repos(text, home)
                 require_body_author(home)
             except (ValueError, OSError) as exc:
@@ -791,3 +795,10 @@ def _newest_router(facts: list[Fact]) -> int | None:
 
 def _routable(home: Home, facts: list[Fact]) -> list[str]:
     return sorted(main_snapshot(home))
+
+
+def _can_run(home, shell: str) -> bool:
+    """Is ``shell`` installed here, with fuel above the floor (or none read yet)?"""
+    import shutil
+    from .usage import dry_until
+    return shutil.which(shell) is not None and dry_until(home, shell) is None
