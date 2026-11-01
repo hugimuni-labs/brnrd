@@ -19,13 +19,6 @@ def main(argv: list[str] | None = None) -> int:
     except SendError as exc:
         print(str(exc), file=sys.stderr)
         return 1
-    if outcome.status == "merged":
-        # The shed tally counts turns since the last landing (shed.py).
-        room = Path(ns.room).resolve()
-        room = next((r for r in (room, room.parent) if (r / "port").is_dir()), None)
-        if room is not None:
-            from .shed import landed
-            landed(room)
     return _emit(outcome)
 
 
