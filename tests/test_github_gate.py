@@ -1266,7 +1266,7 @@ def test_deliver_pr_review_response_posts_to_pr_thread_with_quote(
         "> Replying to [@alice's comment]"
         "(https://github.com/owner/name/pull/62#pullrequestreview-555)"
     )
-    assert text.endswith("On it — will push fixes shortly.")
+    assert text.endswith("On it — will push fixes shortly.\n\n<!-- brnrd:gate -->")
 
 
 def test_mention_trigger_creates_event_for_pr_review_comment(tmp_path, monkeypatch):
@@ -1458,7 +1458,7 @@ def test_response_posts_comment_to_originating_thread(tmp_path, monkeypatch):
     # Label-trigger events: the issue itself is the source, so the
     # response body lands verbatim — no quote preface needed (and one
     # would just point the comment back at its own issue).
-    assert posts == [("/repos/owner/name/issues/42/comments", {"body": "the answer"})]
+    assert posts == [("/repos/owner/name/issues/42/comments", {"body": "the answer\n\n<!-- brnrd:gate -->"})]
     # Events survive delivery — status transitions replace file deletion.
     assert protocol.parse_frontmatter(event_path.read_text(encoding="utf-8"))["status"] == "delivered"
 
@@ -1508,7 +1508,7 @@ def test_response_to_mention_quotes_source_comment(tmp_path, monkeypatch):
         "> Replying to [@alice's comment]"
         "(https://github.com/owner/name/pull/7#issuecomment-12345)"
     )
-    assert text.endswith("Done — pushed to feature-x.")
+    assert text.endswith("Done — pushed to feature-x.\n\n<!-- brnrd:gate -->")
 
 
 def test_response_to_pr_review_comment_replies_in_thread(tmp_path, monkeypatch):
