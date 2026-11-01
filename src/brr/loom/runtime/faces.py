@@ -151,10 +151,15 @@ def proposal_line(proposal: dict | None) -> str:
             "your next letter lets it lapse")
 
 
+# A letter's token is a raw id whose form differs by channel and is often not
+# the letter being answered: the face? hint carries it, the header does not.
+UNSPOKEN = {"letter"}
+
+
 def voice(facts, strand: str, gen: int, thread: str) -> str:
     """The fact the header carries: the last that proposed, whatever the body decided."""
     trigger = _standing(facts, strand, gen, thread)
-    return trigger["token"] if trigger else ""
+    return trigger["token"] if trigger and trigger["kind"] not in UNSPOKEN else ""
 
 
 def faces(facts) -> dict[str, dict]:
