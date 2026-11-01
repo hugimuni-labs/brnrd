@@ -160,6 +160,9 @@ class DaemonDoor(BaseModel):
     the shape a connector's `door` prints."""
     name: str
     link: str
+    # The same code texted alone to brnrd's WhatsApp number binds too
+    # (`webhooks`' WhatsApp redeem); None where this deployment has none.
+    whatsapp: str | None = None
 
 
 class DaemonChat(BaseModel):
@@ -181,6 +184,10 @@ class DaemonChats(BaseModel):
     # this login (`enqueue_loom_letter`), and only this account's session can
     # write them, so the loom enrols it as the approving person's.
     login: str | None = None
+    # Where the person opens each shared chat with no code, by platform
+    # (`https://t.me/<bot>`, `https://wa.me/<digits>`): setup's last step
+    # links every chat it enabled.
+    links: dict[str, str] = {}
 
 
 class DaemonWhoami(BaseModel):

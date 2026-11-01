@@ -654,7 +654,8 @@ def test_cloud_setup_offers_backup_app_and_board_and_brnrd_asks_what_was_left_of
     from brr.loom.runtime.wishes import wishes
     paired, made = [], []
     monkeypatch.setattr(setup_channel, '_gh_login', lambda: ('ada', ''))
-    monkeypatch.setattr(setup_channel, 'back_up_self', lambda home, login: made.append(login) or ('u', True))
+    monkeypatch.setattr(setup_channel, 'backup_repo', lambda home, login: setup_channel.SELF_REPO)
+    monkeypatch.setattr(setup_channel, 'back_up_self', lambda home, login, repo: made.append(login) or ('u', True))
     monkeypatch.setattr(setup_channel, 'pair', lambda *a, **kw: paired.append(kw['env']))
     # Piped: Enter for the body, then leave the App (2) out.
     monkeypatch.setattr('sys.stdin', io.StringIO('2\n'))
@@ -692,3 +693,77 @@ def test_the_backup_adopts_only_a_private_repo(tmp_path, monkeypatch):
     got = subprocess.run(['git', '-C', str(tmp_path / 'self'), 'remote', 'get-url', 'origin'],
                          capture_output=True, text=True).stdout.strip()
     assert got == url
+
+
+def _backed_up_self(tmp_path, monkeypatch):
+    """An earlier install's self, pushed to a private ``ada/brnrd-self`` (a bare repo here)."""
+    from brr import home_link
+    from brr.loom.runtime.selfrepo import init_self
+    init_self(tmp_path / 'before', person='ada')
+    remote = tmp_path / 'remote' / 'brnrd-self.git'
+    subprocess.run(['git', 'clone', '-q', '--bare', str(tmp_path / 'before/self'), str(remote)], check=True)
+    monkeypatch.setattr(home_link, '_repo_view',
+                        lambda owner, name: {'visibility': 'PRIVATE'} if name == 'brnrd-self' else None)
+    monkeypatch.setattr(setup_channel, '_repo_url', lambda login, name: str(tmp_path / 'remote' / f'{name}.git'))
+    return subprocess.run(['git', '-C', str(remote), 'rev-parse', 'main'],
+                          capture_output=True, text=True, check=True).stdout.strip()
+
+
+def test_a_new_install_restores_the_memory_its_backup_holds(tmp_path, monkeypatch):
+    """Item 7 (Sasha's reinstall): setup looks at the backup first and takes the memory back, never seeding over it."""
+    (tmp_path / 'home').mkdir()
+    home = home_at(tmp_path / 'home')
+    sha = _backed_up_self(tmp_path, monkeypatch)
+    assert setup_channel.backup_repo(home, 'ada', ask=lambda question, default: default) == 'brnrd-self'
+    self_dir = tmp_path / 'home/self'
+    assert subprocess.run(['git', '-C', str(self_dir), 'rev-parse', 'main'],
+                          capture_output=True, text=True).stdout.strip() == sha
+    assert (self_dir / '.git/hooks/pre-receive').is_file()
+    # The restored self has its origin, so the backup offer is gone.
+    assert setup_channel.offers(home, 'telegram', 'ada') == []
+
+
+def test_a_declined_restore_backs_up_to_a_new_name_and_never_pushes_over_the_old(tmp_path, monkeypatch):
+    from brr.loom.runtime.selfrepo import init_self
+    (tmp_path / 'home').mkdir()
+    home = home_at(tmp_path / 'home')
+    _backed_up_self(tmp_path, monkeypatch)
+    assert setup_channel.backup_repo(home, 'ada', ask=lambda question, default: 'no') == 'brnrd-self-2'
+    assert not (tmp_path / 'home/self').exists()
+    init_self(tmp_path / 'home', person='ada')
+    with pytest.raises(ValueError, match='already holds a self'):
+        setup_channel.back_up_self(home, 'ada', 'brnrd-self')
+
+
+def test_a_refused_pairing_answer_says_what_the_person_does():
+    """Item 6: Telegram's own reason is carried through, and the message says what to do."""
+    told = setup_channel._what_to_do('Telegram refused sendMessage (HTTP 403: Forbidden: bot was blocked by the user)',
+                                     '@ada_bot')
+    assert 'Restart' in told
+    assert '@ada_bot' in setup_channel._what_to_do('Telegram refused sendMessage (HTTP 403)', '@ada_bot')
+    assert setup_channel._what_to_do('relay: event not found for this account', None) == ''
+
+
+def test_telegram_errors_carry_telegrams_reason_and_never_the_token(tmp_path, monkeypatch):
+    import importlib.util
+    import io
+    from urllib.error import HTTPError
+    path = Path(setup_channel.__file__).parent / 'connectors/telegram/common.py'
+    spec = importlib.util.spec_from_file_location('telegram_common_test', path)
+    common = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(common)
+    (tmp_path / 'token').write_text('123:SECRET\n')
+    monkeypatch.setenv('BRNRD_STATE', str(tmp_path))
+
+    def refuse(code, text):
+        def urlopen(request, timeout):
+            raise HTTPError(request.full_url, code, 'x', {},
+                            io.BytesIO(json.dumps({'ok': False, 'description': text}).encode()))
+        return urlopen
+    monkeypatch.setattr(common, 'urlopen', refuse(403, 'Forbidden: bot was blocked by the user'))
+    with pytest.raises(common.Refused) as refused:
+        common.call('sendMessage', {})
+    assert 'blocked by the user' in str(refused.value) and 'SECRET' not in str(refused.value)
+    monkeypatch.setattr(common, 'urlopen', refuse(409, 'Conflict: terminated by other getUpdates request'))
+    with pytest.raises(RuntimeError, match='another program is reading this bot'):
+        common.call('getUpdates', {})

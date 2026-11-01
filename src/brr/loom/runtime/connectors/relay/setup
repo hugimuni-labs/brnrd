@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Sign this home in to brnrd.dev: an approval link (and its QR code), then the gate written for the relay.
+"""Sign this home in to brnrd.dev: an approval link, then the gate written for the relay.
 
 The handshake is ``brnrd account connect``'s own (``cloud.start_pair`` /
 ``cloud.await_pair``), bound to the home's self repo. Its state lands in
@@ -15,7 +15,6 @@ from pathlib import Path
 from brr.gates import cloud
 from brr.loom.runtime import gates as home_gates
 from brr.loom.runtime.config import load_config, seed_config, set_value
-from brr.loom.runtime.setup_channel import qr_code
 
 home = Path(os.environ['BRNRD_CONFIG']).parent.parent
 if home_gates.state_dir(home, load_config(home)) is not None:
@@ -35,11 +34,8 @@ try:
     pair = cloud.start_pair(url, body)
 except Exception as exc:
     sys.exit(f'Could not reach {url}: {exc}')
-print(f"  Open {pair['pair_url']} and sign in to approve this computer"
-      + (", or scan the code below with your phone's camera." if sys.stdout.isatty() else '.'), flush=True)
-picture = qr_code(pair['pair_url']) if sys.stdout.isatty() else ''
-if picture:
-    print(picture, flush=True)
+# A web page opens in this computer's browser: a QR code is only for a link into an app.
+print(f"  Open {pair['pair_url']} and sign in to approve this computer.", flush=True)
 print(f"  Only approve a code you started yourself: the page shows {pair['pair_code']}"
       f" for {body.get('os_user', '?')} on {body.get('hostname', '?')}.", flush=True)
 try:

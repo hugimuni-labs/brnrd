@@ -131,7 +131,8 @@ def _start(client, chat_id, text, *, user_id=42, message_id=7):
 def test_a_codeless_door_binds_the_chat_to_the_account_and_the_loom_reads_it_back(env):
     client, _ = env
     _account, daemon, _repo = brnrd_repo_and_daemon(client)
-    assert client.get("/v1/daemons/chats", headers=daemon).json() == {"chats": [], "login": "octocat"}
+    assert client.get("/v1/daemons/chats", headers=daemon).json() == {
+        "chats": [], "login": "octocat", "links": {"telegram": "https://t.me/brnrd_bot"}}
     door = client.post("/v1/daemons/door", json={}, headers=daemon).json()
     _start(client, 778, "/start " + door["link"].removeprefix("https://t.me/brnrd_bot?start="))
 
@@ -163,7 +164,7 @@ def test_another_accounts_daemon_neither_sees_nor_unbinds_the_chat(env):
     theirs = {"Authorization": f"Bearer {token}"}
 
     # Their web chat is their own login: the approver's, never the other account's.
-    assert client.get("/v1/daemons/chats", headers=theirs).json() == {"chats": [], "login": "mallory"}
+    assert client.get("/v1/daemons/chats", headers=theirs).json()["login"] == "mallory"
     assert client.delete(f"/v1/daemons/chats/{chat['id']}", headers=theirs).status_code == 404
     assert len(client.get("/v1/daemons/chats", headers=daemon).json()["chats"]) == 1
 
@@ -226,12 +227,14 @@ def _stub_brnrd(tmp_path, chats_after_door, login=None):
             seen.append(("GET", self.path, None))
             doored = any(path == "/v1/daemons/door" for _, path, _ in seen)
             self._reply({"chats": chats_after_door if doored or chats_after_door is PRE else [],
+                         "links": {"telegram": "https://t.me/brnrd_bot", "whatsapp": "https://wa.me/15550001"},
                          **({"login": login} if login else {})})
 
         def do_POST(self):
             size = int(self.headers.get("Content-Length") or 0)
             seen.append(("POST", self.path, json.loads(self.rfile.read(size))))
-            self._reply({"name": "@brnrd_bot", "link": "https://t.me/brnrd_bot?start=PK-AB12"})
+            self._reply({"name": "@brnrd_bot", "link": "https://t.me/brnrd_bot?start=PK-AB12",
+                         "whatsapp": "https://wa.me/15550001?text=PK-AB12"})
 
         def log_message(self, *_):
             pass
@@ -286,6 +289,8 @@ def test_setup_with_no_bound_chat_shows_the_account_door_and_reads_the_binding_b
     # The door carries no loom code: the chat binds to the account, not to this computer.
     assert ("POST", "/v1/daemons/door", {}) in seen
     assert "https://t.me/brnrd_bot?start=PK-AB12" in said[0] and "PK-AB12" in said[0]
+    # Fresh-user run (9967): the missing-chat message names WhatsApp as well as Telegram.
+    assert "WhatsApp: open https://wa.me/15550001?text=PK-AB12" in said[0]
     # WhatsApp's sender is its chat, as `in` writes it.
     assert key == "cloud:whatsapp:4915112345678"
     assert connector._sender(Home(tmp_path), "cloud", "whatsapp:4915112345678") == "person:ada"
@@ -345,3 +350,38 @@ def test_a_web_chat_alone_still_offers_the_phone_door(tmp_path, monkeypatch):
     assert ("POST", "/v1/daemons/door", {}) in seen
     assert key == "cloud:telegram:42"
     assert connector._sender(Home(tmp_path), "cloud", "loom:Gurio") == "person:ada"
+
+
+def test_a_codeless_door_offers_the_same_code_on_whatsapp_where_brnrd_has_a_number(env):
+    """The code that binds on Telegram binds texted alone on WhatsApp too; the door says where."""
+    from brnrd.messenger_doors import MessengerIdentities
+
+    client, _ = env
+    _account, daemon, _repo = brnrd_repo_and_daemon(client)
+    assert client.post("/v1/daemons/door", json={}, headers=daemon).json()["whatsapp"] is None
+    client.app.state.messenger_identities = MessengerIdentities(telegram_bot_username="brnrd_bot",
+                                                                whatsapp_e164="15550001")
+    try:
+        door = client.post("/v1/daemons/door", json={}, headers=daemon).json()
+        links = client.get("/v1/daemons/chats", headers=daemon).json()["links"]
+    finally:
+        del client.app.state.messenger_identities
+    code = door["link"].removeprefix("https://t.me/brnrd_bot?start=")
+    assert door["whatsapp"] == f"https://wa.me/15550001?text={code}"
+    assert links == {"telegram": "https://t.me/brnrd_bot", "whatsapp": "https://wa.me/15550001"}
+
+
+def test_setup_hands_back_a_link_to_every_chat_it_enabled(tmp_path):
+    """Fresh-user run (9967): the 'Say hello' step links each enabled chat."""
+    from brr.loom.runtime import setup_channel
+    from brr.loom.runtime.home import Home
+
+    server, _seen = _stub_brnrd(tmp_path, PRE, login="Gurio")
+    links = []
+    try:
+        setup_channel.pair(Home(tmp_path), "relay", "cloud", "ada", timeout=5, out=lambda _: None, qr=False,
+                           links=links)
+    finally:
+        server.shutdown()
+    assert links == [("Telegram", "https://t.me/brnrd_bot"),
+                     ("brnrd.dev", f"http://127.0.0.1:{server.server_port}")]

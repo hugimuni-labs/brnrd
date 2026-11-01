@@ -391,6 +391,33 @@ def init_self(home: Path, person: str | None = None, remote: str | None = None) 
     return f"initialized {self_dir} {sha}\n{IDENTITY_NOTE}"
 
 
+def restore_self(home: Path, remote: str) -> str:
+    """Clone a self backed up by an earlier install into ``home/self``; return its short sha.
+
+    The memory is the person's: a new install takes it back instead of
+    seeding a self that the backup's history would then diverge from.
+    The clone is a working repo like a seeded one, with the pre-receive
+    shim installed. Raises ``SelfError`` when a self is already here or the
+    clone fails; a failed clone leaves no ``home/self`` behind.
+    """
+    home = Path(home).resolve()
+    self_dir = home / "self"
+    if (self_dir / ".git").exists() or (self_dir.exists() and any(self_dir.iterdir())):
+        raise SelfError(f"a self is already at {self_dir}; nothing was restored")
+    cloned = subprocess.run(
+        ["git", "-c", "credential.helper=", "-c", "credential.helper=!gh auth git-credential",
+         "clone", "-q", "--branch", "main", remote, str(self_dir)],
+        capture_output=True, text=True, env={**os.environ, "GIT_TERMINAL_PROMPT": "0"})
+    if cloned.returncode != 0:
+        shutil.rmtree(self_dir, ignore_errors=True)
+        why = (cloned.stderr.strip().splitlines() or [f"git clone exited {cloned.returncode}"])[-1]
+        raise SelfError(f"could not restore brnrd's memory from {remote}: {why}")
+    from .merge import install_pre_receive
+    install_pre_receive(self_dir)
+    seed_config(home)
+    return git(self_dir, "rev-parse", "--short", "HEAD").stdout.strip()
+
+
 def heal_home_thread(home: Path) -> str:
     """Put the seed's home thread README back on the self's ``main``; return the sha.
 

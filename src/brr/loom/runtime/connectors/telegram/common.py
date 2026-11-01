@@ -32,17 +32,33 @@ def call(method, payload, timeout=35):
         with urlopen(request, timeout=timeout) as response:
             result = json.load(response)
     except HTTPError as exc:
-        # Never include the request URL (it contains the credential).
+        # Never include the request URL (it contains the credential); the
+        # body's description is Telegram's own reason and carries no token.
+        why = _description(exc)
         if exc.code in (400, 401, 403, 404):
-            raise Refused(f'Telegram refused {method} (HTTP {exc.code})') from None
-        raise RuntimeError(f'Telegram {method}: HTTP {exc.code}') from None
+            raise Refused(f'Telegram refused {method} (HTTP {exc.code}{why})') from None
+        if exc.code == 409:
+            raise RuntimeError(f'Telegram {method}: HTTP 409{why}: another program is reading '
+                               'this bot (an older brnrd or brr on some computer?); stop it') from None
+        raise RuntimeError(f'Telegram {method}: HTTP {exc.code}{why}') from None
     except OSError:
         raise RuntimeError(f'Telegram {method}: connection failed') from None
     if not result.get('ok'):
         code = result.get('error_code')
         error = Refused if code in (400, 401, 403, 404) else RuntimeError
-        raise error(f'Telegram refused {method} ({code})')
+        why = f": {result['description']}" if isinstance(result.get('description'), str) else ''
+        raise error(f'Telegram refused {method} ({code}{why})')
     return result['result']
+
+
+def _description(exc):
+    """``": <Telegram's description>"`` from an error body, or ""."""
+    try:
+        body = json.loads(exc.read() or b'{}')
+    except (OSError, ValueError):
+        return ''
+    text = body.get('description') if isinstance(body, dict) else None
+    return f': {text[:200]}' if isinstance(text, str) and text else ''
 
 
 def download(file_id):

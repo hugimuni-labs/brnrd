@@ -285,6 +285,8 @@ def door(payload: schemas.DaemonDoorStart, request: Request, principal: Principa
     the daemon that code as the chat's first message
     (`webhooks._handle_start`), which is what an older loom pairs on.
     """
+    from ..messenger_doors import mint_deep_link
+    from .dashboard import _messenger_identities
     from .pairing import telegram_pair_core
 
     if payload.code is not None and principal.repo_id is None:
@@ -295,11 +297,13 @@ def door(payload: schemas.DaemonDoorStart, request: Request, principal: Principa
     if not started.deep_link:
         raise HTTPException(status_code=503, detail="no shared Telegram bot is configured")
     name = started.deep_link.removeprefix("https://t.me/").split("?", 1)[0]
-    return schemas.DaemonDoor(name="@" + name, link=started.deep_link)
+    identities = _messenger_identities(request, request.app.state.settings)
+    whatsapp = mint_deep_link("whatsapp", identities, started.pair_code) if payload.code is None else None
+    return schemas.DaemonDoor(name="@" + name, link=started.deep_link, whatsapp=whatsapp)
 
 
 @router.get("/chats", response_model=schemas.DaemonChats)
-def chats(principal: Principal = Depends(require_daemon), db: Session = Depends(get_db)) -> schemas.DaemonChats:
+def chats(request: Request, principal: Principal = Depends(require_daemon), db: Session = Depends(get_db)) -> schemas.DaemonChats:
     """The chats bound to the token's account, newest first.
 
     A chat binds to the account, not to a loom (#1457), so a loom set up on
@@ -316,7 +320,14 @@ def chats(principal: Principal = Depends(require_daemon), db: Session = Depends(
         .order_by(ChannelRoute.created_at.desc())
     ).scalars()
     account = db.get(Account, principal.account_id)
-    return schemas.DaemonChats(chats=[
+    from .dashboard import _messenger_identities
+
+    identities = _messenger_identities(request, request.app.state.settings)
+    links = {platform: link for platform, link in (
+        ("telegram", f"https://t.me/{identities.telegram_bot_username}" if identities.telegram_bot_username else ""),
+        ("whatsapp", f"https://wa.me/{identities.whatsapp_e164}" if identities.whatsapp_e164 else ""),
+    ) if link}
+    return schemas.DaemonChats(links=links, chats=[
         schemas.DaemonChat(id=r.id, platform=r.platform, chat_id=r.channel_id, topic_id=r.topic_id,
                            principal_id=r.paired_principal_id, principal_display=r.paired_user_display,
                            chat_title=r.chat_title, paired_at=r.created_at)
