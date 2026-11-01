@@ -273,3 +273,17 @@ def test_a_quiet_room_is_stat_ed_at_each_listing_and_a_moving_one_at_every_read(
     assert tools.read()  # moved since the listing: still read at every tick
     tools.listed -= 61
     assert tools.read() and set(tools.tools) == {"s-aa-moving", "s-aa-woken"}
+
+
+def test_two_rooms_moving_in_one_read_survive_the_next_listing(tmp_path):
+    """Each moving room's hot mark is the read's clock, so the next listing can age it (#2569 stored a live dict)."""
+    for strand in ("s-aa-one", "s-aa-two"):
+        port = tmp_path / "rooms" / strand / "port"
+        port.mkdir(parents=True)
+        (port / "tools.jsonl").write_text("")
+    tools = Tools(Home(tmp_path), every=60)
+    assert tools.read() and set(tools.tools) == {"s-aa-one", "s-aa-two"}
+    assert all(isinstance(at, float) for at in tools.hot.values())
+    tools.listed -= 61
+    tools.read()
+    assert set(tools.tools) == {"s-aa-one", "s-aa-two"}

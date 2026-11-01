@@ -497,11 +497,11 @@ class Tools:
             self.tools[strand] = [{"at": _iso(r["at"]), "end": r["end"] and _iso(r["end"]), "tool": r["tool"],
                                    "arg": r["arg"], "cmd": r.get("cmd", ""), "say": r.get("say", ""),
                                    "by": r.get("by", ""), "failed": bool(r.get("failed"))} for r in rows]
-            now = tooltrace.live(port.parent)
+            live = tooltrace.live(port.parent)
             self.live[strand] = {"open": [{"at": _iso(c["at"]), "tool": c["tool"], "arg": c["arg"],
-                                           "cmd": c.get("cmd", ""), "by": c.get("by", "")} for c in now["open"]],
-                                 "say": now["say"], "last_end": now["last_end"] and _iso(now["last_end"]),
-                                 "paused": bool(now["paused"])}
+                                           "cmd": c.get("cmd", ""), "by": c.get("by", "")} for c in live["open"]],
+                                 "say": live["say"], "last_end": live["last_end"] and _iso(live["last_end"]),
+                                 "paused": bool(live["paused"])}
             moved = True
         for gone in set(self.tools) - set(sig):
             self.tools.pop(gone, None)
