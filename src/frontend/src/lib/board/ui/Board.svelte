@@ -76,13 +76,15 @@
 		});
 	});
 
-	// A newer page (v44hse5kpf, 4912): reload at once, unless the box has focus and holds text; then say so, and
-	// leaving the box takes it. The draft and its armed wish ride sessionStorage across the reload either way.
+	// A newer page (v44hse5kpf, 4912): a tab he is looking at never reloads under him; it says so, and takes the page
+	// once the tab is away (or at the next navigation, SvelteKit's own). The draft and its armed wish ride
+	// sessionStorage across the reload.
+	let away = $state(typeof document !== 'undefined' && document.hidden);
 	$effect(() => {
 		if (updated.current) b.newer = true;
 	});
 	$effect(() => {
-		if (b.newer && !(b.writing && b.draft.trim())) {
+		if (b.newer && away) {
 			b.keep();
 			location.reload();
 		}
@@ -97,6 +99,8 @@
 		return () => (clearInterval(faces), off());
 	});
 </script>
+
+<svelte:document onvisibilitychange={() => (away = document.hidden)} />
 
 <div class="brd" class:sheet={!!b.beadId}>
 	<header>
@@ -114,7 +118,7 @@
 				via {b.model.via}{/if}</span
 		>
 		<span id="live" class="dim" class:off={b.live === 'offline'}
-			>{b.error || (b.newer ? 'a newer page · leave the box to take it' : b.live)}</span
+			>{b.error || (b.newer ? 'a newer page · it loads while this tab is away' : b.live)}</span
 		>
 		<label id="internal" class="dim"
 			><input type="checkbox" bind:checked={b.showAll} onchange={() => b.persist()} /> show internal</label
