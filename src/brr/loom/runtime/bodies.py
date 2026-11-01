@@ -42,6 +42,8 @@ TABLE = (
     Row(("wanted",), "fenced", "wanted", ()),
     Row(("parked",), "fenced", "parked", ()),
     Row(("parked",), "woken on another body", "ended", ("end_molted",) + CLEANUP),
+    Row(("wanted",), "memory pressed", "wanted", ("pending",)),
+    Row(("parked",), "memory pressed", "parked", ()),
     Row(("parked",), "gauge unknown, before until", "parked", ()),
     Row(("parked",), "gauge refreshing", "parked", ()),
     Row(("wanted",), "gauge refreshing", "wanted", ("pending",)),
@@ -121,6 +123,7 @@ class Observation:
     fenced: bool = False
     held: bool = False
     away: bool = False
+    pressed: bool = False
 
 
 @dataclass(frozen=True)
@@ -192,6 +195,8 @@ OBSERVED = {
     "pinned away": lambda s, o: o.away,
     "failure": lambda s, o: bool(o.failure),
     "woken on another body": lambda s, o: bool(o.woken),
+    # The memory floor holds (memory.py): nothing new starts, and an operator's force still does.
+    "memory pressed": lambda s, o: o.pressed and not o.force,
     "held dry, woken on another body": lambda s, o: o.alive and o.held and bool(o.woken),
     "gauge unknown, before until": lambda s, o: not o.force and o.gauge == "unknown" and o.now < s.until,
     "gauge refreshing": lambda s, o: o.gauge == "refreshing",

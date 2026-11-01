@@ -1432,6 +1432,7 @@ def _fenced(home, facts) -> bool:
 def _observe_body(home, facts, strand, thread, gen, bodies, *, choice=None, force=False):
     from .config import load_config
     from .lifecycle import CLOSED, closing_commit, read_thread
+    from .memory import pressed
     from .usage import fuels, reading
     from types import SimpleNamespace
     now, config, room = time.time(), load_config(home.root), home.room(strand)
@@ -1491,14 +1492,17 @@ def _observe_body(home, facts, strand, thread, gen, bodies, *, choice=None, forc
                               body.proc if body else None, alive=alive)
     # The boundary lists every cached shell. Park still reads `empty`, the seated gauge only.
     fuel = fuels(home, shell)
+    # The memory floor holds only a start; a live body is left alone.
+    squeeze = None if alive else pressed(home.root, config)
     context = SimpleNamespace(thread=thread, shell=shell, core=core, pid=pid, empty=empty, fuel=fuel,
                               why=(closing_commit(home, thread)[1] or f"thread {thread} settled") if closed
                               else _FENCED if fenced else _AWAY.format(pin) if away else "",
-                              failure="", repos=lease.get("repos"))
+                              failure="", repos=lease.get("repos"), pressure=str(squeeze or ""))
     o = Observation(strand, gen, alive, closed, "refreshing" if gauge is None else "empty" if empty
                     else "ok" if gauge["windows"] else "unknown",
                     now, proven, until=until, force=force, stop_grace=config.stop_grace,
-                    woken="/".join(woken) if woken else "", fenced=fenced, held=held, away=away)
+                    woken="/".join(woken) if woken else "", fenced=fenced, held=held, away=away,
+                    pressed=squeeze is not None)
     if TABLE[row_for(facts, o)].next == "parked" and not fenced:
         park = fact_for(facts, "body.parked", strand, gen)
         _park_notice(home, facts, thread, (shell, core),
@@ -1908,7 +1912,7 @@ def _hand_spawn(x, command, step):
 def _hand_record(x, command, step):
     """Write a body fact: its fields are the registry's, its id follows ``once``."""
     c, kind = x.c, KINDS[step.records]
-    why = {"body.stopped": c.why, "body.exited": c.failure,
+    why = {"body.stopped": c.why, "body.exited": c.failure, "body.pending": getattr(c, "pressure", ""),
            "body.unidentified": f"pid {c.pid} could not be proven to be the body on thread {c.thread}"}
     values = {**x.values, "deadline": command.deadline, "why": why.get(kind.kind)}
     data = {name: values[name] for name in kind.names() if name in kind.required() or values.get(name)}
@@ -2360,6 +2364,8 @@ def run(root: Path | str, *, adapter: str = "fake", core: str = "haiku",
         from .sampler import Sampler
         sampler = Sampler(home, _log)
         from .cpu import CpuWatch
+        from .memory import MemoryFloor
+        memory = MemoryFloor(home)
         cpu = CpuWatch(on_high=sampler.start)
         from .receipts import source_root
         updater = Updater(home, _log, source_root())
@@ -2396,6 +2402,7 @@ def run(root: Path | str, *, adapter: str = "fake", core: str = "haiku",
                 health.guard("sample", sampler.step, backoff=False)
                 health.guard("disk", reaper.disk, backoff=False)
                 health.guard("cpu", cpu.step, backoff=False)
+                health.guard("memory", memory.step, backoff=False)
                 health.guard("reap", reaper.step, backoff=False)
                 if spa is not None:  # the board's build follows the checkout; a failed one stays degraded
                     health.guard("spa", spa.step, backoff=False)
