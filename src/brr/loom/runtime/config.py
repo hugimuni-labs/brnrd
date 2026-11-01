@@ -94,10 +94,14 @@ KEYS: tuple[Key, ...] = (
         "The disk floor, as a percent of the home's volume (never under 5 GiB): below it the loom "
         "is degraded, reaps rooms at once and prunes package caches."),
     Key("memory_floor", "choice", "on",
-        "on: while macOS reports memory pressure critical, or warn with swap over 75% used, the "
-        "loom is degraded and starts no new body (a wanted one waits, live ones are untouched). "
+        "on: while macOS reports memory pressure critical, or warn with more than memory_swap_gb "
+        "of swap used, the loom is degraded and starts no new body (a wanted one waits, live ones "
+        "are untouched). "
         "off: bodies start whatever the pressure. Elsewhere it reads nothing.",
         choices=("on", "off")),
+    Key("memory_swap_gb", "positive", 6.0,
+        "GB of swap used past which a warn pressure holds new bodies (memory_floor). An absolute "
+        "amount: macOS grows its swap total on demand, so a share of it is nearly always high."),
     Key("max_held", "positive", None,
         "Most live bodies this install keeps warm, the home thread's not counted. Past it, the "
         "body held longest with nothing to do leaves at its stop hook; a working body is never "

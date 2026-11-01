@@ -1493,8 +1493,11 @@ def _observe_body(home, facts, strand, thread, gen, bodies, *, choice=None, forc
                               body.proc if body else None, alive=alive)
     # The boundary lists every cached shell. Park still reads `empty`, the seated gauge only.
     fuel = fuels(home, shell)
-    # The memory floor holds only a start; a live body is left alone.
-    squeeze = None if alive else pressed(home.root, config)
+    # The memory floor holds only a start, and never the inbox's or a first worker's:
+    # a new worker waits only while another worker of this install is live.
+    squeeze = None if alive or thread == home.main_thread() else pressed(home.root, config)
+    if squeeze is not None and not _worker_live(home, facts, strand):
+        squeeze = None
     context = SimpleNamespace(thread=thread, shell=shell, core=core, pid=pid, empty=empty, fuel=fuel,
                               why=(closing_commit(home, thread)[1] or f"thread {thread} settled") if closed
                               else _FENCED if fenced else _AWAY.format(pin) if away else "",
@@ -1504,7 +1507,8 @@ def _observe_body(home, facts, strand, thread, gen, bodies, *, choice=None, forc
                     now, proven, until=until, force=force, stop_grace=config.stop_grace,
                     woken="/".join(woken) if woken else "", fenced=fenced, held=held, away=away,
                     pressed=squeeze is not None)
-    if TABLE[row_for(facts, o)].next == "parked" and not fenced:
+    row = TABLE[row_for(facts, o)]
+    if row.next == "parked" and not fenced:
         park = fact_for(facts, "body.parked", strand, gen)
         _park_notice(home, facts, thread, (shell, core),
                      (empty["name"], empty["left_pct"], until) if empty else
@@ -1515,7 +1519,42 @@ def _observe_body(home, facts, strand, thread, gen, bodies, *, choice=None, forc
         shown = fold(facts).shown.get(strand, set())
         _park_notice(home, facts, thread, (shell, core), (empty["name"], empty["left_pct"], until),
                      [(letter, channel) for letter, channel in dms if letter.id not in shown], held=True)
+    elif row.observed == "memory pressed" and row.next == "wanted":
+        _memory_hold(home, facts, thread, squeeze, _person_dms(home, facts, thread))
     return o, context
+
+
+MEMORY_WORD = "Heard you. This machine is short on memory; I'll answer as soon as it clears."
+
+
+def _memory_hold(home, facts, thread, squeeze, letters):
+    """Once a hold episode, the inbox hears which thread waits and how to start it,
+    and each person whose letter waits there hears one word. The inbox decides; the
+    loom never overrides its own floor.
+
+    The episode is the guard's (health.py): dips of one condition share it, so a
+    flapping floor says nothing new, and a loom restart inside it keeps it. The
+    guard writes its streak after this tick's bodies; the notices wait one tick.
+    """
+    from .health import open_streaks
+    streak = next((f for f in reversed(open_streaks(facts, home.install_id()))
+                   if f.data.get("step") == "memory"), None)
+    if streak is None:
+        return
+    episode = str(streak.data.get("episode") or streak.data.get("since"))
+    notice(home, facts, "memory-held", f"{thread} {episode}",
+           f"Thread {thread} waits on the memory floor ({squeeze.held}).",
+           f"to start it anyway: brnrd runtime threads --force {thread}", thread=home.main_thread())
+    for letter, channel in letters:
+        notice(home, facts, "memory", f"{channel} {episode}", MEMORY_WORD,
+               f"Your letter is kept on thread {thread}.", about=letter, channel=channel, passive=True)
+
+
+def _worker_live(home, facts, strand) -> bool:
+    """Another body of this install is live on a thread that is not the inbox."""
+    from .router import install_of
+    return any(thread != home.main_thread() and other != strand and install_of(other) == home.install_id()
+               and body_alive(home.room(other)) for thread, (other, _gen) in fold(facts).holder.items())
 
 
 def _held_dry(room: Path) -> bool:
