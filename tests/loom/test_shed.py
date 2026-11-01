@@ -110,7 +110,8 @@ def test_a_long_park_states_the_stakes_and_a_short_one_says_nothing():
     assert not shed.long_wait("ci:o/r@abc", now) and not shed.long_wait("file:/x", now)
     line = shed.rest_line("letter:a/b", 134_000)
     assert line.startswith("resting until letter:a/b. Context 134k. What isn't in the README is lost on any end")
-    assert line.endswith("What here would you not carry into the next hour?") and "due" not in line
+    assert line.endswith("Only what's written carries past an end; the scroll doesn't. "
+                         "What does the next hour need that isn't written yet?") and "due" not in line
 
 def test_a_broken_tally_never_ends_the_stop(room, tmp_path, monkeypatch):
     def broken(*args):

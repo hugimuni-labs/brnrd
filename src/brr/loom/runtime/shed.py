@@ -224,4 +224,5 @@ def long_wait(condition: str, now: datetime | None = None) -> bool:
 def rest_line(what: str, context: int) -> str:
     """The one sentence a long park gets: the cost, plain, and a question, never a verdict."""
     size = f" Context {context // 1000}k." if context else ""
-    return f"resting until {what}.{size} {STAKES} What here would you not carry into the next hour?"
+    return (f"resting until {what}.{size} {STAKES} Only what's written carries past an end; "
+            "the scroll doesn't. What does the next hour need that isn't written yet?")
