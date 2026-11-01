@@ -385,3 +385,32 @@ def test_setup_hands_back_a_link_to_every_chat_it_enabled(tmp_path):
         server.shutdown()
     assert links == [("Telegram", "https://t.me/brnrd_bot"),
                      ("brnrd.dev", f"http://127.0.0.1:{server.server_port}")]
+
+
+def test_setup_run_again_reads_each_door_and_offers_to_mend_the_dark_one(tmp_path, capsys):
+    """Item 4: a chat unbound on brnrd.dev after setup is seen on the rerun, and binding again keeps one connector."""
+    from brr.loom.runtime import setup_channel
+    from brr.loom.runtime.config import load_config
+    from brr.loom.runtime.home import Home
+
+    server, _seen = _stub_brnrd(tmp_path, PRE)
+    try:
+        setup_channel.pair(Home(tmp_path), "relay", "cloud", "ada", timeout=5, out=lambda _: None, qr=False)
+        assert setup_channel.door_states(Home(tmp_path)) == {"cloud": ("relay", True, "Telegram bound")}
+    finally:
+        server.shutdown()
+    server, _seen = _stub_brnrd(tmp_path, [])
+    try:
+        assert setup_channel.door_states(Home(tmp_path)) == {"cloud": ("relay", False, "no chat bound any more")}
+        assert setup_channel._status(Home(tmp_path)) == 0
+        assert "talks over cloud, but no chat bound any more: brnrd setup channel" in capsys.readouterr().out
+    finally:
+        server.shutdown()
+    # Bound again under the same name: still one connector.
+    server, _seen = _stub_brnrd(tmp_path, PRE)
+    try:
+        assert setup_channel._channel_name(Home(tmp_path), "relay") == "cloud"
+        setup_channel.pair(Home(tmp_path), "relay", "cloud", "ada", timeout=5, out=lambda _: None, qr=False)
+    finally:
+        server.shutdown()
+    assert load_config(tmp_path).connectors.count("cloud=relay") == 1

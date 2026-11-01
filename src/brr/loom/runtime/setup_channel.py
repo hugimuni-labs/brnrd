@@ -79,7 +79,9 @@ def _enroll(home, kind, name, person, keys):
         atomic_write(channels, 'channels = ' + json.dumps([*previous, *added]) + '\n')
     # Commit the config last: a failed pairing never enables input.
     seed_config(home.root)
-    set_value(home.root, 'connectors', [*load_config(home.root).connectors, f'{name}={kind}'])
+    enabled = load_config(home.root).connectors
+    if f'{name}={kind}' not in enabled:  # a door bound again is still one connector
+        set_value(home.root, 'connectors', [*enabled, f'{name}={kind}'])
 
 
 #: Telegram's reason for not writing (its error description, lowercased) → what the person does.
@@ -221,7 +223,7 @@ def pair(home, kind, name, person, *, timeout=180, out=print, qr=None, env=None,
     links = [] if links is None else links
     if not all(re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9._-]*', v) for v in (name, person)):
         raise ValueError('Channel and person names use letters, digits, dots, dashes or underscores')
-    if name in instances(home):
+    if instances(home).get(name, kind) != kind:
         raise ValueError(f'Channel name {name!r} is already in use')
     folder = resolve(home, kind, 'connectors')
     if not (folder / 'out').is_file():
@@ -371,8 +373,8 @@ def first_letter(home, person, *, timeout=600, out=print, running=None, sleep=ti
 #: What a person picks from, in plain words; a kind not named here shows by its own name.
 #: ``fake`` is a test pipe: reachable with ``--kind fake``, never offered.
 CHOICES = {
-    'telegram': 'Telegram, with a bot you make yourself (two minutes, in the Telegram app)',
-    'relay': 'brnrd cloud, with your brnrd.dev login',
+    'relay': 'brnrd cloud: Telegram or WhatsApp through brnrd\'s own bot, and a chat on brnrd.dev',
+    'telegram': 'Your own Telegram bot (two minutes, in the Telegram app)',
 }
 HIDDEN = {'fake'}
 
@@ -393,24 +395,70 @@ def _ask(question, default=''):
         raise ValueError('No answer: input closed; nothing was changed') from None
 
 
-def _choose_kind(kinds):
+def door_states(home):
+    """``{name: (kind, live, what)}`` for every enabled connector, read from the connector, not the config.
+
+    ``live`` is True when it still reaches the person (the account still
+    binds a chat; the bot still answers), False when it went dark (a chat
+    unbound on brnrd.dev, a revoked token), None when it cannot say.
+    """
+    found = {}
+    for name, kind in instances(home).items():
+        try:
+            folder = resolve(home, kind, 'connectors')
+        except (ValueError, OSError):
+            found[name] = (kind, False, 'its connector is not installed')
+            continue
+        env = environment(home, name)
+        if (folder / 'bound').is_file():
+            try:
+                chats = [c for c in _bound(folder, env) if c.get('platform') != 'loom']
+            except (ValueError, OSError, subprocess.SubprocessError) as exc:
+                found[name] = (kind, None, str(exc))
+                continue
+            where = ', '.join(sorted({PLATFORMS.get(c.get('platform'), c.get('platform') or '?') for c in chats}))
+            found[name] = (kind, bool(chats), f'{where} bound' if chats else 'no chat bound any more')
+        elif (folder / 'door').is_file():
+            door = _door(folder, env, 'status')
+            found[name] = (kind, door is not None,
+                           f"{door['name']} answers" if door else 'the bot does not answer (token revoked?)')
+        else:
+            found[name] = (kind, None, '')
+    return found
+
+
+def _choose_doors(home, kinds):
+    """Which doors to connect, one or several: brnrd needs at least one to reach the person.
+
+    A first setup starts on brnrd cloud alone. Run again, a door that
+    still reaches the person starts off (it needs nothing), and one that
+    went dark starts on, so Enter mends it.
+    """
     offered = [k for k in CHOICES if k in kinds] + [k for k in kinds if k not in CHOICES and k not in HIDDEN]
-    _step('How do you want to talk to brnrd?')
-    for number, kind in enumerate(offered, 1):
-        print(f"    {number}. {CHOICES.get(kind, kind)}")
+    states = {}
+    for _name, (kind, live, what) in door_states(home).items():
+        states.setdefault(kind, (live, what))
+    rows = []
+    for kind in offered:
+        live, what = states.get(kind, (None, ''))
+        note = '' if kind not in states else style.dim(' · connected' if live else f' · {what or "not reaching you"}')
+        rows.append((kind, CHOICES.get(kind, kind) + note, ''))
+    start = {k for k in offered if k in states and states[k][0] is not True}
+    if not states:
+        start = {offered[0]}
+    _step('How should brnrd reach you? Pick one or more')
     while True:
-        answer = _ask(f'Choose 1-{len(offered)}:', '1')
-        if answer in kinds:
-            return answer
-        if answer.isdigit() and 1 <= int(answer) <= len(offered):
-            return offered[int(answer) - 1]
-        print(f"  {style.dot()} Type a number from the list.")
+        picked = checklist(rows, start=start)
+        if picked or any(live for live, _ in states.values()):
+            return [k for k in offered if k in picked]
+        print(f"  {style.cross()} brnrd needs at least one way to reach you; switch one on.")
 
 
 def _channel_name(home, kind):
-    """The channel's name is the kind, numbered when that is taken: nobody should have to name a pipe."""
-    taken = set(instances(home))
-    return next(n for n in (kind, *(f'{kind}-{i}' for i in range(2, 100))) if n not in taken)
+    """The channel's name: the one this kind already has (a door bound again), else the kind, numbered when taken."""
+    taken = instances(home)
+    mine = next((name for name, k in taken.items() if k == kind), None)
+    return mine or next(n for n in (kind, *(f'{kind}-{i}' for i in range(2, 100))) if n not in taken)
 
 
 SELF_REPO = 'brnrd-self'
@@ -458,26 +506,26 @@ def _row(row, on, at=None, number=None):
     return f"    {lead} {box} {style.dim(label) if why else label}" + (f" {style.dim('· ' + why)}" if why else '')
 
 
-def checklist(rows, *, keys=None):
-    """Every pickable row starts on: Enter confirms, arrows move, space switches one.
+def checklist(rows, *, keys=None, start=None):
+    """Every pickable row starts on, or those in ``start``: Enter confirms, arrows move, space switches one.
 
     ``keys`` stands in for a terminal (tests); without a terminal it reads one
-    line instead: Enter keeps all, numbers leave those out. Returns the keys on.
+    line instead: Enter keeps them, numbers switch those. Returns the keys on.
     """
-    on = [not why for _, _, why in rows]
+    on = [not why and (start is None or key in start) for key, _, why in rows]
     if not rows:
         return set()
     tty = keys is not None or sys.stdin.isatty()
-    if not any(on):  # nothing to pick: say why, ask nothing
+    if all(why for _, _, why in rows):  # nothing to pick: say why, ask nothing
         for row in rows:
             print(_row(row, False))
         return set()
     if not tty:
         for i, row in enumerate(rows):
             print(_row(row, on[i], number=i + 1))
-        for token in _ask('Enter to confirm, or the numbers to leave out:').replace(',', ' ').split():
-            if token.isdigit() and 1 <= int(token) <= len(rows):
-                on[int(token) - 1] = False
+        for token in _ask('Enter to confirm, or the numbers to switch:').replace(',', ' ').split():
+            if token.isdigit() and 1 <= int(token) <= len(rows) and not rows[int(token) - 1][2]:
+                on[int(token) - 1] = not on[int(token) - 1]
         return {row[0] for row, picked in zip(rows, on) if picked}
     print(f"  {style.dim('Enter confirms · ↑ ↓ move · space switches one off or on')}")
     at = 0
@@ -771,13 +819,19 @@ def _status(home):
         _ok(f"thinks with {body}")
     else:
         print(f"  {style.cross()} no AI chosen yet: run brnrd setup channel")
-    for connector in config.connectors:
-        _ok(f"talks over {connector.partition('=')[0]}")
+    dark = False
+    for name, (_kind, live, what) in door_states(home).items():
+        if live is False:
+            dark = True
+            print(f"  {style.cross()} talks over {name}, but {what}: brnrd setup channel connects it again")
+        else:
+            _ok(f"talks over {name}" + (f" ({what})" if what else ''))
     if _lock_held(home.root):
         _ok('running')
     else:
         print(f"  {style.dot()} not running: start it with `brnrd loom install`")
-    print(f"  {style.dim('Add a channel: brnrd setup channel. Change the AI: model.default in loom/preferences.toml.')}")
+    if not dark:
+        print(f"  {style.dim('Add or mend a door: brnrd setup channel. Change the AI: model.default in loom/preferences.toml.')}")
     return 0
 
 
@@ -805,10 +859,13 @@ def main(argv=None):
         return 0
     try:
         _choose_body(home)
-        kind = args.kind or _choose_kind(kinds)
+        doors = [args.kind] if args.kind else _choose_doors(home, kinds)
+        if not doors:
+            _ok('every door still reaches you; nothing to connect')
+            return 0
         if not args.kind:
-            _ok(CHOICES.get(kind, kind).split(',')[0])
-        name = args.name or _channel_name(home, kind)
+            for kind in doors:
+                _ok(CHOICES.get(kind, kind).split(':')[0].split(' (')[0])
         login, why = _gh_login()
         # Before any seed: an earlier install's memory is restored, never seeded over.
         repo = backup_repo(home, login)
@@ -823,18 +880,31 @@ def main(argv=None):
         # A letter lands only on a thread on the self's main: seed it before pairing.
         if init_self(home.root, person=person).startswith('initialized '):
             _ok(IDENTITY_NOTE)
-        rows = offers(home, kind, login, why, repo)
+        rows = offers(home, 'relay' if 'relay' in doors else doors[0], login, why, repo)
         picked = set()
         if rows:
             _step('brnrd will also')
             picked = checklist(rows)
         left = _take_offers(home, picked, rows, login, repo)
         onboarding_asks(home, also=[LATER[key] for key in left])
-        _step(f'Connect {CHOICES.get(kind, kind).split(",")[0]}')
-        links = []
-        paired = pair(home, kind, name, person, timeout=args.timeout, links=links,
-                      env={'BRNRD_SETUP_BOARD': '1' if 'board' in picked else ''})
-        if paired and args.wait > 0:
+        links, paired, missed = [], [], []
+        for kind in doors:
+            _step(f"Connect {CHOICES.get(kind, kind).split(':')[0].split(' (')[0]}")
+            name = args.name or _channel_name(home, kind)
+            try:
+                paired.append(pair(home, kind, name, person, timeout=args.timeout, links=links,
+                                   env={'BRNRD_SETUP_BOARD': '1' if kind == 'relay' and 'board' in picked else ''}))
+            except (ValueError, TimeoutError) as exc:
+                if len(doors) == 1:
+                    raise
+                # One door missed is not the setup failed: the others still reach the person.
+                print(f"  {style.cross()} {exc}")
+                missed.append(kind)
+        if not paired:  # every door missed; a missed one raised, so a listed one connected
+            raise ValueError('No door was connected, so brnrd cannot reach you yet; run brnrd setup again.')
+        if missed:
+            print(f"  {style.dot()} brnrd setup channel connects the rest later.")
+        if any(paired) and args.wait > 0:
             _step('Say hello: send brnrd any message in ' + ('one of your chats' if len(links) > 1 else 'that chat'))
             for where, link in links:
                 print(f"    {where}: {style.accent(link)}")

@@ -77,8 +77,9 @@ def test_fake_live_pair_saves_named_identity_and_keeps_unrelated_letters(tmp_pat
     assert sent[0]['text'].startswith('Paired ✓')
     assert (state / 'in/other.md').exists() and not (state / 'in/code.md').exists()
     assert connector.person_dm(home, 'channel:desk/42') == 'person:ada'
+    # The same kind may pair again (a door that went dark); another kind may not take the name.
     with pytest.raises(ValueError, match='already in use'):
-        setup_channel.pair(home, 'fake', 'desk', 'ada')
+        setup_channel.pair(home, 'telegram', 'desk', 'ada')
 
 
 def test_timeout_never_enables_or_enrols_channel(tmp_path):
@@ -427,11 +428,11 @@ def test_guided_setup_asks_in_plain_words_and_derives_the_channel_name(tmp_path,
     monkeypatch.setattr(setup_channel.shutil, 'which', lambda name: f'/bin/{name}')
     monkeypatch.setattr('brr.loom.runtime.service._windows', lambda home, shell: None)
     monkeypatch.setattr('brr.loom.runtime.service._defaults', lambda: [('claude', ''), ('codex', '')])
-    # Piped answers: codex, Enter for Telegram; nothing asks a name.
-    monkeypatch.setattr('sys.stdin', io.StringIO('2\n\n'))
+    # Piped answers: codex, then switch brnrd cloud off and the own bot on; nothing asks a name.
+    monkeypatch.setattr('sys.stdin', io.StringIO('2\n1 2\n'))
     assert setup_channel.main(['--home', str(tmp_path)]) == 0
     out = capsys.readouterr().out
-    for asked in ('Which AI should brnrd think with?', 'How do you want to talk to brnrd?'):
+    for asked in ('Which AI should brnrd think with?', 'How should brnrd reach you?'):
         assert asked in out
     # The name is the resident's first question, not a form field.
     for gone in ('Channel kind', 'Name this channel', 'Your person name', 'fake', 'call you', 'Your name'):
@@ -441,10 +442,12 @@ def test_guided_setup_asks_in_plain_words_and_derives_the_channel_name(tmp_path,
     assert load_config(tmp_path).body is None
 
 
-def test_a_second_channel_of_a_kind_gets_a_numbered_name(tmp_path):
+def test_a_door_connected_again_keeps_its_name_and_a_taken_name_is_numbered(tmp_path):
     home = home_at(tmp_path)
     (tmp_path / 'loom').mkdir(exist_ok=True)
     (tmp_path / 'loom/config.toml').write_text('connectors = ["telegram=telegram"]\n')
+    assert setup_channel._channel_name(Home(tmp_path), 'telegram') == 'telegram'
+    (tmp_path / 'loom/config.toml').write_text('connectors = ["telegram=fake"]\n')
     assert setup_channel._channel_name(Home(tmp_path), 'telegram') == 'telegram-2'
     assert setup_channel._person_id('  Ada Lovelace! ') == 'ada-lovelace'
 
@@ -767,3 +770,17 @@ def test_telegram_errors_carry_telegrams_reason_and_never_the_token(tmp_path, mo
     monkeypatch.setattr(common, 'urlopen', refuse(409, 'Conflict: terminated by other getUpdates request'))
     with pytest.raises(RuntimeError, match='another program is reading this bot'):
         common.call('getUpdates', {})
+
+
+def test_setup_refuses_zero_doors_and_connects_every_door_picked(tmp_path, monkeypatch, capsys):
+    """Item 2: cloud and own bot are one list, not either-or, and brnrd needs at least one."""
+    import io
+    calls = []
+    monkeypatch.setattr(setup_channel, 'pair', lambda home, kind, name, person, **kw: calls.append(
+        (kind, name, kw['env']['BRNRD_SETUP_BOARD'])))
+    monkeypatch.setattr(setup_channel, '_take_offers', lambda home, picked, rows, login, repo: [])
+    # Switch brnrd cloud off (nothing left: refused), then from the start again add the own bot; the offers keep Enter.
+    monkeypatch.setattr('sys.stdin', io.StringIO('1\n2\n\n'))
+    assert setup_channel.main(['--home', str(tmp_path), '--person', 'ada']) == 0
+    assert 'at least one way to reach you' in capsys.readouterr().out
+    assert calls == [('relay', 'relay', '1'), ('telegram', 'telegram', '')]
