@@ -520,7 +520,6 @@ APP_URL = 'https://github.com/apps/brnrd-dev/installations/new'
 LATER = {
     'repo': "Back up my memory to a private GitHub repo? (setup left it off)",
     'app': "Install the brnrd-dev GitHub App, so brnrd.dev can reach your repos? (setup left it off)",
-    'board': "Show my board on brnrd.dev? (setup left it off; you switch it on signed in, in brnrd.dev settings)",
 }
 
 
@@ -537,7 +536,7 @@ def offers(home, kind, login=None, why='', repo=SELF_REPO):
     """What setup switches on unless the person says no: ``(key, label, why not)`` rows.
 
     A row with a reason cannot be picked and starts off. The repo row goes once
-    the self has an origin; the App and the board rows only on a cloud path
+    the self has an origin; the App row only on a cloud path
     that still signs in, where the approve page is still ahead.
     """
     from . import gates
@@ -548,7 +547,6 @@ def offers(home, kind, login=None, why='', repo=SELF_REPO):
         rows.append(('repo', f"Back up brnrd's memory to a private GitHub repo{where}", why))
     if kind == 'relay' and gates.state_dir(home.root, load_config(home.root)) is None:
         rows.append(('app', 'Let brnrd.dev reach your GitHub repos (the brnrd-dev GitHub App)', ''))
-        rows.append(('board', 'Show your board on brnrd.dev (you confirm on the approve page)', ''))
     return rows
 
 
@@ -943,8 +941,7 @@ def main(argv=None):
         links = []
 
         def connect(kind):
-            return pair(home, kind, args.name or _channel_name(home, kind), person, timeout=args.timeout,
-                        links=links, env={'BRNRD_SETUP_BOARD': '1' if kind == 'relay' and 'board' in picked else ''})
+            return pair(home, kind, args.name or _channel_name(home, kind), person, timeout=args.timeout, links=links)
         if args.kind:  # one door named on the command line: it connects or setup says why
             _step(f"Connect {_label(args.kind)}")
             paired, missed = [connect(args.kind)], []

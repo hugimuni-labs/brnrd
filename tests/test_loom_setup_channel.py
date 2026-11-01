@@ -175,7 +175,6 @@ def test_relay_setup_signs_in_and_writes_the_gate_the_relay_reads(tmp_path):
     server = http.server.ThreadingHTTPServer(('127.0.0.1', 0), Pairing)
     threading.Thread(target=server.serve_forever, daemon=True).start()
     env['BRNRD_URL'] = f'http://127.0.0.1:{server.server_port}'
-    env['BRNRD_SETUP_BOARD'] = '1'  # setup's board offer, kept: the approve page's box starts ticked
     try:
         fresh = subprocess.run([str(Path(setup_channel.__file__).parent / 'connectors/relay/setup')],
                                env=env, capture_output=True, text=True, timeout=60)
@@ -183,7 +182,8 @@ def test_relay_setup_signs_in_and_writes_the_gate_the_relay_reads(tmp_path):
         server.shutdown()
     assert fresh.returncode == 0 and 'Traceback' not in fresh.stderr, fresh.stderr
     assert 'Signed in to brnrd.dev' in fresh.stdout
-    assert [s[2].get('board') for s in seen if s[1] == '/v1/accounts/pair'] == [None, True], seen
+    # The approve page's board box starts unticked (Planet49): setup never asks it ticked.
+    assert [s[2].get('board') for s in seen if s[1] == '/v1/accounts/pair'] == [None, None], seen
     assert cloud._load_state_from_dir(tmp_path / 'loom')['brnrd_url'] == env['BRNRD_URL']
 
 
@@ -651,7 +651,7 @@ def test_piped_setup_keeps_the_offers_on_enter_and_numbers_leave_them_out(monkey
     assert setup_channel.checklist(rows) == {'app'}
 
 
-def test_cloud_setup_offers_backup_app_and_board_and_brnrd_asks_what_was_left_off(tmp_path, monkeypatch):
+def test_cloud_setup_offers_backup_and_app_and_brnrd_asks_what_was_left_off(tmp_path, monkeypatch):
     import io
     from brr.loom.runtime.ledger import read_facts
     from brr.loom.runtime.wishes import wishes
@@ -659,15 +659,15 @@ def test_cloud_setup_offers_backup_app_and_board_and_brnrd_asks_what_was_left_of
     monkeypatch.setattr(setup_channel, '_gh_login', lambda: ('ada', ''))
     monkeypatch.setattr(setup_channel, 'backup_repo', lambda home, login: setup_channel.SELF_REPO)
     monkeypatch.setattr(setup_channel, 'back_up_self', lambda home, login, repo: made.append(login) or ('u', True))
-    monkeypatch.setattr(setup_channel, 'pair', lambda *a, **kw: paired.append(kw['env']))
+    monkeypatch.setattr(setup_channel, 'pair', lambda *a, **kw: paired.append(a[1]))
     # Piped: Enter for the body, then leave the App (2) out.
     monkeypatch.setattr('sys.stdin', io.StringIO('2\n'))
     argv = ['--home', str(tmp_path), '--kind', 'relay', '--name', 'cloud', '--person', 'ada']
     assert setup_channel.main(argv) == 0
-    assert made == ['ada'] and paired == [{'BRNRD_SETUP_BOARD': '1'}]
+    assert made == ['ada'] and paired == ['relay']
     lines = {w.line for w in wishes(read_facts(Home(tmp_path))).values()}
     assert setup_channel.LATER['app'] in lines
-    assert not lines & {setup_channel.LATER['repo'], setup_channel.LATER['board']}
+    assert setup_channel.LATER['repo'] not in lines and 'board' not in setup_channel.LATER
 
 
 def test_an_own_bot_setup_offers_only_the_backup(tmp_path):
@@ -675,7 +675,7 @@ def test_an_own_bot_setup_offers_only_the_backup(tmp_path):
     home = home_at(tmp_path)
     init_self(tmp_path, person='ada')
     assert [k for k, _, _ in setup_channel.offers(home, 'telegram', 'ada')] == ['repo']
-    assert [k for k, _, _ in setup_channel.offers(home, 'relay', 'ada')] == ['repo', 'app', 'board']
+    assert [k for k, _, _ in setup_channel.offers(home, 'relay', 'ada')] == ['repo', 'app']
     subprocess.run(['git', '-C', str(tmp_path / 'self'), 'remote', 'add', 'origin', 'https://x/y.git'], check=True)
     assert setup_channel.offers(home, 'telegram', 'ada') == []
 
@@ -776,8 +776,7 @@ def test_setup_refuses_zero_doors_and_connects_every_door_picked(tmp_path, monke
     """Item 2: cloud and own bot are one list, not either-or, and brnrd needs at least one."""
     import io
     calls = []
-    monkeypatch.setattr(setup_channel, 'pair', lambda home, kind, name, person, **kw: calls.append(
-        (kind, name, kw['env']['BRNRD_SETUP_BOARD'])))
+    monkeypatch.setattr(setup_channel, 'pair', lambda home, kind, name, person, **kw: calls.append((kind, name)))
     monkeypatch.setattr(setup_channel, '_take_offers', lambda home, picked, rows, login, repo: [])
     # A first setup starts on brnrd cloud and the page. Switch both off (nothing left: refused), then from the
     # start again add the own bot: all three doors are offered and each one ticked is walked in turn.
@@ -786,7 +785,7 @@ def test_setup_refuses_zero_doors_and_connects_every_door_picked(tmp_path, monke
     out = capsys.readouterr().out
     assert 'at least one way to reach you' in out
     assert all(label in out for label in setup_channel.CHOICES.values())
-    assert calls == [('relay', 'relay', '1'), ('telegram', 'telegram', ''), ('web', 'web', '')]
+    assert calls == [('relay', 'relay'), ('telegram', 'telegram'), ('web', 'web')]
 
 
 def test_the_web_door_needs_no_code_and_its_page_is_the_link_and_the_board_writes_through_it(tmp_path):
