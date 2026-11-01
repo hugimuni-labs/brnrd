@@ -174,7 +174,7 @@
 .brd .letter {
 	width: 87%;
 	padding: 8px 10px;
-	border-left: 3px solid var(--h);
+	border-left: 3px var(--line, solid) var(--h);
 	overflow-wrap: anywhere;
 	background: #fafafa;
 	white-space: pre-wrap;
@@ -191,11 +191,11 @@
 }
 .brd .letter.pending {
 	opacity: 0.55;
-	border-left-style: dashed;
+	--line: dotted;
 }
 .brd .letter small {
 	display: block;
-	color: var(--h);
+	color: #777;
 	font-size: 10px;
 	margin-bottom: 5px;
 	white-space: normal;
@@ -1884,7 +1884,7 @@
 	align-self: flex-end;
 	background: #f2f6ff;
 	border-left: 0;
-	border-right: 3px solid var(--h);
+	border-right: 3px var(--line, solid) var(--h);
 }
 .brd .column[data-b='mine'].stall {
 	filter: grayscale(0.6);

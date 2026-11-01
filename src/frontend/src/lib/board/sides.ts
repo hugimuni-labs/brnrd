@@ -42,3 +42,22 @@ export function linked(id: string, letters: Letter[], byId: Map<string, Letter>)
 	for (const x of letters) if (x.re && resolve(x.re)?.id === id) ids.add(x.id);
 	return ids;
 }
+
+// Colour means the thread, and only the thread (w-k1cbhzog8guq): a resident's letter takes the colour of the thread
+// its strand works for, his letters one fixed neutral, so no hue reads as a person. The bar's line says which strand
+// (10007): solid for the thread's current strand (its last), dashed for an earlier one; the short id stays as text.
+export const ME = '#171717';
+export function letterMark(
+	l: Letter,
+	col: string,
+	threads: Thread[]
+): { thread: string | null; line?: 'solid' | 'dashed' } {
+	if (l.person) return { thread: null };
+	const who = sender(l);
+	for (const t of threads) {
+		const s = t.strands || [];
+		const i = s.findIndex((x) => x.id === who);
+		if (i >= 0) return { thread: t.id, line: i === s.length - 1 ? 'solid' : 'dashed' };
+	}
+	return { thread: l.threads?.[0] || col, line: 'solid' };
+}

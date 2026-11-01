@@ -4,13 +4,14 @@
 	// wishes citing it, the letters answering it) on a press.
 	import type { Letter } from '../types.ts';
 	import { hm, hue, splitQuote } from '../text.ts';
-	import { inSide, internal, routes, sender } from '../sides.ts';
+	import { inSide, internal, letterMark, ME, routes, sender } from '../sides.ts';
 	import { stamps } from '../stamps.ts';
 	import Chips from './Chips.svelte';
 	import { board } from './board.svelte.ts';
 	let { l, col, inbox }: { l: Letter; col: string; inbox: boolean } = $props();
 	const b = board();
 	const who = $derived(sender(l));
+	const mark = $derived(letterMark(l, col, b.model?.threads || []));
 	const q = $derived(splitQuote(l, b.model?.byId || new Map()));
 	const shut = $derived(inbox && internal(l) && !b.showAll && !b.open.has('l:' + l.id));
 	const line = $derived(String(l.body).replace(/\s+/g, ' ').trim());
@@ -45,7 +46,8 @@
 	class:pending={l.pendingNote}
 	class:sel={b.isSel(l.id, col)}
 	class:linked={b.linked.has(l.id) && !b.isSel(l.id, col)}
-	style:--h={hue(who)}
+	style:--h={mark.thread ? hue(mark.thread) : ME}
+	style:--line={mark.line}
 	onclick={press}
 >
 	{#if shut}
