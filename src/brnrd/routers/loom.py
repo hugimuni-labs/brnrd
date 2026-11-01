@@ -14,6 +14,7 @@ import asyncio
 import gzip
 import json
 import time
+from urllib.parse import quote
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, Request
@@ -172,7 +173,11 @@ async def loom_letter(request: Request, db: Session = Depends(get_db)) -> JSONRe
     queued = enqueue_loom_letter(request, db, account, payload)
     if isinstance(queued, JSONResponse):
         return JSONResponse({"error": json.loads(queued.body)["detail"]}, status_code=queued.status_code)
-    return JSONResponse({"id": f"event:{queued.event_id}", "thread": MAIN_THREAD})
+    # The id the loom's ledger letter ends with (relay `message_id`: platform:login:message_id), so the
+    # board's pending echo resolves into it wherever routing lands it, not only on the thread it was sent to.
+    origin = json.loads(queued.reply_to or "{}")
+    native = ":".join(quote(str(origin.get(k) or ""), safe="") for k in ("platform", "user_id", "message_id"))
+    return JSONResponse({"id": native, "thread": MAIN_THREAD})
 
 
 #: The one publish lane a loom's board rides (`PUT /v1/daemons/loom{,/parts}`).

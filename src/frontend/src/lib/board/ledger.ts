@@ -169,3 +169,14 @@ export function inboxCards(wishes: Wish[]): { cards: Wish[]; open: number } {
 	);
 	return { cards, open: cards.filter((w) => !DONE.includes(w.state)).length };
 }
+
+// The letters sent from this page that the ledger does not hold yet. A sent letter's id is the ledger letter's whole
+// id (the loopback) or its native tail (brnrd.dev answers platform:login:message_id; the loom files it under
+// letter:<connector>:<that>). Matched by id alone, wherever routing put it, so a letter rerouted to its wish's
+// thread still resolves its pending copy.
+export function unechoed(pending: Letter[], ledger: Letter[]): Letter[] {
+	if (!pending.length) return pending;
+	const have = ledger.map((l) => l.id);
+	const left = pending.filter((p) => !have.some((id) => id === p.id || id.endsWith(':' + p.id)));
+	return left.length === pending.length ? pending : left;
+}

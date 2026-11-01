@@ -7,6 +7,7 @@ import type { Letter, Model } from '../types.ts';
 import { normalize, panelIds, resolveRef, timeline, type Timeline } from '../bead.ts';
 import { armedVerdict, correctDraft, verdictLetter } from '../calls.ts';
 import { refTokens } from '../text.ts';
+import { unechoed } from '../ledger.ts';
 
 const KEY = Symbol('board');
 const local = (k: string, d: string) =>
@@ -70,9 +71,7 @@ export class Board {
 	letters = $derived.by(() => {
 		const m = this.model;
 		if (!m) return [];
-		// eslint-disable-next-line svelte/prefer-svelte-reactivity -- a local, not state
-		const have = new Set(m.letters.map((l) => l.id));
-		return [...m.letters, ...this.pending.filter((p) => !have.has(p.id))].sort(
+		return [...m.letters, ...unechoed(this.pending, m.letters)].sort(
 			(a, b) => a.at.localeCompare(b.at) || a.id.localeCompare(b.id)
 		);
 	});
@@ -81,10 +80,7 @@ export class Board {
 		try {
 			if (await this.store.sync()) {
 				this.model = this.store.model();
-				// eslint-disable-next-line svelte/prefer-svelte-reactivity -- a local, not state
-				const have = new Set(this.model!.letters.map((l) => l.id));
-				if (this.pending.some((p) => have.has(p.id)))
-					this.pending = this.pending.filter((p) => !have.has(p.id));
+				this.pending = unechoed(this.pending, this.model!.letters);
 				if (this.beads && !this.store.beads) this.beads = await this.store.loadBeads();
 			}
 			// eslint-disable-next-line svelte/prefer-svelte-reactivity -- a temporary, not state

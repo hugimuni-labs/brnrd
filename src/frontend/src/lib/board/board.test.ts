@@ -6,7 +6,7 @@ import { inSide, internal, linked, sender } from './sides.ts';
 import { arrange, REORDER, SETTLED, sortThreads, wanted } from './order.ts';
 import { pipOn, stages, stageWord } from './stages.ts';
 import { answered, stack, verdictLetter } from './calls.ts';
-import { inboxCards, ledger, threadWishes } from './ledger.ts';
+import { inboxCards, ledger, threadWishes, unechoed } from './ledger.ts';
 import { bar, beats, liveOf, withTools } from './tape.ts';
 import { ancestors, children, moved, Store, type Beads } from './parts.ts';
 import { face, moves, seen } from './rail.ts';
@@ -495,4 +495,29 @@ test('a letter stamps who picked it up first, then its disposition, its send and
 	);
 	equal(stamps(l)[3].title, 'make it\nbrnrd#1');
 	deepEqual(stamps(L('l2', '2026-10-27T10:00:00Z')), []);
+});
+
+test('pending: a sent letter resolves by id alone, even rerouted to its wish thread', () => {
+	// brnrd.dev answers the native tail; the loom files it under its connector and routes it by the &wish
+	const sent = L('loom:arseni:ltr_1', '2026-11-01T17:00:00Z', {
+		to: 'thread:inbox',
+		threads: ['inbox'],
+		pendingNote: true
+	});
+	const local = L('letter:board:arseni:board-x', '2026-11-01T17:00:01Z', { pendingNote: true });
+	const other = L('loom:arseni:ltr_2', '2026-11-01T17:00:02Z', { pendingNote: true });
+	const handled = L('letter:relay:loom:arseni:ltr_1', '2026-11-01T17:00:05Z', {
+		to: 'thread:setup-flow',
+		threads: ['setup-flow']
+	});
+	const pend = [sent, local, other];
+	deepEqual(
+		unechoed(pend, [handled, L('letter:board:arseni:board-x', '2026-11-01T17:00:06Z')]).map(
+			(l) => l.id
+		),
+		['loom:arseni:ltr_2']
+	);
+	// an id that only shares a prefix is not the letter
+	deepEqual(unechoed([sent], [L('letter:relay:loom:arseni:ltr_10', 'x')]), [sent]);
+	equal(unechoed(pend, []), pend);
 });

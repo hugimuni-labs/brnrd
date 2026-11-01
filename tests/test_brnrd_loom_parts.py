@@ -160,6 +160,26 @@ def test_a_board_letter_goes_through_the_relay(client):
     assert client.post("/v1/loom/letters", json={"body": "  "}).status_code == 400
 
 
+def test_a_board_letter_id_is_the_tail_of_the_ledger_letter_the_loom_files(client, tmp_path):
+    """The cloud's answer to a sent letter names the letter the loom files, so its pending copy resolves by id."""
+    import connector_support as relay
+    from brr.loom.runtime.home import Home
+    from test_loom_relay import FakeClient, kinds
+
+    headers, session = _account(client)
+    relay_headers = _relay_token(client, headers, _repo(client, headers))
+    _signed_in(client, session)
+    sent = client.post("/v1/loom/letters", json={"body": "look"}).json()
+    _signed_in(client, None)
+    events = client.get("/v1/daemons/inbox", params={"wait": 0}, headers=relay_headers).json()["events"]
+    home = Home(tmp_path, install="aaaa")
+    home.thread_dir("inbox").mkdir(parents=True)
+    (home.thread_dir("inbox") / "README.md").write_text("---\nid: inbox\nstatus: open\ntense: plan\n---\n# inbox\n")
+    relay.pull_once(home, FakeClient(events, cursor=1), 0)
+    letter, = kinds(home, "letter")
+    assert sent["id"] != letter.data["id"] and letter.data["id"].endswith(":" + sent["id"])
+
+
 def test_the_loom_pusher_lands_only_moved_parts_through_the_cloud(client, monkeypatch, tmp_path):
     """brr's Pusher against this app: the first push lands every part, the next only the moved one."""
     import threading
