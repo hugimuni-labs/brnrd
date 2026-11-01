@@ -356,7 +356,8 @@ class Watcher:
     so the loop's guard records an outage, not one bad condition.
     """
 
-    def __init__(self, path=None):
+    def __init__(self, path=None, comments=None):
+        from .comments import Cursor
         self.states: dict[str, dict] = {}
         self.wants: set[str] = set()
         self.prs: set[str] = set()
@@ -369,6 +370,18 @@ class Watcher:
         self.failing: tuple[Exception, object] | None = None
         #: The last poll's failure per condition, in words.
         self.errors: dict[str, str] = {}
+        #: ``owner/repo#N`` → claiming thread, merged or open: whose comments are read (``comments``).
+        self.owners: dict[str, str] = {}
+        self.cursor = Cursor(comments)
+        self.reader = None
+        #: Comments read and not yet told; the tick takes them under the lock.
+        self.found: list[dict] = []
+        self.lock = threading.Lock()
+
+    def take(self) -> list[dict]:
+        with self.lock:
+            found, self.found = self.found, []
+        return found
 
     def step(self, config, armed: bool) -> None:
         if self.path is not None and not self.cards:
@@ -378,27 +391,38 @@ class Watcher:
                 self.cards = {}
         open_prs = {key for key in self.prs if self.cards.get(key, {}).get("state") not in ("merged", "closed")}
         cards = self.path is not None and bool(open_prs)
-        if not armed or not (self.wants or cards):
+        if not armed or not (self.wants or cards or self.owners):
             self.failing = None
             return
         if not (self.worker and self.worker.is_alive()):
             now = time.monotonic()
             wants = set(self.wants) if self.checked is None or now - self.checked >= EVERY else set()
-            prs = (open_prs if cards and (self.prs_checked is None or now - self.prs_checked >= PRS_EVERY)
-                   else set())
+            due = self.prs_checked is None or now - self.prs_checked >= PRS_EVERY
+            prs = open_prs if cards and due else set()
+            owners = dict(self.owners) if due else {}
             if wants:
                 self.checked = now
-            if prs:
+            if prs or owners:
                 self.prs_checked = now
-            if wants or prs:
+            if wants or prs or owners:
                 self.worker = threading.Thread(target=self._poll, args=(forge_for(config), wants, prs),
+                                               kwargs={"owners": owners, "open_prs": open_prs},
                                                name="loom-waits", daemon=True)
                 self.worker.start()
         if self.failing is not None:
             raise self.failing[0].with_traceback(self.failing[1])
 
-    def _poll(self, forge, wants: set[str], prs: set[str] = frozenset()) -> None:
+    def _poll(self, forge, wants: set[str], prs: set[str] = frozenset(), *,
+              owners: dict[str, str] | None = None, open_prs: set[str] = frozenset()) -> None:
         read, missed = 0, None
+        if owners:
+            from .comments import Reader, poll
+            if self.reader is None:
+                self.reader = Reader(forge.checks._token)
+            self.reader.token = forge.checks._token
+            found, missed, read = poll(self.reader, self.cursor, owners, set(open_prs))
+            with self.lock:
+                self.found.extend(found)
         if prs:
             from .home import atomic_write
             # One unreadable pull request keeps its last card; the rest still land.

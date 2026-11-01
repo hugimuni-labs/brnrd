@@ -12,6 +12,7 @@ from urllib.parse import quote
 import httpx
 
 from brr.gates.github import paths
+from brr.loom.runtime.comments import mark
 
 
 def _headers(token: str, api_version: str) -> dict[str, str]:
@@ -39,7 +40,7 @@ def post_issue_comment(
     resp = httpx.post(
         _url(api_base_url, paths.issue_comments(repo, issue_number)),
         headers=_headers(token, api_version),
-        json={"body": body},
+        json={"body": mark(body, "cloud")},
         timeout=timeout,
     )
     resp.raise_for_status()

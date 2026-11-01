@@ -2136,11 +2136,15 @@ def tick_once(home: Home, bodies: dict[str, Body], adapter: str, core: str,
         watcher = getattr(router, "watcher", None)
         facts = observe_waits(home, facts, router.armed(), watcher.states if watcher else None)
         if watcher is not None:
+            from .comments import claims, observe_comments
             from .receipts import receipts
             from .waits import open_claims
             from .wishes import told
             watcher.wants = forge_wants(told(facts))
-            watcher.prs = open_claims(receipts(facts, home.install_id()))
+            claimed = receipts(facts, home.install_id())
+            watcher.prs = open_claims(claimed)
+            watcher.owners = claims(claimed)
+            facts = observe_comments(home, facts, True, watcher.take()) if router.armed() else facts
         facts = router.route(facts, bodies, (adapter, core))
         facts = router.speak_out(facts)
 
@@ -2375,7 +2379,7 @@ def run(root: Path | str, *, adapter: str = "fake", core: str = "haiku",
         cpu = CpuWatch(on_high=sampler.start)
         from .receipts import source_root
         updater = Updater(home, _log, source_root())
-        router.watcher = Watcher(home.root / "loom" / "prs.json")
+        router.watcher = Watcher(home.root / "loom" / "prs.json", home.root / "loom" / "pr-comments.json")
         while not (stop is not None and stop.is_set()):
             try:
                 config = load_config(home.root)
