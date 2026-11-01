@@ -2388,8 +2388,9 @@ def run(root: Path | str, *, adapter: str = "fake", core: str = "haiku",
         publisher = Publisher(home, _log, functools.partial(health.guard, backoff=False))
         spa = None
         pusher = None
-        # The board's parts feed the loopback (board_port) and the cloud (relay_state); both read at start.
-        if config.board_port or config.relay_state:
+        # The board's parts feed the loopback (board_port) and the cloud (its gate); both read at start.
+        from .gates import state_dir
+        if config.board_port or state_dir(home.root, config):
             from .board import Parts, Pusher
             board = Parts(home, lambda: load_config(home.root), _log)
             threading.Thread(target=board.run, name="board", daemon=True).start()

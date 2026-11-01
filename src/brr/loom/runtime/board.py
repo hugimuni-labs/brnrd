@@ -622,7 +622,10 @@ class Pusher:
         self.failing: tuple[Exception, object] | None = None
 
     def step(self, config) -> None:
-        if not config.relay_state:
+        from .gates import state_dir
+        # The gate the snapshot reads: relay_state names it, else loom/gates (a home migrate:gates moved).
+        gate = state_dir(self.parts.home.root, config)
+        if gate is None:
             return
         with self.parts.changed:
             held, hashes = self.parts.parts, self.parts.hashes
@@ -631,7 +634,7 @@ class Pusher:
         wait = self.RETRY if self.failing else self.EVERY
         if hashes and hashes != self.sent and not busy and (self.attempted is None or now - self.attempted >= wait):
             self.attempted = now
-            self.worker = threading.Thread(target=self._put, args=(Path(config.relay_state), held, hashes),
+            self.worker = threading.Thread(target=self._put, args=(gate, held, hashes),
                                            name="loom-parts", daemon=True)
             self.worker.start()
         if self.failing is not None:
