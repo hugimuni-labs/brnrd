@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import functools
 import gzip
 import io
 import json
@@ -799,7 +800,20 @@ async def put_loom_parts(request: Request, principal: Principal = Depends(requir
     the board's own agree included (10099).
     """
     raw = await request.body()
+    permitted = functools.partial(publish_scope.lane_permitted, db, repo_id=principal.repo_id, lane="activity")
+    if not await anyio.to_thread.run_sync(permitted):
+        await anyio.to_thread.run_sync(_drop_loom_parts, principal, db)
+        raise HTTPException(status_code=PUBLISH_WITHHELD_STATUS, detail="this repo's publish scope withholds the activity lane")
     return await anyio.to_thread.run_sync(_store_loom_parts, raw, request.headers.get("content-encoding"), principal, db)
+
+
+def _drop_loom_parts(principal: Principal, db: Session) -> None:
+    """A refusal also drops the copy, as the snapshot does. The daemon row stays: brnrd.dev asks consent of it."""
+    daemon = _current_daemon(db, principal)
+    if daemon is None:
+        daemon = _upsert_daemon(db, principal, schemas.DaemonRegister(daemon_name=LOOM_DAEMON_NAME))
+    db.execute(delete(LoomPart).where(LoomPart.daemon_id == daemon.id))
+    db.commit()
 
 
 def _store_loom_parts(raw: bytes, encoding: str | None, principal: Principal, db: Session) -> dict:
@@ -827,11 +841,6 @@ def _store_loom_parts(raw: bytes, encoding: str | None, principal: Principal, db
     if daemon is None:
         daemon = _upsert_daemon(db, principal, schemas.DaemonRegister(daemon_name=LOOM_DAEMON_NAME))
     now = datetime.now(timezone.utc)
-    if not publish_scope.lane_permitted(db, repo_id=principal.repo_id, lane="activity"):
-        # A refusal also drops the copy, as the snapshot does.
-        db.execute(delete(LoomPart).where(LoomPart.daemon_id == daemon.id))
-        db.commit()
-        raise HTTPException(status_code=PUBLISH_WITHHELD_STATUS, detail="this repo's publish scope withholds the activity lane")
     held = {row.key: row for row in db.execute(select(LoomPart).where(LoomPart.daemon_id == daemon.id)).scalars()}
     for key in set(held) - keys:
         db.delete(held.pop(key))
