@@ -126,3 +126,24 @@ def test_a_loom_with_a_copied_install_does_not_tick(tmp_path, monkeypatch):
     thread.join(10)
     assert not thread.is_alive()
     assert "not starting: install " + first.install_id() in log.read_text()
+
+
+def test_a_home_reading_while_another_mints_sees_the_whole_id(tmp_path, monkeypatch):
+    from brr.loom.runtime import home as home_module
+    write, started = home_module.os.write, threading.Event()
+
+    def slow(fd, data):
+        started.set()
+        time.sleep(0.3)
+        return write(fd, data)
+
+    monkeypatch.setattr(home_module.os, "write", slow)
+    ids = []
+    minting = threading.Thread(target=lambda: ids.append(Home(tmp_path).install_id()))
+    minting.start()
+    assert started.wait(5)
+    # Mid-write: the second Home either mints and links first, or reads the
+    # first one's whole id; never an empty file.
+    ids.append(Home(tmp_path).install_id())
+    minting.join(5)
+    assert len(ids) == 2 and ids[0] == ids[1] == (tmp_path / "loom/install-id").read_text().strip()
