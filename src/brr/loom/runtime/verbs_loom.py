@@ -1,13 +1,14 @@
-"""``python -m brr.loom.runtime <loom|send|molt|jack|attention>``."""
+"""``python -m brr.loom.runtime <loom|send|reincarnate|hold|jack|attention>``."""
 
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import sys
 from pathlib import Path
 
-from .home import Home, home_of_room, resolve_home, strand_of_room
+from .home import Home, home_of_room, mint, resolve_home, strand_of_room
 from .jack import run as run_jack
 from .ledger import read_facts
 from .loom import pending_bodies, run as run_loom
@@ -178,9 +179,9 @@ def _send(argv: list[str]) -> int:
 
 
 def _molt(argv: list[str]) -> int:
-    """``shed``, and ``molt`` for one release: hand the seat on. The stakes and
-    the README's facts come first, on stderr, so the choice is an informed one."""
-    parser = argparse.ArgumentParser(prog="python -m brr.loom.runtime shed")
+    """``reincarnate``, and its old names ``shed`` and ``molt``: hand the seat on. The
+    stakes and the README's facts come first, on stderr, so the choice is an informed one."""
+    parser = argparse.ArgumentParser(prog="python -m brr.loom.runtime reincarnate")
     parser.add_argument("--room")
     parser.add_argument("--why", required=True)
     parser.add_argument("--fresh", action="store_true")
@@ -207,9 +208,60 @@ def _shed_stakes(room) -> str:
         facts = read_facts(home_of_room(room))
         thread = sender_threads(facts).get(strand_of_room(room)) or ""
         said = readme_facts(room, thread, facts, _state(room).get("readme_base") or "") if thread else ""
-    except Exception:  # noqa: BLE001 - facts inform the shed; they never block it
+    except Exception:  # noqa: BLE001 - facts inform the reincarnation; they never block it
         said = ""
     return f"{STAKES}\n" + (f"{said}\n" if said else "")
+
+
+#: Words that name no particular thing: a why made only of these is a bare hold.
+_GENERIC = set("""a an the it its this that my our of on in for to and or but with is are be still
+just some all everything nothing stuff things context warm cache cached live work working busy
+ongoing progress current state needed need needs mid way midway mid-way hold holding keep keeping
+going reasoning thread here now yet more later continue continuing wip tbd n/a na none""".split())
+
+
+def bare(why: str) -> bool:
+    """A hold's why that names nothing that would die: fewer than three words of substance."""
+    words = [w.strip(".,;:!?()'\"`").lower() for w in why.split()]
+    return sum(1 for w in words if w and w not in _GENERIC and len(w) > 1) < 3
+
+
+def _hold(argv: list[str]) -> int:
+    """``hold``: keep the seat past the context mark, naming what would die if it went.
+    A bare why is refused; the hold is a fact, so the whys can be read back later."""
+    from .jack import _HEADER_LINE, _boundary_text, _set_state, _state
+    from .ledger import append
+    from .shed import contexts
+    from brr.daemon2.facts import Fact
+    parser = argparse.ArgumentParser(prog="python -m brr.loom.runtime hold")
+    parser.add_argument("--room")
+    parser.add_argument("--why", required=True)
+    args = parser.parse_args(argv)
+    why = " ".join(args.why.split())
+    if bare(why):
+        sys.stderr.write("hold: name what would die, by name (a decision mid-way, a person's "
+                         "conversation, a reasoning not yet written); a generic why is no hold. "
+                         "If nothing would, reincarnate --why \"<what the successor picks up>\".\n")
+        return 1
+    try:
+        room = _room(args.room)
+        state = _state(room)
+        path = state.get("transcript") or ""
+        context = (contexts(json.dumps({"transcript_path": path}), 0)[1] if path else 0) \
+            or int(state.get("context") or 0)
+        header = _HEADER_LINE.search(_boundary_text(room))
+        strand = strand_of_room(room)
+        fact = Fact(kind="hold", by=f"strand:{strand}", id="hold:" + mint(12),
+                    data={"strand": strand, "gen": int(header.group(2)) if header else None,
+                          "why": why, "context": context})
+        append(home_of_room(room), fact)
+        # The mark's ask stays quiet until the context grows past this hold.
+        _set_state(room, mark_at=context)
+    except (PortError, SelfError, ValueError, OSError) as exc:
+        sys.stderr.write(f"{exc}\n")
+        return 1
+    sys.stdout.write(fact.id + "\n")
+    return 0
 
 
 def _settle(argv: list[str]) -> int:

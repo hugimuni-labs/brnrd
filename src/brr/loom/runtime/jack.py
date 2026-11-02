@@ -445,6 +445,20 @@ def _turn(room: Path, stdin_text: str) -> None:
                turn_open=False, readme_seen=readme, readme_acts=unread)
 
 
+def _transcript_path(stdin_text: str) -> str:
+    try:
+        return str(json.loads(stdin_text).get("transcript_path") or "")
+    except (ValueError, AttributeError, TypeError):
+        return ""
+
+
+def _keep_transcript(room: Path, stdin_text: str) -> None:
+    """The scroll's path, kept for a park, which has no hook stdin to read it from."""
+    path = _transcript_path(stdin_text)
+    if path and path != _state(room).get("transcript"):
+        _set_state(room, transcript=path)
+
+
 def _opened(room: Path) -> None:
     """A stop that returns work opens the next turn."""
     _set_state(room, turn_open=True, turn_at=time.time())
@@ -632,6 +646,7 @@ def execute(event: str, room: Path, stdin_text: str) -> str:
     guarded = _guard_warnings(room, "post", stdin_text)[0] if event == "post" else ""
     if event == "post":
         tooltrace.note(room, stdin_text, "post")
+        _keep_transcript(room, stdin_text)
         _touch(room, stdin_text)
         guarded = "\n".join(filter(None, (guarded, _lib_changes(room))))
         _note_tool(room, stdin_text)
@@ -646,6 +661,8 @@ def execute(event: str, room: Path, stdin_text: str) -> str:
     elif event == "start":
         from .shed import base, heads, readme_hash
         _set_state(room, boundary_at=time.time(), turn_open=True, turn_at=time.time(),
+                   booted_at=time.time(), stops=0, scroll={}, mark_at=None,
+                   transcript=_transcript_path(stdin_text),
                    heads=_shed(room, heads, room, default={}),
                    readme_seen=_shed(room, readme_hash, room, os.environ.get("BRNRD_THREAD") or ""),
                    readme_base=_shed(room, base, room, default=""))
@@ -728,6 +745,9 @@ def execute(event: str, room: Path, stdin_text: str) -> str:
             "hookEventName": hook, "additionalContext": text}})
     if _state(room).get("molted") or _order(room) == "end" or parsed.settled is not None:
         return ""
+    state = _state(room)
+    path = _transcript_path(stdin_text) or state.get("transcript") or ""
+    _set_state(room, stops=int(state.get("stops") or 0) + 1, transcript=path)
     _shed(room, _turn, room, stdin_text)
     out = _stop_block(room, text, plan) or _poll(room, stdin_text)
     if out:
@@ -782,7 +802,7 @@ def _stop_block(room: Path, text: str, plan: str) -> str:
     sections = [section for section in sections if section]
     state = _state(room)
     if not sections:
-        sections = [section for section in [_readme_miss(room, state)] if section]
+        sections = [section for section in [_readme_miss(room, state), _mark_miss(room, state)] if section]
     count = int(state.get("stop_blocks") or 0)
     seen = "\n\n".join(sections)
     if (count >= 3) if _hand() else (count and seen == state.get("stop_said")):
@@ -834,6 +854,36 @@ def _readme_miss(room: Path, state: dict) -> str:
     _set_state(room, readme_acts=[])
     facts = _shed(room, _readme_facts, room, thread, state, default="")
     return README.format(did=", ".join(did), thread=thread, facts=f"\n  {facts}" if facts else "")
+
+
+MARK = """context {k}k, past the {mark}k mark, before resting: what in it would die if you reincarnated now?
+{census}
+The burden is on holding: name what would die, or go. A conversation with a person that is mid-way counts as live.
+- go: brnrd runtime reincarnate --why "<what the successor picks up>"
+- hold: brnrd runtime hold --why "<what would die, by name>"
+Asked once; it comes back when the context grows {rearm}k past this."""
+
+
+def _mark_miss(room: Path, state: dict) -> str:
+    """At a resting stop past the mark, once: reincarnate or hold, each with its why."""
+    from . import shed
+    context = int(state.get("context") or 0)
+    mark_at = state.get("mark_at")
+    if context < shed.MARK or (mark_at is not None and context < int(mark_at) + shed.REARM):
+        return ""
+    _set_state(room, mark_at=context)
+    said = _shed(room, _census, room, default="") or ""
+    return MARK.format(k=context // 1000, mark=shed.MARK // 1000, rearm=shed.REARM // 1000,
+                       census=said).replace("\n\n", "\n")
+
+
+def _census(room: Path) -> str:
+    """The census since this gen booted; its scroll offset is kept so the next reads on."""
+    from .ledger import read_facts
+    from .shed import census
+    said, kept = census(room, os.environ.get("BRNRD_THREAD") or "", _state(room), read_facts(home_of_room(room)))
+    _set_state(room, scroll=kept)
+    return said
 
 
 def _readme_facts(room: Path, thread: str, state: dict) -> str:

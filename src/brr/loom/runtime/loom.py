@@ -630,7 +630,7 @@ def _prepare(home: Home, strand: str, thread: str, gen: int,
         "You forget what is not written: keep this thread's README true (spec, decisions) and "
         "land self commits with `brnrd runtime send-self --room .`; what is left on a wish lives "
         "on it: `wish <w-id> --left \"<step>\" …`, the whole list, latest wins (`--left same` "
-        "when nothing moved), and the stop asks for it once a wish moved. To shed: `shed --why \"<one line>\"`, then end the turn; work done: "
+        "when nothing moved), and the stop asks for it once a wish moved. To reincarnate: `reincarnate --why \"<one line>\"`, then end the turn; work done: "
         "`settle <thread> --why \"…\"`. A letter from `loom` is a notice yours to settle; its "
         "last lines say how (core/loom/README.md, Notices). Stamp what someone wants with "
         "`send --wish`; open a thread only for one: `send --to thread:<new> --wish <w-id>` or "
