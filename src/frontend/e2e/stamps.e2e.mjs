@@ -1,5 +1,5 @@
 // A letter's stamps (board.html stampsHtml): the strand that picked it up first, `picked up · <strand> <time>`, then
-// its wishes' stamps; and the header's loom clock, `loom HH:MM:SSZ`, which moves when the index comes back.
+// one line per wish citing it, `<state> · <id> · <thread>`; and the header's loom clock, `loom HH:MM:SSZ`, which moves when the index comes back.
 import { after, before, test } from 'node:test';
 import { equal, match, notEqual, ok } from 'node:assert/strict';
 import { open } from './harness.mjs';
@@ -20,9 +20,10 @@ test('a letter a strand picked up says so before its wish stamps', async () => {
 	equal(st[0][0], 'stamp read');
 	match(st[0][1], /^picked up · inbox0 \d\d-\d\d \d\d:\d\d$/);
 	ok(
-		st.slice(1).every(([, t]) => / · 000000 /.test(t)),
+		st.slice(1).every(([, t]) => / · 000000( · |$)/.test(t)),
 		JSON.stringify(st)
 	);
+	equal(new Set(st.map(([, t]) => t)).size, st.length, 'a wish line repeats');
 });
 
 test('the header carries the loom clock and it moves with the index', async () => {

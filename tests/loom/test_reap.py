@@ -102,6 +102,7 @@ def test_under_the_disk_floor_the_loop_degrades_and_recovers(tmp_path, monkeypat
     write_thread(root, "brnrd", "Brnrd", "brnrd")
     free = [1]
     monkeypatch.setattr(reap, "floor", lambda path: (free[0], 2))
+    monkeypatch.setattr(reap, "DISK_EVERY", 0.0)
     looming = Loom(root, tick=0.01)
     looming.start()
     try:
@@ -192,6 +193,36 @@ def test_rooms_kept_for_a_body_reach_inbox_once_their_thread_at_wake_and_force_c
     assert _reaped(home)["rooms/0001-loose"].data["forced"] == "the draft is in the PR body"
     reaper.reap()
     assert json.loads((home.root / reap.KEPT).read_text()) == {"kept": {}, "told": []}
+
+
+def test_a_new_rooms_kept_notice_settles_the_one_it_restates(tmp_path):
+    # 10-31, gen 241: four rooms-kept notices, each repeating the last list, all owed at wake.
+    from brr.loom.runtime.lifecycle import main_snapshot
+    from brr.loom.runtime.owners import letters_for
+    home = Home(tmp_path / "home", install="0001")
+    init_self(home.root, person="test")
+    write_thread(home.root, "brnrd", "Brnrd", "quit-now", wait="0")
+    (_ended(home, "one", "0001-one", 8) / "a.md").write_text("draft a")
+    reaper = reap.Reaper(home, lambda *_: None)
+    reaper.reap()
+    # An older notice naming a room that is still on disk but no longer listed is not restated.
+    home.room("0001-ghost").mkdir(parents=True)
+    append(home, Fact(kind="letter", by="loom:0001", id="loom/rooms-kept-0000000000", data={
+        "id": "loom/rooms-kept-0000000000", "from": "loom", "to": f"thread:{home.main_thread()}",
+        "body": "1 rooms are kept\n- 0001-ghost (thread ghost): loose files: c.md"}))
+    (_ended(home, "two", "0001-two", 8) / "b.md").write_text("draft b")
+    reaper.reap()
+    facts = read_facts(home)
+    assert not any(f.id == "letter.disposed:loom/rooms-kept-0000000000" for f in facts)
+    notices = [f for f in facts if f.kind == "letter" and f.id.startswith("loom/rooms-kept-")
+               and f.id != "loom/rooms-kept-0000000000"]
+    assert len(notices) == 2
+    first, latest = sorted(notices, key=lambda f: "0001-two" in f.data["body"])
+    assert "0001-one" in latest.data["body"] and "0001-two" in latest.data["body"]
+    [gone] = [f for f in facts if f.id == f"letter.disposed:{first.id}"]
+    assert gone.data["dispositions"][0]["reason"] == f"superseded by {latest.id}"
+    owed = [f.id for f in letters_for(facts, main_snapshot(home), home.main_thread())]
+    assert latest.id in owed and first.id not in owed
 
 
 def _project(tmp_path, home, strands):
@@ -365,3 +396,27 @@ def test_loose_scratch_dirs_never_keep_a_room_but_a_loose_file_by_their_name_doe
     (room / "runs").rmdir()
     (room / "runs").write_text("a file, not scratch")
     assert reap.loose(room) == ["runs"]
+
+
+def test_a_clone_another_room_borrows_objects_from_goes_only_once_the_borrower_holds_its_own(tmp_path):
+    # 2026-10-30: s-ae66-k7xzbz/brnrd was a `git clone --shared` of s-ae66-fko75x/brnrd;
+    # reaping fko75x (clean, nothing unpushed) left k7xzbz with bad objects.
+    home = Home(tmp_path / "home", install="0001")
+    init_self(home.root, person="test")
+    _project(tmp_path, home, [("0001-old", 3), ("0001-latest", 3)])
+    lender = home.room("0001-old") / "widget"
+    borrower = home.room("0001-latest") / "borrow"
+    git(home.root, "clone", "-q", "--shared", str(lender), str(borrower))
+    alternates = borrower / ".git" / "objects" / "info" / "alternates"
+    assert str(lender) in alternates.read_text()
+    assert reap.borrowers(home, home.room("0001-old")) == [(borrower, [str(lender / ".git" / "objects")])]
+    assert reap.borrowers(home, borrower) == []
+
+    lines = []
+    reap.Reaper(home, lambda _home, line: lines.append(line)).reap()
+    assert not lender.exists()
+    assert list(_reaped(home)) == ["rooms/0001-old/widget"]
+    assert git(borrower, "fsck", "--connectivity-only", check=False).returncode == 0
+    assert not alternates.exists() or str(lender) not in alternates.read_text()
+    assert git(borrower, "log", "--oneline", "-1").stdout.strip()
+    assert any(line.startswith(f"unlent {lender}") for line in lines)

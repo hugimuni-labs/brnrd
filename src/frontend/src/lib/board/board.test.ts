@@ -2,11 +2,11 @@ import { deepEqual, equal, ok } from 'node:assert/strict';
 import { test } from 'node:test';
 import type { Call, Index, Letter, Thread, ThreadPart, Wish } from './types.ts';
 import { chips, dur, refTokens, splitQuote } from './text.ts';
-import { inSide, internal, linked, sender } from './sides.ts';
+import { inSide, internal, letterMark, linked, sender } from './sides.ts';
 import { arrange, REORDER, SETTLED, sortThreads, wanted } from './order.ts';
 import { pipOn, stages, stageWord } from './stages.ts';
 import { answered, stack, verdictLetter } from './calls.ts';
-import { inboxCards, ledger, threadWishes } from './ledger.ts';
+import { inboxCards, ledger, threadWishes, unechoed } from './ledger.ts';
 import { bar, beats, liveOf, withTools } from './tape.ts';
 import { ancestors, children, moved, Store, type Beads } from './parts.ts';
 import { face, moves, seen } from './rail.ts';
@@ -164,13 +164,13 @@ test('calls: an open ask stands, verdicts fold into one counted line, a pending 
 	const s = stack(calls, pend, new Set(), false);
 	deepEqual(
 		s.shown.map((c) => c.wish),
-		['a']
+		[]
 	);
-	deepEqual(s.fold, { verdicts: 1, answered: 2 });
+	deepEqual(s.fold, { asks: 1, verdicts: 1, answered: 2 });
 	equal(stack(calls, pend, new Set(), true).shown.length, 4);
 	deepEqual(
 		stack(calls, [], new Set(['b']), false).shown.map((c) => c.wish),
-		['a', 'b']
+		['b']
 	);
 });
 
@@ -476,10 +476,17 @@ test('a letter stamps who picked it up first, then its disposition, its send and
 		wishes: [
 			{
 				wish: 'w-abc123',
+				thread: 'web-main',
 				line: 'make it',
 				state: 'read',
-				stamps: [{ stamp: 'read', at: '2026-10-27T10:03:00Z', ref: 'brnrd#1' }]
-			}
+				stamps: [
+					{ stamp: 'heard', at: '2026-10-27T09:00:00Z' },
+					{ stamp: 'read', at: '2026-10-27T10:03:00Z', ref: 'brnrd#1' },
+					{ stamp: 'read', at: '2026-10-27T10:04:00Z' }
+				]
+			},
+			// the same wish again, as two citing letters list it (10010): one line, not its history twice
+			{ wish: 'w-abc123', thread: 'web-main', line: 'make it', state: 'read', stamps: [] }
 		],
 		wish: 'w-zzz999'
 	});
@@ -489,10 +496,74 @@ test('a letter stamps who picked it up first, then its disposition, its send and
 			['read', 'picked up · inbox1 10-27 10:01'],
 			['heard', 'chatter'],
 			['heard', 'to channel · failed'],
-			['read', 'read · abc123 10-27 10:03'],
+			['read', 'read · abc123 · web-main'],
 			['heard', 'stamps zzz999']
 		]
 	);
-	equal(stamps(l)[3].title, 'make it\nbrnrd#1');
+	equal(
+		stamps(l)[3].title,
+		'make it\nheard 10-27 09:00\nread 10-27 10:03 brnrd#1\nread 10-27 10:04'
+	);
 	deepEqual(stamps(L('l2', '2026-10-27T10:00:00Z')), []);
+});
+
+test('pending: a sent letter resolves by id alone, even rerouted to its wish thread', () => {
+	// brnrd.dev answers the native tail; the loom files it under its connector and routes it by the &wish
+	const sent = L('loom:arseni:ltr_1', '2026-11-01T17:00:00Z', {
+		to: 'thread:inbox',
+		threads: ['inbox'],
+		pendingNote: true
+	});
+	const local = L('letter:board:arseni:board-x', '2026-11-01T17:00:01Z', { pendingNote: true });
+	const other = L('loom:arseni:ltr_2', '2026-11-01T17:00:02Z', { pendingNote: true });
+	const handled = L('letter:relay:loom:arseni:ltr_1', '2026-11-01T17:00:05Z', {
+		to: 'thread:setup-flow',
+		threads: ['setup-flow']
+	});
+	const pend = [sent, local, other];
+	deepEqual(
+		unechoed(pend, [handled, L('letter:board:arseni:board-x', '2026-11-01T17:00:06Z')]).map(
+			(l) => l.id
+		),
+		['loom:arseni:ltr_2']
+	);
+	// an id that only shares a prefix is not the letter
+	deepEqual(unechoed([sent], [L('letter:relay:loom:arseni:ltr_10', 'x')]), [sent]);
+	equal(unechoed(pend, []), pend);
+});
+
+test('colour is the thread: a strand letter takes its thread, his letters the neutral; current strand solid, earlier dashed', () => {
+	const threads = [
+		T('setup-flow', {
+			strands: [{ id: 's-ae66-old111' }, { id: 's-ae66-new222' }] as Thread['strands']
+		}),
+		T('web-main', { strands: [{ id: 's-ae66-web333' }] as Thread['strands'] })
+	];
+	const from = (f: string, o: Partial<Letter> = {}) =>
+		L('x', '2026-11-01T00:00:00Z', { from: f, ...o });
+	deepEqual(letterMark(from('s-ae66-new222/a'), 'inbox', threads), {
+		thread: 'setup-flow',
+		line: 'solid'
+	});
+	deepEqual(letterMark(from('s-ae66-old111/b'), 'inbox', threads), {
+		thread: 'setup-flow',
+		line: 'dashed'
+	});
+	// read in another thread's column, it keeps its own thread's colour
+	deepEqual(letterMark(from('s-ae66-web333/c'), 'setup-flow', threads), {
+		thread: 'web-main',
+		line: 'solid'
+	});
+	deepEqual(letterMark(from('person:arseni', { person: true }), 'web-main', threads), {
+		thread: null
+	});
+	// a strand no thread lists falls back to where the letter went, then the column
+	deepEqual(letterMark(from('s-ae66-gone44/d', { threads: ['loom-cpu'] }), 'inbox', threads), {
+		thread: 'loom-cpu',
+		line: 'solid'
+	});
+	deepEqual(letterMark(from('s-ae66-gone44/d'), 'inbox', threads), {
+		thread: 'inbox',
+		line: 'solid'
+	});
 });

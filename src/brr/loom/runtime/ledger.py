@@ -5,6 +5,7 @@ from __future__ import annotations
 import fcntl
 import json
 import os
+import threading
 import time
 from collections import defaultdict, OrderedDict
 from datetime import datetime
@@ -74,6 +75,28 @@ def fact_filename(fact: Fact) -> str:
     return f"{strand}.jsonl"
 
 
+#: A ledger row written before a rename, in today's words (10052: molt became reincarnate).
+_FRESH = ("Fresh molt: start from main.", "Fresh reincarnation: start from main.")
+
+
+def renamed(row: dict) -> dict:
+    """The one place an old name is read: kind ``molt``, a letter's ``molt`` marker, the
+    ``molted`` ending and the fresh control text come back as ``reincarnate``'s."""
+    kind, data = row.get("kind"), row.get("data")
+    if kind == "molt":
+        row = {**row, "kind": "reincarnate"}
+    if isinstance(data, dict):
+        if "molt" in data:
+            data = {("reincarnate" if key == "molt" else key): value for key, value in data.items()}
+        if kind == "attempt.ended" and data.get("cause") == "molted":
+            data = {**data, "cause": "reincarnated"}
+        if kind == "letter" and data.get("body") == _FRESH[0]:
+            data = {**data, "body": _FRESH[1]}
+        if data is not row.get("data"):
+            row = {**row, "data": data}
+    return row
+
+
 def read_file(path: Path) -> list[Fact]:
     """Parse one jsonl file, skipping a trailing line the process didn't finish."""
     raw = path.read_bytes()
@@ -85,24 +108,43 @@ def read_file(path: Path) -> list[Fact]:
     facts = []
     for line in raw.decode().splitlines():
         if line.strip():
-            facts.append(Fact.from_row(json.loads(line)))
+            facts.append(Fact.from_row(renamed(json.loads(line))))
     return facts
 
 
 def read_facts(home: Home) -> list[Fact]:
-    """Union every install's folder. Appending stays inside the caller's own."""
+    """Union every install's folder. Appending stays inside the caller's own.
+
+    The process's one fold of this home, rescanned now and copied: a copy is
+    a list of pointers, a refold was ~200 MB and ~5 s (2026-10-30: the loom
+    held several at once, swapped them out, and gc paged them back in).
+    """
     root = home.root / "ledger" / "facts"
     if not root.is_dir():
         return []
-    streams = [read_file(path) for path in sorted(root.glob("*/*.jsonl"))]
-    if not streams:
-        return []
-    return union(*streams)
+    return list(shared_reader(home).now(home))
 
 
 def fact_order(fact):
     return (fact.hlc or (int(datetime.fromisoformat(fact.at).timestamp() * 1000),
                          0, fact.by), fact.id)
+
+
+def newest_renewals(facts) -> list:
+    """``facts`` with each (install, gen)'s ``router.renewed`` cut to its newest.
+
+    A renewal only says its lease was alive until ``until``; the router reads
+    the newest per generation (``_prior_visible``) and nothing names one in
+    ``after``. On 2026-10-30 they were 107k of the ledger's 155k facts. The
+    files keep every one; only a built view drops the superseded.
+    """
+    facts = list(facts)
+    newest = {(f.data.get("install"), f.data.get("gen")): f.id
+              for f in facts if f.kind == "router.renewed"}
+    if len(newest) == sum(1 for f in facts if f.kind == "router.renewed"):
+        return facts
+    return [f for f in facts if f.kind != "router.renewed"
+            or newest[(f.data.get("install"), f.data.get("gen"))] == f.id]
 
 
 class LedgerView(list):
@@ -211,6 +253,8 @@ class LedgerView(list):
         if not delta:
             self.delta = ()
             return
+        if not len(self):  # a first load builds the view: cut renewals as a rebuild does
+            delta = newest_renewals(delta)
         if repair:
             duplicates = self.duplicates
             ordered = union(self, delta, duplicates=duplicates)
@@ -308,6 +352,8 @@ def kind_facts(facts, *kinds):
 # code from before the marker does not touch it: FULL_EVERY bounds that.
 MARKER = ".changed"
 FULL_EVERY = 2.0
+#: Bytes before a stream's cursor kept to tell an append from a longer rewrite.
+TAIL = 256
 
 
 def mark_changed(facts_root) -> None:
@@ -352,20 +398,32 @@ class LedgerReader:
         self.ordered = LedgerView()
         self.revision = 0
         self.seen = (None, None, 0.0)
+        # One scan at a time: the loop, the board and every read_facts share a reader.
+        self.lock = threading.Lock()
 
     def read(self, home: Home) -> list[Fact]:
         return list(self.refresh(home))
 
     def refresh(self, home: Home) -> LedgerView:
         root = str(home.root / "ledger" / "facts")
-        # Read before the scan: a write landing during it moves the marker again.
-        marker, now = _marker(root), time.monotonic()
-        if (marker is not None and self.seen[:2] == (root, marker)
-                and now - self.seen[2] < FULL_EVERY):
-            return self.ordered
-        view = self._scan(root)
-        self.seen = (root, marker, now)
-        return view
+        with self.lock:
+            # Read before the scan: a write landing during it moves the marker again.
+            marker, now = _marker(root), time.monotonic()
+            if (marker is not None and self.seen[:2] == (root, marker)
+                    and now - self.seen[2] < FULL_EVERY):
+                return self.ordered
+            view = self._scan(root)
+            self.seen = (root, marker, now)
+            return view
+
+    def now(self, home: Home) -> LedgerView:
+        """``refresh`` without the marker's grace: every stream is stat'ed now."""
+        root = str(home.root / "ledger" / "facts")
+        with self.lock:
+            marker, now = _marker(root), time.monotonic()
+            view = self._scan(root)
+            self.seen = (root, marker, now)
+            return view
 
     def _scan(self, root: str) -> LedgerView:
         # Path.glob plus a Path sort costs more than the stats below; keep the parts order.
@@ -399,18 +457,28 @@ class LedgerReader:
                     streams[path] = prior
                     continue
                 changed = True
+                raw = None
                 if (prior is not None and prior[0][:2] == stamp[:2]
                         and stat.st_size > prior[0][2]):
-                    offset = prior[1]
-                else:
+                    # Grown in place is an append only if the bytes before the cursor
+                    # are still the ones read: a hand edit rewrites hand.jsonl longer.
+                    offset, tail = prior[1], prior[3]
+                    handle.seek(offset - len(tail))
+                    raw = handle.read()
+                    if raw.startswith(tail):
+                        raw = raw[len(tail):]
+                    else:
+                        raw = None
+                if raw is None:
                     offset = 0
                     repair = repair or prior is not None
-                handle.seek(offset)
-                raw = handle.read()
+                    handle.seek(0)
+                    raw = handle.read()
                 complete = raw[:raw.rfind(b"\n") + 1]
-                added = [Fact.from_row(json.loads(line))
+                added = [Fact.from_row(renamed(json.loads(line)))
                          for line in complete.decode().splitlines() if line.strip()]
-                streams[path] = (stamp, offset + len(complete), str(path))
+                tail = ((prior[3] if prior is not None and offset else b"") + complete)[-TAIL:]
+                streams[path] = (stamp, offset + len(complete), str(path), tail)
                 additions.extend(added)
         if changed:
             if repair:
@@ -429,6 +497,16 @@ class LedgerReader:
             self.revision += 1
         self.streams = streams
         return self.ordered
+
+
+_SHARED: dict[str, LedgerReader] = {}
+_SHARED_LOCK = threading.Lock()
+
+
+def shared_reader(home: Home) -> LedgerReader:
+    """The process's one reader of a home's ledger."""
+    with _SHARED_LOCK:
+        return _SHARED.setdefault(str(home.root / "ledger" / "facts"), LedgerReader())
 
 
 class WriterIndex:
@@ -456,7 +534,7 @@ class WriterIndex:
                 handle.seek(offset)
                 raw = handle.read()
                 complete = raw[:raw.rfind(b'\n') + 1]
-                additions.extend(Fact.from_row(json.loads(line)) for line in complete.splitlines() if line.strip())
+                additions.extend(Fact.from_row(renamed(json.loads(line))) for line in complete.splitlines() if line.strip())
                 stamps[path] = (stamp, offset + len(complete))
         if repair:
             additions = [f for path in paths for f in read_file(path)]

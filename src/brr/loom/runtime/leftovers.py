@@ -1,7 +1,7 @@
 """Room contents held nowhere else, inspected only by an explicit request.
 
 Reachability is publish's comparison. This inventory also reads dirty paths
-and the copies held by openers and molt successors; it never runs on a tick.
+and the copies held by openers and reincarnation successors; it never runs on a tick.
 An inspection failure is non-empty, so a future sweep cannot treat it as safe.
 """
 

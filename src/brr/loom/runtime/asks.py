@@ -146,7 +146,7 @@ class Beads:
             if d.get("from") == "loom":
                 return (f.after[0], "after") if f.after and f.after[0] in self.facts else (None, "loom")
             if f.by.startswith("strand:"):
-                return f.by.removeprefix("strand:"), "molt" if d.get("molt") else "strand"
+                return f.by.removeprefix("strand:"), "reincarnate" if d.get("reincarnate") else "strand"
             return None, "dangling"
         if kind == "fact":
             return None, "loom" if self.facts[ident].by.startswith("loom:") else "dangling"
@@ -197,7 +197,7 @@ class Beads:
             at = up
 
     def successor(self, strand: str) -> str | None:
-        """The strand that took over ``strand``'s thread after it molted."""
+        """The strand that took over ``strand``'s thread after it reincarnated."""
         thread = self.writers.get(strand)
         held = [str(f.data["strand"]) for f in self.leases if f.data.get("thread") == thread]
         after = held[held.index(strand) + 1:] if strand in held else []
@@ -254,14 +254,14 @@ def bead(facts, main: dict, ident: str) -> dict | None:
         strip = {"prev": str(own[at - 1].data.get("id")) if at else None,
                  "next": str(own[at + 1].data.get("id")) if at + 1 < len(own) else None}
     strand = letter.by.removeprefix("strand:") if letter.by.startswith("strand:") else None
-    molt = {"from": strand, "to": beads.successor(strand)} if d.get("molt") and strand else None
+    reincarnate = {"from": strand, "to": beads.successor(strand)} if d.get("reincarnate") and strand else None
     shown = sorted({str(f.data.get("strand")) for f in facts
                     if f.kind == "shown" and found in (f.data.get("ids") or ())})
     wished = sorted(w.id for w in told.values() if any(s.letter == found for s in w.says))
     threads = [writers.get(strand), _destination(d), *(told[w].thread for w in wished)]
     return {"kind": "letter", "id": found, "from": d.get("from"), "to": d.get("to"), "at": letter.at,
             "body": d.get("body", ""), "links": list(d.get("links") or ()), **up,
-            "said": said, "strip": strip, "molt": molt, "wishes": wished,
+            "said": said, "strip": strip, "reincarnate": reincarnate, "wishes": wished,
             "threads": list(dict.fromkeys(t for t in threads if t)),
             "strands": list(dict.fromkeys(s for s in [strand, *shown] if s)),
             "answers": [i for i, f in letters.items()

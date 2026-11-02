@@ -95,13 +95,21 @@ const words = (t: string) => {
 		.trim();
 	return t.length > 90 ? t.slice(0, 88) + '…' : t;
 };
+// A forge ref's address: a URL as it is, `owner/repo#N` (what a granting stamp records) and `PR #N` / `brnrd#N` as
+// the pull (the forge redirects an issue's number); anything else has none.
+export function forgeHref(r: string | null | undefined): string | null {
+	r = String(r || '').trim();
+	if (/^https?:\/\//.test(r)) return r;
+	const n = r.match(/^([\w.-]+\/[\w.-]+)#(\d+)$/) || r.match(/^(?:PR |brnrd)#(\d+)$/);
+	if (!n) return null;
+	return n.length === 3
+		? `https://github.com/${n[1]}/pull/${n[2]}`
+		: `https://github.com/hugimuni-labs/brnrd/pull/${n[1]}`;
+}
 export function refOf(r: string, beads: Beads, steps: Step[]): Ref {
 	r = String(r || '');
-	if (/^https?:/.test(r))
-		return { kind: 'url', href: r, text: r.replace(/^https:\/\/github\.com\//, '') };
-	const pr = r.match(/^(?:PR |brnrd)#(\d+)$/);
-	if (pr)
-		return { kind: 'url', href: `https://github.com/hugimuni-labs/brnrd/pull/${pr[1]}`, text: r };
+	const href = forgeHref(r);
+	if (href) return { kind: 'url', href, text: r.replace(/^https:\/\/github\.com\//, '') };
 	if (beads[r]) return { kind: 'bead', id: r, text: words(beads[r][4]) || short(r) };
 	const st = r && steps.find((x) => x.receipt === r || String(x.text).includes(r));
 	if (st) return { kind: 'step', sha: r, text: words(stepText(st.text)) };

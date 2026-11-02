@@ -47,6 +47,18 @@
 		first = false;
 		if (bottom) tick().then(() => pane && (pane.scrollTop = pane.scrollHeight));
 	});
+	// A pane that shrinks (the plan grows over the column, the composer grows) keeps a reader at the bottom there, rather
+	// than cutting the last letter mid-sentence (wvut8 4).
+	let low = true;
+	$effect(() => {
+		if (!pane) return;
+		const p = pane;
+		const keep = () => (low = p.scrollHeight - p.clientHeight - p.scrollTop < 40);
+		const ro = new ResizeObserver(() => low && (p.scrollTop = p.scrollHeight));
+		p.addEventListener('scroll', keep, { passive: true });
+		ro.observe(p);
+		return () => (ro.disconnect(), p.removeEventListener('scroll', keep));
+	});
 	// Near the top, the older letters load above; the reader stays on the letter they were reading.
 	const more = $derived(!!b.model && !!b.store.threads.get(t.id)?.more && !wv);
 	async function onscroll() {

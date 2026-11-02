@@ -6,6 +6,7 @@
 	import { byAt, hm, stepText } from '../text.ts';
 	import Chips from './Chips.svelte';
 	import Pips from './Pips.svelte';
+	import Ref from './Ref.svelte';
 	import { board } from './board.svelte.ts';
 	let { t, letters }: { t: Thread; letters: Letter[] } = $props();
 	const b = board();
@@ -94,10 +95,7 @@
 				<h4>delivered</h4>
 				{#each r.w.results || [] as res, i (i)}<div>
 						{res.delivered ? 'delivered' : 'result'} · {res.kind || ''}
-						<!-- eslint-disable-next-line svelte/no-navigation-without-resolve -- an external link -->
-						{#if /^https?:/.test(res.ref || '')}<a href={res.ref} target="_blank" rel="noopener"
-								>{res.ref}</a
-							>{:else}{res.ref || ''}{/if}
+						<Ref ref={res.ref} />
 						<span class="dim">{res.line || ''} {hm(res.at)}</span>
 					</div>{:else}<div class="dim">nothing yet</div>{/each}
 				<h4>verdict</h4>

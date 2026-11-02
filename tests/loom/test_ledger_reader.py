@@ -4,7 +4,14 @@ import json
 import pytest
 from brr.daemon2.facts import Fact
 from brr.loom.runtime.home import Home
-from brr.loom.runtime.ledger import LedgerReader, read_facts
+from brr.daemon2.facts import union
+from brr.loom.runtime.ledger import LedgerReader, read_facts as shared_read_facts, read_file
+
+
+def read_facts(home):
+    """The uncached fold every reader must agree with: no shared reader, every file parsed."""
+    paths = sorted(home.facts_dir().parent.glob("*/*.jsonl"))
+    return union(*(read_file(path) for path in paths)) if paths else []
 
 
 def row(ident, **kwargs):
@@ -128,3 +135,52 @@ def test_a_view_handed_out_never_changes_when_a_late_fact_reorders(tmp_path):
     assert [f.id for f in held.by_kind['note']] == ['late']
     assert held.project('ids', (), lambda view: [f.id for f in view]) is built
     assert current == read_facts(home)
+
+
+def test_a_second_read_facts_copies_pointers_and_folds_nothing(tmp_path):
+    """read_facts shares the process's fold: a second call parses no fact, and
+    allocates one list of pointers, not a refold (#2541's shape, 2026-10-30)."""
+    import gc
+    import tracemalloc
+    home = Home(tmp_path)
+    home.facts_dir().joinpath('loom.jsonl').write_bytes(b''.join(row(f'f{i}') for i in range(5000)))
+    first = shared_read_facts(home)
+    gc.collect()
+    tracemalloc.start()
+    try:
+        before = tracemalloc.take_snapshot()
+        second = shared_read_facts(home)
+        grown = sum(stat.size_diff for stat in tracemalloc.take_snapshot().compare_to(before, 'filename'))
+    finally:
+        tracemalloc.stop()
+    assert second == first and second is not first
+    assert all(a is b for a, b in zip(first, second))  # the same Fact objects, none parsed again
+    assert grown < 8 * len(first) + 64_000  # the list's pointers and the scan's stats, nothing per fact
+
+
+def test_a_stream_rewritten_longer_in_place_is_read_again_not_as_an_append(tmp_path):
+    """The hand.jsonl interface: a person rewrites the file, same inode, longer."""
+    home = Home(tmp_path)
+    path = home.facts_dir() / 'hand.jsonl'
+    path.write_bytes(row('one') + row('two'))
+    reader = LedgerReader()
+    assert [f.id for f in reader.read(home)] == ['one', 'two']
+    path.write_bytes(row('one-renamed') + row('two'))
+    assert [f.id for f in reader.read(home)] == [f.id for f in read_facts(home)]
+    with path.open('ab') as handle:
+        handle.write(row('three'))
+    assert [f.id for f in reader.read(home)] == [f.id for f in read_facts(home)]
+
+
+def test_a_built_view_keeps_only_each_generations_newest_renewal(tmp_path):
+    """router.renewed was 69% of the live ledger (2026-10-30); a fold keeps one per (install, gen)."""
+    def renewed(ident, gen, millis):
+        return (json.dumps(Fact(kind='router.renewed', by='loom:ae66', id=ident,
+                                data={'install': 'ae66', 'gen': gen, 'until': millis},
+                                hlc=(millis, 0, 'ae66')).row()) + '\n').encode()
+    home = Home(tmp_path)
+    path = home.facts_dir() / 'loom.jsonl'
+    path.write_bytes(renewed('r1a', 1, 1000) + renewed('r1b', 1, 2000)
+                     + renewed('r2a', 2, 3000) + renewed('r2b', 2, 4000) + row('note'))
+    assert [f.id for f in LedgerReader().read(home)] == ['r1b', 'r2b', 'note']
+    assert len(read_facts(home)) == 5  # the files keep every renewal

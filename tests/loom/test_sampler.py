@@ -53,3 +53,21 @@ def test_no_request_starts_nothing_and_a_bad_one_is_dropped(tmp_path):
     s.step()
     assert s.worker is None and not (tmp_path / "loom" / "sample.request").exists()
     assert "not a number" in logged[0]
+
+
+def test_a_heap_request_names_the_container_that_grows(tmp_path):
+    (tmp_path / "loom").mkdir()
+    (tmp_path / "loom" / "heap.request").write_text("")
+    logged = []
+    holder = {"grown_cache": [object() for _ in range(200_000)]}
+    s = sampler.Sampler(SimpleNamespace(root=tmp_path), lambda home, text: logged.append(text))
+    s.step()
+    assert not (tmp_path / "loom" / "heap.request").exists() and s.worker is None
+    [written] = (tmp_path / "loom" / "samples").glob("*.heap")
+    lines = written.read_text().splitlines()
+    assert lines[0].startswith("tracked ")
+    assert any(line.startswith("type list ") for line in lines)
+    assert any(line.startswith("largest list len 200000 of object held by dict['grown_cache']")
+               for line in lines)
+    assert any(text.startswith("sample: heap") for text in logged)
+    del holder

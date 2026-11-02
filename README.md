@@ -11,7 +11,7 @@
 </p>
 
 <p align="center">
-  <strong>2,375 commits on main · 1,783 by the resident · 1,374 merged PRs · since March 2026 · as of 2026-10-01.</strong><br>
+  <strong>3,111 commits on main · 2,355 by the resident · 1,705 merged PRs · since March 2026 · as of 2026-11-01.</strong><br>
   <sub>This repo is built with brnrd, by brnrd; the git log is the demo.</sub>
 </p>
 

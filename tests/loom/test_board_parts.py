@@ -8,7 +8,7 @@ import time
 
 import pytest
 
-from brr.loom.runtime.board import Parts, digest, serve, window
+from brr.loom.runtime.board import Parts, Tools, digest, serve, window
 from brr.loom.runtime.config import load_config
 from brr.loom.runtime.home import Home
 from brr.daemon2.facts import Fact
@@ -69,6 +69,47 @@ def test_the_looms_own_heartbeat_recomputes_nothing(parts, monkeypatch):
     inject_letter(root, to="thread:web", body="second")
     assert parts.step()
     assert computed == [1]
+
+
+def test_a_tape_move_recuts_only_its_thread_paced_and_never_recomputes(parts, monkeypatch):
+    """busy-cpu: a body's tool calls move its tape several times a second; each re-cuts its thread's tapes over the
+    last compute at most once per TAPE s, and the result is the part a whole compute would give."""
+    from brr.loom.runtime import board, tooltrace
+    root = parts.home.root
+    append(parts.home, Fact(kind="router", by="loom:aaaa", data={"gen": 1}))
+    append(parts.home, Fact(kind="lease", by="loom:aaaa", data={
+        "thread": "web", "strand": "s-aaaa-webbod", "gen": 1, "install": "aaaa", "router_gen": 1,
+        "shell": "fake", "core": "fake", "repos": []}))
+    inject_letter(root, to="thread:docs", body="other")
+    assert parts.step()
+    before = dict(parts.hashes)
+    computed = []
+    real = board.compute
+    monkeypatch.setattr(board, "compute", lambda *a: computed.append(1) or real(*a))
+    clock = [time.monotonic()]
+    monkeypatch.setattr(board.time, "monotonic", lambda: clock[0])
+
+    (parts.home.room("s-aaaa-webbod") / "port").mkdir(parents=True)
+
+    def call(n):
+        tooltrace.note(parts.home.room("s-aaaa-webbod"), json.dumps(
+            {"tool_name": "Bash", "tool_input": {"command": f"echo {n}"}, "tool_use_id": f"t{n}"}), "pre")
+    call(1)
+    parts.tape.listed = None  # the room is listed at the next read, as within Tools.EVERY
+    assert not parts.step()  # within TAPE of the compute: held, not lost
+    call(2)
+    clock[0] += board.TAPE
+    assert parts.step()
+    assert computed == []
+    assert [c["cmd"] for c in parts.parts["thread/web"]["tools"]["s-aaaa-webbod"]] == ["echo 1", "echo 2"]
+    assert parts.hashes["thread/docs"] == before["thread/docs"] and parts.hashes["beads"] == before["beads"]
+    assert parts.hashes["thread/web"] != before["thread/web"]
+    assert parts.parts["index"]["parts"] == {k: v for k, v in parts.hashes.items() if k != "index"}
+    assert not parts.step()  # nothing moved since
+    recut = dict(parts.hashes)
+    parts.revision = None  # a whole compute over the same ledger and tapes gives the same parts
+    assert not parts.step()
+    assert parts.hashes == recut and computed == [1]
 
 
 def test_a_wish_ships_in_its_thread_part_and_the_index_keeps_counts(parts):
@@ -255,3 +296,35 @@ def test_loopback_serves_the_spa_build_beside_the_parts(parts, tmp_path):
     finally:
         nothing.shutdown()
         nothing.server_close()
+
+
+def test_a_quiet_room_is_stat_ed_at_each_listing_and_a_moving_one_at_every_read(tmp_path):
+    """Hundreds of dead rooms cost the board's 0.25 s read nothing between listings."""
+    def tape(strand, text=""):
+        port = tmp_path / "rooms" / strand / "port"
+        port.mkdir(parents=True, exist_ok=True)
+        with open(port / "tools.jsonl", "a") as out:
+            out.write(text)
+    tape("s-aa-moving")
+    tools = Tools(Home(tmp_path), every=60)
+    assert tools.read() and set(tools.tools) == {"s-aa-moving"}
+    tape("s-aa-woken")
+    assert not tools.read()  # not listed yet
+    tape("s-aa-moving", "\n")
+    assert tools.read()  # moved since the listing: still read at every tick
+    tools.listed -= 61
+    assert tools.read() and set(tools.tools) == {"s-aa-moving", "s-aa-woken"}
+
+
+def test_two_rooms_moving_in_one_read_survive_the_next_listing(tmp_path):
+    """Each moving room's hot mark is the read's clock, so the next listing can age it (#2569 stored a live dict)."""
+    for strand in ("s-aa-one", "s-aa-two"):
+        port = tmp_path / "rooms" / strand / "port"
+        port.mkdir(parents=True)
+        (port / "tools.jsonl").write_text("")
+    tools = Tools(Home(tmp_path), every=60)
+    assert tools.read() and set(tools.tools) == {"s-aa-one", "s-aa-two"}
+    assert all(isinstance(at, float) for at in tools.hot.values())
+    tools.listed -= 61
+    tools.read()
+    assert set(tools.tools) == {"s-aa-one", "s-aa-two"}

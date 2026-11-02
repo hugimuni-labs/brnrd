@@ -41,7 +41,9 @@ TABLE = (
     Row(STARTABLE, "pinned away", "ended", ("end_moved",) + CLEANUP),
     Row(("wanted",), "fenced", "wanted", ()),
     Row(("parked",), "fenced", "parked", ()),
-    Row(("parked",), "woken on another body", "ended", ("end_molted",) + CLEANUP),
+    Row(("parked",), "woken on another body", "ended", ("end_reincarnated",) + CLEANUP),
+    Row(("wanted",), "memory pressed", "wanted", ("pending",)),
+    Row(("parked",), "memory pressed", "parked", ()),
     Row(("parked",), "gauge unknown, before until", "parked", ()),
     Row(("parked",), "gauge refreshing", "parked", ()),
     Row(("wanted",), "gauge refreshing", "wanted", ("pending",)),
@@ -97,7 +99,7 @@ COMMANDS = {step.name: step for step in (
     Step("end",          "end",      "attempt.ended",     False),
     Step("end_settled",  "end",      "attempt.ended",     False, "settled"),
     Step("end_failed",   "end",      "attempt.ended",     False, "failed"),
-    Step("end_molted",   "end",      "attempt.ended",     False, "molted"),
+    Step("end_reincarnated",   "end",      "attempt.ended",     False, "reincarnated"),
     Step("end_moved",    "end",      "attempt.ended",     False, "moved"),
     Step("drained",      "drained",  "port.drained",      True),
     Step("release",      "release",  "released",          True),
@@ -121,6 +123,7 @@ class Observation:
     fenced: bool = False
     held: bool = False
     away: bool = False
+    pressed: bool = False
 
 
 @dataclass(frozen=True)
@@ -192,6 +195,8 @@ OBSERVED = {
     "pinned away": lambda s, o: o.away,
     "failure": lambda s, o: bool(o.failure),
     "woken on another body": lambda s, o: bool(o.woken),
+    # The memory floor holds (memory.py): nothing new starts, and an operator's force still does.
+    "memory pressed": lambda s, o: o.pressed and not o.force,
     "held dry, woken on another body": lambda s, o: o.alive and o.held and bool(o.woken),
     "gauge unknown, before until": lambda s, o: not o.force and o.gauge == "unknown" and o.now < s.until,
     "gauge refreshing": lambda s, o: o.gauge == "refreshing",
@@ -246,10 +251,15 @@ def exit_cause(facts: list[Fact], o: Observation, *, owed: bool) -> str:
     from .project import fold
     if fact_for(facts, "body.stopped", o.strand, o.gen):
         return "stopped"
-    if fact_for(fold(facts).accepted, "molt", o.strand, o.gen) or o.woken:
-        return "molted"
+    if fact_for(fold(facts).accepted, "reincarnate", o.strand, o.gen) or o.woken:
+        return "reincarnated"
     if o.closed:
         return "settled"
+    # A body sent away by the lease or a pin left for that, not for its letters.
+    if o.fenced:
+        return "fenced"
+    if o.away:
+        return "moved"
     if not owed:
         return "idle"
     return "paced" if o.gauge == "empty" else "failed"

@@ -151,7 +151,8 @@ class DaemonRegistered(BaseModel):
 class DaemonDoorStart(BaseModel):
     # The loom's own pairing code (`setup_channel.pairing_code`: `K7Q-M9X`;
     # 8 hex digits from a loom older than that).
-    code: str = Field(pattern=r"^(?:[0-9a-f]{8}|[A-HJKMNP-Z2-9]{3}-[A-HJKMNP-Z2-9]{3})$")
+    # None: bind the chat to the account (`GET /v1/daemons/chats` reads it back).
+    code: str | None = Field(default=None, pattern=r"^(?:[0-9a-f]{8}|[A-HJKMNP-Z2-9]{3}-[A-HJKMNP-Z2-9]{3})$")
 
 
 class DaemonDoor(BaseModel):
@@ -159,6 +160,34 @@ class DaemonDoor(BaseModel):
     the shape a connector's `door` prints."""
     name: str
     link: str
+    # The same code texted alone to brnrd's WhatsApp number binds too
+    # (`webhooks`' WhatsApp redeem); None where this deployment has none.
+    whatsapp: str | None = None
+
+
+class DaemonChat(BaseModel):
+    """One chat bound to the account: where to write (``platform``,
+    ``chat_id``, ``topic_id``) and who it is (the verified sender)."""
+    id: str
+    platform: str
+    chat_id: str
+    topic_id: str | None = None
+    principal_id: str
+    principal_display: str | None = None
+    chat_title: str | None = None
+    paired_at: datetime
+
+
+class DaemonChats(BaseModel):
+    chats: list[DaemonChat]
+    # The account's own brnrd.dev chat: the composer stamps its letters with
+    # this login (`enqueue_loom_letter`), and only this account's session can
+    # write them, so the loom enrols it as the approving person's.
+    login: str | None = None
+    # Where the person opens each shared chat with no code, by platform
+    # (`https://t.me/<bot>`, `https://wa.me/<digits>`): setup's last step
+    # links every chat it enabled.
+    links: dict[str, str] = {}
 
 
 class DaemonWhoami(BaseModel):

@@ -16,11 +16,15 @@ import os
 import shutil
 import subprocess
 import threading
+import time
 from pathlib import Path
 
 STAMP = ".tree"
 #: Seconds a build or an install may take before it counts as failed.
 LIMIT = 900
+#: Seconds between reads of HEAD's tree: a ``git`` fork at every 0.2 s tick was a share of the loom's idle CPU.
+#: Follow-main re-execs after it moves the checkout, and a fresh process reads at its first pass.
+EVERY = 30.0
 
 
 class BuildFailed(Exception):
@@ -35,8 +39,9 @@ def _run(args: list[str], cwd: Path, env: dict | None = None) -> None:
 
 
 class SpaBuild:
-    def __init__(self, frontend: Path, log, run=_run):
+    def __init__(self, frontend: Path, log, run=_run, every: float = EVERY, clock=time.monotonic):
         self.frontend, self.log, self.run = frontend, log, run
+        self.every, self.clock, self.due = every, clock, 0.0
         self.build, self.next = frontend / "build", frontend / "build.next"
         self.worker: threading.Thread | None = None
         self.failed: tuple[str, str] | None = None  # (tree, why)
@@ -53,6 +58,11 @@ class SpaBuild:
         """On the loop: start a build when the tree moved; raises while HEAD's tree failed to build."""
         if self.worker is not None and self.worker.is_alive():
             return
+        if self.clock() < self.due:
+            if self.failed is not None:
+                raise BuildFailed(f"{self.failed[1]}; serving the build of tree {self.built()[:8] or 'none'}")
+            return
+        self.due = self.clock() + self.every
         tree = self.wanted()
         if tree is None or tree == self.built():
             self.failed = None

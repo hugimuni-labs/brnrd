@@ -15,17 +15,24 @@ export const allCalls = (threads: Thread[]): Call[] => threads.flatMap((t) => t.
 export const openAsks = (calls: Call[]): Set<string> =>
 	new Set(calls.filter((c) => c.kind === 'ask' && !c.closed).map((c) => c.wish));
 
-// The inbox keeps its stack, but only an open ask or a card he opened stands at full height; the rest (unopened
-// verdicts, answered cards) fold into one counted line that unfolds the whole stack (ug2om 1: 12 cards in a 34% box
-// hid the pane).
-export type Stack = { shown: Call[]; fold: { verdicts: number; answered: number } | null };
+// The inbox's stack is one counted line ("7 ask you · 19 verdicts wait on you") that unfolds the whole stack on a tap;
+// only a card he opened stands while folded (ug2om 1: 12 cards in a 34% box hid the pane; wvut8 1: 7 open asks still
+// took the inbox's first screen and sliced its last bar).
+export type Stack = {
+	shown: Call[];
+	fold: { asks: number; verdicts: number; answered: number } | null;
+};
 export function stack(calls: Call[], pending: Letter[], open: Set<string>, unfold: boolean): Stack {
-	const stand = (c: Call) => !answered(c, pending) && (c.kind === 'ask' || open.has(c.wish));
+	const stand = (c: Call) => !answered(c, pending) && open.has(c.wish);
 	const folded = calls.filter((c) => !stand(c));
-	const verdicts = folded.filter((c) => !answered(c, pending)).length;
+	const live = folded.filter((c) => !answered(c, pending));
+	const asks = live.filter((c) => c.kind === 'ask').length;
 	return {
 		shown: unfold || folded.length < 2 ? calls : calls.filter(stand),
-		fold: folded.length < 2 ? null : { verdicts, answered: folded.length - verdicts }
+		fold:
+			folded.length < 2
+				? null
+				: { asks, verdicts: live.length - asks, answered: folded.length - live.length }
 	};
 }
 

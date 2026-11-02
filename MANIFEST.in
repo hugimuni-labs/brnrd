@@ -1,1 +1,3 @@
 prune src/frontend
+# The board page a pip install serves on 127.0.0.1 (board_port): release.yml builds it into the package.
+graft src/brr/loom/runtime/frontend

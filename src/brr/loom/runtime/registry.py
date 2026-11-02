@@ -59,7 +59,7 @@ SCOPES = ("global", "machine")
 
 REGISTRY = (
     #     kind                resource   fields                                              writer         scope
-    _kind("body.pending",      "body",    "strand gen shell core",                            "loom",        "machine", once=True),
+    _kind("body.pending",      "body",    "strand gen shell core why?",                       "loom",        "machine", once=True),
     _kind("body.parked",       "body",    "strand gen shell core window left_pct until",      "loom",        "machine"),
     _kind("body.started",      "body",    "strand gen pid shell core readme lstart",          "loom",        "machine", once=True),
     _kind("body.leaving",      "body",    "strand gen deadline",                              "loom",        "machine"),
@@ -82,7 +82,8 @@ REGISTRY = (
     _kind("lease",             "thread",  "thread strand gen install router_gen shell core repos parent? pin?", "loom", "global", once=True),
     _kind("released",          "thread",  "thread strand gen why install router_gen?",        "loom",        "global",  once=True),
     _kind("shown",             "letter",  "strand gen ids",                                   "loom strand", "global"),
-    _kind("molt",              "letter",  "strand gen why fresh?",                            "strand",      "global"),
+    _kind("reincarnate",              "letter",  "strand gen why fresh?",                            "strand",      "global"),
+    _kind("hold",              "letter",  "strand gen why context",                           "strand",      "global"),
     _kind("attempt.ended",     "attempt", "thread strand gen ids cause code dispositions evidence", "loom",  "global",  once=True),
     _kind("port.drained",      "port",    "thread strand gen",                                "loom",        "global",  once=True),
     _kind("loom.started",      "loom",    "install pid commit? loaded merges?",               "loom",        "global"),

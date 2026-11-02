@@ -23,6 +23,12 @@ class Clock:
         return self.now
 
 
+@pytest.fixture(autouse=True)
+def unpaced(monkeypatch):
+    # Every disk() call reads the volume, as the scripted readings here need.
+    monkeypatch.setattr(reap, "DISK_EVERY", 0.0)
+
+
 @pytest.fixture
 def disk(tmp_path, monkeypatch):
     root = tmp_path / "home"

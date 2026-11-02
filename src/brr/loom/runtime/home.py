@@ -114,15 +114,22 @@ class Home:
             return self._install
         path.parent.mkdir(parents=True, exist_ok=True)
         value = secrets.token_hex(2)
-        try:
-            fd = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
-        except FileExistsError:
-            return path.read_text().strip()
+        # Written whole beside it, then linked into place: the link is as
+        # exclusive as O_EXCL, and a reader never sees the file half-written.
+        tmp = path.with_name(f".install-id.{os.getpid()}.{secrets.token_hex(4)}")
+        fd = os.open(tmp, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
         try:
             os.write(fd, (value + "\n").encode())
         finally:
             os.close(fd)
-        return value
+        try:
+            os.link(tmp, path)
+        except FileExistsError:
+            value = path.read_text().strip()
+        finally:
+            tmp.unlink(missing_ok=True)
+        self._install = check_install(value)
+        return self._install
 
     def facts_dir(self) -> Path:
         path = self.root / "ledger" / "facts" / self.install_id()

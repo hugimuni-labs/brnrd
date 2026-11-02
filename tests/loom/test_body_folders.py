@@ -119,7 +119,7 @@ clone = ctx.room / "self"
 (clone / "threads/work/seat").write_text("# Execution choice\\nbody: other/small\\nrepo: /nowhere/ignored\\nwatch: ignored\\n")
 git(clone, "add", "threads/work/seat")
 git(clone, "commit", "-m", "Choose another body.")
-ctx.molt("use the landed seat")
+ctx.reincarnate("use the landed seat")
 ''')
     folder = root / "loom/bodies/other"
     folder.mkdir(parents=True)

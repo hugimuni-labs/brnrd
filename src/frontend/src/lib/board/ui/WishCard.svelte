@@ -6,6 +6,7 @@
 	import { byAt, hm, hue } from '../text.ts';
 	import Chips from './Chips.svelte';
 	import Pips from './Pips.svelte';
+	import Ref from './Ref.svelte';
 	import { board } from './board.svelte.ts';
 	let { w }: { w: Wish } = $props();
 	const b = board();
@@ -43,10 +44,7 @@
 		<div class="res">
 			{#each w.results || [] as r, i (i)}<div>
 					{r.delivered ? 'delivered' : 'result'} · {r.kind || ''}
-					<!-- eslint-disable-next-line svelte/no-navigation-without-resolve -- an external link -->
-					{#if /^https?:/.test(r.ref || '')}<a href={r.ref} target="_blank" rel="noopener"
-							>{r.ref}</a
-						>{:else}{r.ref || ''}{/if}
+					<Ref ref={r.ref} />
 				</div>{/each}
 			{#if w.verdict}<div>
 					verdict · <b>{w.verdict.as}</b>

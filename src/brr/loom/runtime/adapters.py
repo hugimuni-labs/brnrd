@@ -152,14 +152,62 @@ _ROLE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*")
 
 
 def _preferences(home):
-    """``loom/preferences.toml`` read and checked: only ``model.<role>`` keys."""
+    """``loom/preferences.toml`` read and checked: ``model.<role>`` keys, and ``bodies.order``."""
     from .config import ConfigError, read_values
     path = home.root / "loom" / "preferences.toml"
     found = read_values(path)
     for key in found:
+        if key == "bodies.order":
+            value = found[key]
+            if not (isinstance(value, list) and all(isinstance(v, str) and _ROLE.fullmatch(v) for v in value)):
+                raise ConfigError(f"{path}: bodies.order is a list of shells, e.g. [\"claude\", \"codex\"]")
+            continue
         if not key.startswith("model.") or not _ROLE.fullmatch(key[6:]):
-            raise ConfigError(f"{path}: unknown key {key!r} (known: model.default, model.inbox, model.<thread>)")
+            raise ConfigError(f"{path}: unknown key {key!r} "
+                              "(known: model.default, model.inbox, model.<thread>, bodies.order)")
     return path, found
+
+
+def default_order() -> list[str]:
+    """The harnesses setup offers, best first: ``bodies/order``, the one file that ranks them."""
+    text = (Path(__file__).parent / "bodies" / "order").read_text(encoding="utf-8")
+    return [line.strip() for line in text.splitlines() if line.strip() and not line.lstrip().startswith("#")]
+
+
+def body_order(home) -> list[str]:
+    """The person's harnesses, best first, the ones switched off left out: ``bodies.order``, else ``bodies/order``."""
+    chosen = _preferences(home)[1].get("bodies.order")
+    return list(chosen) if isinstance(chosen, list) else default_order()
+
+
+def set_order(home, shells: list[str]) -> None:
+    """Write ``bodies.order``; every other line of ``loom/preferences.toml`` stays as written."""
+    from .config import _render_value, _set_key
+    from .home import atomic_write
+    if not shells or not all(_ROLE.fullmatch(s) for s in shells):
+        raise ValueError(f"bodies.order needs at least one shell: {shells!r}")
+    path, _found = _preferences(home)
+    lines = path.read_text(encoding="utf-8").splitlines() if path.is_file() else []
+    lines = [line for line in lines if _set_key(line) != "bodies.order"]
+    lines.append(f"bodies.order = {_render_value(list(shells))}")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    atomic_write(path, "\n".join(lines) + "\n")
+
+
+def fall_down(home, choice: tuple[str, str], usable) -> tuple[str, str]:
+    """``choice``, or the next shell on the person's list when ``choice``'s cannot run now.
+
+    Only a ranked shell falls (a seat's ``fake`` or a home's own folder never
+    does), and only to one ``usable(shell)`` says can run: installed, with fuel.
+    The fallback runs with the harness's own model.
+    """
+    order = body_order(home)
+    if choice[0] not in default_order() or usable(choice[0]):
+        return choice
+    for shell in order:
+        if shell != choice[0] and usable(shell):
+            return shell, ""
+    return choice
 
 
 def preferred_body(home, thread: str) -> str:

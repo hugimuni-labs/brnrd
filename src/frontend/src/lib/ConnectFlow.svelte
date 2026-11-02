@@ -93,9 +93,10 @@
 	// the repository is the loom's storage, never shown or picked.
 	let loomPair = $derived(isLoomPair(context));
 	let approvedLoom = $state(false);
-	// The board box on a loom pair: starts as the terminal left it; the
-	// approve click with it ticked is the person's yes.
-	let showBoard = $derived(context?.board === true);
+	// The board box on a loom pair: always starts unticked, whatever the
+	// terminal asked, since a pre-ticked box is no consent in the EU (Planet49).
+	// The approve click with it ticked by the person is the yes.
+	let showBoard = $state(false);
 
 	async function loadContext(c: string): Promise<void> {
 		contextError = null;

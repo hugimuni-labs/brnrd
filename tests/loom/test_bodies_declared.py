@@ -125,8 +125,8 @@ class MemoryBody:
                 if crash_at_exit:
                     self.check_prefix(o)
                     return
-            elif name in {"end", "end_failed", "end_settled", "end_molted", "end_moved"}:
-                cause = ("failed" if name == "end_failed" else "molted" if name == "end_molted"
+            elif name in {"end", "end_failed", "end_settled", "end_reincarnated", "end_moved"}:
+                cause = ("failed" if name == "end_failed" else "reincarnated" if name == "end_reincarnated"
                          else exit_cause(self.facts, o, owed=False))
                 if fact_for(self.facts, "attempt.ended", self.strand, self.gen) is None:
                     self.add("attempt.ended", cause=cause)
@@ -157,6 +157,8 @@ def test_seeded_sequences_check_ledger_prefixes_and_reach_every_row():
         rng = random.Random(seed)
         # Pins draw from their own stream, so main's walk still reaches its rows.
         pins = random.Random(-seed - 1)
+        # So does memory pressure, the floor that holds a start.
+        squeezes = random.Random(seed + 1000)
         body = MemoryBody(rng, coverage)
         for _ in range(350):
             state = state_of(body.facts, body.strand, body.gen, alive=body.alive).name
@@ -173,6 +175,7 @@ def test_seeded_sequences_check_ledger_prefixes_and_reach_every_row():
             closed = rng.random() < 0.65
             fenced = rng.random() < 0.15
             away = pins.random() < 0.05
+            pressed = squeezes.random() < 0.05
             gauge = rng.choice(["ok", "ok", "unknown", "refreshing", "empty"])
             failure = "spawn failed" if state in STARTABLE and not body.alive and rng.random() < 0.1 else ""
             # A live body asleep in its stop hook is woken the same way.
@@ -180,7 +183,8 @@ def test_seeded_sequences_check_ledger_prefixes_and_reach_every_row():
             woken = "other/core" if (state == "parked" or held) and rng.random() < 0.1 else ""
             o = Observation(body.strand, body.gen, body.alive, closed, gauge, body.now,
                             proven=rng.choice([True, False]), until=body.now + 3,
-                            stop_grace=1, failure=failure, woken=woken, fenced=fenced, held=held, away=away)
+                            stop_grace=1, failure=failure, woken=woken, fenced=fenced, held=held, away=away,
+                            pressed=pressed)
             body.step(o, crash_at_end=not body.alive and rng.random() < 0.2,
                       crash_at_exit=not body.alive and rng.random() < 0.2)
     assert coverage == set(range(len(TABLE))), {i: TABLE[i] for i in set(range(len(TABLE))) - coverage}
@@ -190,7 +194,7 @@ def test_table_rendering_matches_checked_in_page():
     from pathlib import Path
     page = Path(__file__).resolve().parents[2] / "src/brr/loom/runtime/bodies.md"
     assert render_table() == page.read_text().strip()
-    assert len(TABLE) == 25
+    assert len(TABLE) == 27
 
 
 def test_an_unlisted_pair_logs_and_raises(caplog):
@@ -301,9 +305,11 @@ def test_exit_cause_uses_the_post_drain_ledger_in_contract_order():
     assert exit_cause([], o, owed=False) == "idle"
     assert exit_cause([], replace(o, gauge="ok"), owed=True) == "failed"
     assert exit_cause([], replace(o, closed=True), owed=True) == "settled"
+    assert exit_cause([], replace(o, fenced=True), owed=True) == "fenced"
+    assert exit_cause([], replace(o, away=True), owed=False) == "moved"
     facts = [Fact(kind="lease", by="loom:aaaa", data={"thread": "work", "strand": "s", "gen": 1}),
-             Fact(kind="molt", by="strand:s", data={"strand": "s", "gen": 1})]
-    assert exit_cause(facts, replace(o, closed=True), owed=True) == "molted"
+             Fact(kind="reincarnate", by="strand:s", data={"strand": "s", "gen": 1})]
+    assert exit_cause(facts, replace(o, closed=True), owed=True) == "reincarnated"
     facts.append(Fact(kind="body.stopped", by="loom:aaaa", data={"strand": "s", "gen": 1}))
     assert exit_cause(facts, replace(o, closed=True), owed=True) == "stopped"
 

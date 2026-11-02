@@ -1,4 +1,4 @@
-"""Each wish carries what is left: the stop asks for it, molt refuses without it, the wake shows the tree."""
+"""Each wish carries what is left: the stop asks for it, reincarnate refuses without it, the wake shows the tree."""
 import json
 from io import StringIO
 from types import SimpleNamespace
@@ -9,7 +9,7 @@ from brr.daemon2.facts import Fact
 from brr.loom.runtime import jack
 from brr.loom.runtime.ledger import append, inject_letter, read_facts
 from brr.loom.runtime.loom import _boundary, _ingest, tick_once
-from brr.loom.runtime.port import PortError, write_molt
+from brr.loom.runtime.port import PortError, write_reincarnate
 from brr.loom.runtime.selfrepo import run_wake
 from brr.loom.runtime.wishes import wishes
 from test_wishes import command, heard, ledger  # noqa: F401  (fixture)
@@ -164,12 +164,12 @@ def test_molt_refuses_while_a_left_is_owed(body):
     home, seat = body
     wish = heard(home, seat, "Hold the board still")
     with pytest.raises(PortError, match=f"wish {wish} --left"):
-        write_molt(seat, "context is heavy")
+        write_reincarnate(seat, "context is heavy")
     assert not list((seat / "port/out").glob("*.md"))
     command(home, seat, "wish", wish, "--left", "freeze hover")
     readme = next(seat.glob("*/threads/work/README.md"))
     readme.write_text(readme.read_text() + "\n## Now\n- freeze hover\n")
-    assert write_molt(seat, "context is heavy").startswith(STRAND + "/")
+    assert write_reincarnate(seat, "context is heavy").startswith(STRAND + "/")
 
 
 def test_a_pr_opened_on_a_one_wish_thread_is_its_result(body):
@@ -214,3 +214,17 @@ def test_one_stop_shows_every_miss_at_once_until_each_is_cleared(body):
     assert "what is left" not in third and "has not said how it ends" not in third
     assert third.startswith("the stop holds on 1 thing") and "--note" in third
     assert not list((seat / "port/out").glob("asked-*.md"))
+
+
+def test_a_delivered_wish_takes_one_line_in_the_wake(body):
+    # 10-31, gen 241: delivered wishes came in whole and crowded the README out.
+    home, seat = body
+    done = heard(home, seat, "Ship the switch")
+    command(home, seat, "wish", done, "--left", "wait for CI")
+    command(home, seat, "wish", done, "--result", "pr:https://example.com/9", "--line", "Shipped", "--deliver")
+    live = heard(home, seat, "Paint the board")
+    command(home, seat, "wish", live, "--left", "pick a palette")
+    shown = wake(seat)
+    assert f"{done} · delivered · Ship the switch · https://example.com/9" in shown
+    assert "wait for CI" not in shown and "pick a palette" in shown
+    assert sum(done in line for line in shown.splitlines()) == 1

@@ -3,6 +3,7 @@
 	import { page } from '$app/state';
 	import './layout.css';
 	import { markBooted } from '$lib/boot';
+	import { outbound } from '$lib/outbound';
 	import favicon from '$lib/assets/favicon.svg';
 	import { canonicalUrl, hasCanonicalMeta, isIndexablePath, normalizePathname } from '$lib/seo';
 
@@ -57,6 +58,8 @@
 		setTimeout(step, FRAME_MS);
 	});
 </script>
+
+<svelte:document onclickcapture={(e) => outbound(e)} />
 
 <svelte:head>
 	<link rel="icon" href={favicon} />

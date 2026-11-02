@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from contextlib import contextmanager
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
@@ -395,12 +396,18 @@ def test_surface_rejects_a_traversal_path_even_in_an_unconsented_layer():
 
 
 def test_dashboard_warp_asks_serves_lru_rows_stale_and_done_apart():
+    # Touched dates relative to now: fixed ones turn stale as the calendar passes them.
+    def ago(days):
+        at = datetime.now(timezone.utc) - timedelta(days=days)
+        return at.strftime("%Y-%m-%dT%H:%M:%SZ")
+    ran = datetime.now(timezone.utc) - timedelta(days=9)  # w-2's run, newer than its touched
+
     client = _client()
     _, daemon_headers = _repo_and_daemon(client)
     files = [
-        {"path": "surface/warp/w-1.md", "markdown": "# Older\n\ntype: action\nreturn: in git\ntouched: 2026-09-01T00:00:00Z\nsays: evt-a evt-b\n"},
-        {"path": "surface/warp/w-2.md", "markdown": "# Newer\n\ntype: decision\ntouched: 2026-09-20T00:00:00Z\nattempts: run-260921-2330-3low\n"},
-        {"path": "surface/warp/w-3.md", "markdown": "# Ancient\n\ntype: action\ntouched: 2025-01-01T00:00:00Z\n"},
+        {"path": "surface/warp/w-1.md", "markdown": f"# Older\n\ntype: action\nreturn: in git\ntouched: {ago(30)}\nsays: evt-a evt-b\n"},
+        {"path": "surface/warp/w-2.md", "markdown": f"# Newer\n\ntype: decision\ntouched: {ago(10)}\nattempts: {ran:run-%y%m%d-%H%M-3low}\n"},
+        {"path": "surface/warp/w-3.md", "markdown": f"# Ancient\n\ntype: action\ntouched: {ago(400)}\n"},
         {"path": "surface/warp/w-4.md", "markdown": "# Shipped\n\ntype: action\ndone: 2026-09-10\n"},
         {"path": "surface/warp/g-1.md", "markdown": "# A goal\n\ntype: goal\n"},
     ]
@@ -414,7 +421,7 @@ def test_dashboard_warp_asks_serves_lru_rows_stale_and_done_apart():
     assert [row["id"] for row in body["asks"]] == ["w-2", "w-1", "w-3"]  # LRU, stale last
     assert [row["stale"] for row in body["asks"]] == [False, False, True]
     assert body["asks"][1]["return"] == "in git" and len(body["asks"][1]["says"]) == 2
-    assert body["asks"][0]["touched_at"].startswith("2026-09-21T23:30")  # newest evidence: the run id
+    assert body["asks"][0]["touched_at"].startswith(f"{ran:%Y-%m-%dT%H:%M}")  # newest evidence: the run id
     assert [row["id"] for row in body["done"]] == ["w-4"]
     assert [row["id"] for row in body["goals"]] == ["g-1"]
     assert body["stale_after_days"] == 60

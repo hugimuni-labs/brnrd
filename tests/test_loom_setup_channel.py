@@ -77,8 +77,9 @@ def test_fake_live_pair_saves_named_identity_and_keeps_unrelated_letters(tmp_pat
     assert sent[0]['text'].startswith('Paired ✓')
     assert (state / 'in/other.md').exists() and not (state / 'in/code.md').exists()
     assert connector.person_dm(home, 'channel:desk/42') == 'person:ada'
+    # The same kind may pair again (a door that went dark); another kind may not take the name.
     with pytest.raises(ValueError, match='already in use'):
-        setup_channel.pair(home, 'fake', 'desk', 'ada')
+        setup_channel.pair(home, 'telegram', 'desk', 'ada')
 
 
 def test_timeout_never_enables_or_enrols_channel(tmp_path):
@@ -174,7 +175,6 @@ def test_relay_setup_signs_in_and_writes_the_gate_the_relay_reads(tmp_path):
     server = http.server.ThreadingHTTPServer(('127.0.0.1', 0), Pairing)
     threading.Thread(target=server.serve_forever, daemon=True).start()
     env['BRNRD_URL'] = f'http://127.0.0.1:{server.server_port}'
-    env['BRNRD_SETUP_BOARD'] = '1'  # setup's board offer, kept: the approve page's box starts ticked
     try:
         fresh = subprocess.run([str(Path(setup_channel.__file__).parent / 'connectors/relay/setup')],
                                env=env, capture_output=True, text=True, timeout=60)
@@ -182,7 +182,8 @@ def test_relay_setup_signs_in_and_writes_the_gate_the_relay_reads(tmp_path):
         server.shutdown()
     assert fresh.returncode == 0 and 'Traceback' not in fresh.stderr, fresh.stderr
     assert 'Signed in to brnrd.dev' in fresh.stdout
-    assert [s[2].get('board') for s in seen if s[1] == '/v1/accounts/pair'] == [None, True], seen
+    # The approve page's board box starts unticked (Planet49): setup never asks it ticked.
+    assert [s[2].get('board') for s in seen if s[1] == '/v1/accounts/pair'] == [None, None], seen
     assert cloud._load_state_from_dir(tmp_path / 'loom')['brnrd_url'] == env['BRNRD_URL']
 
 
@@ -427,24 +428,26 @@ def test_guided_setup_asks_in_plain_words_and_derives_the_channel_name(tmp_path,
     monkeypatch.setattr(setup_channel.shutil, 'which', lambda name: f'/bin/{name}')
     monkeypatch.setattr('brr.loom.runtime.service._windows', lambda home, shell: None)
     monkeypatch.setattr('brr.loom.runtime.service._defaults', lambda: [('claude', ''), ('codex', '')])
-    # Piped answers: codex, Enter for Telegram; nothing asks a name.
-    monkeypatch.setattr('sys.stdin', io.StringIO('2\n\n'))
+    # Piped answers: codex, then switch brnrd cloud off and the own bot on (the page stays on); nothing asks a name.
+    monkeypatch.setattr('sys.stdin', io.StringIO('2\n1 2\n'))
     assert setup_channel.main(['--home', str(tmp_path)]) == 0
     out = capsys.readouterr().out
-    for asked in ('Which AI should brnrd think with?', 'How do you want to talk to brnrd?'):
+    for asked in ('Which AI should brnrd think with?', 'How should brnrd reach you?'):
         assert asked in out
     # The name is the resident's first question, not a form field.
     for gone in ('Channel kind', 'Name this channel', 'Your person name', 'fake', 'call you', 'Your name'):
         assert gone not in out
-    assert [a[1:] for a in calls] == [('telegram', 'telegram', 'sasha.petrova')]
+    assert [a[1:] for a in calls] == [('telegram', 'telegram', 'sasha.petrova'), ('web', 'web', 'sasha.petrova')]
     assert (tmp_path / 'loom' / 'preferences.toml').read_text().startswith('model.default = "codex"')
     assert load_config(tmp_path).body is None
 
 
-def test_a_second_channel_of_a_kind_gets_a_numbered_name(tmp_path):
+def test_a_door_connected_again_keeps_its_name_and_a_taken_name_is_numbered(tmp_path):
     home = home_at(tmp_path)
     (tmp_path / 'loom').mkdir(exist_ok=True)
     (tmp_path / 'loom/config.toml').write_text('connectors = ["telegram=telegram"]\n')
+    assert setup_channel._channel_name(Home(tmp_path), 'telegram') == 'telegram'
+    (tmp_path / 'loom/config.toml').write_text('connectors = ["telegram=fake"]\n')
     assert setup_channel._channel_name(Home(tmp_path), 'telegram') == 'telegram-2'
     assert setup_channel._person_id('  Ada Lovelace! ') == 'ada-lovelace'
 
@@ -648,22 +651,23 @@ def test_piped_setup_keeps_the_offers_on_enter_and_numbers_leave_them_out(monkey
     assert setup_channel.checklist(rows) == {'app'}
 
 
-def test_cloud_setup_offers_backup_app_and_board_and_brnrd_asks_what_was_left_off(tmp_path, monkeypatch):
+def test_cloud_setup_offers_backup_and_app_and_brnrd_asks_what_was_left_off(tmp_path, monkeypatch):
     import io
     from brr.loom.runtime.ledger import read_facts
     from brr.loom.runtime.wishes import wishes
     paired, made = [], []
     monkeypatch.setattr(setup_channel, '_gh_login', lambda: ('ada', ''))
-    monkeypatch.setattr(setup_channel, 'back_up_self', lambda home, login: made.append(login) or ('u', True))
-    monkeypatch.setattr(setup_channel, 'pair', lambda *a, **kw: paired.append(kw['env']))
+    monkeypatch.setattr(setup_channel, 'backup_repo', lambda home, login: setup_channel.SELF_REPO)
+    monkeypatch.setattr(setup_channel, 'back_up_self', lambda home, login, repo: made.append(login) or ('u', True))
+    monkeypatch.setattr(setup_channel, 'pair', lambda *a, **kw: paired.append(a[1]))
     # Piped: Enter for the body, then leave the App (2) out.
     monkeypatch.setattr('sys.stdin', io.StringIO('2\n'))
     argv = ['--home', str(tmp_path), '--kind', 'relay', '--name', 'cloud', '--person', 'ada']
     assert setup_channel.main(argv) == 0
-    assert made == ['ada'] and paired == [{'BRNRD_SETUP_BOARD': '1'}]
+    assert made == ['ada'] and paired == ['relay']
     lines = {w.line for w in wishes(read_facts(Home(tmp_path))).values()}
     assert setup_channel.LATER['app'] in lines
-    assert not lines & {setup_channel.LATER['repo'], setup_channel.LATER['board']}
+    assert setup_channel.LATER['repo'] not in lines and 'board' not in setup_channel.LATER
 
 
 def test_an_own_bot_setup_offers_only_the_backup(tmp_path):
@@ -671,7 +675,7 @@ def test_an_own_bot_setup_offers_only_the_backup(tmp_path):
     home = home_at(tmp_path)
     init_self(tmp_path, person='ada')
     assert [k for k, _, _ in setup_channel.offers(home, 'telegram', 'ada')] == ['repo']
-    assert [k for k, _, _ in setup_channel.offers(home, 'relay', 'ada')] == ['repo', 'app', 'board']
+    assert [k for k, _, _ in setup_channel.offers(home, 'relay', 'ada')] == ['repo', 'app']
     subprocess.run(['git', '-C', str(tmp_path / 'self'), 'remote', 'add', 'origin', 'https://x/y.git'], check=True)
     assert setup_channel.offers(home, 'telegram', 'ada') == []
 
@@ -692,3 +696,173 @@ def test_the_backup_adopts_only_a_private_repo(tmp_path, monkeypatch):
     got = subprocess.run(['git', '-C', str(tmp_path / 'self'), 'remote', 'get-url', 'origin'],
                          capture_output=True, text=True).stdout.strip()
     assert got == url
+
+
+def _backed_up_self(tmp_path, monkeypatch):
+    """An earlier install's self, pushed to a private ``ada/brnrd-self`` (a bare repo here)."""
+    from brr import home_link
+    from brr.loom.runtime.selfrepo import init_self
+    init_self(tmp_path / 'before', person='ada')
+    remote = tmp_path / 'remote' / 'brnrd-self.git'
+    subprocess.run(['git', 'clone', '-q', '--bare', str(tmp_path / 'before/self'), str(remote)], check=True)
+    monkeypatch.setattr(home_link, '_repo_view',
+                        lambda owner, name: {'visibility': 'PRIVATE'} if name == 'brnrd-self' else None)
+    monkeypatch.setattr(setup_channel, '_repo_url', lambda login, name: str(tmp_path / 'remote' / f'{name}.git'))
+    return subprocess.run(['git', '-C', str(remote), 'rev-parse', 'main'],
+                          capture_output=True, text=True, check=True).stdout.strip()
+
+
+def test_a_new_install_restores_the_memory_its_backup_holds(tmp_path, monkeypatch):
+    """Item 7 (Sasha's reinstall): setup looks at the backup first and takes the memory back, never seeding over it."""
+    (tmp_path / 'home').mkdir()
+    home = home_at(tmp_path / 'home')
+    sha = _backed_up_self(tmp_path, monkeypatch)
+    assert setup_channel.backup_repo(home, 'ada', ask=lambda question, default: default) == 'brnrd-self'
+    self_dir = tmp_path / 'home/self'
+    assert subprocess.run(['git', '-C', str(self_dir), 'rev-parse', 'main'],
+                          capture_output=True, text=True).stdout.strip() == sha
+    assert (self_dir / '.git/hooks/pre-receive').is_file()
+    # The restored self has its origin, so the backup offer is gone.
+    assert setup_channel.offers(home, 'telegram', 'ada') == []
+
+
+def test_a_declined_restore_backs_up_to_a_new_name_and_never_pushes_over_the_old(tmp_path, monkeypatch):
+    from brr.loom.runtime.selfrepo import init_self
+    (tmp_path / 'home').mkdir()
+    home = home_at(tmp_path / 'home')
+    _backed_up_self(tmp_path, monkeypatch)
+    assert setup_channel.backup_repo(home, 'ada', ask=lambda question, default: 'no') == 'brnrd-self-2'
+    assert not (tmp_path / 'home/self').exists()
+    init_self(tmp_path / 'home', person='ada')
+    with pytest.raises(ValueError, match='already holds a self'):
+        setup_channel.back_up_self(home, 'ada', 'brnrd-self')
+
+
+def test_a_refused_pairing_answer_says_what_the_person_does():
+    """Item 6: Telegram's own reason is carried through, and the message says what to do."""
+    told = setup_channel._what_to_do('Telegram refused sendMessage (HTTP 403: Forbidden: bot was blocked by the user)',
+                                     '@ada_bot')
+    assert 'Restart' in told
+    assert '@ada_bot' in setup_channel._what_to_do('Telegram refused sendMessage (HTTP 403)', '@ada_bot')
+    assert setup_channel._what_to_do('relay: event not found for this account', None) == ''
+
+
+def test_telegram_errors_carry_telegrams_reason_and_never_the_token(tmp_path, monkeypatch):
+    import importlib.util
+    import io
+    from urllib.error import HTTPError
+    path = Path(setup_channel.__file__).parent / 'connectors/telegram/common.py'
+    spec = importlib.util.spec_from_file_location('telegram_common_test', path)
+    common = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(common)
+    (tmp_path / 'token').write_text('123:SECRET\n')
+    monkeypatch.setenv('BRNRD_STATE', str(tmp_path))
+
+    def refuse(code, text):
+        def urlopen(request, timeout):
+            raise HTTPError(request.full_url, code, 'x', {},
+                            io.BytesIO(json.dumps({'ok': False, 'description': text}).encode()))
+        return urlopen
+    monkeypatch.setattr(common, 'urlopen', refuse(403, 'Forbidden: bot was blocked by the user'))
+    with pytest.raises(common.Refused) as refused:
+        common.call('sendMessage', {})
+    assert 'blocked by the user' in str(refused.value) and 'SECRET' not in str(refused.value)
+    monkeypatch.setattr(common, 'urlopen', refuse(409, 'Conflict: terminated by other getUpdates request'))
+    with pytest.raises(RuntimeError, match='another program is reading this bot'):
+        common.call('getUpdates', {})
+
+
+def test_setup_refuses_zero_doors_and_connects_every_door_picked(tmp_path, monkeypatch, capsys):
+    """Item 2: cloud and own bot are one list, not either-or, and brnrd needs at least one."""
+    import io
+    calls = []
+    monkeypatch.setattr(setup_channel, 'pair', lambda home, kind, name, person, **kw: calls.append((kind, name)))
+    monkeypatch.setattr(setup_channel, '_take_offers', lambda home, picked, rows, login, repo: [])
+    # A first setup starts on brnrd cloud and the page. Switch both off (nothing left: refused), then from the
+    # start again add the own bot: all three doors are offered and each one ticked is walked in turn.
+    monkeypatch.setattr('sys.stdin', io.StringIO('1 3\n2\n\n'))
+    assert setup_channel.main(['--home', str(tmp_path), '--person', 'ada']) == 0
+    out = capsys.readouterr().out
+    assert 'at least one way to reach you' in out
+    assert all(label in out for label in setup_channel.CHOICES.values())
+    assert calls == [('relay', 'relay'), ('telegram', 'telegram'), ('web', 'web')]
+
+
+def test_the_web_door_needs_no_code_and_its_page_is_the_link_and_the_board_writes_through_it(tmp_path):
+    """The page on this computer as a door: setup gives it a loopback port, the board's letters come from it."""
+    from brr.loom.runtime import board
+    from brr.loom.runtime.selfrepo import init_self
+    home = home_at(tmp_path)
+    init_self(tmp_path, person='ada')
+    setup_channel._enroll(home, 'fake', 'desk', 'ada', ['desk:42'])
+    links = []
+    assert setup_channel.pair(home, 'web', 'web', 'ada', links=links) == 'web:local'
+    port = load_config(tmp_path).board_port
+    assert port and port.isdigit()
+    assert links == [('In your browser', f'http://127.0.0.1:{port}')]
+    assert setup_channel.door_states(home)['web'] == ('web', True, f'at http://127.0.0.1:{port}')
+    # Run again: the port stays, so the page keeps its address.
+    setup_channel.pair(home, 'web', 'web', 'ada')
+    assert load_config(tmp_path).board_port == port
+    # The page comes first though the chat was enrolled first: a letter typed there is answered there.
+    assert board.person_of(home, None) == ('ada', 'web', 'local')
+    board.Parts(home, lambda: load_config(tmp_path), None).send('hello')
+    connector.drain(home, 'web', tmp_path / 'loom/connectors/web/state/in', {})
+    from brr.loom.runtime.ledger import read_facts
+    letter = next(f for f in read_facts(home) if f.kind == 'letter')
+    assert letter.data['from'] == 'person:ada'
+
+
+def test_the_web_door_goes_dark_when_its_port_is_unset_and_setup_mends_it(tmp_path):
+    home = home_at(tmp_path)
+    setup_channel.pair(home, 'web', 'web', 'ada')
+    set_value(tmp_path, 'board_port', '')
+    assert setup_channel.door_states(home)['web'][1] is False
+    setup_channel.pair(home, 'web', 'web', 'ada')
+    assert setup_channel.door_states(home)['web'][1] is True
+
+
+def _walk(monkeypatch, tmp_path, answers, outcomes):
+    """``_walk_doors`` with piped answers; ``outcomes[kind]`` is a list of what each try at that door does."""
+    import io
+    monkeypatch.setattr('sys.stdin', io.StringIO(answers))
+    tried = []
+
+    def connect(kind):
+        tried.append(kind)
+        what = outcomes[kind].pop(0)
+        if isinstance(what, BaseException):
+            raise what
+        return what
+    kinds = ['fake', 'relay', 'telegram', 'web']
+    return tried, lambda doors: setup_channel._walk_doors(home_at(tmp_path), doors, kinds, connect)
+
+
+def test_a_door_skipped_with_ctrl_c_goes_on_and_the_page_still_connects(tmp_path, monkeypatch, capsys):
+    """9989: every door step can be skipped; with nothing else connected, the page is the door."""
+    tried, walk = _walk(monkeypatch, tmp_path, '\n', {'relay': [KeyboardInterrupt()], 'web': ['web:local']})
+    assert walk(['web', 'relay']) == (['web:local'], ['relay'])
+    assert tried == ['relay', 'web']  # the page last: it needs nothing, the others may
+    out = capsys.readouterr().out
+    assert 'Ctrl-C skips this one' in out and 'on the page for now; add more: brnrd setup channel' in out
+
+
+def test_back_goes_to_the_list_and_q_stops(tmp_path, monkeypatch):
+    # b: the list again (piped: switch the own bot on), and the walk goes on from the new picks, relay again included.
+    tried, walk = _walk(monkeypatch, tmp_path, 'b\n2\n', {'relay': [KeyboardInterrupt(), 'relay:1'],
+                                                         'telegram': ['telegram:1'], 'web': ['web:local']})
+    assert walk(['relay', 'web']) == (['relay:1', 'telegram:1', 'web:local'], [])
+    assert tried == ['relay', 'relay', 'telegram', 'web']
+    (tmp_path / 'q').mkdir()
+    tried, walk = _walk(monkeypatch, tmp_path / 'q', 'q\n', {'relay': [KeyboardInterrupt()]})
+    with pytest.raises(KeyboardInterrupt):
+        walk(['relay'])
+
+
+def test_with_the_page_switched_off_a_dead_end_brings_the_list_back_once(tmp_path, monkeypatch, capsys):
+    # Relay fails; the list comes back once (piped: Enter keeps its picks, relay again), it fails again: setup stops.
+    tried, walk = _walk(monkeypatch, tmp_path, '3\n', {'relay': [ValueError('no'), ValueError('no')]})
+    with pytest.raises(ValueError, match='No door was connected'):
+        walk(['relay'])
+    assert capsys.readouterr().out.count('No door connected yet; pick again') == 1
+    assert tried == ['relay', 'relay']

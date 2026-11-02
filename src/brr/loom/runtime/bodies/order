@@ -1,0 +1,7 @@
+# The harnesses setup offers, best first: one bundled body folder per line, fake left out.
+# A person reorders them, or switches one off, in loom/preferences.toml (bodies.order).
+# tests/test_loom_body_order.py fails when a body folder is missing here.
+claude
+codex
+grok
+vibe

@@ -1,5 +1,5 @@
 from _step import mail
-"""A molted successor inherits the committed next step; a person hears back before the molt."""
+"""A reincarnated successor inherits the committed next step; a person hears back before the reincarnation."""
 
 import json
 
@@ -46,15 +46,15 @@ else:
     path = ctx.room / "self/threads/work/README.md"
     path.write_text(path.read_text().replace("Next step: original", "Next step: inherited"))
     try:
-        ctx.molt("carry the next step")
+        ctx.reincarnate("carry the next step")
     except RuntimeError as exc:
         assert {second!r} in str(exc) and {first!r} not in str(exc), str(exc)
     else:
-        raise AssertionError("molt passed with a person letter unanswered")
+        raise AssertionError("reincarnate passed with a person letter unanswered")
     ctx.send("channel:fake", "on it, my successor finishes it", re={second!r})
-    ctx.molt("carry the next step")
+    ctx.reincarnate("carry the next step")
     assert ctx.jack("stop").raw == ""
-assert not (ctx.room / "port/molt-pending").exists()
+assert not (ctx.room / "port/reincarnate-pending").exists()
 ''')
     loom = Loom(root)
     loom.start()
@@ -68,18 +68,18 @@ assert not (ctx.room / "port/molt-pending").exists()
                    for f in loom.facts())
         assert "Next step: inherited" in (root / "self/threads/work/README.md").read_text()
         wait_until(lambda: not mail(root, loom.facts(), "work"), 5, loom.dump)
-        assert any(f.kind == "attempt.ended" and f.data["cause"] == "molted" for f in loom.facts())
+        assert any(f.kind == "attempt.ended" and f.data["cause"] == "reincarnated" for f in loom.facts())
         assert not any(is_notice(f) and "body exited" in f.data["body"] for f in loom.facts())
-        assert not list((root / "rooms").glob("*/port/molt-pending"))
+        assert not list((root / "rooms").glob("*/port/reincarnate-pending"))
     finally:
         loom.halt()
     assert not loom.errors
 
 
 def test_molt_counts_a_reply_the_loom_has_not_drained_yet(tmp_path):
-    # The loom drains port/out on its tick; a molt right after the ack ran
+    # The loom drains port/out on its tick; a reincarnation right after the ack ran
     # before that tick in 1 of 5 runs and was refused. Here the loom is stopped
-    # between the ack and the molt, so the ack is only ever in port/out.
+    # between the ack and the reincarnation, so the ack is only ever in port/out.
     root = tmp_path / "home"
     init_self(root, person="test")
     write_thread(root, "work", "Work\n\n## Now\nNext step: original", "work", wait="0")
@@ -95,11 +95,11 @@ while not Path({str(go)!r}).exists():
     time.sleep(0.02)
 ctx.send("channel:fake", "on it, my successor finishes it", re={ask!r})
 try:
-    ctx.molt("carry the next step")
+    ctx.reincarnate("carry the next step")
 except RuntimeError as exc:
     atomic_write(Path({str(result)!r}), str(exc))
 else:
-    atomic_write(Path({str(result)!r}), "molted")
+    atomic_write(Path({str(result)!r}), "reincarnated")
 ''')
     loom = Loom(root)
     loom.start()
@@ -110,7 +110,7 @@ else:
         loom.thread.join(timeout=5)
         go.touch()
         wait_until(result.exists, 30, loom.dump)
-        assert result.read_text() == "molted"
+        assert result.read_text() == "reincarnated"
         assert loom.out_files(), "the loom drained port/out; the ack was not held back"
     finally:
         loom.halt()
@@ -161,7 +161,7 @@ else:
     (clone / "threads/work/research.md").write_text("untrusted research stays in the room\\n")
     git(clone, "add", "threads/work/research.md")
     git(clone, "commit", "-m", "Keep research for the next body.")
-    ctx.molt("carry the research")
+    ctx.reincarnate("carry the research")
     assert ctx.jack("stop").raw == ""
 ''')
     loom = Loom(root)
@@ -193,12 +193,12 @@ else:
 
 
 def test_a_successor_is_told_which_owed_letters_its_predecessor_already_read(tmp_path):
-    """Live, 2026-10-12: a person's "add the line, then molt" stayed owed after the
-    molt; the successor read it as an instruction, redid it and molted again."""
+    """Live, 2026-10-12: a person's "add the line, then reincarnate" stayed owed after the
+    reincarnate; the successor read it as an instruction, redid it and reincarnated again."""
     root = tmp_path / "home"
     init_self(root, person="test")
     write_thread(root, "work", "Work\n\n## Now\nNext step: original", "work", wait="0")
-    ask = inject_letter(root, to="thread:work", body="add the line, then molt")
+    ask = inject_letter(root, to="thread:work", body="add the line, then reincarnate")
     received = root / "successor.json"
     bodies(root, f'''import json, sys
 from pathlib import Path
@@ -211,7 +211,7 @@ if "predecessor" in ctx.wake():
     for letter in letters:
         ctx.send("thread:work", note="settled", re=letter.id)
 else:
-    ctx.molt("line added")
+    ctx.reincarnate("line added")
     assert ctx.jack("stop").raw == ""
 ''')
     loom = Loom(root)
@@ -219,7 +219,7 @@ else:
     try:
         wait_until(received.exists, 30, loom.dump)
         wake = json.loads(received.read_text())["wake"]
-        assert f"already read by your predecessor, who molted and left its handover: {ask}" in wake
+        assert f"already read by your predecessor, who reincarnated and left its handover: {ask}" in wake
         assert wake.count("already read by your predecessor") == 1
     finally:
         loom.halt()
@@ -227,8 +227,8 @@ else:
 
 
 def test_a_successor_wakes_with_its_predecessors_molt_why_and_the_notes_after_it(tmp_path):
-    """wake-vision: gen 221 of the inbox grepped the ledger for the molt why and the
-    note its predecessor wrote after the molt, which held the real state."""
+    """wake-vision: gen 221 of the inbox grepped the ledger for the reincarnation why and the
+    note its predecessor wrote after the reincarnation, which held the real state."""
     root = tmp_path / "home"
     init_self(root, person="test")
     write_thread(root, "work", "Work\n\n## Now\nNext step: original", "work", wait="0")
@@ -245,8 +245,8 @@ if "handover from" in ctx.wake():
     for letter in letters:
         ctx.send("thread:work", note="settled", re=letter.id)
 else:
-    ctx.molt("NEXT: merge #7 when its re-run is green")
-    ctx.send("thread:work", note="done after the molt: #7 merged as abc123", re=letters[0].id)
+    ctx.reincarnate("NEXT: merge #7 when its re-run is green")
+    ctx.send("thread:work", note="done after the reincarnation: #7 merged as abc123", re=letters[0].id)
     assert ctx.jack("stop").raw == ""
 ''')
     loom = Loom(root)
@@ -254,10 +254,10 @@ else:
     try:
         wait_until(received.exists, 30, loom.dump)
         wake = json.loads(received.read_text())["wake"]
-        assert "(gen 1, molted " in wake
+        assert "(gen 1, reincarnated " in wake
         assert "NEXT: merge #7 when its re-run is green" in wake
-        assert "done after the molt: #7 merged as abc123" in wake
-        assert wake.index("NEXT: merge #7") < wake.index("done after the molt")
+        assert "done after the reincarnation: #7 merged as abc123" in wake
+        assert wake.index("NEXT: merge #7") < wake.index("done after the reincarnation")
     finally:
         loom.halt()
     assert not loom.errors
@@ -294,7 +294,7 @@ else:
         wait_until(received.exists, 30, loom.dump)
         result = json.loads(received.read_text())
         assert "Decision: keep the room" in result["readme"]
-        assert "(gen 1): no molt" in result["wake"]
+        assert "(gen 1): no reincarnation" in result["wake"]
         assert "README last landed" in result["wake"]
         assert "→ channel:fake: on it" in result["wake"]
         leases = [f for f in loom.facts() if f.kind == "lease" and f.data.get("thread") == "work"]
@@ -307,7 +307,7 @@ else:
 
 
 def test_a_sheds_why_is_read_once_its_successor_was_shown_it(tmp_path):
-    """handover, 2026-10-29: requests gen 4 was shown its predecessor's shed --why
+    """handover, 2026-10-29: requests gen 4 was shown its predecessor's reincarnate --why
     at every boundary for 12 minutes until it noted it; the why asks nothing."""
     from brr.loom.runtime.project import fold
     root = tmp_path / "home"
@@ -324,7 +324,7 @@ letters = ctx.owed()
 if "handover from" in ctx.wake():
     atomic_write(Path({str(received)!r}), json.dumps([letter.id for letter in letters]))
 else:
-    ctx.molt("README Now says merge #7")
+    ctx.reincarnate("README Now says merge #7")
     assert ctx.jack("stop").raw == ""
 ''')
     loom = Loom(root)
@@ -332,7 +332,7 @@ else:
     try:
         wait_until(received.exists, 30, loom.dump)
         owed = json.loads(received.read_text())
-        why = next(f.id for f in loom.facts() if f.kind == "letter" and f.data.get("molt"))
+        why = next(f.id for f in loom.facts() if f.kind == "letter" and f.data.get("reincarnate"))
         assert why in owed and ask in owed
         wait_until(lambda: why in fold(loom.facts()).handled, 30, loom.dump)
         assert ask not in fold(loom.facts()).handled

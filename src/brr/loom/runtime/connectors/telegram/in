@@ -64,7 +64,8 @@ def poll(drop, stop):
                 atomic_write(cursor, str(offset))
             delay = 1
         except Exception as exc:
-            print(f'telegram: {type(exc).__name__}; retry in {delay}s', file=sys.stderr)
+            # The message names no URL (common.call keeps the token out of it).
+            print(f'telegram: {exc or type(exc).__name__}; retry in {delay}s', file=sys.stderr)
             stop.wait(delay)
             delay = min(60, delay * 2)
 

@@ -1,4 +1,4 @@
-"""A body never quits: it holds until it settles, molts or runs dry, and says how it ends."""
+"""A body never quits: it holds until it settles, reincarnates or runs dry, and says how it ends."""
 import json
 
 import pytest

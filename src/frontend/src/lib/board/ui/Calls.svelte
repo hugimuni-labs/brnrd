@@ -1,28 +1,32 @@
 <script lang="ts">
-	// The inbox's stack of calls: an open ask or a card he opened stands; unopened verdicts and answered cards fold into
-	// one counted line (ug2om 1). done/agree sends at once, correct arms the composer.
+	// The inbox's stack of calls: one counted line that unfolds on a tap; a card he opened stands (wvut8 1). done/agree
+	// sends at once, correct arms the composer.
 	import type { Call } from '../types.ts';
 	import { answered, stack } from '../calls.ts';
 	import { hm } from '../text.ts';
 	import { board } from './board.svelte.ts';
+	import Ref from './Ref.svelte';
 	let { calls }: { calls: Call[] } = $props();
 	const b = board();
 	const opened = $derived(
 		new Set([...b.open].filter((k) => k.startsWith('c:')).map((k) => k.slice(2)))
 	);
 	const S = $derived(stack(calls, b.pending, opened, b.cunfold));
+	const line = (f: { asks: number; verdicts: number }) =>
+		[
+			f.asks ? `${f.asks} ask${f.asks == 1 ? 's' : ''} you` : '',
+			f.verdicts ? `${f.verdicts} verdict${f.verdicts == 1 ? ' waits' : 's wait'} on you` : ''
+		]
+			.filter(Boolean)
+			.join(' · ');
 </script>
 
 <!-- eslint-disable svelte/no-navigation-without-resolve -- an external receipt -->
 {#if calls.length}<div class="calls">
 		{#if S.fold}<button type="button" class="cfold" onclick={() => (b.cunfold = !b.cunfold)}
 				>{b.cunfold ? '▾' : '▸'}
-				{#if S.fold.verdicts}<b
-						>{S.fold.verdicts} verdict{S.fold.verdicts == 1 ? '' : 's'} wait{S.fold.verdicts == 1
-							? 's'
-							: ''} on you</b
-					>{/if}{S.fold.verdicts && S.fold.answered ? ' · ' : ''}{S.fold.answered
-					? `${S.fold.answered} answered`
+				<b>{line(S.fold)}</b>{S.fold.answered
+					? `${S.fold.asks + S.fold.verdicts ? ' · ' : ''}${S.fold.answered} answered`
 					: ''}</button
 			>{/if}
 		{#each S.shown as c (c.wish)}
@@ -63,11 +67,7 @@
 					<div class="more">
 						{c.wish} · {ask ? 'asked' : 'delivered'}
 						{hm(c.at)}{#if ask}
-							· waits on {c.waits || ''}{:else}<br />{#if /^https?:/.test(c.ref || '')}<a
-									href={c.ref}
-									target="_blank"
-									rel="noopener">{c.ref}</a
-								>{:else}{c.ref || ''}{/if}
+							· waits on {c.waits || ''}{:else}<br /><Ref ref={c.ref} />
 							{c.result || ''}{/if}
 					</div>
 				{/if}

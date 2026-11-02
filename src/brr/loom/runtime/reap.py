@@ -9,6 +9,10 @@ is kept, and the reason is logged. ``self.broken-*`` asides go ``BROKEN_AGE``
 after the ``room.repaired`` that made them, ``.self-clone-*`` once their pid is
 dead. Each removal writes ``room.reaped`` first, with the bytes and branch
 heads it held; a path still on disk under such a fact is finished next pass.
+Before any removal, a clone elsewhere under ``rooms/`` that borrows objects
+from the path through ``objects/info/alternates`` (a ``git clone --shared``)
+is repacked to hold its own and its line dropped (``unlend``); a borrower
+that cannot be keeps the path.
 A kept room still loses each code clone (a checkout other than self) once
 ``clone_kept`` finds no reason: one ``clone:<strand>/<name>`` converge want
 each, ``CLONE_AGE`` after release; self and port stay until the room goes.
@@ -62,6 +66,7 @@ KEPT = "loom/reap-kept.json"
 # Caches a tool rebuilds on its next install; each runs only where its binary is on PATH.
 PRUNE = (("uv", "cache", "prune"), ("npm", "cache", "verify"), ("pip", "cache", "purge"))
 PRUNE_TIMEOUT = 600
+REPACK_TIMEOUT = 900
 
 
 class DiskFloor(Exception):
@@ -143,6 +148,8 @@ def space(path: Path) -> tuple[int, int, int]:
 
 
 SWAP_SHARE = 0.25
+#: Seconds between free-space reads by the loop's ``disk`` step.
+DISK_EVERY = 10.0
 
 
 def _run(*command: str) -> str:
@@ -363,6 +370,61 @@ def clone_kept(home, facts, strand: str, name: str, now: float, working: set[str
     return ""
 
 
+def borrowers(home, path: Path) -> list[tuple[Path, list[str]]]:
+    """Clones under ``rooms/`` outside ``path`` whose alternates name an object store inside it.
+
+    Each with the alternates lines that do. A line may be relative to the
+    borrower's ``objects`` dir; a ``.brr/worktrees`` run clone counts too.
+    """
+    inside = path.resolve()
+    found = []
+    rooms = home.root / "rooms"
+    for alternates in sorted([*rooms.glob("*/*/.git/objects/info/alternates"),
+                              *rooms.glob("*/*/.brr/worktrees/*/.git/objects/info/alternates")]):
+        repo = alternates.parents[3]
+        if repo.resolve().is_relative_to(inside):
+            continue
+        try:
+            lines = alternates.read_text().splitlines()
+        except OSError:
+            continue
+        lent = [line for line in lines if line.strip() and not line.startswith("#")
+                and (alternates.parents[1] / line.strip()).resolve().is_relative_to(inside)]
+        if lent:
+            found.append((repo, lent))
+    return found
+
+
+def unlend(home, path: Path) -> list[Path]:
+    """Make every borrower of ``path`` hold its own objects, so removing ``path`` breaks none.
+
+    ``git repack -a -d`` without ``-l`` copies what the borrower reaches
+    through its alternates into its own pack; the lent lines go only after
+    the borrower's every ref still resolves without them. Idempotent: a crash
+    between the two steps repacks again next pass. Raises when one cannot.
+    """
+    done = []
+    for repo, lent in borrowers(home, path):
+        alternates = repo / ".git" / "objects" / "info" / "alternates"
+        repack = subprocess.run(["git", "repack", "-a", "-d", "-q"], cwd=repo, capture_output=True,
+                                text=True, timeout=REPACK_TIMEOUT)
+        if repack.returncode != 0:
+            raise RuntimeError(f"repack of borrower {repo} failed: {repack.stderr.strip()}")
+        before = alternates.read_text()
+        kept = [line for line in before.splitlines() if line not in lent]
+        if kept:
+            alternates.write_text("\n".join(kept) + "\n")
+        else:
+            alternates.unlink()
+        check = subprocess.run(["git", "rev-list", "--objects", "--all", "--quiet"], cwd=repo,
+                               capture_output=True, text=True, timeout=REPACK_TIMEOUT)
+        if check.returncode != 0:
+            alternates.write_text(before)
+            raise RuntimeError(f"borrower {repo} still needs {path}: {check.stderr.strip()[:200]}")
+        done.append(repo)
+    return done
+
+
 def clones(room: Path) -> list[Path]:
     return sorted(p for p in room.iterdir() if p.name not in PLUMBING and not p.is_symlink()
                   and (p / ".git").exists())
@@ -374,16 +436,22 @@ class Reaper:
         self.log = log
         self.next = 0.0
         self.below = False
+        self.disk_due, self.floor_error = 0.0, None
         self.worker: threading.Thread | None = None
         self.failing: tuple[Exception, object] | None = None
 
     def disk(self) -> None:
-        free, least = floor(self.home.root)
-        if free < least and not self.below:
-            self.next = 0.0  # Once per streak: the pass is not a tick-rate loop.
-        self.below = free < least
-        if self.below:
-            raise DiskFloor(free, least, space(self.home.root)[1], swap(self.home.root))
+        # The free-space query (CoreFoundation, config, statvfs) at every 0.2 s tick was a share of the idle loom.
+        if DISK_EVERY <= 0 or time.monotonic() >= self.disk_due:
+            self.disk_due = time.monotonic() + DISK_EVERY if DISK_EVERY > 0 else 0.0
+            free, least = floor(self.home.root)
+            if free < least and not self.below:
+                self.next = 0.0  # Once per streak: the pass is not a tick-rate loop.
+            self.below = free < least
+            self.floor_error = (DiskFloor(free, least, space(self.home.root)[1], swap(self.home.root))
+                                if self.below else None)
+        if self.floor_error is not None:
+            raise self.floor_error
 
     def step(self) -> None:
         """Until a pass succeeds again, raise the last pass's failure for the loop's guard."""
@@ -467,17 +535,17 @@ class Reaper:
         for room in sorted(rooms.iterdir()):
             if room.name.startswith(".") or not room.is_dir():
                 continue
-            if key(room) in reaped:
-                shutil.rmtree(room, ignore_errors=True)
-                continue
             try:
+                if key(room) in reaped:
+                    self._remove(room, "room", room.name, done=True)
+                    continue
                 why = room_kept(home, facts, room.name, now, settled=settled, holding=holding)
+                if not why:
+                    self._remove(room, "room", room.name)
+                    gone += 1
+                    continue
             except Exception as exc:
                 why = f"inspection failed: {type(exc).__name__}: {exc}"
-            if not why:
-                self._remove(room, "room", room.name)
-                gone += 1
-                continue
             kept[why.split(":")[0]] = kept.get(why.split(":")[0], 0) + 1
             if why.startswith(BODY_REASONS):
                 settle[room.name] = why
@@ -556,6 +624,11 @@ class Reaper:
         except (OSError, ValueError, AttributeError):
             told = set()
         new = set(settle) - told
+
+        def covers(old) -> bool:
+            # An earlier notice is restated only if each room it names is listed again or gone.
+            named = re.findall(r"^- (\S+) \(thread ", str(old.data.get("body", "")), re.M)
+            return all(name in settle or not self.home.room(name).exists() for name in named)
         if new:
             facts = read_facts(self.home)
             threads = sender_threads(facts)
@@ -565,7 +638,7 @@ class Reaper:
                        f"- {strand} (thread {threads.get(strand, '?')}): {why}"
                        for strand, why in sorted(settle.items())),
                    "then clear the room with `python -m brr.loom.runtime reap <strand> --force"
-                   " --why \"<what you did with it>\"`")
+                   " --why \"<what you did with it>\"`", supersedes=covers)
         # Told rooms stay told while kept; a room that leaves and comes back is new again.
         atomic_write(path, json.dumps({"kept": settle, "told": sorted(set(settle) & (told | new))},
                                       sort_keys=True) + "\n")
@@ -574,6 +647,8 @@ class Reaper:
         return str(path.resolve().relative_to(self.home.root.resolve()))
 
     def _remove(self, path: Path, what: str, strand: str, done: bool = False, why: str = "") -> None:
+        for repo in unlend(self.home, path):  # before the fact: a borrower that cannot be raises and keeps the path
+            self.log(self.home, f"unlent {path}: {repo} now holds its own objects")
         if not done:
             from brr.daemon2.facts import Fact
             from .ledger import append

@@ -38,6 +38,7 @@ from . import tooltrace
 from brr import emotes
 
 TICK = 0.25  # seconds between stats of the ledger and the rooms; a still home costs a few stats
+TAPE = 1.0  # a tape alone moves the board at most once per this: its tool calls coalesce, nothing else recomputes
 TOOLS = 120  # tool lines kept per strand
 LETTERS = 200  # letters per thread part; older ones by ?before=
 LABEL = 80  # characters of a bead's label
@@ -55,10 +56,24 @@ def _say(raw) -> tuple:
 
 
 
+_READMES: dict[Path, tuple[tuple, str]] = {}
+
+
+def _readme(self_root: Path, thread: str) -> str:
+    """A thread's README, re-read only when its stat moved: a compute reads every thread's twice."""
+    path = self_root / "threads" / thread / "README.md"
+    st = path.stat()
+    stamp = (st.st_mtime_ns, st.st_size, st.st_ino)
+    held = _READMES.get(path)
+    if held is None or held[0] != stamp:
+        held = _READMES[path] = (stamp, path.read_text())
+    return held[1]
+
+
 def plan_bytes(self_root: Path, thread: str) -> int | None:
     """Bytes of a thread's ``## Plan`` section, the part of its README every wake carries."""
     try:
-        text = (self_root / "threads" / thread / "README.md").read_text()
+        text = _readme(self_root, thread)
     except OSError:
         return None
     found = re.search(r"^## Plan\n(.*?)(?=^## |\Z)", text, re.M | re.S)
@@ -72,7 +87,7 @@ def steps_of(self_root: Path, thread: str) -> list[dict]:
     """A thread's steps (6lozd): the top-level rows of its ``## Plan``, each with the wishes its ``· re:`` tail cites.
     A row is done as the loom's ``receipt`` reads it: a PR or a sha, or an ``[x]`` box; a file link alone is a mention."""
     try:
-        text = (self_root / "threads" / thread / "README.md").read_text()
+        text = _readme(self_root, thread)
     except OSError:
         return []
     found = re.search(r"^## Plan\n(.*?)(?=^## |\Z)", text, re.M | re.S)
@@ -417,11 +432,9 @@ def compute(home: Home, facts, config, tools: dict, live: dict, person: str | No
     counts = {name: dict(Counter(row["state"] for row in rows)) for name, rows in wished.items() if name in known}
     for t in threads:
         mine = by_thread.get(t["id"], [])
-        strands = [s["id"] for s in t.get("strands") or ()]
         parts[f"thread/{t['id']}"] = {
             "id": t["id"], "count": len(mine), "letters": mine, "wishes": wished.get(t["id"], []),
-            "tools": {s: tools[s] for s in strands if s in tools},
-            "live": {s: live[s] for s in strands if s in live}}
+            **taped(t, tools, live)}
     parts["beads"] = beads_of(facts, main_snapshot(home))
     hashes = {name: digest(part) for name, part in parts.items()}
     index = {"v": 1, **{k: v for k, v in snap.items() if k not in {"at", "log"}}, "wishes": counts,
@@ -429,6 +442,12 @@ def compute(home: Home, facts, config, tools: dict, live: dict, person: str | No
              **_as(home, person), "parts": hashes, "faces": FACES}
     parts["index"] = index
     return parts
+
+
+def taped(thread: dict, tools: dict, live: dict) -> dict:
+    """A thread part's ``tools`` and ``live``: its strands' tapes, the one thing a tape move changes."""
+    strands = [s["id"] for s in thread.get("strands") or ()]
+    return {"tools": {s: tools[s] for s in strands if s in tools}, "live": {s: live[s] for s in strands if s in live}}
 
 
 def _as(home: Home, person: str | None) -> dict:
@@ -452,16 +471,30 @@ def window(part: dict, before: str | None = None, until: str | None = None, most
 
 
 class Tools:
-    """Each room's tape, re-read only when its trace moved: a few stats per room per tick."""
+    """Each room's tape, re-read only when its trace moved: a few stats per room per tick.
 
-    def __init__(self, home: Home):
+    The rooms are listed again every ``every`` seconds; between listings only a room whose
+    tape moved within that span is stat'ed, so a home of hundreds of dead rooms costs a few
+    stats per tick, and a quiet room that wakes shows within ``every`` seconds.
+    """
+
+    EVERY = 2.0
+
+    def __init__(self, home: Home, every: float | None = None):
         self.home = home
+        self.every = self.EVERY if every is None else every
         self.tools, self.live, self.sig = {}, {}, {}
+        self.listed, self.ports, self.hot = None, [], {}
 
     def read(self) -> bool:
         """Re-read the rooms whose trace moved; True when any did. A codex room's calls come from its body.log."""
-        moved, sig = False, {}
-        for port in (self.home.root / "rooms").glob("*/port"):
+        now = time.monotonic()
+        whole = self.listed is None or now - self.listed >= self.every
+        if whole:
+            self.listed, self.ports = now, list((self.home.root / "rooms").glob("*/port"))
+            self.hot = {strand: at for strand, at in self.hot.items() if now - at < self.every}
+        moved, sig = False, {} if whole else dict(self.sig)
+        for port in self.ports if whole else [self.home.root / "rooms" / s / "port" for s in self.hot]:
             strand, stamp = port.parent.name, []
             for name in ("tools.jsonl", "body.log", ".paused.json"):
                 if name == "body.log" and stamp[0]:
@@ -473,19 +506,21 @@ class Tools:
                 except OSError:
                     stamp.append(None)
             if not (stamp[0] or stamp[1]):
+                sig.pop(strand, None)
                 continue
             sig[strand] = tuple(stamp)
             if self.sig.get(strand) == sig[strand]:
                 continue
+            self.hot[strand] = now
             rows = tooltrace.read(port.parent, limit=TOOLS)
             self.tools[strand] = [{"at": _iso(r["at"]), "end": r["end"] and _iso(r["end"]), "tool": r["tool"],
                                    "arg": r["arg"], "cmd": r.get("cmd", ""), "say": r.get("say", ""),
                                    "by": r.get("by", ""), "failed": bool(r.get("failed"))} for r in rows]
-            now = tooltrace.live(port.parent)
+            live = tooltrace.live(port.parent)
             self.live[strand] = {"open": [{"at": _iso(c["at"]), "tool": c["tool"], "arg": c["arg"],
-                                           "cmd": c.get("cmd", ""), "by": c.get("by", "")} for c in now["open"]],
-                                 "say": now["say"], "last_end": now["last_end"] and _iso(now["last_end"]),
-                                 "paused": bool(now["paused"])}
+                                           "cmd": c.get("cmd", ""), "by": c.get("by", "")} for c in live["open"]],
+                                 "say": live["say"], "last_end": live["last_end"] and _iso(live["last_end"]),
+                                 "paused": bool(live["paused"])}
             moved = True
         for gone in set(self.tools) - set(sig):
             self.tools.pop(gone, None)
@@ -496,43 +531,72 @@ class Tools:
 
 
 class Parts:
-    """The parts, recomputed whole on their own thread when the ledger or a tape moved (design §D7).
+    """The parts, recomputed whole on their own thread when the ledger moved (design §D7).
 
-    Its own ledger reader and projection cache keep it apart from the loop: the loop never waits on a
-    board, and a board never sees a tick's half-written state. ``changed`` wakes the event streams.
+    A tape alone moving (a body's tool call) re-cuts only the ``tools`` and ``live`` of the thread parts
+    over the last compute, at most once per ``TAPE`` s: with bodies live the tapes move several times a
+    second, and a whole compute is a large share of a core (busy-cpu). It shares the process's ledger
+    reader (one fold, not two), but keeps its own projection cache: a board never sees a tick's
+    half-written state. ``changed`` wakes the event streams.
     """
 
     def __init__(self, home: Home, config_of, log=None, person: str | None = None):
-        from .ledger import LedgerReader
+        from .ledger import shared_reader
         self.home, self.config_of, self.log, self.person = home, config_of, log, person
-        self.reader, self.cache, self.tape = LedgerReader(), {}, Tools(home)
+        self.reader, self.cache, self.tape = shared_reader(home), {}, Tools(home)
         self.parts: dict[str, dict] = {}
         self.hashes: dict[str, str] = {}
         self.revision = None
+        self.taped, self.tape_at = False, None  # a tape move not shown yet; when the last one was
         # Which strand typed a letter through the board: the board's own note, outside the self repo.
         self.typed_path, self.typed, self.typed_mtime = home.root / "loom/board/typed.json", {}, None
         self.changed = threading.Condition()
         self.stop = threading.Event()
 
     def step(self) -> bool:
-        """One recompute when anything moved; True when a part's hash did."""
+        """One recompute when the ledger moved, one re-cut of the tapes when only they did; True when a part's
+        hash moved."""
         facts = self.reader.refresh(self.home)
-        moved = self.tape.read() | self._typed()
+        self.taped |= self.tape.read()
+        typed = self._typed()
         # semantic_revision: the loom's own router.renewed heartbeat (6 a minute) is no change here.
         revision = (id(facts), facts.semantic_revision)
-        if revision == self.revision and not moved:
+        now = time.monotonic()
+        if revision != self.revision or typed or not self.parts:
+            self.revision, self.taped, self.tape_at = revision, False, now
+            with projection_cache(self.cache):
+                parts = compute(self.home, facts, self.config_of(), self.tape.tools, self.tape.live, self.person,
+                                self.typed)
+            hashes = dict(parts["index"]["parts"], index=digest(parts["index"]))  # compute hashed the others
+        elif self.taped and (self.tape_at is None or now - self.tape_at >= TAPE):
+            self.taped, self.tape_at = False, now
+            parts, hashes = self._retaped()
+        else:
             return False
-        self.revision = revision
-        with projection_cache(self.cache):
-            parts = compute(self.home, facts, self.config_of(), self.tape.tools, self.tape.live, self.person,
-                            self.typed)
-        hashes = {name: digest(part) for name, part in parts.items()}
         if hashes == self.hashes:
             return False
         with self.changed:
             self.parts, self.hashes = parts, hashes
             self.changed.notify_all()
         return True
+
+    def _retaped(self) -> tuple[dict, dict]:
+        """The last compute with each thread part's tapes cut fresh: only a part whose tapes moved is hashed again."""
+        parts, hashes = dict(self.parts), dict(self.hashes)
+        index = parts["index"]
+        for t in index.get("threads") or ():
+            name = f"thread/{t['id']}"
+            part = parts.get(name)
+            if part is None:
+                continue
+            tape = taped(t, self.tape.tools, self.tape.live)
+            if tape["tools"] != part["tools"] or tape["live"] != part["live"]:
+                parts[name] = dict(part, **tape)
+                hashes[name] = digest(parts[name])
+        if hashes != self.hashes:
+            parts["index"] = dict(index, parts={k: v for k, v in hashes.items() if k != "index"})
+            hashes["index"] = digest(parts["index"])
+        return parts, hashes
 
     def _typed(self) -> bool:
         mtime = self.typed_path.stat().st_mtime if self.typed_path.exists() else None
@@ -606,7 +670,10 @@ class Pusher:
         self.failing: tuple[Exception, object] | None = None
 
     def step(self, config) -> None:
-        if not config.relay_state:
+        from .gates import state_dir
+        # The gate the snapshot reads: relay_state names it, else loom/gates (a home migrate:gates moved).
+        gate = state_dir(self.parts.home.root, config)
+        if gate is None:
             return
         with self.parts.changed:
             held, hashes = self.parts.parts, self.parts.hashes
@@ -615,7 +682,7 @@ class Pusher:
         wait = self.RETRY if self.failing else self.EVERY
         if hashes and hashes != self.sent and not busy and (self.attempted is None or now - self.attempted >= wait):
             self.attempted = now
-            self.worker = threading.Thread(target=self._put, args=(Path(config.relay_state), held, hashes),
+            self.worker = threading.Thread(target=self._put, args=(gate, held, hashes),
                                            name="loom-parts", daemon=True)
             self.worker.start()
         if self.failing is not None:
@@ -668,12 +735,15 @@ def person_channel(home: Home, person: str | None) -> tuple[str, str]:
 
 
 def person_of(home: Home, person: str | None) -> tuple[str, str, str]:
-    """``(name, instance, user)``: who the board writes as, and the channel it writes through."""
+    """``(name, instance, user)``: who the board writes as, and the channel it writes through.
+
+    A ``web`` door (the page itself) comes first: a letter typed here is answered here, not in a chat.
+    """
     enabled = instances(home)
     for path in sorted((home.root / "self/people").glob("*/channels.toml")):
         if person and path.parent.name != person:
             continue
-        for entry in read_array(path, "channels"):
+        for entry in sorted(read_array(path, "channels"), key=lambda e: enabled.get(e.partition(":")[0]) != "web"):
             instance, _, user = entry.partition(":")
             if instance in enabled and user and ":" not in user:
                 channel_parts(f"channel:{instance}/{user}", home)
@@ -683,11 +753,16 @@ def person_of(home: Home, person: str | None) -> tuple[str, str, str]:
 
 def spa_root() -> Path | None:
     """The SvelteKit build the loopback serves: ``BRNRD_FRONTEND_DIR`` (as the cloud's ``brnrd.spa``), else the
-    checkout's ``src/frontend/build``; ``None`` until ``npm run build`` has written one. Read per request, so a
-    rebuild lands without a re-exec."""
+    checkout's ``src/frontend/build``, else the one a wheel ships (``frontend/``, built by release.yml); ``None``
+    until one exists. Read per request, so a rebuild lands without a re-exec."""
     configured = os.environ.get("BRNRD_FRONTEND_DIR")
-    root = Path(configured).expanduser() if configured else Path(__file__).resolve().parents[3] / "frontend" / "build"
-    return root.resolve() if root.is_dir() else None
+    if configured:
+        root = Path(configured).expanduser()
+        return root.resolve() if root.is_dir() else None
+    for root in (Path(__file__).resolve().parents[3] / "frontend" / "build", Path(__file__).resolve().parent / "frontend"):
+        if root.is_dir():
+            return root.resolve()
+    return None
 
 
 def spa_file(root: Path, url_path: str) -> Path | None:

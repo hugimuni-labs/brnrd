@@ -1,15 +1,17 @@
 <script lang="ts">
-	// One letter in a column. On the inbox an internal letter folds to one line until opened (or "show internal");
-	// a person letter opens its disposition (the wishes citing it, the letters answering it) on a press.
+	// One letter in a column: a one-line head and two lines of body until a press selects it (wvut8 2). On the inbox an
+	// internal letter folds to one line until opened (or "show internal"); a person letter opens its disposition (the
+	// wishes citing it, the letters answering it) on a press.
 	import type { Letter } from '../types.ts';
 	import { hm, hue, splitQuote } from '../text.ts';
-	import { inSide, internal, routes, sender } from '../sides.ts';
+	import { inSide, internal, letterMark, ME, routes, sender } from '../sides.ts';
 	import { stamps } from '../stamps.ts';
 	import Chips from './Chips.svelte';
 	import { board } from './board.svelte.ts';
 	let { l, col, inbox }: { l: Letter; col: string; inbox: boolean } = $props();
 	const b = board();
 	const who = $derived(sender(l));
+	const mark = $derived(letterMark(l, col, b.model?.threads || []));
 	const q = $derived(splitQuote(l, b.model?.byId || new Map()));
 	const shut = $derived(inbox && internal(l) && !b.showAll && !b.open.has('l:' + l.id));
 	const line = $derived(String(l.body).replace(/\s+/g, ' ').trim());
@@ -44,7 +46,8 @@
 	class:pending={l.pendingNote}
 	class:sel={b.isSel(l.id, col)}
 	class:linked={b.linked.has(l.id) && !b.isSel(l.id, col)}
-	style:--h={hue(who)}
+	style:--h={mark.thread ? hue(mark.thread) : ME}
+	style:--line={mark.line}
 	onclick={press}
 >
 	{#if shut}
@@ -60,11 +63,9 @@
 						b.openBead('thread:' + t);
 					}}>{t}</button
 				>{/each}{/if}
-		<small
+		<small title="{l.at.slice(0, 19).replace('T', ' ')} UTC"
 			>{who} → {l.to || ''}{#if l.typed_by}
-				· <span class="typed">typed by {l.typed_by}</span>{/if}<br />{l.at
-				.slice(0, 19)
-				.replace('T', ' ')} UTC</small
+				· <span class="typed">typed by {l.typed_by}</span>{/if} · {hm(l.at)}</small
 		>
 		{#if q[0] != null}<!-- svelte-ignore a11y_no_static_element_interactions -->
 			<span

@@ -19,7 +19,15 @@ from .selfrepo import _env_without_pin
 CACHE_TTL = 300
 REFRESH_INTERVAL = 600
 PROBE_INTERVAL = 60
+# A refresh still running past this reads as unknown fuel, so a wanted body
+# starts: on 10-31 one blocked refresh held every wake pending for ten hours.
+STUCK_AFTER = 120
 _REFRESHING = set()
+_STARTED: dict[Path, float] = {}
+
+
+class StuckRefresh(RuntimeError):
+    """A usage refresh that has not returned within ``STUCK_AFTER``."""
 
 
 def shells(home):
@@ -87,9 +95,14 @@ def _refresh(path, script, after=0) -> None:
     except (OSError, ValueError, KeyError, TypeError, subprocess.TimeoutExpired):
         windows = []
     finally:
-        if proc is not None and proc.poll() is None:
-            os.killpg(proc.pid, signal.SIGKILL)
-            proc.wait()
+        try:
+            if proc is not None and proc.poll() is None:
+                os.killpg(proc.pid, signal.SIGKILL)
+                # A child stuck in the kernel ignores SIGKILL: leave it rather
+                # than hold the gauge on an unbounded wait.
+                proc.wait(timeout=5)
+        except (OSError, subprocess.TimeoutExpired):
+            pass
         try:
             if attempted:
                 atomic_write(path, json.dumps({"at": at, "windows": windows, **({"error": error} if error else {})}) + "\n")
@@ -97,10 +110,27 @@ def _refresh(path, script, after=0) -> None:
             if claim is not None:
                 claim.close()
             _REFRESHING.discard(path)
+            _STARTED.pop(path, None)
+
+
+def _stuck(path) -> float | None:
+    """How long the refresh of ``path`` has run, once past ``STUCK_AFTER``."""
+    started = _STARTED.get(path) if path in _REFRESHING else None
+    age = time.monotonic() - started if started is not None else 0
+    return age if age >= STUCK_AFTER else None
+
+
+def check_stuck() -> None:
+    """Raise for refreshes past ``STUCK_AFTER``: the loop's guard makes it ``loom.degraded``."""
+    stuck = sorted((path.stem, age) for path in list(_REFRESHING) if (age := _stuck(path)) is not None)
+    if stuck:
+        raise StuckRefresh("usage refresh stuck, gauge read as unknown: " + ", ".join(
+            f"{name} for {age:.0f}s" for name, age in stuck))
 
 
 def reading(home, shell: str, after: float = 0, *, fresh=False):
-    """None while refreshing; an empty reading means the gauge is unknown."""
+    """None while refreshing; an empty reading means the gauge is unknown,
+    as does a refresh still running past ``STUCK_AFTER``."""
     path = (home.root / "loom/usage" / f"{shell}.json").resolve()
     try:
         script = resolve(home, shell) / "usage"
@@ -120,8 +150,12 @@ def reading(home, shell: str, after: float = 0, *, fresh=False):
             return reading
     except (OSError, ValueError, KeyError, TypeError):
         pass
+    if _stuck(path) is not None:
+        # Unknown, not pending; no second refresh joins the blocked one.
+        return {"windows": []}
     if path not in _REFRESHING:
         _REFRESHING.add(path)
+        _STARTED[path] = time.monotonic()
         threading.Thread(target=_refresh, args=(path, script, after) if fresh else (path, script), daemon=True).start()
     return None
 

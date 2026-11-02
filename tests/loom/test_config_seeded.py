@@ -30,6 +30,16 @@ def test_declaration_is_the_dataclass():
     assert len(KEYS) == 22
 
 
+def test_a_retired_key_still_loads_and_is_ignored(tmp_path):
+    # boot-review v2 retired the reincarnation trigger's keys; a file that names them must still load.
+    from brr.loom.runtime.config import RETIRED, config_path
+    path = config_path(tmp_path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text('shed_hold = ["home"]\nshed_excess = 60000\n')
+    assert RETIRED == {"shed_excess", "shed_hold"}
+    assert not hasattr(load_config(tmp_path), "shed_hold")
+
+
 def test_unknown_key_is_refused_with_the_nearest(tmp_path):
     home = _home(tmp_path, 'forge_token_file = "x"\n')
     with pytest.raises(ConfigError) as err:

@@ -26,6 +26,7 @@ from .. import (
     limits,
     stripe_api,
 )
+from ..looms import loom_repos
 from ..models import Account, ChannelRoute, Daemon, Event, Repo, StripeEvent, TgPairCode
 from ..platforms import github as gh
 from ..platforms import telegram as tg
@@ -189,6 +190,11 @@ def _route_target_repo(db: Session, route: ChannelRoute) -> Repo | None:
     A chat is paired to an *account*; the repo is routing, not identity.
     Resolution order, first hit wins:
 
+    0. the account's resident: its last seen loom's repo, or the pinned
+       one when the pin is itself a loom. One account has one resident,
+       so an old daemon's repo, pinned or busier, never outranks a live
+       loom. Every install of the resident polls that one self repo, and
+       the git inbox lease among them says which answers.
     1. the route's own pin (``/repo owner/name``, or a legacy repo-scoped
        pairing — same row, same meaning),
     2. the account's sole repo,
@@ -206,6 +212,9 @@ def _route_target_repo(db: Session, route: ChannelRoute) -> Repo | None:
     (one persona resident per account, deciding placement itself); when a
     resident-side router exists, rungs 2–4 collapse into it.
     """
+    looms = [repo for repo, _ in loom_repos(db, route.account_id)]
+    if looms:
+        return next((repo for repo in looms if repo.id == route.repo_id), looms[0])
     if route.repo_id is not None:
         pinned = db.get(Repo, route.repo_id)
         if pinned is not None:

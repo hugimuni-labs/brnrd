@@ -67,9 +67,9 @@ def test_send_refuses_a_letter_to_the_senders_own_thread(tmp_path):
     with pytest.raises(PortError, match="your own thread"):
         write_send(room, to="thread:t", sender=STRAND, body="pong", re="p-test/abcde")
     assert not list((room / "port" / "out").glob("*.md"))
-    # The two ways a thread does speak to itself still pass: a note, a molt's handover.
+    # The two ways a thread does speak to itself still pass: a note, a reincarnation's handover.
     write_send(room, to="thread:t", sender=STRAND, re="p-test/abcde", note="done")
-    write_send(room, to="thread:t", sender=STRAND, body="why", molt=f"{STRAND}/m1")
+    write_send(room, to="thread:t", sender=STRAND, body="why", reincarnate=f"{STRAND}/m1")
     assert len(list((room / "port" / "out").glob("*.md"))) == 2
 
 

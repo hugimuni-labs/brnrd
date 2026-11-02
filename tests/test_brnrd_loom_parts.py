@@ -19,6 +19,14 @@ PARTS = {
 }
 
 
+
+def _gated(root):
+    """A home whose gate the pusher finds: ``root/gates`` holds a cloud.json with a URL and a token."""
+    from types import SimpleNamespace
+    (root / "gates").mkdir(parents=True, exist_ok=True)
+    (root / "gates/cloud.json").write_text(json.dumps({"brnrd_url": "http://x", "token": "t"}))
+    return SimpleNamespace(root=root)
+
 def _push(client, relay, parts=PARTS, keys=None, hashes=None, gz=True):
     hashes = hashes or {k: f"h-{k}" for k in parts}
     doc = {"keys": list(keys if keys is not None else parts),
@@ -152,6 +160,26 @@ def test_a_board_letter_goes_through_the_relay(client):
     assert client.post("/v1/loom/letters", json={"body": "  "}).status_code == 400
 
 
+def test_a_board_letter_id_is_the_tail_of_the_ledger_letter_the_loom_files(client, tmp_path):
+    """The cloud's answer to a sent letter names the letter the loom files, so its pending copy resolves by id."""
+    import connector_support as relay
+    from brr.loom.runtime.home import Home
+    from test_loom_relay import FakeClient, kinds
+
+    headers, session = _account(client)
+    relay_headers = _relay_token(client, headers, _repo(client, headers))
+    _signed_in(client, session)
+    sent = client.post("/v1/loom/letters", json={"body": "look"}).json()
+    _signed_in(client, None)
+    events = client.get("/v1/daemons/inbox", params={"wait": 0}, headers=relay_headers).json()["events"]
+    home = Home(tmp_path, install="aaaa")
+    home.thread_dir("inbox").mkdir(parents=True)
+    (home.thread_dir("inbox") / "README.md").write_text("---\nid: inbox\nstatus: open\ntense: plan\n---\n# inbox\n")
+    relay.pull_once(home, FakeClient(events, cursor=1), 0)
+    letter, = kinds(home, "letter")
+    assert sent["id"] != letter.data["id"] and letter.data["id"].endswith(":" + sent["id"])
+
+
 def test_the_loom_pusher_lands_only_moved_parts_through_the_cloud(client, monkeypatch, tmp_path):
     """brr's Pusher against this app: the first push lands every part, the next only the moved one."""
     import threading
@@ -172,7 +200,8 @@ def test_the_loom_pusher_lands_only_moved_parts_through_the_cloud(client, monkey
         return client.request(method, url.removeprefix("http://testserver"), content=data, headers=headers)
 
     monkeypatch.setattr(cloud._SESSION, "request", request)
-    board = SimpleNamespace(parts=dict(PARTS), hashes={k: f"h-{k}" for k in PARTS}, changed=threading.Condition())
+    board = SimpleNamespace(parts=dict(PARTS), hashes={k: f"h-{k}" for k in PARTS}, changed=threading.Condition(),
+                          home=_gated(tmp_path))
     pusher = Pusher(board)
     pusher.EVERY = 0
     config = SimpleNamespace(relay_state=str(tmp_path))
@@ -207,7 +236,8 @@ def test_the_loom_pusher_raises_a_refused_push(client, monkeypatch, tmp_path):
     monkeypatch.setattr(cloud._SESSION, "request",
                         lambda *a, **k: SimpleNamespace(status_code=403, text="withheld", json=dict))
     # a 403 that is not the consent refusal stays a plain failure
-    board = SimpleNamespace(parts={"index": {}}, hashes={"index": "h"}, changed=threading.Condition())
+    board = SimpleNamespace(parts={"index": {}}, hashes={"index": "h"}, changed=threading.Condition(),
+                          home=_gated(tmp_path))
     pusher = Pusher(board)
     config = SimpleNamespace(relay_state=str(tmp_path))
     try:
@@ -230,7 +260,8 @@ def test_the_loom_pusher_names_a_withheld_board(monkeypatch, tmp_path):
     monkeypatch.setattr(cloud, "_load_state_from_dir", lambda d: {"brnrd_url": "http://x", "token": "t"})
     monkeypatch.setattr(cloud._SESSION, "request",
                         lambda *a, **k: SimpleNamespace(status_code=451, text=detail, json=dict))
-    board = SimpleNamespace(parts={"index": {}}, hashes={"index": "h"}, changed=threading.Condition())
+    board = SimpleNamespace(parts={"index": {}}, hashes={"index": "h"}, changed=threading.Condition(),
+                          home=_gated(tmp_path))
     pusher = Pusher(board)
     config = SimpleNamespace(relay_state=str(tmp_path))
     try:
@@ -337,7 +368,8 @@ def test_the_pusher_names_a_withheld_board_until_a_yes_on_brnrd_dev_clears_it(cl
 
     monkeypatch.setattr(cloud._SESSION, "request", request)
     hashes = {k: f"h-{k}" for k in PARTS}
-    pusher = Pusher(SimpleNamespace(parts=dict(PARTS), hashes=hashes, changed=threading.Condition()))
+    pusher = Pusher(SimpleNamespace(parts=dict(PARTS), hashes=hashes, changed=threading.Condition(),
+                          home=_gated(tmp_path)))
     pusher._put(tmp_path, dict(PARTS), hashes)  # the worker's body, run here so no thread races the asserts
     assert isinstance(pusher.failing[0], BoardWithheld) and "board withheld" in str(pusher.failing[0])
 
@@ -345,3 +377,30 @@ def test_the_pusher_names_a_withheld_board_until_a_yes_on_brnrd_dev_clears_it(cl
     assert client.post("/v1/loom/consent", json={"send": True}).status_code == 200
     pusher._put(tmp_path, dict(PARTS), hashes)
     assert pusher.failing is None and pusher.sent == hashes
+
+
+def test_the_pusher_finds_the_gate_migrate_gates_moved(monkeypatch, tmp_path):
+    """A home whose relay_state migrate:gates commented out still pushes, through loom/gates, as the snapshot does:
+    the pusher returning on a bare relay_state left brnrd.dev's chat at 10-29 17:09 (self thread web-chat-out)."""
+    import threading
+    from types import SimpleNamespace
+
+    from brr.gates import cloud
+    from brr.loom.runtime.board import Pusher
+
+    _gated(tmp_path / "loom")
+    seen = []
+    monkeypatch.setattr(cloud, "_load_state_from_dir", lambda d: seen.append(d) or {"brnrd_url": "http://x", "token": "t"})
+    monkeypatch.setattr(cloud._SESSION, "request",
+                        lambda *a, **k: SimpleNamespace(status_code=200, json=lambda: {"hashes": {"index": "h"}}))
+    board = SimpleNamespace(parts={"index": {}}, hashes={"index": "h"}, changed=threading.Condition(),
+                            home=SimpleNamespace(root=tmp_path))
+    pusher = Pusher(board)
+    pusher.step(SimpleNamespace(relay_state=None))
+    pusher.worker.join(5)
+    assert seen == [tmp_path / "loom"] and pusher.sent == {"index": "h"} and pusher.failing is None
+
+    bare = Pusher(SimpleNamespace(parts={"index": {}}, hashes={"index": "h"}, changed=threading.Condition(),
+                                  home=SimpleNamespace(root=tmp_path / "elsewhere")))
+    bare.step(SimpleNamespace(relay_state=None))  # no gate anywhere: not connected, nothing to push
+    assert bare.worker is None

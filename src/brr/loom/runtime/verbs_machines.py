@@ -1,5 +1,6 @@
 """``python -m brr.loom.runtime machines prefer <install>``: ask for inbox on one machine.
 ``machines pin <thread> <install>`` / ``machines unpin <thread>``: run a thread on one machine.
+``machines join <self-url>``: make an empty home a second machine of the resident (``installs.join``).
 
 Each fact lands in this install's ledger and reaches the others on the ledger
 shuttle. The holder releases inbox to the preferred install
@@ -10,7 +11,9 @@ shuttle. The holder releases inbox to the preferred install
 from __future__ import annotations
 
 import argparse
+import os
 import sys
+from pathlib import Path
 
 from brr.daemon2.facts import Fact
 
@@ -30,7 +33,20 @@ def _machines(argv: list[str]) -> int:
     pin.add_argument("to", metavar="INSTALL")
     unpin = sub.add_parser("unpin", help="let this thread run wherever inbox is held")
     unpin.add_argument("thread")
+    join = sub.add_parser("join", help="clone the self at this URL into an empty home, as a new install")
+    join.add_argument("url", metavar="SELF_URL")
     args = parser.parse_args(argv)
+    if args.verb == "join":
+        from .installs import JoinError, join as join_home
+        from .selfrepo import SelfError
+        # Join creates a home, as setup does, and where setup would look for it.
+        target = args.home or os.environ.get("BRNRD_HOME") or Path.home() / "brnrd"
+        try:
+            sys.stdout.write(join_home(resolve_home(target)[0], args.url) + "\n")
+        except (JoinError, SelfError) as exc:
+            sys.stderr.write(f"not joined: {exc}\n")
+            return 1
+        return 0
     root, _ = resolve_home(args.home)
     home = Home(root, install=args.install)
     to = None

@@ -117,7 +117,8 @@ def _post_comment(token: str, event: dict, body: str) -> object:
         post_path = pull_comment_replies(repo, pr_number, review_cid)
     else:
         post_path = issue_comments(repo, number)
-    return client._api_post(token, post_path, body={"body": threaded_body})
+    from brr.loom.runtime.comments import mark
+    return client._api_post(token, post_path, body={"body": mark(threaded_body, "gate")})
 
 
 def _event_field(event: dict, *names: str) -> str:
