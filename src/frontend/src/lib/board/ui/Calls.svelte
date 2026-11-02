@@ -5,6 +5,7 @@
 	import { answered, stack } from '../calls.ts';
 	import { hm } from '../text.ts';
 	import { board } from './board.svelte.ts';
+	import Ref from './Ref.svelte';
 	let { calls }: { calls: Call[] } = $props();
 	const b = board();
 	const opened = $derived(
@@ -66,11 +67,7 @@
 					<div class="more">
 						{c.wish} · {ask ? 'asked' : 'delivered'}
 						{hm(c.at)}{#if ask}
-							· waits on {c.waits || ''}{:else}<br />{#if /^https?:/.test(c.ref || '')}<a
-									href={c.ref}
-									target="_blank"
-									rel="noopener">{c.ref}</a
-								>{:else}{c.ref || ''}{/if}
+							· waits on {c.waits || ''}{:else}<br /><Ref ref={c.ref} />
 							{c.result || ''}{/if}
 					</div>
 				{/if}
