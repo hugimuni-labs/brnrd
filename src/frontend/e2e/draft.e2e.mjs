@@ -31,7 +31,8 @@ test('a newer page never reloads by itself: not while he writes, not on blur, no
 	await B.page.keyboard.type(draft);
 	await B.page.evaluate((w) => (window.__board.armed = w), WISH);
 	await newer();
-	await B.page.locator('header').click();
+	// blur on plain text: a bare header click lands on its centre, where #update sits once the header is short (#2585)
+	await B.page.locator('#at').click();
 	await B.page.evaluate(() => {
 		Object.defineProperty(document, 'hidden', { value: true, configurable: true });
 		document.dispatchEvent(new Event('visibilitychange'));
