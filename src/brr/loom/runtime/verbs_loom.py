@@ -179,8 +179,8 @@ def _send(argv: list[str]) -> int:
 
 
 def _reincarnate(argv: list[str]) -> int:
-    """``reincarnate``, and its old names ``reincarnate`` and ``reincarnate``: hand the seat on. The
-    stakes and the README's facts come first, on stderr, so the choice is an informed one."""
+    """``reincarnate``: hand the seat on. The stakes and the README's facts come
+    first, on stderr, so the choice is an informed one."""
     parser = argparse.ArgumentParser(prog="python -m brr.loom.runtime reincarnate")
     parser.add_argument("--room")
     parser.add_argument("--why", required=True)

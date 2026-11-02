@@ -252,19 +252,6 @@ def test_a_resting_stop_past_the_mark_asks_once_and_a_hold_quiets_it(room, tmp_p
     assert "past the 150k mark" in json.loads(_turn(room, bigger))["reason"]
 
 
-def test_reincarnate_keeps_shed_and_molt_as_old_names(monkeypatch, tmp_path):
-    from brr.loom.runtime import __main__ as cli, verbs_loom
-    assert cli.VERBS["reincarnate"] == cli.VERBS["reincarnate"] == cli.VERBS["reincarnate"] == ("verbs_loom", "_reincarnate")
-    calls = []
-    monkeypatch.setattr(verbs_loom, "_room", lambda room: tmp_path)
-    monkeypatch.setattr(verbs_loom, "_stakes", lambda room: "")
-    monkeypatch.setattr(verbs_loom, "write_reincarnate", lambda room, why, fresh: calls.append(why) or "s/x")
-    for name in ("reincarnate", "reincarnate", "reincarnate"):
-        assert cli.main([name, "--why", f"via {name}"]) == 0
-    assert calls == ["via reincarnate", "via reincarnate", "via reincarnate"]
-    assert "old name of reincarnate" in cli.usage()
-
-
 def test_a_park_before_the_first_stop_reads_the_scroll_itself(room, tmp_path, capsys):
     # jack-state's context is 0 until a gen's first stop; the park reads the transcript.
     from types import SimpleNamespace
@@ -275,3 +262,24 @@ def test_a_park_before_the_first_stop_reads_the_scroll_itself(room, tmp_path, ca
     said = capsys.readouterr().err
     assert "resting until letter:a/b. Context 170k." in said and reincarnate.DIE in said
     assert said.startswith("since this gen booted") and "scroll: tool output 60%" in said
+
+
+def test_a_ledger_written_before_the_rename_reads_in_todays_words(tmp_path):
+    # 10052: no old names in the code, but the ledgers keep what they were written with.
+    from brr.loom.runtime.ledger import read_file
+    path = tmp_path / "old.jsonl"
+    rows = [
+        {"kind": "molt", "by": f"strand:{STRAND}", "id": f"{STRAND}/a", "data": {"strand": STRAND, "gen": 1, "why": "w"}},
+        {"kind": "letter", "by": f"strand:{STRAND}", "id": f"{STRAND}/b",
+         "data": {"to": "thread:work", "body": "Fresh molt: start from main.", "molt": f"{STRAND}/a"}},
+        {"kind": "attempt.ended", "by": "loom:ab12", "id": "e", "data": {"cause": "molted"}},
+        {"kind": "note", "by": f"strand:{STRAND}", "id": f"{STRAND}/c", "data": {"why": "molt"}},
+    ]
+    from brr.daemon2.facts import VERSION
+    path.write_text("".join(json.dumps({**row, "v": VERSION, "at": "2026-11-01T00:00:00+00:00"}) + "\n"
+                            for row in rows))
+    molt, letter, ended, note = read_file(path)
+    assert molt.kind == "reincarnate" and molt.data["why"] == "w"
+    assert letter.data == {"to": "thread:work", "body": "Fresh reincarnation: start from main.",
+                           "reincarnate": f"{STRAND}/a"}
+    assert ended.data["cause"] == "reincarnated" and note.data == {"why": "molt"}

@@ -910,7 +910,7 @@ def _carried(home, facts, stamped, re, target, sender) -> list:
 
 
 def write_reincarnate(room: Path, why: str, *, fresh: bool = False) -> str:
-    """``reincarnate`` (``reincarnate`` and ``reincarnate`` are its old names): hand the seat to a successor."""
+    """``reincarnate``: hand the seat to a successor."""
     if not why:
         raise PortError("reincarnate: --why is empty")
     from .ledger import read_facts

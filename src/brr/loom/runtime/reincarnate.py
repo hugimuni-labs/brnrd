@@ -1,5 +1,4 @@
-"""Reincarnating (once ``reincarnate``, before that ``reincarnate``) is the body's call; the
-loom tells it what it would lose.
+"""Reincarnating is the body's call; the loom tells it what it would lose.
 
 The design is the self's threads/boot-review/design.md (v2, on the person's
 5557 and 5565) and threads/reincarnate (10048). Nothing here says one is due. The value of what sits in a
@@ -20,6 +19,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from .home import home_of_room
+from .ledger import renamed
 
 #: Facts that settle a turn rather than act in it.
 SETTLING = {"shown", "note", "wish.read", "left.asked", "reincarnate", "hold"}
@@ -88,7 +88,7 @@ def _mine(room: Path, since: float) -> list[dict]:
             lines = handle.read().decode(errors="replace").splitlines()
         for line in reversed(lines):
             try:
-                fact = json.loads(line)
+                fact = renamed(json.loads(line))
                 at = datetime.fromisoformat(fact["at"]).timestamp()
             except (ValueError, KeyError, TypeError):
                 continue
