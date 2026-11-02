@@ -26,6 +26,8 @@ QUIET_THREAD = 3 * 86400.0
 # ``idle.md``'s mtime is the stamp: acts are derived at most this often per room, as the board paces its parts.
 EVERY = 300.0
 HEAD = "idle? fuel ahead of pace"
+# Words that put a wish's next step in a person's hands; their names are added from the ledger.
+WAITS_ON = r"his|her|hers|him|he|she|the person"
 
 
 def ahead(value, now: float | None = None) -> bool:
@@ -62,6 +64,31 @@ def _epoch(at: str) -> float:
     return datetime.fromisoformat(str(at).replace("Z", "+00:00")).timestamp()
 
 
+def _people(facts) -> frozenset[str]:
+    """Each person's name a letter came from, for reading whom a wish's next step waits on."""
+    from .ledger import kind_facts
+    from .project import cached_projection
+    return cached_projection(facts, "idle.people", (), lambda rows: frozenset(
+        re.sub(r"^(?:person:|p-)", "", sender) for f in kind_facts(rows, "letter")
+        if (sender := str(f.data.get("from") or "")).startswith(("person:", "p-"))) - {""})
+
+
+def waits_on_person(wish, people=()) -> bool:
+    """The newer of the latest park and the latest left's first step puts the next step in a person's hands.
+
+    A read that is a finding, not a park, says nothing about who moves next.
+    """
+    said = []
+    if wish.reads and wish.reads[-1]["reading"].startswith("waiting:"):
+        said.append((wish.reads[-1]["at"], wish.reads[-1]["reading"]))
+    if wish.left and wish.left.get("steps"):
+        said.append((wish.left["at"], str(wish.left["steps"][0])))
+    if not said:
+        return False
+    words = "|".join([WAITS_ON, *(re.escape(name) for name in sorted(people))])
+    return re.search(rf"\b(?:{words})\b", max(said)[1], re.IGNORECASE) is not None
+
+
 def candidates(home, facts, thread: str, children=(), now: float | None = None) -> list[str]:
     """Up to ``TOP`` acts this thread could move, most owed first, one line each.
 
@@ -80,8 +107,9 @@ def candidates(home, facts, thread: str, children=(), now: float | None = None) 
     held = {wish.id for wish, _ in parked}
     out: list[str] = []
     q = queues(found, waits_on(found, main_snapshot(home)))
+    people = _people(facts)
     top = next((w for w in [*q.mine, *q.idle] if w.thread == thread and w.id not in q.blocked
-                and w.id not in held), None)
+                and w.id not in held and not waits_on_person(w, people)), None)
     if top is not None:
         out.append(f'{top.id} is this thread\'s top in their order ({top.state}): "{_short(top.line, 60)}"'
                    f' — `wish {top.id} --pick "<why>"` and build its next step')
@@ -99,12 +127,15 @@ def candidates(home, facts, thread: str, children=(), now: float | None = None) 
         elif age >= STALE_PR:
             out.append(f"#{r.number} {card.get('ci') or 'pending'}, untouched {_age(age)}: "
                        "push what it lacks, ask for its review, or close it")
-    for wish, read in parked[:1]:
+    # A typed wait (pr:, ci:, wish:, ...) wakes its thread by itself: only a prose park needs a look.
+    for wish, read in [row for row in parked if not row[1]["wait"].get("on")][:1]:
         reading = read["reading"].removeprefix("waiting:").strip()
         out.append(f'{wish.id} parked {_age(now - _epoch(read["at"]))} on "{_short(reading, 50)}": '
                    "check whether it turned; re-park, or move it")
     for wish in sorted(found.values(), key=lambda w: (w.born, w.id)):
-        if wish.thread == thread and wish.open and wish.state == "heard" and not (top and wish.id == top.id):
+        # An ask is the person's to read, not this body's.
+        if (wish.thread == thread and wish.open and wish.state == "heard" and wish.sender != "resident"
+                and not (top and wish.id == top.id)):
             out.append(f'{wish.id} is heard, never read: "{_short(wish.line, 60)}" — '
                        f'`wish {wish.id} --read "<what it asks>"`')
     for row in children:
