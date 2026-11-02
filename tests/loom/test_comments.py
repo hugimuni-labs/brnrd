@@ -23,7 +23,7 @@ def user(login, kind="User"):
 #: discussion_r4435435352 on #2567, as the forge answered it on 2026-11-01.
 LINE = {"id": 4435435352, "user": user("Gurio"), "author_association": "MEMBER",
         "created_at": "2026-11-01T11:40:48Z", "updated_at": "2026-11-01T11:40:48Z",
-        "path": "tests/loom/test_shed.py", "line": 113,
+        "path": "tests/loom/test_reincarnate.py", "line": 113,
         "pull_request_url": f"{API}/pulls/2567",
         "html_url": f"https://github.com/{REPO}/pull/2567#discussion_r4435435352",
         "body": "@brnrd-bot is there a more direct pointer at the fact your context shape has thoughts"}
@@ -92,7 +92,7 @@ def test_a_line_comment_on_a_merged_pr_reaches_its_thread_once_with_path_line_an
     told = [f for f in read_facts(home) if f.kind == "letter" and f.id not in before]
     assert len(told) == 2 and {f.data["to"] for f in told} == {"thread:other"}
     line = next(f for f in told if LINE["html_url"] in f.data["body"])
-    assert "Gurio left a review comment on hugimuni-labs/brnrd#2567 at tests/loom/test_shed.py:113" in line.data["body"]
+    assert "Gurio left a review comment on hugimuni-labs/brnrd#2567 at tests/loom/test_reincarnate.py:113" in line.data["body"]
     assert "> @brnrd-bot is there a more direct pointer" in line.data["body"]
     assert f"gh api repos/{REPO}/pulls/2567/comments/4435435352/replies" in line.data["body"]
     assert line.data["label"]["taint"] is False
@@ -192,7 +192,7 @@ for letter in ctx.owed():
     try:
         wait_until((root / "woken").exists, 30, loom.dump)
         woken = json.loads((root / "woken").read_text())
-        assert "tests/loom/test_shed.py:113" in woken["body"] and "discussion_r4435435352" in woken["body"]
+        assert "tests/loom/test_reincarnate.py:113" in woken["body"] and "discussion_r4435435352" in woken["body"]
     finally:
         loom.halt()
         kill_bodies(loom)

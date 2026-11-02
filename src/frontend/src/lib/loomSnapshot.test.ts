@@ -154,7 +154,7 @@ test('liveStrand: working or holding is live; idle, parked and absent threads ar
 		{
 			id: 'a',
 			strands: [
-				{ id: 's1', state: 'molted' },
+				{ id: 's1', state: 'reincarnated' },
 				{ id: 's2', body: 'claude/opus', state: 'holding' }
 			]
 		},

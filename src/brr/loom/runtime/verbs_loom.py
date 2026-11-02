@@ -12,7 +12,7 @@ from .home import Home, home_of_room, mint, resolve_home, strand_of_room
 from .jack import run as run_jack
 from .ledger import read_facts
 from .loom import pending_bodies, run as run_loom
-from .port import PortError, write_molt, write_send
+from .port import PortError, write_reincarnate, write_send
 from .spend import parse_tokens
 from .project import fold, is_notice
 from .selfrepo import SelfError
@@ -178,8 +178,8 @@ def _send(argv: list[str]) -> int:
     return 0
 
 
-def _molt(argv: list[str]) -> int:
-    """``reincarnate``, and its old names ``shed`` and ``molt``: hand the seat on. The
+def _reincarnate(argv: list[str]) -> int:
+    """``reincarnate``, and its old names ``reincarnate`` and ``reincarnate``: hand the seat on. The
     stakes and the README's facts come first, on stderr, so the choice is an informed one."""
     parser = argparse.ArgumentParser(prog="python -m brr.loom.runtime reincarnate")
     parser.add_argument("--room")
@@ -189,8 +189,8 @@ def _molt(argv: list[str]) -> int:
     room = _room(args.room)
     try:
         if not args.fresh:
-            sys.stderr.write(_shed_stakes(room))
-        fact_id = write_molt(room, args.why, fresh=args.fresh)
+            sys.stderr.write(_stakes(room))
+        fact_id = write_reincarnate(room, args.why, fresh=args.fresh)
     except (PortError, SelfError, ValueError, OSError) as exc:
         sys.stderr.write(f"{exc}\n")
         return 1
@@ -198,12 +198,12 @@ def _molt(argv: list[str]) -> int:
     return 0
 
 
-def _shed_stakes(room) -> str:
+def _stakes(room) -> str:
     """What the successor boots into, said once more before the seat goes."""
     from .jack import _state
     from .ledger import read_facts
     from .project import sender_threads
-    from .shed import STAKES, readme_facts
+    from .reincarnate import STAKES, readme_facts
     try:
         facts = read_facts(home_of_room(room))
         thread = sender_threads(facts).get(strand_of_room(room)) or ""
@@ -231,7 +231,7 @@ def _hold(argv: list[str]) -> int:
     A bare why is refused; the hold is a fact, so the whys can be read back later."""
     from .jack import _HEADER_LINE, _boundary_text, _set_state, _state
     from .ledger import append
-    from .shed import contexts
+    from .reincarnate import contexts
     from brr.daemon2.facts import Fact
     parser = argparse.ArgumentParser(prog="python -m brr.loom.runtime hold")
     parser.add_argument("--room")

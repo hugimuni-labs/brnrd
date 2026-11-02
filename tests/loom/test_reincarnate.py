@@ -1,4 +1,4 @@
-"""Shedding is the body's call: the loom states facts about the README and never says a shed is due."""
+"""Shedding is the body's call: the loom states facts about the README and never says a reincarnation is due."""
 
 import json
 import time
@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 import pytest
 
 from brr.daemon2.facts import Fact
-from brr.loom.runtime import jack, shed
+from brr.loom.runtime import jack, reincarnate
 from brr.loom.runtime.jack import _state, execute
 from brr.loom.runtime.port import render_boundary
 
@@ -74,7 +74,7 @@ def test_a_quiet_heavy_stop_asks_once_and_never_says_a_reincarnation_is_due(room
     stdin = _transcript(tmp_path, 40_000, 700_000)
     execute("start", room, "")
     reason = json.loads(_turn(room, stdin))["reason"]
-    assert "would die" in reason and "due" not in reason and "shed?" not in reason
+    assert "would die" in reason and "due" not in reason and "reincarnate?" not in reason
     for _ in range(3):
         assert _turn(room, stdin) == ""
     assert "shed_due_at" not in _state(room)
@@ -85,43 +85,43 @@ def test_readme_facts_name_size_and_closed_citations_and_ask_nothing(room):
     merged = [Fact(kind=k, by=f"strand:{STRAND}", id=f"p{k}", data={"thread": "work", "repo": "brnrd", "number": 5,
                                                                       "url": "u", "head": "h", "merge_commit": "c"})
               for k in ("pr.opened", "pr.merged")]
-    said = shed.readme_facts(room, "work", merged)
+    said = reincarnate.readme_facts(room, "work", merged)
     assert said == f"README: {len(readme.read_bytes())} B · cites 1 closed: #5 merged"
-    assert shed.readme_facts(room, "gone", merged) == ""
+    assert reincarnate.readme_facts(room, "gone", merged) == ""
 
 
 def test_a_cited_closure_names_its_readme_place_until_the_readme_moves(room):
     readme = room / "self" / "threads" / "work" / "README.md"
-    readme.write_text("# Work\n\n## Boot and shed\n- PR #7 in review\n")
+    readme.write_text("# Work\n\n## Boot and reincarnate\n- PR #7 in review\n")
     old = time.time() - 60
     import os
     os.utime(readme, (old, old))
     began = datetime.fromtimestamp(old - 60, timezone.utc).isoformat()
     merged = Fact(kind="pr.merged", by="loom:ab12", id="m7", at=datetime.now(timezone.utc).isoformat(),
                   data={"number": 7, "repo": "brnrd", "thread": "work", "merge_commit": "c"})
-    assert shed.cited_line(room, "work", [merged], began) == 'cited: #7 merged · README "Boot and shed" (l.4)'
-    readme.write_text("# Work\n\n## Boot and shed\n- #7 merged; next is C\n")
-    assert shed.cited_line(room, "work", [merged], began) == ""
-    assert shed.cited_line(room, "work", [merged], datetime.now(timezone.utc).isoformat()) == ""
+    assert reincarnate.cited_line(room, "work", [merged], began) == 'cited: #7 merged · README "Boot and reincarnate" (l.4)'
+    readme.write_text("# Work\n\n## Boot and reincarnate\n- #7 merged; next is C\n")
+    assert reincarnate.cited_line(room, "work", [merged], began) == ""
+    assert reincarnate.cited_line(room, "work", [merged], datetime.now(timezone.utc).isoformat()) == ""
 
 
 def test_a_long_park_states_the_stakes_and_a_short_one_says_nothing():
     now = datetime(2026, 11, 1, 1, 0, tzinfo=timezone.utc)
-    assert shed.long_wait("letter:s-ab12-aaaaaa/x7c53", now)
-    assert shed.long_wait("at:2026-11-01T03:00:00+00:00", now)
-    assert not shed.long_wait("at:2026-11-01T01:20:00+00:00", now)
-    assert not shed.long_wait("ci:o/r@abc", now) and not shed.long_wait("file:/x", now)
-    line = shed.rest_line("letter:a/b", 134_000)
+    assert reincarnate.long_wait("letter:s-ab12-aaaaaa/x7c53", now)
+    assert reincarnate.long_wait("at:2026-11-01T03:00:00+00:00", now)
+    assert not reincarnate.long_wait("at:2026-11-01T01:20:00+00:00", now)
+    assert not reincarnate.long_wait("ci:o/r@abc", now) and not reincarnate.long_wait("file:/x", now)
+    line = reincarnate.rest_line("letter:a/b", 134_000)
     assert line.startswith("resting until letter:a/b. Context 134k. What isn't in the README is lost on any end")
     assert line.endswith("What does the next hour need that isn't written yet?") and "due" not in line
 
 def test_a_broken_tally_never_ends_the_stop(room, tmp_path, monkeypatch):
     def broken(*args):
         raise OSError("no git")
-    monkeypatch.setattr(shed, "heads", broken)
+    monkeypatch.setattr(reincarnate, "heads", broken)
     execute("start", room, "")
     assert _turn(room, _transcript(tmp_path, 40_000)) == ""
-    assert "no git" in (room / "port" / "shed-errors.log").read_text()
+    assert "no git" in (room / "port" / "reincarnate-errors.log").read_text()
     assert not (room / "port" / "jack-errors.log").exists()
 
 
@@ -180,28 +180,28 @@ def _scroll(tmp_path, context, tool="x" * 600, said="y" * 300, own="z" * 100, na
 
 def test_the_scroll_census_counts_bytes_by_class_and_reads_on_from_its_offset(tmp_path):
     path = _scroll(tmp_path, 10)
-    kept = shed.scroll(str(path))
+    kept = reincarnate.scroll(str(path))
     assert (kept["tool"], kept["said"], kept["own"]) == (600, 300, 100)
     assert kept["offset"] == path.stat().st_size
     # Only the new tail is read; a line still being written waits.
     _scroll(tmp_path, 20, tool="x" * 400)
     with path.open("a") as out:
         out.write('{"type": "user", "message": {"content": "half')
-    again = shed.scroll(str(path), kept)
+    again = reincarnate.scroll(str(path), kept)
     assert (again["tool"], again["said"], again["own"]) == (1000, 600, 200)
     assert again["offset"] < path.stat().st_size
     # Another scroll starts over.
-    assert shed.scroll(str(_scroll(tmp_path, 5, name="other.jsonl")), again)["tool"] == 600
+    assert reincarnate.scroll(str(_scroll(tmp_path, 5, name="other.jsonl")), again)["tool"] == 600
 
 
 def test_the_park_line_asks_what_would_die_only_past_the_mark():
-    below = shed.rest_line("letter:a/b", shed.MARK - 1_000, "census here")
+    below = reincarnate.rest_line("letter:a/b", reincarnate.MARK - 1_000, "census here")
     assert below.endswith("What does the next hour need that isn't written yet?") and "census" not in below
-    above = shed.rest_line("letter:a/b", shed.MARK, "census here")
+    above = reincarnate.rest_line("letter:a/b", reincarnate.MARK, "census here")
     assert above.startswith("census here\nresting until letter:a/b. Context 150k.")
-    assert shed.DIE in above and "reincarnate --why" in above and "hold --why" in above
+    assert reincarnate.DIE in above and "reincarnate --why" in above and "hold --why" in above
     # A number and a question, never a verdict.
-    assert "shed?" not in above and "due" not in above
+    assert "reincarnate?" not in above and "due" not in above
 
 
 def test_the_census_splits_what_landed_from_what_only_this_context_holds(room, tmp_path):
@@ -212,7 +212,7 @@ def test_the_census_splits_what_landed_from_what_only_this_context_holds(room, t
     _fact(room, "wish.left", wish="w-aaaaaaaaaaaa", steps=["x"])
     _fact(room, "wish.left", wish="w-aaaaaaaaaaaa", same=True)
     _fact(room, "shown", strand=STRAND, gen=1, ids=["a/1", "a/2", "a/3"])
-    said, kept = shed.census(room, "work", {"booted_at": booted, "transcript": str(path), "stops": 4}, [])
+    said, kept = reincarnate.census(room, "work", {"booted_at": booted, "transcript": str(path), "stops": 4}, [])
     first, after, counts = said.splitlines()
     assert first.startswith("since this gen booted (2m ago): nothing landed in the README")
     # Counted, not the stop's distinct kinds; a left that did not move is no act.
@@ -248,20 +248,20 @@ def test_a_resting_stop_past_the_mark_asks_once_and_a_hold_quiets_it(room, tmp_p
     assert [f.data["why"] for f in holds] == ["Sasha's install answer is mid-way and the 3 failing guards are unwritten"]
     assert holds[0].data["context"] == 160_000 and holds[0].data["gen"] == 1
     # Past the hold by the rearm, the stop asks again.
-    bigger = json.dumps({"transcript_path": str(_scroll(tmp_path, 160_000 + shed.REARM, name="c.jsonl"))})
+    bigger = json.dumps({"transcript_path": str(_scroll(tmp_path, 160_000 + reincarnate.REARM, name="c.jsonl"))})
     assert "past the 150k mark" in json.loads(_turn(room, bigger))["reason"]
 
 
 def test_reincarnate_keeps_shed_and_molt_as_old_names(monkeypatch, tmp_path):
     from brr.loom.runtime import __main__ as cli, verbs_loom
-    assert cli.VERBS["reincarnate"] == cli.VERBS["shed"] == cli.VERBS["molt"] == ("verbs_loom", "_molt")
+    assert cli.VERBS["reincarnate"] == cli.VERBS["reincarnate"] == cli.VERBS["reincarnate"] == ("verbs_loom", "_reincarnate")
     calls = []
     monkeypatch.setattr(verbs_loom, "_room", lambda room: tmp_path)
-    monkeypatch.setattr(verbs_loom, "_shed_stakes", lambda room: "")
-    monkeypatch.setattr(verbs_loom, "write_molt", lambda room, why, fresh: calls.append(why) or "s/x")
-    for name in ("reincarnate", "shed", "molt"):
+    monkeypatch.setattr(verbs_loom, "_stakes", lambda room: "")
+    monkeypatch.setattr(verbs_loom, "write_reincarnate", lambda room, why, fresh: calls.append(why) or "s/x")
+    for name in ("reincarnate", "reincarnate", "reincarnate"):
         assert cli.main([name, "--why", f"via {name}"]) == 0
-    assert calls == ["via reincarnate", "via shed", "via molt"]
+    assert calls == ["via reincarnate", "via reincarnate", "via reincarnate"]
     assert "old name of reincarnate" in cli.usage()
 
 
@@ -273,5 +273,5 @@ def test_a_park_before_the_first_stop_reads_the_scroll_itself(room, tmp_path, ca
     assert not _state(room).get("context")
     verbs_wishes._rest_line(SimpleNamespace(room=str(room)), {"wait": {"on": "letter:a/b"}})
     said = capsys.readouterr().err
-    assert "resting until letter:a/b. Context 170k." in said and shed.DIE in said
+    assert "resting until letter:a/b. Context 170k." in said and reincarnate.DIE in said
     assert said.startswith("since this gen booted") and "scroll: tool output 60%" in said

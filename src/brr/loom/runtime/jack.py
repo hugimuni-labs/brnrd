@@ -294,7 +294,7 @@ def _poll(room: Path, stdin_text: str = '') -> str:
         _set_state(room, held_at=time.time())
     while True:
         order = _order(room)
-        if _state(room).get("molted") or order == "end":
+        if _state(room).get("reincarnated") or order == "end":
             return ""
         if order == "release" and not released:
             # One release for this hold; the next dry stop sleeps again.
@@ -408,14 +408,14 @@ def _note_tool(room: Path, stdin_text: str) -> None:
     )
 
 
-def _shed(room: Path, fn, *args, default=None):
-    """A shed step that fails says nothing: logged apart, since jack-errors.log
+def _soft(room: Path, fn, *args, default=None):
+    """A reincarnation step that fails says nothing: logged apart, since jack-errors.log
     taints the strand, and a broken tally must not end a held body."""
     try:
         return fn(*args)
     except Exception:
         try:
-            with (room / "port" / "shed-errors.log").open("a") as handle:
+            with (room / "port" / "reincarnate-errors.log").open("a") as handle:
                 handle.write(traceback.format_exc())
         except OSError:
             pass
@@ -424,20 +424,20 @@ def _shed(room: Path, fn, *args, default=None):
 
 def _turn(room: Path, stdin_text: str) -> None:
     """At a stop: what the turn that ends here left behind for the README, and the context's size."""
-    from . import shed
+    from . import reincarnate
     state = _state(room)
     if not state.get("turn_open"):
         return
-    heads = shed.heads(room)
+    heads = reincarnate.heads(room)
     moved = [name for name, head in heads.items() if head != (state.get("heads") or {}).get(name)]
-    did = [*shed.acts(room, float(state.get("turn_at") or 0)), *(f"{name} HEAD" for name in moved)]
-    _, now = shed.contexts(stdin_text, 0)
+    did = [*reincarnate.acts(room, float(state.get("turn_at") or 0)), *(f"{name} HEAD" for name in moved)]
+    _, now = reincarnate.contexts(stdin_text, 0)
     # Acts since the README last changed, letters aside (routing is not state).
-    readme = shed.readme_hash(room, os.environ.get("BRNRD_THREAD") or "")
+    readme = reincarnate.readme_hash(room, os.environ.get("BRNRD_THREAD") or "")
     if readme != state.get("readme_seen"):
         # Rewritten this turn: only the acts written after it are left behind.
         thread = os.environ.get("BRNRD_THREAD") or ""
-        did, kept = shed.acts(room, shed.readme_mtime(room, thread)), []
+        did, kept = reincarnate.acts(room, reincarnate.readme_mtime(room, thread)), []
     else:
         kept = state.get("readme_acts") or []
     unread = [*kept, *(x for x in did if x != "letter" and x not in kept)]
@@ -659,13 +659,13 @@ def execute(event: str, room: Path, stdin_text: str) -> str:
         _set_state(room, stop_blocks=0, boundary_at=time.time(), held_at=None, turn_open=True)
         (room / "port" / DISPLACED).unlink(missing_ok=True)
     elif event == "start":
-        from .shed import base, heads, readme_hash
+        from .reincarnate import base, heads, readme_hash
         _set_state(room, boundary_at=time.time(), turn_open=True, turn_at=time.time(),
                    booted_at=time.time(), stops=0, scroll={}, mark_at=None,
                    transcript=_transcript_path(stdin_text),
-                   heads=_shed(room, heads, room, default={}),
-                   readme_seen=_shed(room, readme_hash, room, os.environ.get("BRNRD_THREAD") or ""),
-                   readme_base=_shed(room, base, room, default=""))
+                   heads=_soft(room, heads, room, default={}),
+                   readme_seen=_soft(room, readme_hash, room, os.environ.get("BRNRD_THREAD") or ""),
+                   readme_base=_soft(room, base, room, default=""))
     text = _boundary_text(room)
     parsed = parse_boundary(text)
     opened = [[line.split()[1], line.split()[2], _ageless(line.rpartition(" · owed ")[2])]
@@ -743,12 +743,12 @@ def execute(event: str, room: Path, stdin_text: str) -> str:
         _set_state(room, opened=opened, plan=plan, face=face, moved=moved, band=band, cited=cited)
         return _json({"hookSpecificOutput": {
             "hookEventName": hook, "additionalContext": text}})
-    if _state(room).get("molted") or _order(room) == "end" or parsed.settled is not None:
+    if _state(room).get("reincarnated") or _order(room) == "end" or parsed.settled is not None:
         return ""
     state = _state(room)
     path = _transcript_path(stdin_text) or state.get("transcript") or ""
     _set_state(room, stops=int(state.get("stops") or 0) + 1, transcript=path)
-    _shed(room, _turn, room, stdin_text)
+    _soft(room, _turn, room, stdin_text)
     out = _stop_block(room, text, plan) or _poll(room, stdin_text)
     if out:
         _opened(room)
@@ -852,7 +852,7 @@ def _readme_miss(room: Path, state: dict) -> str:
     if not did or not thread:
         return ""
     _set_state(room, readme_acts=[])
-    facts = _shed(room, _readme_facts, room, thread, state, default="")
+    facts = _soft(room, _readme_facts, room, thread, state, default="")
     return README.format(did=", ".join(did), thread=thread, facts=f"\n  {facts}" if facts else "")
 
 
@@ -866,21 +866,21 @@ Asked once; it comes back when the context grows {rearm}k past this."""
 
 def _mark_miss(room: Path, state: dict) -> str:
     """At a resting stop past the mark, once: reincarnate or hold, each with its why."""
-    from . import shed
+    from . import reincarnate
     context = int(state.get("context") or 0)
     mark_at = state.get("mark_at")
-    if context < shed.MARK or (mark_at is not None and context < int(mark_at) + shed.REARM):
+    if context < reincarnate.MARK or (mark_at is not None and context < int(mark_at) + reincarnate.REARM):
         return ""
     _set_state(room, mark_at=context)
-    said = _shed(room, _census, room, default="") or ""
-    return MARK.format(k=context // 1000, mark=shed.MARK // 1000, rearm=shed.REARM // 1000,
+    said = _soft(room, _census, room, default="") or ""
+    return MARK.format(k=context // 1000, mark=reincarnate.MARK // 1000, rearm=reincarnate.REARM // 1000,
                        census=said).replace("\n\n", "\n")
 
 
 def _census(room: Path) -> str:
     """The census since this gen booted; its scroll offset is kept so the next reads on."""
     from .ledger import read_facts
-    from .shed import census
+    from .reincarnate import census
     said, kept = census(room, os.environ.get("BRNRD_THREAD") or "", _state(room), read_facts(home_of_room(room)))
     _set_state(room, scroll=kept)
     return said
@@ -889,7 +889,7 @@ def _census(room: Path) -> str:
 def _readme_facts(room: Path, thread: str, state: dict) -> str:
     """What the README gained and lost since this gen booted; information, never a step."""
     from .ledger import read_facts
-    from .shed import readme_facts
+    from .reincarnate import readme_facts
     return readme_facts(room, thread, read_facts(home_of_room(room)), state.get("readme_base") or "")
 
 

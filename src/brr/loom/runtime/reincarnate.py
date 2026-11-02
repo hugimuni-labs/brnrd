@@ -1,11 +1,11 @@
-"""Reincarnating (once ``shed``, before that ``molt``) is the body's call; the
+"""Reincarnating (once ``reincarnate``, before that ``reincarnate``) is the body's call; the
 loom tells it what it would lose.
 
 The design is the self's threads/boot-review/design.md (v2, on the person's
 5557 and 5565) and threads/reincarnate (10048). Nothing here says one is due. The value of what sits in a
 context can't be measured from outside it, so the jack only states facts: what
 the README gained and lost since this gen booted, the ids it cites that have
-since closed, and, where a judgement is due (the shed verb, a long park), the
+since closed, and, where a judgement is due (the reincarnation verb, a long park), the
 stakes and the context's size as plain cost.
 """
 
@@ -22,7 +22,7 @@ from pathlib import Path
 from .home import home_of_room
 
 #: Facts that settle a turn rather than act in it.
-SETTLING = {"shown", "note", "wish.read", "left.asked", "molt", "hold"}
+SETTLING = {"shown", "note", "wish.read", "left.asked", "reincarnate", "hold"}
 
 STAKES = ("What isn't in the README is lost on any end, a reincarnation or a crash, and the body that "
           "picks up after a careless handover pays for it.")
@@ -225,7 +225,7 @@ def cited_line(room: Path, thread: str, facts, began: str) -> str:
 
 
 def long_wait(condition: str, now: datetime | None = None) -> bool:
-    """A wait on a person or on a time hours out: where a shed is a judgement worth making."""
+    """A wait on a person or on a time hours out: where a reincarnation is a judgement worth making."""
     if condition.startswith(("letter:", "ask:")):
         return True
     if condition.startswith("at:"):

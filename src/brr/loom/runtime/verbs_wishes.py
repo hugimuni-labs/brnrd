@@ -247,7 +247,7 @@ def _tell_delivered(home, args, wish, result) -> None:
 def _rest_line(args, data) -> None:
     """A long park is where reincarnating is a judgement due: say the stakes once, on stderr.
     Past the mark, a census of the scroll goes above it and the question is what would die."""
-    from .shed import MARK, census, contexts, long_wait, rest_line
+    from .reincarnate import MARK, census, contexts, long_wait, rest_line
     wait = data.get("wait") or {}
     condition = str(wait.get("on") or wait.get("condition") or "") if isinstance(wait, dict) else str(wait)
     if not long_wait(condition):

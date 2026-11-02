@@ -125,8 +125,8 @@ class MemoryBody:
                 if crash_at_exit:
                     self.check_prefix(o)
                     return
-            elif name in {"end", "end_failed", "end_settled", "end_molted", "end_moved"}:
-                cause = ("failed" if name == "end_failed" else "molted" if name == "end_molted"
+            elif name in {"end", "end_failed", "end_settled", "end_reincarnated", "end_moved"}:
+                cause = ("failed" if name == "end_failed" else "reincarnated" if name == "end_reincarnated"
                          else exit_cause(self.facts, o, owed=False))
                 if fact_for(self.facts, "attempt.ended", self.strand, self.gen) is None:
                     self.add("attempt.ended", cause=cause)
@@ -308,8 +308,8 @@ def test_exit_cause_uses_the_post_drain_ledger_in_contract_order():
     assert exit_cause([], replace(o, fenced=True), owed=True) == "fenced"
     assert exit_cause([], replace(o, away=True), owed=False) == "moved"
     facts = [Fact(kind="lease", by="loom:aaaa", data={"thread": "work", "strand": "s", "gen": 1}),
-             Fact(kind="molt", by="strand:s", data={"strand": "s", "gen": 1})]
-    assert exit_cause(facts, replace(o, closed=True), owed=True) == "molted"
+             Fact(kind="reincarnate", by="strand:s", data={"strand": "s", "gen": 1})]
+    assert exit_cause(facts, replace(o, closed=True), owed=True) == "reincarnated"
     facts.append(Fact(kind="body.stopped", by="loom:aaaa", data={"strand": "s", "gen": 1}))
     assert exit_cause(facts, replace(o, closed=True), owed=True) == "stopped"
 

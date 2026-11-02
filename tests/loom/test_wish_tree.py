@@ -1,4 +1,4 @@
-"""Each wish carries what is left: the stop asks for it, molt refuses without it, the wake shows the tree."""
+"""Each wish carries what is left: the stop asks for it, reincarnate refuses without it, the wake shows the tree."""
 import json
 from io import StringIO
 from types import SimpleNamespace
@@ -9,7 +9,7 @@ from brr.daemon2.facts import Fact
 from brr.loom.runtime import jack
 from brr.loom.runtime.ledger import append, inject_letter, read_facts
 from brr.loom.runtime.loom import _boundary, _ingest, tick_once
-from brr.loom.runtime.port import PortError, write_molt
+from brr.loom.runtime.port import PortError, write_reincarnate
 from brr.loom.runtime.selfrepo import run_wake
 from brr.loom.runtime.wishes import wishes
 from test_wishes import command, heard, ledger  # noqa: F401  (fixture)
@@ -164,12 +164,12 @@ def test_molt_refuses_while_a_left_is_owed(body):
     home, seat = body
     wish = heard(home, seat, "Hold the board still")
     with pytest.raises(PortError, match=f"wish {wish} --left"):
-        write_molt(seat, "context is heavy")
+        write_reincarnate(seat, "context is heavy")
     assert not list((seat / "port/out").glob("*.md"))
     command(home, seat, "wish", wish, "--left", "freeze hover")
     readme = next(seat.glob("*/threads/work/README.md"))
     readme.write_text(readme.read_text() + "\n## Now\n- freeze hover\n")
-    assert write_molt(seat, "context is heavy").startswith(STRAND + "/")
+    assert write_reincarnate(seat, "context is heavy").startswith(STRAND + "/")
 
 
 def test_a_pr_opened_on_a_one_wish_thread_is_its_result(body):

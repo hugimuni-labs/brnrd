@@ -285,7 +285,7 @@ from brr.loom.runtime.fakebody import Ctx
 from brr.loom.runtime.home import atomic_write
 ctx = Ctx(Path(sys.argv[1]))
 checkout = ctx.room / "widget"
-if "cut from parent" in ctx.wake() or "Fresh molt: start from main." in ctx.wake():
+if "cut from parent" in ctx.wake() or "Fresh reincarnation: start from main." in ctx.wake():
     sha = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=checkout, text=True).strip()
     atomic_write(Path({str(received)!r}), json.dumps({{
         "sha": sha,
@@ -311,7 +311,7 @@ else:
     subprocess.check_call(["git", "add", "threads/work/research.md"], cwd=self_clone)
     subprocess.check_call(["git", "-c", "commit.gpgsign=false", "commit", "-m", "research"], cwd=self_clone)
     (ctx.room / "port/out/taint-research.json").write_text('{{"tool":"WebFetch"}}')
-    ctx.molt("carry the checkout", fresh={fresh!r})
+    ctx.reincarnate("carry the checkout", fresh={fresh!r})
     assert ctx.jack("stop").raw == ""
 ''')
     loom = Loom(root)
@@ -327,7 +327,7 @@ else:
             assert second["sha"] != first["sha"]
             assert second["kept"] is None
             assert git(loom.home.room(second["strand"]) / "widget", "cat-file", "-e", first["sha"], check=False).returncode != 0
-            assert any(f.kind == "molt" and f.data.get("fresh") is True for f in loom.facts())
+            assert any(f.kind == "reincarnate" and f.data.get("fresh") is True for f in loom.facts())
         else:
             assert second["sha"] == first["sha"]
             assert second["kept"] == "kept\n"

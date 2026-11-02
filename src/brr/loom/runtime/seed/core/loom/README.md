@@ -102,7 +102,7 @@ record it with `wish <w-id> --result <kind>:<ref> --line "…"`, adding
 `--deliver` on the one you hand over. What is left on a wish is the wish's
 own: `wish <w-id> --left "<step>" --left "<step>"` restates the whole list,
 and the latest one wins (`--left same` when nothing moved). The loom asks for
-it at a stop and refuses a molt while a wish moved since its last left: a
+it at a stop and refuses a reincarnation while a wish moved since its last left: a
 steer, a result, a fact this body wrote on it, or, on a thread with one open
 wish, this body's start. The stop shows everything it holds on in one block,
 each line with its command (owed letters, lefts, an end not yet said, a
@@ -178,7 +178,7 @@ first lines. Cancel one before its time with `python -m brr.loom.runtime send --
 cancel it and send another. A due letter is ordinary mail, even if the loom
 was down at its time. A thread may write to itself only with `--at`; a due
 time cannot be used with a channel address, `--note`, or `--reopen`. For a
-repeat, the woken body sends the next letter. A molted body hands on immediately;
+repeat, the woken body sends the next letter. A reincarnated body hands on immediately;
 an idle body leaves the thread open for its next letter. A paced start waits
 for the recorded reset, without consuming letters. Its opener can run
 `threads --force <thread> --room <room>` to start anyway; the operator uses
@@ -202,7 +202,7 @@ Open a worker and declare its checkouts together with `send --to thread:<new> --
 
 A thread opened by another thread carries an allocation: `--budget <n>` on the opening letter (`500k`, `2m`), or the home's `thread_budget` (2M). The status line shows `spent <s>/<n>` in weighted tokens (input 1, output 5, cache read 0.1, cache write 1.25), read from the harness's own transcripts. Past it, every boundary says so: write to the opener what is done, what is left and how much more you ask. It warns; it never stops a body. The opener raises it with `send --to thread:<child> --budget <n> "…"`, which adds n; read what was spent against what came back before granting.
 
-`reincarnate --why "<one line>"` hands the seat to a successor (`shed` and `molt` are its old names and still work). Plain `reincarnate` carries the room and label forward; `reincarnate --fresh --why "<reason>"` starts a successor from main without inheriting the room or its label. The old room and unlanded work remain for review. The reason stays in the molt fact; the successor receives a fixed fresh-start message. After `reincarnate`, end the turn: the process ends itself.
+`reincarnate --why "<one line>"` hands the seat to a successor (`reincarnate` and `reincarnate` are its old names and still work). Plain `reincarnate` carries the room and label forward; `reincarnate --fresh --why "<reason>"` starts a successor from main without inheriting the room or its label. The old room and unlanded work remain for review. The reason stays in the reincarnation fact; the successor receives a fixed fresh-start message. After `reincarnate`, end the turn: the process ends itself.
 
 Reincarnating is the body's call; nothing says one is due, because the value of what a context holds can't be measured from outside it. The loom informs the call instead. At a resting stop after acts that left the README behind, the stop line carries the README's facts: its size, lines added and removed and landings since this gen booted, and the cited wishes and PRs that have since closed. At the first boundary after a closure the README cites, a `cited:` line names the event and the README place that cites it, once. `reincarnate` writes the stakes and those facts to stderr before it hands the seat on, and a park on a person or on a time an hour or more out says the context's size and whose call reincarnating is. `reincarnate` still refuses while a left is owed or a person letter it holds is unreplied.
 

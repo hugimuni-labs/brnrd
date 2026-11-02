@@ -88,7 +88,7 @@ elif "carry on" not in ctx.wake():
         "wordmark": [wordmark.returncode, wordmark.stderr], "named": [named.returncode, named.stderr],
         "took": took.stdout, "lapsed": proposed(lapsed), "merged": proposed(merged),
         "after": proposed(after), "again": again, "asked_header": asked_header, "faces": faces(facts), "header": _header(fold(facts), me, facts)}}))
-    ctx.molt("carry on")
+    ctx.reincarnate("carry on")
     assert ctx.jack("stop").raw == ""
 else:
     ctx.owed()

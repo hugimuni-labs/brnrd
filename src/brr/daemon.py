@@ -11378,7 +11378,7 @@ def _fire_due_schedules(
         # (status ``pending``) does not fire again. Pile-ups of identical
         # letters are what starved a one-shot `at:` letter behind a live
         # seat: claim order is oldest-first, so five queued goal pulses
-        # outranked the molt letter carrying real work. The cadence still
+        # outranked the reincarnation letter carrying real work. The cadence still
         # advances (``new_state`` was computed above), so the entry fires
         # on its next interval once the pending one is taken. A letter
         # being processed doesn't count: a firing during a long run is a

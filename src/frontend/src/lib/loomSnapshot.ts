@@ -7,7 +7,7 @@ import { quotaLevel } from './quota.ts';
 // it omits, so every optional field here renders as absent, never as 0.
 
 export type StrandState =
-	'working' | 'holding' | 'idle' | 'parked' | 'failed' | 'molted' | 'settled' | 'stopped';
+	'working' | 'holding' | 'idle' | 'parked' | 'failed' | 'reincarnated' | 'settled' | 'stopped';
 
 export type Turn = 'yours' | 'mine' | 'blocked' | 'none';
 

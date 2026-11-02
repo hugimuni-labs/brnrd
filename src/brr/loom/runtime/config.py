@@ -331,8 +331,8 @@ def read_array(path: Path, key: str) -> list[str]:
     return values
 
 
-#: Keys a release removed: still accepted in a file, and ignored. The shed
-#: trigger they tuned is gone (boot-review design v2): a body sheds by choice.
+#: Keys a release removed: still accepted in a file, and ignored. The reincarnation
+#: trigger they tuned is gone (boot-review design v2): a body reincarnates by choice.
 RETIRED = frozenset({"shed_excess", "shed_hold"})
 
 

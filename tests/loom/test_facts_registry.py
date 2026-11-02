@@ -98,7 +98,7 @@ def walk(table=TABLE, commands=COMMANDS, observed=OBSERVED, hands=loom.HANDS, ki
 
 def test_the_table_names_only_declared_commands_observations_hands_and_facts():
     assert walk() == []
-    assert _kinds_read(bodies) >= {"lease", "shown", "released", "attempt.ended", "body.stopped", "molt"}
+    assert _kinds_read(bodies) >= {"lease", "shown", "released", "attempt.ended", "body.stopped", "reincarnate"}
 
 
 @pytest.mark.parametrize("change, said", [

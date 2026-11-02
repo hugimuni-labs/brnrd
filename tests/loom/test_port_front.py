@@ -16,24 +16,24 @@ def test_a_two_line_molt_why_and_note_reach_the_ledger_whole(ledger, text):
     home, seat = ledger
     readme = next(seat.glob("*/threads/work/README.md"))
     readme.write_text(readme.read_text() + "\n## Now\n- part 2\n")
-    command(home, seat, "molt", "--why", text)
+    command(home, seat, "reincarnate", "--why", text)
     command(home, seat, "send", "--re", "p-test/none", "--to", "thread:work", "--note", text)
     _ingest(home)
     facts = read_facts(home)
     assert not list((seat / "port" / "out").glob("*.md"))
-    assert [f.data["why"] for f in facts if f.kind == "molt"] == [text]
+    assert [f.data["why"] for f in facts if f.kind == "reincarnate"] == [text]
     assert text in [f.data.get("body") for f in facts if f.kind == "letter"]
     assert [f.data["why"] for f in facts if f.kind == "note"] == [text]
 
 
 def test_a_single_line_is_written_byte_for_byte_as_before():
     # The loaded loom may be older than the body writing the port file.
-    assert _front({"kind": "molt", "why": "plain: one line"}) == "---\nkind: molt\nwhy: plain: one line\n---\n"
+    assert _front({"kind": "reincarnate", "why": "plain: one line"}) == "---\nkind: reincarnate\nwhy: plain: one line\n---\n"
 
 
 @pytest.mark.parametrize("value", ['"quoted"', "a\n---\nb", "x\\ny"])
 def test_a_value_that_would_break_the_frontmatter_round_trips(value):
-    assert parse_frontmatter(_front({"kind": "molt", "why": value}))["why"] == value
+    assert parse_frontmatter(_front({"kind": "reincarnate", "why": value}))["why"] == value
 
 
 def test_an_idle_outbox_is_skipped_until_a_file_lands(ledger, monkeypatch):

@@ -528,13 +528,13 @@ def _refuse_other_loom(home, thread: str) -> None:
             "on their letter; to run the thread here, empty its `for:`")
 
 
-def _check_grant(home, to: str, sender: str, opening: str | None, note, molt) -> None:
+def _check_grant(home, to: str, sender: str, opening: str | None, note, reincarnate) -> None:
     """``--budget`` rides a letter to a thread: the one opening it, or the opener's answer.
 
     The fold counts a grant only from the parent's strands as well; this is
     the refusal its writer reads now.
     """
-    if is_channel(to) or note is not None or molt is not None:
+    if is_channel(to) or note is not None or reincarnate is not None:
         raise PortError("send: --budget is for a letter to a thread, without --note")
     if opening is not None:
         return
@@ -598,7 +598,7 @@ def write_send(room: Path, *, to: str, sender: str, body: str = "",
                re: str | None = None, note: str | None = None,
                clean: bool = False, kind: str | None = None,
                refs: tuple[str, ...] | list[str] = (),
-               molt: str | None = None, body_choice: str | None = None,
+               reincarnate: str | None = None, body_choice: str | None = None,
                at: str | None = None, repo_sources: tuple[str, ...] | list[str] = (),
                wish: str | tuple | list | None = None,
                budget: int | None = None, chatter: list[str] | None = None,
@@ -618,7 +618,7 @@ def write_send(room: Path, *, to: str, sender: str, body: str = "",
     opening = None
     if at is not None:
         from .timers import stored_when
-        if is_channel(to) or note is not None or molt is not None:
+        if is_channel(to) or note is not None or reincarnate is not None:
             raise PortError("send: --at is only for a thread letter, without --note or --reopen")
         at = stored_when(at)
     if note is not None and not re:
@@ -646,12 +646,12 @@ def write_send(room: Path, *, to: str, sender: str, body: str = "",
             if body_choice is not None or repo_sources:
                 raise PortError("send: --body is only for opening a new thread; --repo is only for opening a new thread")
         else:
-            if note is not None or molt is not None:
+            if note is not None or reincarnate is not None:
                 raise PortError(f"send: no thread {thread} on main")
             opening = thread
-    if note is None and molt is None and not is_channel(to):
+    if note is None and reincarnate is None and not is_channel(to):
         _refuse_other_loom(home, thread_of(to))
-    if note is None and molt is None and at is None and not is_channel(to):
+    if note is None and reincarnate is None and at is None and not is_channel(to):
         from .ledger import read_facts
         from .project import sender_threads
         if sender_threads(read_facts(home)).get(sender) == thread_of(to):
@@ -660,7 +660,7 @@ def write_send(room: Path, *, to: str, sender: str, body: str = "",
                 "Answer to the reply address on the letter's line; where that is `-`, "
                 "settle the letter with --re <id> --note \"<what you did>\"")
     if budget is not None:
-        _check_grant(home, to, sender, opening, note, molt)
+        _check_grant(home, to, sender, opening, note, reincarnate)
     if re:
         re = _full_re(Path(room), re)
     if note is not None and body:
@@ -752,7 +752,7 @@ def write_send(room: Path, *, to: str, sender: str, body: str = "",
         line = related_line(home, query, facts=facts, exclude={s.data["thread"] for s in wish_stamps})
         if line:
             echo.append(line)
-    if (re in letters and note is None and molt is None and not is_channel(to)
+    if (re in letters and note is None and reincarnate is None and not is_channel(to)
             and thread_of(to) != home.main_thread()):
         from .dispositions import is_person
         from .project import sender_threads
@@ -783,10 +783,10 @@ def write_send(room: Path, *, to: str, sender: str, body: str = "",
         facts = facts if letters else read_facts(home)
         links, misses = refs_mod.link(facts, main_snapshot(home), note or body)
     # A thread letter answers something: a letter, a wish, or an item it names.
-    # A reopen's parent is the thread it reopens, as a molt's is; a budget
+    # A reopen's parent is the thread it reopens, as a reincarnation's is; a budget
     # raise's is the thread it funds; a --clean handoff's is the strand whose
     # work it publishes.
-    if (not is_channel(to) and opening is None and note is None and molt is None and at is None
+    if (not is_channel(to) and opening is None and note is None and reincarnate is None and at is None
             and not reopen and budget is None and not clean
             and not re and not asked and not chatter and not links):
         from .ledger import read_facts
@@ -794,7 +794,7 @@ def write_send(room: Path, *, to: str, sender: str, body: str = "",
         raise PortError(f"send: a letter to {to} cites nothing. A follow-up answers the letter it follows: "
                         + (f"--re {latest} (the latest between you)" if latest else "--re <id>")
                         + ", or names what it is about with an &ref in the body (&<w-id>, &<letter>)")
-    if is_channel(to) and note is None and molt is None:
+    if is_channel(to) and note is None and reincarnate is None:
         from .ledger import read_facts
         from .project import sender_threads
         from .raises import RaiseError, capture, refuse
@@ -839,8 +839,8 @@ def write_send(room: Path, *, to: str, sender: str, body: str = "",
         fields["chatter"] = " ".join(chatter)
     if links:
         fields["links"] = " ".join(links)
-    if molt:
-        fields["molt"] = molt
+    if reincarnate:
+        fields["reincarnate"] = reincarnate
     if note is not None:
         fields["note"] = note
     elif clean:
@@ -909,8 +909,8 @@ def _carried(home, facts, stamped, re, target, sender) -> list:
     return out
 
 
-def write_molt(room: Path, why: str, *, fresh: bool = False) -> str:
-    """``reincarnate`` (``shed`` and ``molt`` are its old names): hand the seat to a successor."""
+def write_reincarnate(room: Path, why: str, *, fresh: bool = False) -> str:
+    """``reincarnate`` (``reincarnate`` and ``reincarnate`` are its old names): hand the seat to a successor."""
     if not why:
         raise PortError("reincarnate: --why is empty")
     from .ledger import read_facts
@@ -942,21 +942,21 @@ def write_molt(room: Path, why: str, *, fresh: bool = False) -> str:
     path = f"threads/{thread}/README.md"
     if not fresh and git(clone, "diff", "HEAD", "--quiet", "--", path, check=False).returncode:
         git(clone, "add", "--", path)
-        git(clone, "commit", "--only", "-m", f"molt: {why}", "--", path)
+        git(clone, "commit", "--only", "-m", f"reincarnate: {why}", "--", path)
     if not fresh and not _current_label(clone, strand).taint:
         outcome = send_to_self(clone)
         if outcome.status != "merged":
             raise PortError(outcome.stderr or f"reincarnate: landing {outcome.status}: {', '.join(outcome.files)}")
     stem = mint(5)
     fact_id = f"{strand}/{stem}"
-    fields = {"kind": "molt", "id": fact_id, "why": why}
+    fields = {"kind": "reincarnate", "id": fact_id, "why": why}
     if fresh:
         fields["fresh"] = "true"
     write_port(room, stem, _front(fields))
     write_send(room, to=f"thread:{thread}", sender=strand,
-               body="Fresh molt: start from main." if fresh else why, molt=fact_id)
+               body="Fresh reincarnation: start from main." if fresh else why, reincarnate=fact_id)
     from .jack import _set_state
-    _set_state(room, molted=True)
+    _set_state(room, reincarnated=True)
     return fact_id
 
 
@@ -970,8 +970,8 @@ def answered(room: Path) -> set[str]:
     The loom drains port/out on its tick and regenerates the boundary later; in
     between, the boundary still lists those letters as owed. A slow loom made a
     stop re-show letters the body had answered (stop-list, and again once the
-    reply had left port/out for the ledger: stop-answered) and refused a molt
-    whose ack was not yet drained (molt-flake). The stop and the molt both
+    reply had left port/out for the ledger: stop-answered) and refused a reincarnation
+    whose ack was not yet drained (reincarnate-flake). The stop and the reincarnation both
     read it here: port/out, then this strand's own ledger file."""
     found = _ledger_answered(room)
     for path in (room / "port" / "out").glob("*.md"):
@@ -1017,7 +1017,7 @@ def unreplied_held(facts, strand: str, room: Path) -> dict:
     """Person letters with a chat to answer on, shown to this strand, that no letter answers yet.
 
     A reply counts once it is written: its delivery receipt may come after the
-    molt, and the loom may not have drained it from port/out yet.
+    reincarnate, and the loom may not have drained it from port/out yet.
     """
     from .owners import unanswered_letters
     from .project import is_notice, reply_channels
@@ -1065,7 +1065,7 @@ def fact_from_port(fm: dict[str, str], strand: str, gen: int | None,
     fact_id = fm.get("id")
     if not fact_id:
         raise PortError("port file has no id")
-    if kind in {"letter", "note", "molt", "face", "left-asked"} and gen is None:
+    if kind in {"letter", "note", "reincarnate", "face", "left-asked"} and gen is None:
         raise PortError(f"strand {strand} has no lease; refusing {kind} {fact_id}")
     if kind == "letter":
         data: dict = {
@@ -1076,7 +1076,7 @@ def fact_from_port(fm: dict[str, str], strand: str, gen: int | None,
             thread_of(data["to"])
         if fm.get("at") is not None:
             from .timers import parse_instant
-            if is_channel(data["to"]) or fm.get("molt") or parse_instant(fm["at"]) is None:
+            if is_channel(data["to"]) or fm.get("reincarnate") or parse_instant(fm["at"]) is None:
                 raise PortError("send --at: expected a thread letter with YYYY-MM-DDTHH:MM:SSZ")
             data["at"] = fm["at"]
         if fm.get("re"):
@@ -1087,8 +1087,8 @@ def fact_from_port(fm: dict[str, str], strand: str, gen: int | None,
             data["links"] = fm["links"].split()
         if fm.get("edit"):
             data["edit"] = fm["edit"]
-        if fm.get("molt"):
-            data["molt"] = fm["molt"]
+        if fm.get("reincarnate"):
+            data["reincarnate"] = fm["reincarnate"]
         if fm.get("budget"):
             try:
                 data["budget"] = int(fm["budget"])
@@ -1128,11 +1128,11 @@ def fact_from_port(fm: dict[str, str], strand: str, gen: int | None,
         return Fact(kind="left.asked", by=f"strand:{strand}", id=fact_id,
                     data={"strand": strand, "gen": gen, "wishes": fm.get("wishes", "").split(),
                           **({"letters": fm["letters"].split()} if fm.get("letters") else {})})
-    if kind == "molt":
+    if kind == "reincarnate":
         if not fm.get("why"):
-            raise PortError(f"molt {fact_id} has no why")
+            raise PortError(f"reincarnate {fact_id} has no why")
         return Fact(
-            kind="molt", by=f"strand:{strand}", id=fact_id,
+            kind="reincarnate", by=f"strand:{strand}", id=fact_id,
             data={"strand": strand, "gen": gen, "why": fm["why"], **({"fresh": True} if fm.get("fresh") == "true" else {})},
         )
     if kind == "face":

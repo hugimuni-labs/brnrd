@@ -312,7 +312,7 @@ def _opened(home, own: str, worker: str) -> bool:
 
 
 def _worker_checkout(who: _Caller, worker: str) -> Path | None:
-    """The newest room of ``worker`` that has this repo. A molt's successor
+    """The newest room of ``worker`` that has this repo. A reincarnation's successor
     starts from its predecessor's branch, so the newest holds the most."""
     from .project import fold
     strands = [str(fact.data["strand"]) for fact in fold(who.facts).accepted
