@@ -1,21 +1,19 @@
 """Asks are a pull (requests R4): every open ask is live, moved or stale, said
-at the boundary in one ``asks:`` band, and a person's rank word owes a ``top?``.
+at the boundary in one ``asks:`` band.
 
-All derived at every render. The band is news only when it changes; a person
-letter carries its thread's asks under its ``steers?`` prompt; the stop holds
-once on a rank word no ``wish --top`` answered (design.md §4, §5 of
-threads/requests in the self).
+All derived at every render. The band is news only when it changes
+(design.md §4 of threads/requests in the self). A person's order is the
+body's judgement on reading the letter, recorded with ``wish --top``; no
+keyword match asks for it (prompts-remake, his 10095).
 """
 
 from __future__ import annotations
 
-import re
 from datetime import datetime, timezone
 from pathlib import Path
 
 from .raises import last_raise, move, prs
 
-RANK = re.compile(r"\b(first|before|most important|priority|top)\b", re.I)
 BAND = 5
 # The kinds that move or stale an ask; the band reads no others.
 MOVES = frozenset({"letter", "wish", "pr.opened", "pr.merged"})
@@ -71,35 +69,6 @@ def band_line(facts, found: dict, thread: str, main: str, room: Path | None = No
         items.append(f'{ask.id} {kind}{what}{where} "{_short(ask.line, 50)}" {_age(ask.born or ask.at, now)}')
     more = f" · +{len(rows) - BAND} more: brnrd runtime asks" if len(rows) > BAND else ""
     return "asks: " + " · ".join(items) + more
-
-
-def owed_tops(facts, thread: str, strand: str) -> list[tuple[str, str]]:
-    """``(letter, word)`` for each person letter to ``thread`` since this body's
-    lease that says a rank word, cited by no ``wish.top`` and not yet asked at a stop."""
-    from .ledger import kind_facts
-    from .wishes import _letter_word, _person
-    since = max((f.at for f in kind_facts(facts, "lease") if f.data.get("strand") == strand), default="")
-    topped = {str(f.data.get("ref")) for f in kind_facts(facts, "wish.top")}
-    asked = {ident for f in kind_facts(facts, "left.asked") if f.data.get("strand") == strand
-             for ident in f.data.get("letters") or ()}
-    out = []
-    for f in kind_facts(facts, "letter"):
-        ident = str(f.data.get("id", f.id))
-        if f.at < since or f.data.get("to") != f"thread:{thread}" or not _person(f) \
-                or ident in topped or _letter_word(ident) in asked:
-            continue
-        word = RANK.search(str(f.data.get("body", "")))
-        if word:
-            out.append((_letter_word(ident), word.group(1).lower()))
-    return out
-
-
-def top_line(owed: list[tuple[str, str]]) -> str:
-    """The stop line a rank word owes; a stop again passes it as no change."""
-    if not owed:
-        return ""
-    named = " · ".join(f'{ident} says "{word}"' for ident, word in owed[:3])
-    return f"top? {named} — wish <w-id> --top <letter> | stop again: no change"
 
 
 def done_line(found: dict, thread: str, main: str) -> str:

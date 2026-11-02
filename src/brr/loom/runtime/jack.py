@@ -113,11 +113,12 @@ def _ageless(line: str) -> str:
 
 
 def _slot(key: str) -> str:
+    """The place a line holds: a line that changed in place (``degraded:``, ``asks:``,
+    one ``opened:`` thread) is said anew, never also as gone."""
     if key.startswith("opened: "):
         return " ".join(key.split()[:2])
-    if key.startswith("asks: "):
-        return "asks:"
-    return "idle:" if key.startswith("idle: ") else key
+    head = key.split(" ", 1)[0]
+    return head if head.endswith((":", "?")) else key
 
 
 def _news(text: str, state: dict, plan_changed: bool) -> tuple[str, list[str], list[str]]:
@@ -146,7 +147,7 @@ def _news(text: str, state: dict, plan_changed: bool) -> tuple[str, list[str], l
     letters: list[str] = []
     skipped: list[str] = []
     for unit in units:
-        # Past its allocation the warning comes at every post (``over``), so it is never said nor gone.
+        # Past its allocation the warning has its own pace (``_over``), so it is never said nor gone.
         if unit[0].startswith("budget: "):
             continue
         item = _ITEM_LINE.match(unit[0])
@@ -429,10 +430,9 @@ def _turn(room: Path, stdin_text: str) -> None:
     if not state.get("turn_open"):
         return
     heads = reincarnate.heads(room)
-    moved = [name for name, head in heads.items() if head != (state.get("heads") or {}).get(name)]
-    did = [*reincarnate.acts(room, float(state.get("turn_at") or 0)), *(f"{name} HEAD" for name in moved)]
+    did = reincarnate.acts(room, float(state.get("turn_at") or 0))
     _, now = reincarnate.contexts(stdin_text, 0)
-    # Acts since the README last changed, letters aside (routing is not state).
+    # Acts since the README last changed that change what it says (reincarnate.acts).
     readme = reincarnate.readme_hash(room, os.environ.get("BRNRD_THREAD") or "")
     if readme != state.get("readme_seen"):
         # Rewritten this turn: only the acts written after it are left behind.
@@ -440,7 +440,7 @@ def _turn(room: Path, stdin_text: str) -> None:
         did, kept = reincarnate.acts(room, reincarnate.readme_mtime(room, thread)), []
     else:
         kept = state.get("readme_acts") or []
-    unread = [*kept, *(x for x in did if x != "letter" and x not in kept)]
+    unread = [*kept, *(x for x in did if x not in kept)]
     _set_state(room, heads=heads, context=now or state.get("context") or 0,
                turn_open=False, readme_seen=readme, readme_acts=unread)
 
@@ -661,7 +661,7 @@ def execute(event: str, room: Path, stdin_text: str) -> str:
     elif event == "start":
         from .reincarnate import base, heads, readme_hash
         _set_state(room, boundary_at=time.time(), turn_open=True, turn_at=time.time(),
-                   booted_at=time.time(), stops=0, scroll={}, mark_at=None,
+                   booted_at=time.time(), stops=0, scroll={}, mark_at=None, declared=None,
                    transcript=_transcript_path(stdin_text),
                    heads=_soft(room, heads, room, default={}),
                    readme_seen=_soft(room, readme_hash, room, os.environ.get("BRNRD_THREAD") or ""),
@@ -672,10 +672,6 @@ def execute(event: str, room: Path, stdin_text: str) -> str:
               for line in text.splitlines() if line.startswith("opened: ")]
     plan = next((line.partition(" · plan ")[2] for line in text.splitlines()
                  if line.startswith("status:")), "")
-    face = next((line for line in text.splitlines() if line.startswith("face? ")), "")
-    moved = next((line for line in text.splitlines() if line.startswith("moved: ")), "")
-    cited = next((line for line in text.splitlines() if line.startswith("cited: ")), "")
-    band = _ageless(next((line for line in text.splitlines() if line.startswith("asks: ")), ""))
     if event == "start":
         broken = _guards(room)[1]
         if broken:
@@ -686,41 +682,30 @@ def execute(event: str, room: Path, stdin_text: str) -> str:
             return ""
         if parsed.ids:
             _shown(room, parsed)
-        _set_state(room, opened=opened, plan=plan, face=face, moved=moved, band=band, cited=cited,
+        _over(room, next((line for line in text.splitlines() if line.startswith("budget: ")), ""))
+        _set_state(room, plan=plan,
                    **dict(zip(("said", "told"), _news(text, {}, True)[1:])))
         return text if text.endswith("\n") else text + "\n"
     if event == "post":
         state = _state(room)
-        opened_changed = opened != state.get("opened", [])
         plan_changed = plan != state.get("plan", "")
         settled_changed = parsed.settled is not None and parsed.settled != state.get("settled")
-        # A new proposal is shown once, at the next post; it never wakes a held body.
-        face_changed = bool(face) and face != state.get("face", "")
-        # The loom's code moved under a seated body: said once, at the next post.
-        moved_changed = bool(moved) and moved != state.get("moved", "")
-        # A closure the README cites, while the body still holds the event (design §3a).
-        cited_changed = bool(cited) and cited != state.get("cited", "")
-        # An ask turning moved or stale is the cue to raise or drop it (requests R4).
-        band_changed = bool(band) and band != state.get("band", "")
         paused = describe(read_paused_record(room / "port"))
         hook = _hook_event(stdin_text)
-        # Past its allocation a strand is told at every boundary, not once.
-        over = next((line for line in text.splitlines() if line.startswith("budget: ")), "")
+        over = _over(room, next((line for line in text.splitlines() if line.startswith("budget: ")), ""))
         left = _left(room, False).rstrip("\n")
         # A left in room is news when it changes; the stop still holds on it every time.
         if left == state.get("left_said", ""):
             left = ""
         else:
             _set_state(room, left_said=left)
+        # Every line is news the first time it appears; only the status line waits on the plan.
         news, said, told = _news(text, state, plan_changed)
         _set_state(room, said=said, told=told)
-        if not parsed.ids and not settled_changed and not opened_changed and not plan_changed \
-                and not face_changed and not moved_changed and not band_changed and not cited_changed:
-            news = ""
         if not news:
             if parsed.ids:
                 _shown(room, parsed)
-            _set_state(room, opened=opened, plan=plan, face=face, moved=moved, band=band, cited=cited)
+            _set_state(room, plan=plan)
             if parsed.settled is not None:
                 _set_state(room, settled=parsed.settled)
             if not paused and not over and not guarded and not left:
@@ -740,7 +725,7 @@ def execute(event: str, room: Path, stdin_text: str) -> str:
             _set_state(room, settled=parsed.settled)
         if parsed.ids:
             _shown(room, parsed)
-        _set_state(room, opened=opened, plan=plan, face=face, moved=moved, band=band, cited=cited)
+        _set_state(room, plan=plan)
         return _json({"hookSpecificOutput": {
             "hookEventName": hook, "additionalContext": text}})
     if _state(room).get("reincarnated") or _order(room) == "end" or parsed.settled is not None:
@@ -753,6 +738,25 @@ def execute(event: str, room: Path, stdin_text: str) -> str:
     if out:
         _opened(room)
     return out
+
+
+_OVER = re.compile(r" of (\S+) tokens \(\+(\d+)%\)")
+OVER_STEP = 5
+
+
+def _over(room: Path, line: str) -> str:
+    """The ``budget:`` line when the allocation is crossed and at every further
+    +5%, never at every call: going over is an exchange with the opener, said
+    when it moves (prompts-remake, his 10095)."""
+    if not line:
+        return ""
+    found = _OVER.search(line)
+    allocated, step = (found.group(1), int(found.group(2)) // OVER_STEP) if found else (line, 0)
+    said = _state(room).get("over_said") or ["", -1]
+    if said[0] == allocated and step <= said[1]:
+        return ""
+    _set_state(room, over_said=[allocated, step])
+    return line
 
 
 def _letter_miss(room: Path, parsed: Boundary, done: set[str]) -> str:
@@ -786,15 +790,12 @@ def _stop_block(room: Path, text: str, plan: str) -> str:
         return ""
     text, lefts = _settled_render(room, text)
     parsed = parse_boundary(text)
-    top = next((line for line in text.splitlines() if line.startswith("top? ")), "")
-    tops = re.findall(r"(\S+) says \"", top)
     if parsed.settled is not None:
         return ""
     sections = [
         _letter_miss(room, parsed, answered(room)),
         _left(room, True).rstrip("\n"),
         LEFT.format(named=" · ".join(f"{ident} ({why})" for ident, why in lefts)) if lefts else "",
-        TOP.format(line=top) if top else "",
         _end_miss(room, plan),
         _guard_miss(room),
         _kept_miss(room),
@@ -807,7 +808,7 @@ def _stop_block(room: Path, text: str, plan: str) -> str:
     seen = "\n\n".join(sections)
     if (count >= 3) if _hand() else (count and seen == state.get("stop_said")):
         # Stopped again with nothing done since the same list: let it through.
-        _asked(room, parsed, [ident for ident, _ in lefts], tops)
+        _asked(room, parsed, [ident for ident, _ in lefts])
         return ""
     known = _known_miss(room)
     if not sections and not known:
@@ -823,6 +824,7 @@ def _stop_block(room: Path, text: str, plan: str) -> str:
 
 END = """work is left on this thread (plan {plan}) and this body has not said how it ends. Do one:
 - a result: brnrd runtime wish <w-id> --result <kind>:<ref> --line "<what it is>" [--deliver]
+- the steps still left: brnrd runtime wish <w-id> --left "<step>" --left "<step>"
 - an ask to a person: brnrd runtime ask "<question>" --for <w-id> --rec "<your call>"
 - a park with its reason: brnrd runtime wish <w-id> --read "waiting: <on what>" --wait <condition>
 - done: brnrd runtime settle {thread} --why "<what it became>"
@@ -834,10 +836,6 @@ LEFT = """what is left on a wish moved since it was last said: {named}
 Restate each one's whole list:
 - brnrd runtime wish <w-id> --left "<step>" --left "<step>"   (--left same when nothing moved)
 - or a park: wish <w-id> --read "waiting: <on what>"; a delivery: --result <kind>:<ref> --line "<what>" --deliver"""
-
-TOP = """a letter of theirs says an order word and no wish was put on top for it: {line}
-- brnrd runtime wish <w-id> --top <letter>   (the wish it puts first)
-- or stop again: the order did not change"""
 
 README = """before resting: since threads/{thread}/README.md last changed this body did {did}. Any end can
 come while it rests, and the README is what its successor boots into. Rewrite it to the current state
@@ -918,10 +916,10 @@ def _settled_render(room: Path, text: str) -> tuple[str, list[tuple[str, str]]]:
                   if ident not in pending]
 
 
-def _asked(room: Path, parsed: Boundary, owed: list[str], tops: list[str] = ()) -> None:
-    """A stop let through with lefts or rank words still owed: a ``left.asked`` fact
-    through the port, after which the lines drop them and the wake shows them stale."""
-    if not owed and not tops:
+def _asked(room: Path, parsed: Boundary, owed: list[str]) -> None:
+    """A stop let through with lefts still owed: a ``left.asked`` fact through
+    the port, after which the line drops them and the wake shows them stale."""
+    if not owed:
         return
     stem = mint(5)
     atomic_write(room / "port" / "out" / f"asked-{stem}.md", (
@@ -929,8 +927,7 @@ def _asked(room: Path, parsed: Boundary, owed: list[str], tops: list[str] = ()) 
         "kind: left-asked\n"
         f"id: {parsed.strand or room.name}/{stem}\n"
         f"wishes: {' '.join(owed)}\n"
-        + (f"letters: {' '.join(tops)}\n" if tops else "")
-        + "---\n"))
+        "---\n"))
 
 
 def _rendered_before_ledger(room: Path) -> bool:
@@ -946,7 +943,7 @@ def _rendered_before_ledger(room: Path) -> bool:
 
 
 def declare(room: Path, how: str) -> None:
-    """A verb that says how this body ends marks its room; the next start clears it."""
+    """A verb that says how this body ends marks its room; the next body's start clears it."""
     _set_state(room, declared=how)
 
 

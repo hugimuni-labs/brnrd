@@ -1,9 +1,9 @@
-"""Asks are a pull (requests R4): live, moved, stale; a rank word owes a top?; a done thread."""
+"""Asks are a pull (requests R4): live, moved, stale; a done thread; a rank word owes nothing."""
 from datetime import datetime, timedelta, timezone
 
 from brr.loom.runtime.jack import _ageless
 from brr.loom.runtime.ledger import Fact, append, inject_letter, read_facts
-from brr.loom.runtime.pull import band_line, done_line, flavour, owed_tops, top_line
+from brr.loom.runtime.pull import band_line, done_line, flavour
 from brr.loom.runtime.wishes import wishes
 from test_requests_raises import TO, asks, channel, person_wish
 from test_wish_tree import body  # noqa: F401  (fixture)
@@ -75,21 +75,16 @@ def test_the_band_says_each_ask_and_only_its_flavour_is_news(ledger):
     assert _ageless(band_line(facts, found, "work", "inbox", seat, now=now)) != _ageless(line)
 
 
-def test_a_rank_word_owes_a_top_until_a_wish_is_topped_or_the_stop_asked(ledger):
-    home, seat = ledger
+def test_a_rank_word_owes_nothing_and_wish_top_still_records_the_order(body):
+    """His 10095: putting a wish first is the body's judgement on reading his
+    letter, never a keyword match; ``wish --top`` and the order it feeds stay."""
+    from test_wish_tree import render
+    home, seat = body
     root = person_wish(home, seat, "Ship the parser")
-    plain = inject_letter(home.root, to="thread:work", body="looks good")
     order = inject_letter(home.root, to="thread:work", body="Do the lexer first, then the rest")
-    owed = owed_tops(read_facts(home), "work", STRAND)
-    word = order.rpartition(":")[2]
-    assert owed == [(word, "first")] and plain.rpartition(":")[2] not in str(owed)
-    assert top_line(owed).startswith(f'top? {word} says "first"')
+    assert "top? " not in render(home)
     command(home, seat, "wish", root, "--top", order)
-    assert owed_tops(read_facts(home), "work", STRAND) == []
-    again = inject_letter(home.root, to="thread:work", body="This is top priority")
-    append(home, Fact(kind="left.asked", by=f"strand:{STRAND}", data={
-        "strand": STRAND, "gen": 1, "wishes": [], "letters": [again.rpartition(":")[2]]}))
-    assert owed_tops(read_facts(home), "work", STRAND) == []
+    assert [t["ref"] for t in wishes(read_facts(home))[root].tops] == [order]
 
 
 def test_a_thread_is_done_when_every_request_on_it_is_shut(ledger):
@@ -101,7 +96,7 @@ def test_a_thread_is_done_when_every_request_on_it_is_shut(ledger):
     assert done_line(wishes(read_facts(home)), "other", "inbox") == ""
 
 
-def test_the_stop_holds_once_on_a_rank_word_and_the_band_is_news_on_change(body):
+def test_the_stop_never_holds_on_a_rank_word_and_the_band_is_news_on_change(body):
     from test_wish_tree import render, stop
     import json
     from brr.loom.runtime import jack
@@ -110,16 +105,10 @@ def test_the_stop_holds_once_on_a_rank_word_and_the_band_is_news_on_change(body)
     channel(home)
     root = person_wish(home, seat, "Ship the parser")
     command(home, seat, "wish", root, "--left", "parser")
-    order = inject_letter(home.root, to="thread:work", body="Lexer first please")
-    word = order.rpartition(":")[2]
-    assert f'top? {word} says "first"' in render(home)
-    refused = json.loads(stop(seat))
-    assert refused["decision"] == "block" and "an order word" in refused["reason"]
-    # Stopped again with nothing done: let through, asked once as a fact through the port.
-    stop(seat)
-    _ingest(home)
-    assert [f.data.get("letters") for f in read_facts(home) if f.kind == "left.asked"] == [[word]]
-    assert not [line for line in render(home).splitlines() if line.startswith("top? ")]
+    inject_letter(home.root, to="thread:work", body="Lexer first please")
+    render(home)
+    held = stop(seat)
+    assert "order word" not in (json.loads(held)["reason"] if held else "")
     # The band is said at a post when a flavour changes, and not when only its age does.
     command(home, seat, "send", "--to", TO, "Merge #12?")
     # Every letter settled, so the band is the only thing a post could say.

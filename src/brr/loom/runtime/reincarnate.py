@@ -104,10 +104,22 @@ def _acted(fact: dict) -> bool:
     return fact.get("kind") not in SETTLING and not (fact.get("kind") == "wish.left" and data.get("same"))
 
 
+def _readme_act(fact: dict) -> str:
+    """What a fact changes in the README, or ``""``: a result, a merge, a new
+    wish, a park. A left, a stamp, a note or a read changes nothing it says
+    (prompts-remake, his 10095); a settle lands the README itself."""
+    kind, data = fact.get("kind"), fact.get("data") or {}
+    if kind == "wish":
+        return "a new wish" if str(fact.get("id", "")).startswith("w-") else ""
+    if kind == "wish.read":
+        return "a park" if data.get("wait") else ""
+    return {"wish.result": "a result", "pr.merged": "a merge"}.get(str(kind), "")
+
+
 def acts(room: Path, since: float) -> list[str]:
-    """The kinds of the facts this strand wrote since ``since`` that acted: a
-    letter, a wish, a left that moved, a PR. Distinct, in the order last written, for the README ask."""
-    newest = dict.fromkeys(str(fact.get("kind")) for fact in reversed(_mine(room, since)) if _acted(fact))
+    """What this strand did since ``since`` that the README should say: distinct,
+    in the order last done, for the README ask."""
+    newest = dict.fromkeys(said for fact in reversed(_mine(room, since)) if (said := _readme_act(fact)))
     return list(reversed(newest))
 
 
@@ -226,7 +238,7 @@ def cited_line(room: Path, thread: str, facts, began: str) -> str:
 
 def long_wait(condition: str, now: datetime | None = None) -> bool:
     """A wait on a person or on a time hours out: where a reincarnation is a judgement worth making."""
-    if condition.startswith(("letter:", "ask:")):
+    if condition.startswith("letter:"):
         return True
     if condition.startswith("at:"):
         try:

@@ -242,8 +242,9 @@ def budget_text(spent: int | None, allocated: int | None) -> str:
 
 
 def over_line(thread: str, opener: str, spent: int, allocated: int) -> str:
-    """The warning a strand past its allocation reads at every boundary."""
-    return (f"budget: thread {thread} has spent {format_tokens(spent)} of {format_tokens(allocated)} tokens. "
+    """The warning a strand past its allocation reads at the crossing and every +5% (jack ``_over``)."""
+    over = (spent - allocated) * 100 // allocated
+    return (f"budget: thread {thread} has spent {format_tokens(spent)} of {format_tokens(allocated)} tokens (+{over}%). "
             f"Write to {opener}: what is done, what is left, and how much more you ask. "
             f"Its answer raises the allocation with `send --to thread:{thread} --budget <n>`. "
             "This warns; nothing stops you.")
