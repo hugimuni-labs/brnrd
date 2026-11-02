@@ -100,12 +100,17 @@ def test_kept_boundary_equals_a_fresh_render_and_every_input_re_renders(tmp_path
         assert tick()
         assert "idle: 2 more opened here" in boundary()
 
-        # A letter to the parent's thread is a ledger change.
+        # A letter to the parent's thread is a ledger change: it shows at the very next tick, however long a
+        # render is kept (busy-cpu), and the boundary is newer than every ledger file, as the jack's stop reads it.
+        monkeypatch.setattr(loom, "RENDER_MAX_AGE", 3600.0)
         ledger.append(home, Fact(kind="letter", by="person:test", id="letter-to-parent",
                                  data={"id": "letter-to-parent", "from": "person:test", "to": "thread:w-1",
                                        "body": "a word for the parent"}))
         assert tick()
         assert "a word for the parent" in boundary()
+        rendered = (home.room(parent) / "port/in/boundary.md").stat().st_mtime
+        assert all(path.stat().st_mtime <= rendered for path in (root / "ledger/facts").glob("*/*.jsonl"))
+        monkeypatch.setattr(loom, "RENDER_MAX_AGE", 30.0)
 
         # A config change is a file the render opened.
         config = root / "loom/config.toml"
