@@ -1,5 +1,6 @@
 """An idle wake works: ahead of pace the keepalive names what the thread could move (w-i1xohccy9ht0)."""
 import json
+import os
 import time
 from datetime import datetime, timezone
 from types import SimpleNamespace
@@ -71,22 +72,51 @@ def test_a_quiet_face_ahead_of_pace_carries_the_threads_acts(ledger, monkeypatch
     home, seat = ledger
     wish, context = _seat(home, seat, monkeypatch, AHEAD)
     quiet = {"face": PROPOSED["quiet"], "token": "quiet since 20:00", "fact": "quiet:x"}
-    block = loom._idle_acts(home, read_facts(home), "s-aaaa-test", context, quiet)
+    block = loom._idle_acts(home, read_facts(home), "s-aaaa-test", context, quiet, ())
     assert block.startswith(idle.HEAD)
     assert wish in block
     # The jack's copy is written whatever the face; another face carries nothing on the boundary.
     assert (home.room("s-aaaa-test") / "port/in/idle.md").read_text() == block
     assert block.rstrip("\n") in render_boundary("s-aaaa-test", 1, "work", [], set(), {}, idle=block)
     letter = {"face": PROPOSED["letter"], "token": "your x", "fact": "x"}
-    assert loom._idle_acts(home, read_facts(home), "s-aaaa-test", context, letter) == ""
+    assert loom._idle_acts(home, read_facts(home), "s-aaaa-test", context, letter, ()) == ""
 
 
-def test_a_quiet_face_behind_pace_carries_nothing(ledger, monkeypatch):
+def test_acts_are_derived_at_most_once_per_stamp(ledger, monkeypatch):
     home, seat = ledger
-    wish, context = _seat(home, seat, monkeypatch, BEHIND)
+    _, context = _seat(home, seat, monkeypatch, AHEAD)
+    calls = []
+    real = idle.candidates
+    monkeypatch.setattr(idle, "candidates", lambda *args: calls.append(args) or real(*args))
     quiet = {"face": PROPOSED["quiet"], "token": "quiet since 20:00", "fact": "quiet:x"}
-    assert loom._idle_acts(home, read_facts(home), "s-aaaa-test", context, quiet) == ""
-    assert wish in (home.room("s-aaaa-test") / "port/in/idle.md").read_text()
+    first = loom._idle_acts(home, read_facts(home), "s-aaaa-test", context, quiet, ())
+    assert loom._idle_acts(home, read_facts(home), "s-aaaa-test", context, quiet, ()) == first
+    assert len(calls) == 1
+    path = home.room("s-aaaa-test") / "port/in/idle.md"
+    old = time.time() - idle.EVERY - 1
+    os.utime(path, (old, old))
+    loom._idle_acts(home, read_facts(home), "s-aaaa-test", context, quiet, ())
+    assert len(calls) == 2
+
+
+def test_a_render_behind_pace_derives_nothing(ledger, monkeypatch):
+    home, seat = ledger
+    _, context = _seat(home, seat, monkeypatch, BEHIND)
+    path = home.room("s-aaaa-test") / "port/in/idle.md"
+    path.write_text(BLOCK)
+    monkeypatch.setattr(idle, "candidates", lambda *args: (_ for _ in ()).throw(AssertionError("derived")))
+    quiet = {"face": PROPOSED["quiet"], "token": "quiet since 20:00", "fact": "quiet:x"}
+    assert loom._idle_acts(home, read_facts(home), "s-aaaa-test", context, quiet, ()) == ""
+    # A stale list never outlives the pace that asked for it.
+    assert not path.exists()
+
+
+def test_a_child_quiet_for_days_with_nothing_in_hand_is_an_act(ledger, monkeypatch):
+    home, seat = ledger
+    row = {"thread": "kid", "now": "idle 4d", "owed": 0, "prs": [], "waits": "", "status": "open"}
+    acts = idle.candidates(home, read_facts(home), "work", [row, {**row, "thread": "busy", "owed": 1},
+                                                             {**row, "thread": "fresh", "now": "idle 2d"}])
+    assert acts == ["thread kid quiet 4d with nothing in hand: write to it with its next step, or settle it"]
 
 
 def test_a_parked_wish_is_offered_as_its_wait_not_as_the_top(ledger, monkeypatch):

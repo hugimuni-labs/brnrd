@@ -23,6 +23,8 @@ TOP = 3
 WEEK = 7 * 86400.0
 STALE_PR = 86400.0
 QUIET_THREAD = 3 * 86400.0
+# ``idle.md``'s mtime is the stamp: acts are derived at most this often per room, as the board paces its parts.
+EVERY = 300.0
 HEAD = "idle? fuel ahead of pace"
 
 
@@ -60,12 +62,16 @@ def _epoch(at: str) -> float:
     return datetime.fromisoformat(str(at).replace("Z", "+00:00")).timestamp()
 
 
-def candidates(home, facts, thread: str, now: float | None = None) -> list[str]:
-    """Up to ``TOP`` acts this thread could move, most owed first, one line each."""
+def candidates(home, facts, thread: str, children=(), now: float | None = None) -> list[str]:
+    """Up to ``TOP`` acts this thread could move, most owed first, one line each.
+
+    ``children`` are the boundary's own ``thread_table`` rows for what this
+    thread opened: the table is the dearest read here, so it is never run twice.
+    """
     from .lifecycle import main_snapshot
     from .queues import queues
     from .receipts import receipts
-    from .threads import pr_cards, thread_table
+    from .threads import pr_cards
     from .waits import live
     from .wishes import _short, told, waits_on
     now = time.time() if now is None else now
@@ -101,7 +107,7 @@ def candidates(home, facts, thread: str, now: float | None = None) -> list[str]:
         if wish.thread == thread and wish.open and wish.state == "heard" and not (top and wish.id == top.id):
             out.append(f'{wish.id} is heard, never read: "{_short(wish.line, 60)}" — '
                        f'`wish {wish.id} --read "<what it asks>"`')
-    for row in thread_table(home, facts, f"thread:{thread}"):
+    for row in children:
         match = re.fullmatch(r"idle (\d+)d", row["now"])
         if (row["status"] in {"settled", "retired"} or not match or row["owed"] or row.get("prs")
                 or row.get("waits") or int(match[1]) * 86400 < QUIET_THREAD):

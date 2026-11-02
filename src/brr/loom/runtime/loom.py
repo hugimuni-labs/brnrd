@@ -1792,11 +1792,12 @@ def _render_boundary(home, facts, strand, gen, context):
     main, state = main_snapshot(home), fold(facts)
     owed = letters_for(facts, main, context.thread)
     proposal = propose(facts, strand, gen, context.thread)
+    opened = thread_table(home, facts, f"thread:{context.thread}")
     text = render_boundary(
         strand, gen, context.thread, owed,
         state.shown.get(strand, set()), sender_threads(facts), context.fuel,
         context.why or None, reply_channels(facts, home),
-        opened=thread_table(home, facts, f"thread:{context.thread}"), forge=_forge(home),
+        opened=opened, forge=_forge(home),
         plan=_plan(home, context.thread, facts),
         replies={f.letter.id: f.reply_to for f in active_owners(facts, main)},
         attachments=letter_attachments(home.root, facts),
@@ -1807,7 +1808,7 @@ def _render_boundary(home, facts, strand, gen, context):
         moved=moved_line(facts, strand, gen, home.install_id()),
         cited=_cited(home, facts, strand, gen, context.thread),
         face=proposal_line(proposal),
-        idle=_idle_acts(home, facts, strand, context, proposal),
+        idle=_idle_acts(home, facts, strand, context, proposal, opened),
         left=_left(facts, context.thread, strand),
         **_pull(home, facts, context.thread, strand, home.room(strand)),
         **_budget(home, context.thread, facts),
@@ -1815,22 +1816,33 @@ def _render_boundary(home, facts, strand, gen, context):
     return text
 
 
-def _idle_acts(home, facts, strand, context, proposal) -> str:
+def _idle_acts(home, facts, strand, context, proposal, children) -> str:
     """Writes ``port/in/idle.md`` for the jack's keepalive; returns the block when the face is quiet and the
-    week is ahead of pace (w-i1xohccy9ht0). Information only: a failure costs no boundary."""
+    week is ahead of pace (w-i1xohccy9ht0). Information only: a failure costs no boundary.
+
+    Behind pace nothing is derived and the file goes; ahead, the acts are derived at most once per
+    ``idle.EVERY``, stamped by the file's mtime (an empty file stamps "none").
+    """
     from . import idle
     from .faces import PROPOSED
     from .usage import reading
     try:
-        block = idle.render(idle.candidates(home, facts, context.thread))
         path = home.room(strand) / "port/in/idle.md"
-        if not block:
+        shell = getattr(context, "shell", None)
+        if not shell or not idle.ahead(reading(home, shell)):
             path.unlink(missing_ok=True)
-        elif not path.is_file() or path.read_text() != block:
+            return ""
+        try:
+            fresh = time.time() - path.stat().st_mtime < idle.EVERY
+        except OSError:
+            fresh = False
+        if fresh:
+            block = path.read_text()
+        else:
+            block = idle.render(idle.candidates(home, facts, context.thread, children))
             atomic_write(path, block)
         quiet = bool(proposal) and proposal["face"] == PROPOSED["quiet"]
-        shell = getattr(context, "shell", None)
-        return block if block and quiet and shell and idle.ahead(reading(home, shell)) else ""
+        return block if quiet else ""
     except Exception as exc:  # noqa: BLE001 - information only; never costs a boundary
         _log(home, f"idle: skipped ({type(exc).__name__}: {exc})")
         return ""
