@@ -2381,6 +2381,13 @@ def run(root: Path | str, *, adapter: str = "fake", core: str = "haiku",
         next_usage = 0
         from .router import Router
         router = Router(home, config)
+        from .installs import refusal
+        if why := refusal(home, router.gate):
+            # A shared install id writes one ledger folder from two machines;
+            # nothing here ticks until a restart finds it fixed.
+            _log(home, f"loop: not starting: {why}")
+            stop.wait()
+            return
         from .connector import Inputs
         inputs = Inputs(home)
         health = Health(home, read_facts(home), _log)
