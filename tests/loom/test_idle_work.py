@@ -119,12 +119,51 @@ def test_a_child_quiet_for_days_with_nothing_in_hand_is_an_act(ledger, monkeypat
     assert acts == ["thread kid quiet 4d with nothing in hand: write to it with its next step, or settle it"]
 
 
-def test_a_parked_wish_is_offered_as_its_wait_not_as_the_top(ledger, monkeypatch):
+def test_a_prose_park_is_offered_as_its_wait_not_as_the_top(ledger, monkeypatch):
+    home, seat = ledger
+    wish, _ = _seat(home, seat, monkeypatch, AHEAD)
+    command(home, seat, "wish", wish, "--read", "waiting: the colour chart to come back")
+    acts = idle.candidates(home, read_facts(home), "work")
+    assert [a for a in acts if a.startswith(wish)] == [next(a for a in acts if "parked" in a)]
+
+
+def test_a_typed_park_is_not_offered_at_all(ledger, monkeypatch):
+    # The loom checks pr:, ci:, wish:, letter:, at: and file: waits itself and wakes the thread.
     home, seat = ledger
     wish, _ = _seat(home, seat, monkeypatch, AHEAD)
     command(home, seat, "wish", wish, "--read", "waiting: CI on #1", "--wait", "at:2099-01-01T00:00:00Z")
+    assert idle.candidates(home, read_facts(home), "work") == []
+
+
+def test_an_ask_is_never_offered_as_heard_never_read(ledger, monkeypatch):
+    home, seat = ledger
+    wish, _ = _seat(home, seat, monkeypatch, AHEAD)
+    ask = command(home, seat, "ask", "Pick a colour", "--for", wish)
+    late = inject_letter(home.root, to="thread:work", body="And name the board")
+    named = command(home, seat, "wish", "new", "--line", "Name the board", "--say", late)
+    command(home, seat, "wish", named, "--read", "a name for the board")
     acts = idle.candidates(home, read_facts(home), "work")
-    assert [a for a in acts if a.startswith(wish)] == [next(a for a in acts if "parked" in a)]
+    assert not [a for a in acts if ask in a]
+    # The person's wish, heard and never read, is still offered beside the top.
+    assert [a.split()[0] for a in acts] == [named, wish] and "is heard, never read" in acts[1]
+
+
+def test_the_top_waiting_on_a_person_is_not_offered(ledger, monkeypatch):
+    home, seat = ledger
+    wish, _ = _seat(home, seat, monkeypatch, AHEAD)
+    command(home, seat, "wish", wish, "--read", "a colour for the board")
+    command(home, seat, "wish", wish, "--left", "his pick A or B, then paint")
+    assert idle.candidates(home, read_facts(home), "work") == []
+    # The person's own name says it as well as a pronoun.
+    command(home, seat, "wish", wish, "--left", "test's yes on the chart")
+    assert idle.candidates(home, read_facts(home), "work") == []
+    command(home, seat, "wish", wish, "--left", "paint the board blue")
+    assert [a.split()[0] for a in idle.candidates(home, read_facts(home), "work")] == [wish]
+    # The newer of the park and the left decides: a park on the person after a movable left.
+    command(home, seat, "wish", wish, "--read", "waiting: her word on blue")
+    assert idle.candidates(home, read_facts(home), "work") == [
+        next(a for a in idle.candidates(home, read_facts(home), "work"))]
+    assert "parked" in idle.candidates(home, read_facts(home), "work")[0]
 
 
 def test_nothing_to_move_is_stamped_too(ledger, monkeypatch):
