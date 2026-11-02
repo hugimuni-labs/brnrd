@@ -9,8 +9,8 @@ the leader stops renewing the lease (its network drops, its lid shuts), the
 other machine takes the lease when it expires. A thread can also be pinned to
 one machine, so only that machine runs it.
 
-There is no `join` command yet. Every setup path seeds a new self, so the
-second machine is joined by hand. Do these steps in order.
+The second machine joins with `brnrd runtime machines join`, which clones
+the existing self instead of seeding a new one.
 
 `<home>` below is the loom home on each machine: the directory that holds
 `self/`, `loom/` and `ledger/`.
@@ -35,28 +35,29 @@ leads only itself and shares no ledger.
 
 ## 2. The new machine
 
-**Do not run `brnrd setup` on the new machine before the self is cloned.**
-Setup with no self seeds a second one, a second resident under the same
-name.
-
 1. Install brnrd and the harnesses you use, and log each one in. Check them:
    `claude auth status` and `codex login status`.
-2. Clone the existing self into `<home>/self` **before** any setup:
+2. Join, with the same URL as `lease_remote`:
 
    ```bash
-   git clone https://github.com/<you>/<self-repo>.git <home>/self
+   brnrd runtime machines join https://github.com/<you>/<self-repo>.git
    ```
 
-   Setup never overwrites a self that is already a git checkout. Without one
-   it seeds a new self and would try to push it over yours.
-3. Do not copy `<home>/loom/` from the first machine. `loom/install-id` must
-   be this machine's own. Two machines with the same id read each other's
-   lease as their own, and nothing refuses that. The new home writes a fresh
-   id the first time it runs.
-4. Write the same `lease_remote` line into this machine's
-   `<home>/loom/config.toml`. `config.toml` is per machine, and the self does
-   not carry it.
-5. Install and start the service: `brnrd loom install`.
+   It clones the self into an empty home (`--home`, `BRNRD_HOME`, or
+   `~/brnrd`, as setup picks), mints an install id that no ledger on the
+   remote holds, and writes `lease_remote` into this machine's
+   `loom/config.toml`. It refuses a home that already has a self, and a
+   remote that has no `refs/leases/inbox` yet: that means step 1 is not done,
+   and the first machine still leads on its own local lease.
+3. Run `brnrd setup` for this machine's channel and logins. It finds the
+   self and seeds nothing.
+4. Install and start the service: `brnrd loom install`.
+
+Do not copy `<home>/loom/` from the first machine. Each install id is bound
+to the machine and home that minted it (`loom/install-host`), and every
+ledger push carries that binding. A loom whose id was minted elsewhere, or
+whose `refs/ledger/<install>` was pushed from another machine, does not
+start. Its log says `not starting:` and why.
 
 ## 3. Check it
 
