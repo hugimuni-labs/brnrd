@@ -23,6 +23,7 @@ from pathlib import Path
 
 from .gitlease import LEDGERS, GitLeaseAuthority
 from .home import Home, check_install
+from .installs import TRAILER, here
 from .ledger import mark_changed
 
 SEGMENT = 1 << 20
@@ -142,7 +143,7 @@ class Shuttle:
         if parent and self._git("rev-parse", parent + "^{tree}") == tree:
             return parent
         args = ["-c", "user.name=brnrd", "-c", "user.email=loom@brnrd.dev",
-                "commit-tree", tree, "-m", f"ledger {self.mine}"]
+                "commit-tree", tree, "-m", f"ledger {self.mine}\n\n{TRAILER}{here(self.home)}"]
         if parent:
             args += ["-p", parent]
         sha = self._git(*args)
