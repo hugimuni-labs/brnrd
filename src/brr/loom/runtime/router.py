@@ -431,10 +431,11 @@ class Router:
         for thread in threads:
             if read_thread(thread).get("status") in CLOSED:
                 continue
-            if not armed():
-                break
+            # armed() takes the lease's lock: asked before each write, not for every thread a tick passes over.
             if thread in state.holder:
                 if holding:
+                    if not armed():
+                        break
                     facts = self._release_abandoned(facts, thread, body_alive)
                 state = fold(facts)
                 if thread in state.holder:
@@ -442,6 +443,8 @@ class Router:
             letters = [f for f in letters_for(facts, main_snapshot(home), thread) if not f.data.get("notice")]
             if not letters:
                 continue
+            if not armed():
+                break
             if self._home_retry_waiting(facts, thread):
                 continue
             target = readme_for(home, thread)

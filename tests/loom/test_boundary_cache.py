@@ -100,12 +100,17 @@ def test_kept_boundary_equals_a_fresh_render_and_every_input_re_renders(tmp_path
         assert tick()
         assert "idle: 2 more opened here" in boundary()
 
-        # A letter to the parent's thread is a ledger change.
+        # A letter to the parent's thread is a ledger change: it shows at the very next tick, however long a
+        # render is kept (busy-cpu), and the boundary is newer than every ledger file, as the jack's stop reads it.
+        monkeypatch.setattr(loom, "RENDER_MAX_AGE", 3600.0)
         ledger.append(home, Fact(kind="letter", by="person:test", id="letter-to-parent",
                                  data={"id": "letter-to-parent", "from": "person:test", "to": "thread:w-1",
                                        "body": "a word for the parent"}))
         assert tick()
         assert "a word for the parent" in boundary()
+        rendered = (home.room(parent) / "port/in/boundary.md").stat().st_mtime
+        assert all(path.stat().st_mtime <= rendered for path in (root / "ledger/facts").glob("*/*.jsonl"))
+        monkeypatch.setattr(loom, "RENDER_MAX_AGE", 30.0)
 
         # A config change is a file the render opened.
         config = root / "loom/config.toml"
@@ -119,3 +124,28 @@ def test_kept_boundary_equals_a_fresh_render_and_every_input_re_renders(tmp_path
     held.close()
     for proc in started:
         proc.kill()
+
+
+def test_a_growing_transcript_keeps_the_render_and_a_watched_file_retires_it(tmp_path, monkeypatch):
+    """busy-cpu: a body's transcript grows at every turn; a render that read it was re-rendered at the next tick.
+    The spend read from it keeps its own TTL, so it is read but not watched."""
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path / "claude"))
+    transcript = tmp_path / "claude/projects/-room-self/one.jsonl"
+    transcript.parent.mkdir(parents=True)
+    transcript.write_text("{}\n")
+    watched = tmp_path / "config.toml"
+    watched.write_text("a = 1\n")
+    facts, renders = object(), []
+
+    def render():
+        renders.append(1)
+        return transcript.read_text() + watched.read_text()
+    key = ("s-aaaa-render", 1)
+    loom._rendered(facts, key, render)
+    with transcript.open("a") as out:
+        out.write("{}\n")
+    loom._rendered(facts, key, render)
+    assert len(renders) == 1
+    watched.write_text("a = 2\n")
+    loom._rendered(facts, key, render)
+    assert len(renders) == 2
