@@ -278,7 +278,7 @@ def render_boundary(strand: str, gen: int, thread: str, letters: list[Fact],
                     reply_context: dict[str, str] | None = None,
                     budget: str = "", over: str = "", repaired: str = "",
                     degraded: str = "", face: str = "", left: str = "", moved: str = "",
-                    library: str = "", forge: str = "", band: str = "", top: str = "",
+                    library: str = "", forge: str = "", band: str = "",
                     done: str = "", room: str = "", cited: str = "", idle: str = "") -> str:
     """Shown letters keep their first line, reply context and attachments when compacted.
 
@@ -296,8 +296,6 @@ def render_boundary(strand: str, gen: int, thread: str, letters: list[Fact],
     if left:
         # What the stop will ask for; never after `` · plan``, so it wakes nobody.
         lines.insert(2, left)
-    if top:
-        lines.insert(2, top)
     if band:
         # The open asks (requests R4): the jack says it again only when a flavour changes.
         lines.insert(2, band)
@@ -776,6 +774,14 @@ def write_send(room: Path, *, to: str, sender: str, body: str = "",
                 f"send: {re} is a person letter with no disposition yet; "
                 + (steer + '--wish new:"<line>"' if steer else 'carry one: --wish <w-id>|new:"<line>"')
                 + ' [--says "quote"] [--ref kind:ref] [--answered], or --chatter if it wants nothing')
+    if echo is not None and re in letters and not asked and reincarnate is None:
+        from .dispositions import is_person
+        from .wishes import untouched_line, wishes
+        found = wishes(facts)
+        if is_person(letters[re]) and not any(re in {say.letter for say in w.says} for w in found.values()):
+            from .project import sender_threads
+            echo.append(untouched_line(found, sender_threads(facts).get(sender), re,
+                                       str(letters[re].data.get("body") or "")))
     links, misses = [], []
     if refs_mod.tokens(note or body):
         from .ledger import read_facts

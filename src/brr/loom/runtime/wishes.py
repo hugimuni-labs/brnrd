@@ -483,16 +483,29 @@ def steer_candidates(found: dict[str, Wish], thread: str) -> list[Wish]:
                    and w.sender == "person"), key=lambda w: w.at, reverse=True)
 
 
-def steers_line(found: dict[str, Wish], thread: str, letter: str) -> str:
-    """The prompt under a person letter that has no disposition yet."""
-    rows = steer_candidates(found, thread)
+def pointed(found: dict[str, Wish], thread: str, body: str) -> list[Wish]:
+    """Open wishes and asks on ``thread`` a letter's words point at: named by id,
+    or sharing two words with its line; named first, then by words shared."""
+    from .recall import MIN_SHARED, words
+    said = set(words(body))
+    rows = []
+    for w in found.values():
+        if w.thread != thread or not w.open:
+            continue
+        named, shared = w.id in body, len(said & set(words(w.line)))
+        if named or shared >= MIN_SHARED:
+            rows.append((not named, -shared, w.at, w))
+    return [row[-1] for row in sorted(rows, key=lambda row: row[:3])][:STEERS]
+
+
+def untouched_line(found: dict[str, Wish], thread: str | None, letter: str, body: str) -> str:
+    """Said at the act, once: a reply to a person letter that touched no wish,
+    and what the letter's words point at (prompts-remake, his 10095)."""
+    rows = pointed(found, thread, body) if thread else []
     if not rows:
-        return ""
-    named = " · ".join(f'{w.id} "{_short(w.line, 40)}"' for w in rows[:STEERS])
-    more = f" · +{len(rows) - STEERS} more: wishes --thread {thread}" if len(rows) > STEERS else ""
-    return (f"steers? {named}{more} · or new — send --re {letter} --wish <w-id> "
-            '[--says "…"] | --wish new:"<line>" | --chatter'
-            f" · top? wish <w-id> --top {letter} | no change")
+        return f"{letter} touched no wish"
+    named = " · ".join(f'{w.id} "{_short(w.line, 40)}"' for w in rows)
+    return f"{letter} touched no wish; its words point at {named} (if it steers one: wish <w-id> --say {letter})"
 
 
 def steers_refusal(found: dict[str, Wish], thread: str | None) -> str:

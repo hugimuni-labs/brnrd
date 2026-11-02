@@ -95,7 +95,7 @@ def test_codex_spend_is_the_rollouts_last_cumulative_total(tmp_path, monkeypatch
     assert spend.codex_spent(seat) == 1_000 + 49_000 * 0.1 + 500
 
 
-def test_past_its_allocation_the_strand_is_warned_at_every_boundary_and_the_opener_raises_it(home, tmp_path):
+def test_past_its_allocation_the_strand_is_warned_at_the_crossing_and_every_5pct_and_the_opener_raises_it(home, tmp_path):
     folder = _transcripts(tmp_path / "claude" / "projects", home.room(CHILD))
     (folder / "s1.jsonl").write_text(_turn("m1", output=500_000))  # 2.5M weighted
     _letter(home, PARENT, "thread:work", "Build it.", budget=3_000_000)
@@ -111,17 +111,18 @@ def test_past_its_allocation_the_strand_is_warned_at_every_boundary_and_the_open
     text = boundary.read_text()
     assert "· spent 3.5M/3M" in text.splitlines()[1]
     parse_boundary(text)  # the warning line is not a letter
-    # Nothing else changed between these calls; the warning still comes each time.
-    for _ in range(2):
-        said = json.loads(execute("post", home.room(CHILD), "{}"))["hookSpecificOutput"]["additionalContext"]
-        assert any(line.startswith("budget: thread work has spent 3.5M of 3M tokens. Write to thread:parent")
-                   for line in said.splitlines())
-    # With nothing owed and nothing new, the warning is the whole message, each time.
+    # Said at the crossing, then not again at every call (his 10095).
+    said = json.loads(execute("post", home.room(CHILD), "{}"))["hookSpecificOutput"]["additionalContext"]
+    assert any(line.startswith("budget: thread work has spent 3.5M of 3M tokens (+16%). Write to thread:parent")
+               for line in said.splitlines())
+    assert "budget:" not in execute("post", home.room(CHILD), "{}")
+    # Within the same +5% step: quiet; the next step says it again, once.
     over = next(line for line in text.splitlines() if line.startswith("budget: "))
-    boundary.write_text(render_boundary(CHILD, 1, "work", [], set(), {}, budget="spent 3.5M/3M", over=over))
-    for _ in range(3):
-        said = json.loads(execute("post", home.room(CHILD), "{}"))["hookSpecificOutput"]["additionalContext"]
-        assert said == over
+    for pct, again in ((19, False), (20, True), (21, False)):
+        line = over.replace("(+16%)", f"(+{pct}%)")
+        boundary.write_text(render_boundary(CHILD, 1, "work", [], set(), {}, budget="spent 3.5M/3M", over=line))
+        said = execute("post", home.room(CHILD), "{}")
+        assert (json.loads(said)["hookSpecificOutput"]["additionalContext"] == line) if again else said == ""
 
     # The child cannot raise its own: refused at send, and ignored in the fold.
     refused = cli(["send", "--room", str(home.room(CHILD)), "--to", "thread:parent", "--budget", "5m", "more"])

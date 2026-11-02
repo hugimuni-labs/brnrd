@@ -131,7 +131,8 @@ def test_a_room_made_before_the_shim_converges_at_its_next_wake(home, tmp_path):
     assert f"{entry.shim()} runtime merge-driver" in driver
     # The wake text names the shim's verb, not an interpreter.
     wake = (prepared / "port" / "loom.md").read_text()
-    assert "`brnrd runtime send --re" in wake and "python -m brr" not in wake
+    from brr.loom.runtime.briefing import BRIEFING
+    assert "`brnrd runtime send --re" in BRIEFING and "python -m brr" not in wake + BRIEFING
     assert sys.executable not in wake and str(entry.prefix()) not in wake
 
     # The claude body rewrites the room's hooks from the wake's env.

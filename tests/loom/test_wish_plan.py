@@ -1,4 +1,4 @@
-"""A thread's plan is its wishes; a person letter is asked which wish it steers."""
+"""A thread's plan is its wishes; a reply to a person letter is told when it steered none."""
 from types import SimpleNamespace
 
 from brr.loom.runtime import snapshot
@@ -77,26 +77,33 @@ def test_snapshot_plan_is_the_wishes(ledger):
     assert work["plan"] == {"done": 1, "total": 2, "next": "Overlay opens"}
 
 
-def test_person_letter_shows_steers_until_disposed(ledger):
+def test_a_person_letter_carries_no_standing_steers(ledger):
+    home, seat = ledger
+    heard(home, seat, "Hovered column holds still")
+    inject_letter(home.root, to="thread:work", body="also when the sheet is open")
+    shown = boundary(home)
+    assert "steers?" not in shown and "asks?" not in shown
+
+
+def test_a_reply_that_touched_no_wish_says_so_once_and_names_what_the_letter_points_at(ledger):
+    """His 10095: feedback after the act, never a list shown before it."""
     home, seat = ledger
     old = heard(home, seat, "Hovered column holds still")
-    letter = inject_letter(home.root, to="thread:work", body="also when the sheet is open")
-    shown = boundary(home)
-    assert f'steers? {old} "Hovered column holds still" · or new — send --re {letter} --wish <w-id>' in shown
-    assert shown.index(letter) < shown.index("steers?")
-    sent = command(home, seat, "send", "--to", "thread:other", "--re", letter, "--wish", old, "on it")
-    assert sent
-    assert "steers?" not in boundary(home)
-
-
-def test_steers_names_three_newest_and_the_rest(ledger):
-    home, seat = ledger
-    ids = [heard(home, seat, f"Wish {i}") for i in range(5)]
-    letter = inject_letter(home.root, to="thread:work", body="one more thing")
-    line = next(row for row in boundary(home).splitlines() if "steers?" in row)
-    assert [i for i in ids if i in line] == ids[2:]
-    assert line.index(ids[4]) < line.index(ids[3]) < line.index(ids[2])
-    assert "+2 more: wishes --thread work" in line and letter in line
+    other = heard(home, seat, "Overlay opens")
+    letter = inject_letter(home.root, to="thread:work", body="the hovered column still jumps")
+    sent = cli(["send", "--room", str(seat), "--to", "thread:other", "--re", letter, "--chatter", "ok"])
+    assert sent.returncode == 0, sent.stderr
+    line = next(row for row in sent.stderr.splitlines() if "touched no wish" in row)
+    assert line.startswith(f'{letter} touched no wish; its words point at {old} "Hovered column holds still"')
+    assert other not in line and f"wish <w-id> --say {letter}" in line
+    # A letter that points at nothing is still told, without a list.
+    plain = inject_letter(home.root, to="thread:work", body="thanks")
+    quiet = cli(["send", "--room", str(seat), "--to", "thread:other", "--re", plain, "--chatter", "ok"])
+    assert f"{plain} touched no wish\n" in quiet.stderr
+    # A reply that steers a wish touched one: nothing to say.
+    steer = inject_letter(home.root, to="thread:work", body="hovered column again")
+    stamped = cli(["send", "--room", str(seat), "--to", "thread:other", "--re", steer, "--wish", old, "ok"])
+    assert stamped.returncode == 0 and "touched no wish" not in stamped.stderr
 
 
 def test_refusal_lists_the_open_wishes(ledger):

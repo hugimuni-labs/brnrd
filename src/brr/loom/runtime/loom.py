@@ -623,21 +623,9 @@ def _prepare(home: Home, strand: str, thread: str, gen: int,
     forge = forge_threads(home.root / "self")
     part = gone + _handover(facts, thread, gen, threads, home) + inherited + (
         f"you are strand {strand} on thread {thread}"
-        + (f" ({forge}/{thread})" if forge else "") + "; letters arrive at your tool "
-        "boundaries, each naming its reply address: answer with "
-        "`brnrd runtime send --re <id> --to <address> \"…\"`, or where the address is `-`, "
-        f"settle it with `send --re <id> --to thread:{thread} --note \"<what you did>\"`. "
-        "You forget what is not written: keep this thread's README true (spec, decisions) and "
-        "land self commits with `brnrd runtime send-self --room .`; what is left on a wish lives "
-        "on it: `wish <w-id> --left \"<step>\" …`, the whole list, latest wins (`--left same` "
-        "when nothing moved), and the stop asks for it once a wish moved. To reincarnate: `reincarnate --why \"<one line>\"`, then end the turn; work done: "
-        "`settle <thread> --why \"…\"`. A letter from `loom` is a notice yours to settle; its "
-        "last lines say how (core/loom/README.md, Notices). Stamp what someone wants with "
-        "`send --wish`; open a thread only for one: `send --to thread:<new> --wish <w-id>` or "
-        "`--wish new:\"<line>\"`. A `face?` line: `face take` wears it, `face <face>` another, "
-        "silence lets it lapse."
-        # Resting and waiting are the loom briefing's, in the core (briefing.py).
-        + (" call `$BRNRD_JACK --event start` now, `$BRNRD_JACK --event post` between "
+        + (f" ({forge}/{thread})" if forge else "")
+        # How to reply, settle, leave and end is the loom briefing's, in the core (briefing.py).
+        + ("; call `$BRNRD_JACK --event start` now, `$BRNRD_JACK --event post` between "
            "steps and `$BRNRD_JACK --event stop` before ending; read each returned boundary\n"
            if jack == "hand" else "\n")
     ) + _loom_line(home, facts)
@@ -1088,9 +1076,9 @@ def _left(facts, thread: str, strand: str) -> str:
 
 
 def _pull(home: Home, facts, thread: str, strand: str, room: Path) -> dict[str, str]:
-    """The asks band, a rank word's ``top?`` and a done thread (requests R4)."""
+    """The asks band and a done thread (requests R4)."""
     from .lifecycle import CLOSED
-    from .pull import band_line, done_line, owed_tops, top_line
+    from .pull import band_line, done_line
     from .threads import thread_table
     from .wishes import told
     found = told(facts)
@@ -1099,36 +1087,13 @@ def _pull(home: Home, facts, thread: str, strand: str, room: Path) -> dict[str, 
     except (OSError, ValueError, KeyError):
         closed = set()
     return {"band": band_line(facts, found, thread, home.main_thread(), room, closed),
-            "top": top_line(owed_tops(facts, thread, strand)),
             "done": done_line(found, thread, home.main_thread())}
 
 
 def _reply_context(facts, thread: str, letters, room: Path | None = None) -> dict[str, str]:
-    """Reply context, and a steers? line under each undisposed person letter."""
-    context = dict(letter_replies(facts))
-    from .dispositions import disposed, is_person
-    person = [letter for letter in letters if is_person(letter)]
-    if not person:
-        return context
-    from .wishes import _short, steers_line, told
-    found, done = told(facts), disposed(facts, room)
-    from .pull import thread_asks
-    asks = [w for w in thread_asks(found, thread, "") if w.thread == thread]
-    said = False
-    for letter in person:
-        ident = str(letter.data.get("id", letter.id))
-        line = "" if ident in done else steers_line(found, thread, ident)
-        if line and said:
-            # The candidates are the thread's, the same under every letter: named once (wake-vision).
-            line = f"steers? as above — send --re {ident} --wish <w-id> | --wish new:\"<line>\" | --chatter"
-        if line and asks and not said:
-            # An answer that did not reply to the raise still closes the ask it answers.
-            line += "\nasks? " + " · ".join(f'{w.id} "{_short(w.line, 40)}"' for w in asks[:3]) \
-                + f" — send --re {ident} --wish <ask-id> if it answers one"
-        said = said or bool(line)
-        if line:
-            context[letter.id] = "\n".join(filter(None, (context.get(letter.id, ""), line)))
-    return context
+    """Reply context. What a person letter steers is said at the reply that touched
+    no wish (``untouched_line``), never as a standing list under it."""
+    return dict(letter_replies(facts))
 
 
 def _budget(home: Home, thread: str, facts) -> dict[str, str]:

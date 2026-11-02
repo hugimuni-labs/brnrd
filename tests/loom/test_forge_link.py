@@ -43,7 +43,7 @@ def test_the_thread_line_card_and_table_carry_the_origins_forge_link(tmp_path, o
     room = _prepare(home, NEXT, "brnrd", 1, [], sender_threads(facts), facts, "hold")
     line = (room / "port/loom.md").read_text()
     assert line.startswith(f"you are strand {NEXT} on thread brnrd"
-                           + (f" ({url}); " if url else "; "))
+                           + (f" ({url})\n" if url else "\n"))
 
     card = next(t for t in snapshot.assemble(home, read_facts(home), load_config(root))["threads"]
                 if t["id"] == "brnrd")
