@@ -352,7 +352,7 @@ def census(room: Path, thread: str, state: dict, facts, now: float | None = None
             counts[str(fact.get("kind"))] = counts.get(str(fact.get("kind")), 0) + 1
     after = ", ".join(f"{count} {kind}" for kind, count in counts.items()) or "nothing"
     where = f"after the last landing ({_ago(now - landed)} ago)" if landed is not None else "unlanded"
-    lines.append(f"{where}, only in this context: {after}")
+    lines.append(f"{where}, not yet in the README: {after}")
     every = _mine(room, booted) if booted else mine
     sent = sum(1 for fact in every if fact.get("kind") == "letter")
     shown = {str(i) for fact in every if fact.get("kind") == "shown" for i in (fact.get("data") or {}).get("ids") or ()}

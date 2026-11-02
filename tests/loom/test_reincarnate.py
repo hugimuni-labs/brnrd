@@ -216,7 +216,7 @@ def test_the_census_splits_what_landed_from_what_only_this_context_holds(room, t
     first, after, counts = said.splitlines()
     assert first.startswith("since this gen booted (2m ago): nothing landed in the README")
     # Counted, not the stop's distinct kinds; a left that did not move is no act.
-    assert after == "unlanded, only in this context: 2 letter, 1 wish.left"
+    assert after == "unlanded, not yet in the README: 2 letter, 1 wish.left"
     assert counts == ("scroll: tool output 60% · letters and boundaries 30% · own turns 10% · "
                       "letters 3 in, 2 out · stops 4")
     assert kept["offset"] == path.stat().st_size
