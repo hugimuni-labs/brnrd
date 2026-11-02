@@ -279,7 +279,7 @@ def render_boundary(strand: str, gen: int, thread: str, letters: list[Fact],
                     budget: str = "", over: str = "", repaired: str = "",
                     degraded: str = "", face: str = "", left: str = "", moved: str = "",
                     library: str = "", forge: str = "", band: str = "", top: str = "",
-                    done: str = "", room: str = "", cited: str = "") -> str:
+                    done: str = "", room: str = "", cited: str = "", idle: str = "") -> str:
     """Shown letters keep their first line, reply context and attachments when compacted.
 
     ``budget`` sits before the plan: the jack compares what follows `` · plan ``,
@@ -309,6 +309,9 @@ def render_boundary(strand: str, gen: int, thread: str, letters: list[Fact],
     if cited:
         # A closure the README cites (boot-review §3a): shown once, never a step.
         lines.insert(2, cited)
+    if idle:
+        # A quiet face with fuel ahead of pace: what this thread could move (idle.py), one unit to the jack.
+        lines.insert(2, idle.rstrip("\n"))
     if face:
         # Its own line, never after `` · plan``: a proposal is not news that wakes a held body.
         lines.insert(2, face)

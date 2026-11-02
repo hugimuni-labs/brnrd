@@ -1791,6 +1791,7 @@ def _render_boundary(home, facts, strand, gen, context):
     from .threads import thread_table
     main, state = main_snapshot(home), fold(facts)
     owed = letters_for(facts, main, context.thread)
+    proposal = propose(facts, strand, gen, context.thread)
     text = render_boundary(
         strand, gen, context.thread, owed,
         state.shown.get(strand, set()), sender_threads(facts), context.fuel,
@@ -1805,12 +1806,34 @@ def _render_boundary(home, facts, strand, gen, context):
         library=problem_line(facts, home.install_id()),
         moved=moved_line(facts, strand, gen, home.install_id()),
         cited=_cited(home, facts, strand, gen, context.thread),
-        face=proposal_line(propose(facts, strand, gen, context.thread)),
+        face=proposal_line(proposal),
+        idle=_idle_acts(home, facts, strand, context, proposal),
         left=_left(facts, context.thread, strand),
         **_pull(home, facts, context.thread, strand, home.room(strand)),
         **_budget(home, context.thread, facts),
     )
     return text
+
+
+def _idle_acts(home, facts, strand, context, proposal) -> str:
+    """Writes ``port/in/idle.md`` for the jack's keepalive; returns the block when the face is quiet and the
+    week is ahead of pace (w-i1xohccy9ht0). Information only: a failure costs no boundary."""
+    from . import idle
+    from .faces import PROPOSED
+    from .usage import reading
+    try:
+        block = idle.render(idle.candidates(home, facts, context.thread))
+        path = home.room(strand) / "port/in/idle.md"
+        if not block:
+            path.unlink(missing_ok=True)
+        elif not path.is_file() or path.read_text() != block:
+            atomic_write(path, block)
+        quiet = bool(proposal) and proposal["face"] == PROPOSED["quiet"]
+        shell = getattr(context, "shell", None)
+        return block if block and quiet and shell and idle.ahead(reading(home, shell)) else ""
+    except Exception as exc:  # noqa: BLE001 - information only; never costs a boundary
+        _log(home, f"idle: skipped ({type(exc).__name__}: {exc})")
+        return ""
 
 
 def _cited(home, facts, strand, gen, thread):
