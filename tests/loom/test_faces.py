@@ -59,6 +59,7 @@ if "on thread other" in ctx.wake():
 elif "carry on" not in ctx.wake():
     letters = ctx.owed()
     asked = until(proposed)
+    asked_header = _header(fold(read_facts(home_of_room(ctx.room))), me)
     wordmark = face("br^rd")
     named = face("focused")
     took = face("take")
@@ -86,7 +87,7 @@ elif "carry on" not in ctx.wake():
         "early": [early.returncode, early.stderr], "asked": proposed(asked),
         "wordmark": [wordmark.returncode, wordmark.stderr], "named": [named.returncode, named.stderr],
         "took": took.stdout, "lapsed": proposed(lapsed), "merged": proposed(merged),
-        "after": proposed(after), "again": again, "faces": faces(facts), "header": _header(fold(facts), me, facts)}}))
+        "after": proposed(after), "again": again, "asked_header": asked_header, "faces": faces(facts), "header": _header(fold(facts), me, facts)}}))
     ctx.molt("carry on")
     assert ctx.jack("stop").raw == ""
 else:
@@ -113,6 +114,8 @@ else:
         short = letter.rpartition("/")[2]
         assert result["asked"] == [f"face? b°O°d for your {short} ({letter}): `brnrd runtime "
                                    "face take` wears it, `face <face>` wears another, your next letter lets it lapse"]
+        # The header never names a letter: its id means nothing to the person reading.
+        assert result["asked_header"] == "b·_·d ⌁ [ work ]"
         assert result["wordmark"][0] == 1 and "give the face itself" in result["wordmark"][1]
         assert result["named"][0] == 1 and "give the face itself" in result["named"][1]
         assert result["took"] == "face b°O°d\n"

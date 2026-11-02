@@ -30,9 +30,12 @@ class Forge:
     def __init__(self, verdict):
         self.verdict_of, self.asked = verdict, []
 
-    def verdict(self, url, sha):
+    def gates(self, url, pull):
+        return None
+
+    def judge(self, url, sha, gates):
         self.asked.append(sha)
-        return self.verdict_of
+        return self.verdict_of, "Backend tests" if self.verdict_of == "red" else ""
 
 
 @pytest.fixture
@@ -141,6 +144,58 @@ def test_a_red_tip_waits_without_a_fact(world):
     _run(world.root, lambda: len(world.forge.asked) >= 3)
     assert _git(world.source, "rev-parse", "HEAD") == world.old
     assert not world.execs and not _degraded(world.root)
+
+
+def _github(monkeypatch, world, tip_runs):
+    """GitHub as the real ``GitHubChecks`` reads it: pull #7's head ran CI and a skipped
+    docs deploy; main's tip ran ``tip_runs``."""
+    import io
+    pr_runs = [{"name": "Backend tests", "status": "completed", "conclusion": "success"},
+               {"name": "deploy", "status": "completed", "conclusion": "skipped"}]
+    bodies = {"pulls/7": {"head": {"sha": "pr7head"}},
+              "commits/pr7head/check-runs?per_page=100": {"check_runs": pr_runs},
+              f"commits/{world.tip}/check-runs?per_page=100": {"check_runs": tip_runs}}
+
+    def urlopen(req, timeout):
+        path = req.full_url.removeprefix("https://api.github.com/repos/o/r/")
+        return io.BytesIO(json.dumps(bodies[path]).encode())
+
+    monkeypatch.setattr(update, "slug", lambda url: "o/r")  # origin is a local bare repo
+    monkeypatch.setattr(update.urllib.request, "urlopen", urlopen)
+    checks = update.GitHubChecks("t")
+    monkeypatch.setattr(checks, "_token", lambda: "t")
+    monkeypatch.setattr(update, "forge_for", lambda config: checks)
+
+
+def test_a_tip_whose_only_failure_is_a_deploy_fast_forwards(world, monkeypatch):
+    # 29f304c9 on 2026-11-01: the Scaleway registry push 500'd, every code check green, ~2 h held.
+    _github(monkeypatch, world, [
+        {"name": "Backend tests", "status": "completed", "conclusion": "success"},
+        {"name": "Build and publish image", "status": "completed", "conclusion": "failure"},
+        {"name": "Deploy the mirrored image", "status": "completed", "conclusion": "skipped"},
+        {"name": "deploy", "status": "completed", "conclusion": "failure"}])
+    _run(world.root, lambda: world.execs)
+    assert _git(world.source, "rev-parse", "HEAD") == world.tip
+
+
+def test_a_tip_red_on_a_gate_stays_and_says_so_once(world, monkeypatch):
+    _github(monkeypatch, world, [
+        {"name": "Backend tests", "status": "completed", "conclusion": "failure"},
+        {"name": "Build and publish image", "status": "completed", "conclusion": "success"}])
+    line = f"update: {world.tip[:8]} is red on Backend tests; staying on {world.old[:8]}"
+    log = world.root / "loom/loom.log"
+    looming = Loom(world.root, tick=0.01)
+    looming.start()
+    try:
+        wait_until(lambda: log.exists() and line in log.read_text(), 10, looming.dump)
+        seen = update.SEEN["at"]
+        wait_until(lambda: update.SEEN["at"] != seen, 10, looming.dump)  # a later poll, still red
+    finally:
+        looming.halt()
+    assert not looming.errors
+    assert _git(world.source, "rev-parse", "HEAD") == world.old
+    assert not world.execs and not _degraded(world.root)
+    assert log.read_text().count(line) == 1
 
 
 def test_a_dirty_checkout_is_refused_and_left_as_it_was(world):
@@ -329,7 +384,7 @@ def test_a_wake_says_what_the_loom_runs_against_main_and_what_it_loaded(world, m
     record_start(home, read_facts(home), root=world.source)
     assert loom._loom_line(home, read_facts(home)) == (
         f"loom: runs {world.old[:8]}; main not fetched by this loom (update off, or not polled yet)\n")
-    assert update.DevSource(world.source, Forge("red")).poll() is None
+    assert isinstance(update.DevSource(world.source, Forge("red")).poll(), update.Held)
     assert loom._loom_line(home, read_facts(home)) == (
         f"loom: runs {world.old[:8]}; main {world.tip[:8]} is 2 commits ahead, not loaded: #7\n")
     _git(world.source, "merge", "-q", "--ff-only", world.tip)

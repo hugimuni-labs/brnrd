@@ -1,4 +1,4 @@
-"""The jack. It reads boundary.md and stdin, and the ledger only through
+"""The jack. It reads boundary.md, idle.md and stdin, and the ledger only through
 ``reap.left`` for its own room. It fails open."""
 
 from __future__ import annotations
@@ -340,9 +340,37 @@ def _poll(room: Path, stdin_text: str = '') -> str:
             # shell ends a hook that outlives its timeout, and the body would
             # then leave while it still owes. With no cache lifetime this
             # happens only at the hook ceiling.
+            news = _stop_news(room, text, parsed)
+            idle = _idle(room, home, shell)
+            if idle:
+                return _json({"decision": "block", "reason": idle(news)})
             return _json({"decision": "block", "reason": "cache keepalive, nothing new arrived: stop, unless the boundary"
-                          " below shows work you already owed\n" + _stop_news(room, text, parsed)})
+                          " below shows work you already owed\n" + news})
         time.sleep(min(0.2, remaining))
+
+
+def _idle(room: Path, home, shell: str | None):
+    """The keepalive's candidates, when the loom wrote some and the week is ahead of pace; else None.
+
+    A failed read says nothing: the keepalive then says what it said before.
+    """
+    path = room / "port" / "in" / "idle.md"
+    if not shell or _hand() or not path.is_file():
+        return None
+    from . import idle
+    from .usage import reading
+    try:
+        lines, value = path.read_text(), reading(home, shell)
+        if not lines.strip() or not idle.ahead(value):
+            return None
+        return lambda news: idle.keepalive(lines, value, news)
+    except Exception:
+        try:
+            with (room / "port" / "idle-errors.log").open("a") as handle:
+                handle.write(traceback.format_exc())
+        except OSError:
+            pass
+        return None
 
 
 def _refilling(home, shell: str) -> bool:

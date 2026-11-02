@@ -10,8 +10,10 @@ bodies seldom pause at once; the start that
 follows writes ``loom.moved``. It never resets: a HEAD main does not contain,
 a branch other than main or a tree with uncommitted changes is refused, and
 the refusal is the ``update`` step's ``loom.degraded``. Red or pending checks
-wait without a fact. ``stable`` is the release channel (product-shape move
-3), not built here: it logs once and stays put. ``auto``, the default, is
+wait without a fact; a red one is said once in loom.log. A check counts only
+when the tip's pull request had to pass it (``GitHubChecks.gates``): a deploy
+is not a gate. ``stable`` is the release channel (product-shape move 3), not
+built here: it logs once and stays put. ``auto``, the default, is
 ``dev`` for a loom that runs from a checkout and ``off`` otherwise.
 """
 
@@ -22,6 +24,7 @@ import re
 import subprocess
 import threading
 import time
+import urllib.error
 import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
@@ -63,6 +66,14 @@ class Offer:
     new: str
 
 
+@dataclass(frozen=True)
+class Held:
+    """Main's tip is red on a check its pull request had to pass: the loom stays on ``head``."""
+    tip: str
+    head: str
+    check: str
+
+
 def slug(url: str) -> str | None:
     """``owner/repo`` of a GitHub remote, https or ssh."""
     if url.startswith("git@github.com:"):
@@ -88,29 +99,58 @@ class GitHubChecks:
         return subprocess.run(["gh", "auth", "token"], capture_output=True, text=True,
                               timeout=20, check=True).stdout.strip()
 
-    def verdict(self, url: str, sha: str) -> str:
-        """``green`` when every run passed, ``red`` when one failed, else ``pending``."""
-        repo = slug(url)
-        if repo is None:
-            raise Refused(f"origin {url} is not on GitHub: no CI to read")
+    def _get(self, repo: str, path: str) -> dict:
         req = urllib.request.Request(
-            f"https://api.github.com/repos/{repo}/commits/{sha}/check-runs?per_page=100",
+            f"https://api.github.com/repos/{repo}/{path}",
             headers={"Authorization": f"Bearer {self._token()}",
                      "Accept": "application/vnd.github+json"})
         with urllib.request.urlopen(req, timeout=20) as resp:
-            runs = json.load(resp).get("check_runs") or []
+            return json.load(resp)
+
+    def _runs(self, repo: str, sha: str) -> list[dict]:
+        return self._get(repo, f"commits/{sha}/check-runs?per_page=100").get("check_runs") or []
+
+    def gates(self, url: str, pull: int | None) -> set[str] | None:
+        """The checks pull request ``pull`` had to pass: those that ran on its head, not skipped.
+
+        A check main runs that its pull request never did is a deploy, not a gate: 29f304c9
+        held the loom ~2 h on publish-container's "Build and publish image", a registry push
+        that failed with every code check green (2026-11-01). ``None``, every check counts,
+        when the commit names no pull request or its head ran none."""
+        repo = slug(url)
+        if pull is None or repo is None:
+            return None
+        try:
+            head = str((self._get(repo, f"pulls/{pull}").get("head") or {}).get("sha") or "")
+        except urllib.error.HTTPError as exc:
+            if exc.code == 404:
+                return None
+            raise
+        ran = {str(r.get("name")) for r in self._runs(repo, head) if r.get("conclusion") != "skipped"} if head else set()
+        return ran or None
+
+    def judge(self, url: str, sha: str, gates: set[str] | None = None) -> tuple[str, str]:
+        """(``verdict``, the first red check's name or ``""``), over ``gates`` when given."""
+        repo = slug(url)
+        if repo is None:
+            raise Refused(f"origin {url} is not on GitHub: no CI to read")
+        runs = [r for r in self._runs(repo, sha) if gates is None or r.get("name") in gates]
         # A run with a conclusion is done, even when GitHub left its status in_progress.
         done = [r for r in runs if r.get("status") == "completed" or r.get("conclusion")]
         # A failure that ended before a live run started is being rerun: #2506's
         # "Backend tests" read red for 5 minutes while its shard reran (2026-10-29).
         live = [str(r.get("started_at") or "~") for r in runs if r not in done]
-        if any(r.get("conclusion") not in PASSED
-               and not (r.get("completed_at") and any(start > r["completed_at"] for start in live))
-               for r in done):
-            return "red"
+        for r in done:
+            if (r.get("conclusion") not in PASSED
+                    and not (r.get("completed_at") and any(start > r["completed_at"] for start in live))):
+                return "red", str(r.get("name") or "?")
         if not runs or len(done) < len(runs):
-            return "pending"
-        return "green"
+            return "pending", ""
+        return "green", ""
+
+    def verdict(self, url: str, sha: str) -> str:
+        """``green`` when every run passed, ``red`` when one failed, else ``pending``."""
+        return self.judge(url, sha)[0]
 
 
 #: Main's tip as this process last fetched it, for the wake's ``loom:`` line.
@@ -140,8 +180,8 @@ class DevSource:
                     f"{'s' * (len(dirty) > 1)} ({dirty[0].strip()}): not touched")
         return ""
 
-    def poll(self) -> Offer | None:
-        """Off the loop: the move main's green tip offers, if any."""
+    def poll(self) -> Offer | Held | None:
+        """Off the loop: the move main's green tip offers, the red check holding a red one."""
         url = self._git("remote", "get-url", "origin")
         self._git("fetch", "--quiet", "--no-tags", "origin", "refs/heads/main")
         tip, head = self._git("rev-parse", "FETCH_HEAD"), self._git("rev-parse", "HEAD")
@@ -151,7 +191,11 @@ class DevSource:
         if not self._ancestor(head, tip):
             raise Refused(f"checkout {self.root} at {head[:8]} has diverged from main "
                           f"{tip[:8]}: not touched")
-        if self.forge.verdict(url, tip) != "green":
+        subject = self._git("log", "-1", "--format=%s", tip)
+        state, red = self.forge.judge(url, tip, self.forge.gates(url, pull_of(subject)))
+        if state == "red":
+            return Held(tip, head, red)
+        if state != "green":
             return None
         if why := self.refusal():
             raise Refused(why)
@@ -184,6 +228,7 @@ class Updater:
         self.worker: threading.Thread | None = None
         self.failing: tuple[Exception, object] | None = None
         self.offer: Offer | None = None
+        self.held: Held | None = None
         self.moved: Offer | None = None
         self.looked = 0.0
         #: Monotonic time a green move first waited for an idle tick; cleared by the move.
@@ -241,6 +286,8 @@ class Updater:
                 self.moved, self.waiting = offer, None
                 return
         self._attempt(source)
+        if (held := self.held) is not None:
+            self._say_once(f"{held.tip[:8]} is red on {held.check}; staying on {held.head[:8]}")
         if self.failing is not None:
             raise self.failing[0].with_traceback(self.failing[1])
 
@@ -257,10 +304,12 @@ class Updater:
 
     def _poll(self, source) -> None:
         try:
-            self.offer = source.poll()
+            found = source.poll()
+            self.offer = found if isinstance(found, Offer) else None
+            self.held = found if isinstance(found, Held) else None
             self.failing = None
         except Exception as exc:
-            self.offer = None
+            self.offer = self.held = None
             self.failing = (exc, exc.__traceback__)
 
 
