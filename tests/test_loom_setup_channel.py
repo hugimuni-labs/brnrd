@@ -353,8 +353,8 @@ def test_setup_turns_the_onboarding_list_into_asks_the_first_wake_shows(tmp_path
     asks = [w for w in found.values() if w.parent == own.id]
     assert [w.line for w in sorted(asks, key=lambda w: w.born)][0] == 'What should I call you?'
     # gh is not signed in here, so the backup offer was left off: brnrd asks it later.
-    assert [w.line for w in asks][3:] == [setup_channel.LATER['repo']]
-    assert len(asks) == 4 and {w.sender for w in asks} == {'resident'}
+    assert [w.line for w in asks][2:] == [setup_channel.LATER['repo']]
+    assert len(asks) == 3 and {w.sender for w in asks} == {'resident'}
     assert not [f for f in read_facts(home) if f.kind == 'wish' and not f.by.startswith('loom:')]
     # They wait on the person, and the home thread's next body wakes with them.
     heads = waits_on(found, main_snapshot(home))
@@ -366,7 +366,7 @@ def test_setup_turns_the_onboarding_list_into_asks_the_first_wake_shows(tmp_path
     listed.write_text(listed.read_text() + '- Which language do you write in?\n')
     assert setup_channel.main(argv) == 0
     lines = [w.line for w in wishes(read_facts(home)).values() if w.parent == own.id]
-    assert len(lines) == 5 and lines.count('What should I call you?') == 1
+    assert len(lines) == 4 and lines.count('What should I call you?') == 1
 
 
 def test_pairing_prompt_says_the_person_writes_first(tmp_path):
