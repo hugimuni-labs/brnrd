@@ -2232,3 +2232,7 @@
 .brd .nowbar:hover {
 	background: #f2f2f2;
 }
+.brd button[data-act]:disabled {
+	opacity: 0.5;
+	cursor: progress;
+}

@@ -160,6 +160,23 @@ def test_a_board_letter_goes_through_the_relay(client):
     assert client.post("/v1/loom/letters", json={"body": "  "}).status_code == 400
 
 
+def test_a_repeat_verdict_on_the_same_wish_is_the_same_letter(client):
+    """10099: a slow agree pressed three times queued three; a repeat answers the first one's id and queues nothing."""
+    headers, session = _account(client)
+    relay = _relay_token(client, headers, _repo(client, headers))
+    _signed_in(client, session)
+    agree = {"body": "agree &w-abc123", "wish": "w-abc123", "verdict": "agree"}
+    ids = [client.post("/v1/loom/letters", json=agree).json()["id"] for _ in range(3)]
+    assert len(set(ids)) == 1
+    other = client.post("/v1/loom/letters", json={**agree, "wish": "w-def456"}).json()["id"]
+    correct = client.post("/v1/loom/letters", json={**agree, "verdict": "correct"}).json()["id"]
+    assert len({ids[0], other, correct}) == 3
+    _signed_in(client, None)
+    events = client.get("/v1/daemons/inbox", params={"wait": 0}, headers=relay).json()["events"]
+    assert [(e["reply_to"]["wish"], e["reply_to"]["verdict"]) for e in events] == [
+        ("w-abc123", "agree"), ("w-def456", "agree"), ("w-abc123", "correct")]
+
+
 def test_a_board_letter_id_is_the_tail_of_the_ledger_letter_the_loom_files(client, tmp_path):
     """The cloud's answer to a sent letter names the letter the loom files, so its pending copy resolves by id."""
     import connector_support as relay

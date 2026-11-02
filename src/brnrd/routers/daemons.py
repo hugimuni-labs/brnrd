@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import functools
 import gzip
 import io
 import json
@@ -792,11 +793,33 @@ _PART_KEY = re.compile(r"^(index|beads|thread/[A-Za-z0-9._-]{1,180})$")
 
 @router.put("/loom/parts")
 async def put_loom_parts(request: Request, principal: Principal = Depends(require_daemon), db: Session = Depends(get_db)):
-    """Store the board parts whose hash moved; answer every hash now held."""
+    """Store the board parts whose hash moved; answer every hash now held.
+
+    Only the body read is async. The rest (gunzip up to 40 MB, the parse, a re-gzip per part, the writes) runs on
+    a worker thread: on the event loop it stalled every other request for each push, every 2 s while a loom is busy,
+    the board's own agree included (10099).
+    """
     raw = await request.body()
+    permitted = functools.partial(publish_scope.lane_permitted, db, repo_id=principal.repo_id, lane="activity")
+    if not await anyio.to_thread.run_sync(permitted):
+        await anyio.to_thread.run_sync(_drop_loom_parts, principal, db)
+        raise HTTPException(status_code=PUBLISH_WITHHELD_STATUS, detail="this repo's publish scope withholds the activity lane")
+    return await anyio.to_thread.run_sync(_store_loom_parts, raw, request.headers.get("content-encoding"), principal, db)
+
+
+def _drop_loom_parts(principal: Principal, db: Session) -> None:
+    """A refusal also drops the copy, as the snapshot does. The daemon row stays: brnrd.dev asks consent of it."""
+    daemon = _current_daemon(db, principal)
+    if daemon is None:
+        daemon = _upsert_daemon(db, principal, schemas.DaemonRegister(daemon_name=LOOM_DAEMON_NAME))
+    db.execute(delete(LoomPart).where(LoomPart.daemon_id == daemon.id))
+    db.commit()
+
+
+def _store_loom_parts(raw: bytes, encoding: str | None, principal: Principal, db: Session) -> dict:
     if len(raw) > _MAX_PARTS_GZIP:
         raise HTTPException(status_code=413, detail="loom parts push exceeds 4 MB")
-    if (request.headers.get("content-encoding") or "").strip() == "gzip":
+    if (encoding or "").strip() == "gzip":
         try:
             raw = gzip.GzipFile(fileobj=io.BytesIO(raw)).read(_MAX_PARTS_BYTES + 1)
         except (OSError, EOFError) as exc:
@@ -818,11 +841,6 @@ async def put_loom_parts(request: Request, principal: Principal = Depends(requir
     if daemon is None:
         daemon = _upsert_daemon(db, principal, schemas.DaemonRegister(daemon_name=LOOM_DAEMON_NAME))
     now = datetime.now(timezone.utc)
-    if not publish_scope.lane_permitted(db, repo_id=principal.repo_id, lane="activity"):
-        # A refusal also drops the copy, as the snapshot does.
-        db.execute(delete(LoomPart).where(LoomPart.daemon_id == daemon.id))
-        db.commit()
-        raise HTTPException(status_code=PUBLISH_WITHHELD_STATUS, detail="this repo's publish scope withholds the activity lane")
     held = {row.key: row for row in db.execute(select(LoomPart).where(LoomPart.daemon_id == daemon.id)).scalars()}
     for key in set(held) - keys:
         db.delete(held.pop(key))

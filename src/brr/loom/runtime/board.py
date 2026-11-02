@@ -38,6 +38,9 @@ from . import tooltrace
 from brr import emotes
 
 TICK = 0.25  # seconds between stats of the ledger and the rooms; a still home costs a few stats
+# A repeat of the same verdict on the same wish within this many seconds is the same letter (10099: a slow
+# agree pressed three times landed three); the cloud's intake folds by the same window.
+VERDICT_REPEAT_S = 600
 TAPE = 1.0  # a tape alone moves the board at most once per this: its tool calls coalesce, nothing else recomputes
 TOOLS = 120  # tool lines kept per strand
 LETTERS = 200  # letters per thread part; older ones by ?before=
@@ -552,6 +555,7 @@ class Parts:
         self.typed_path, self.typed, self.typed_mtime = home.root / "loom/board/typed.json", {}, None
         self.changed = threading.Condition()
         self.stop = threading.Event()
+        self.said: dict[tuple[str, str], tuple[float, dict]] = {}  # (wish, verdict) -> (when, the answer sent)
 
     def step(self) -> bool:
         """One recompute when the ledger moved, one re-cut of the tapes when only they did; True when a part's
@@ -621,6 +625,17 @@ class Parts:
             raise ValueError("verdict is agree or correct")
         if typed_by and not re.fullmatch(r"s-[a-z0-9]{2,8}-[a-z0-9]{4,12}", typed_by):
             raise ValueError("typed_by is a strand id")
+        if wish and verdict:
+            with self.changed:
+                again = self.said.get((wish, verdict))
+                if again and time.monotonic() - again[0] < VERDICT_REPEAT_S:
+                    return again[1]
+                sent = self._send(body, typed_by, wish, verdict)
+                self.said[(wish, verdict)] = (time.monotonic(), sent)
+                return sent
+        return self._send(body, typed_by, wish, verdict)
+
+    def _send(self, body: str, typed_by: str | None, wish: str | None, verdict: str | None) -> dict:
         instance, user = person_channel(self.home, self.person)
         lands = self.home.main_thread()
         ident = f"{user}:board-{mint(10)}"  # a chat-scoped native id, as the connector writes
