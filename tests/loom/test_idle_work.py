@@ -125,3 +125,16 @@ def test_a_parked_wish_is_offered_as_its_wait_not_as_the_top(ledger, monkeypatch
     command(home, seat, "wish", wish, "--read", "waiting: CI on #1", "--wait", "at:2099-01-01T00:00:00Z")
     acts = idle.candidates(home, read_facts(home), "work")
     assert [a for a in acts if a.startswith(wish)] == [next(a for a in acts if "parked" in a)]
+
+
+def test_nothing_to_move_is_stamped_too(ledger, monkeypatch):
+    home, _ = ledger
+    monkeypatch.setattr(usage, "reading", lambda *args, **kwargs: AHEAD)
+    (home.room("s-aaaa-test") / "port/in").mkdir(parents=True, exist_ok=True)
+    calls = []
+    monkeypatch.setattr(idle, "candidates", lambda *args: calls.append(args) or [])
+    context = SimpleNamespace(thread="work", shell="claude")
+    for _ in range(2):
+        assert loom._idle_acts(home, read_facts(home), "s-aaaa-test", context, None, ()) == ""
+    assert (home.room("s-aaaa-test") / "port/in/idle.md").read_text() == ""
+    assert len(calls) == 1
