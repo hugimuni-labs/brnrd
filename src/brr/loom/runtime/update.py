@@ -27,6 +27,7 @@ import time
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import urlsplit
 
@@ -38,6 +39,18 @@ EVERY = 300
 LOOK_EVERY = 5
 #: Check conclusions that count as passed; any other completed one is red.
 PASSED = {"success", "neutral", "skipped"}
+#: Seconds a ``since`` judgment with no run started since reads pending: GitHub
+#: registers a rerun's check runs a few seconds after ``gh run rerun`` returns.
+RERUN_GRACE = 120
+
+
+def _moment(text) -> datetime | None:
+    """A GitHub or fact timestamp, aware; None when absent or unreadable."""
+    try:
+        moment = datetime.fromisoformat(str(text).replace("Z", "+00:00"))
+    except (TypeError, ValueError):
+        return None
+    return moment if moment.tzinfo else moment.replace(tzinfo=timezone.utc)
 #: (seconds a green move has waited, how young an open tool call must be to hold it back);
 #: ``None`` is any open call. A call that has run a minute waits on CI or tests; it is not
 #: importing the checkout. On 6 h of this loom's calls (2026-10-26) the strict gate was open
@@ -129,12 +142,29 @@ class GitHubChecks:
         ran = {str(r.get("name")) for r in self._runs(repo, head) if r.get("conclusion") != "skipped"} if head else set()
         return ran or None
 
-    def judge(self, url: str, sha: str, gates: set[str] | None = None) -> tuple[str, str]:
-        """(``verdict``, the first red check's name or ``""``), over ``gates`` when given."""
+    def judge(self, url: str, sha: str, gates: set[str] | None = None, since: str | None = None,
+              now: datetime | None = None) -> tuple[str, str]:
+        """(``verdict``, the first red check's name or ``""``), over ``gates`` when given.
+
+        ``since``, a park's time, drops the runs that had concluded before it once
+        any run started at or after it: a park made after ``gh run rerun`` waits
+        for the new attempt, not the old red. With none started since, the first
+        ``RERUN_GRACE`` seconds read pending (the rerun not yet registered), then
+        every run counts, as without ``since``."""
         repo = slug(url)
         if repo is None:
             raise Refused(f"origin {url} is not on GitHub: no CI to read")
         runs = [r for r in self._runs(repo, sha) if gates is None or r.get("name") in gates]
+        parked = _moment(since) if since else None
+        if parked is not None:
+            def before(r, field):
+                moment = _moment(r.get(field))
+                return moment is not None and moment < parked
+            if any(not before(r, "started_at") for r in runs):
+                # A run queued but not started counts as started since: it is the rerun.
+                runs = [r for r in runs if not before(r, "completed_at")]
+            elif ((now or datetime.now(timezone.utc)) - parked).total_seconds() < RERUN_GRACE:
+                return "pending", ""
         # A run with a conclusion is done, even when GitHub left its status in_progress.
         done = [r for r in runs if r.get("status") == "completed" or r.get("conclusion")]
         # A failure that ended before a live run started is being rerun: #2506's
@@ -148,9 +178,9 @@ class GitHubChecks:
             return "pending", ""
         return "green", ""
 
-    def verdict(self, url: str, sha: str) -> str:
+    def verdict(self, url: str, sha: str, since: str | None = None) -> str:
         """``green`` when every run passed, ``red`` when one failed, else ``pending``."""
-        return self.judge(url, sha)[0]
+        return self.judge(url, sha, since=since)[0]
 
 
 #: Main's tip as this process last fetched it, for the wake's ``loom:`` line.
