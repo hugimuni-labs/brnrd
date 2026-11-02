@@ -138,7 +138,7 @@ def test_a_resting_stop_asks_once_for_the_readme_acts_left_behind(room, tmp_path
     assert _turn(room, stdin) == ""
     time.sleep(0.01)
     execute("post", room, json.dumps({"tool_name": "Bash"}))
-    _fact(room, "wish.result", wish="w-aaaaaaaaaaaa", kind="pr", ref="u", line="PR", delivered=True)
+    _fact(room, "wish.result", wish="w-aaaaaaaaaaaa", ref="u", line="PR", delivered=True)
     asked = json.loads(execute("stop", room, stdin))
     assert asked["decision"] == "block"
     assert "since threads/work/README.md last changed this body did a result." in asked["reason"]
