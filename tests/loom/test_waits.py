@@ -54,14 +54,74 @@ def test_a_forge_state_resolves_a_wait_the_ledger_never_saw(ledger):
     home, seat = ledger
     pr, ci = heard(home, seat, "Merged elsewhere"), heard(home, seat, "Green elsewhere")
     park(home, seat, pr, "--wait", f"pr:{REPO}#7")
-    park(home, seat, ci, "--wait", f"ci:{REPO}@abc1234")
-    assert waits.forge_wants(wishes(read_facts(home))) == {f"pr:{REPO}#7", f"ci:{REPO}@abc1234"}
-    assert told(home, forge={f"ci:{REPO}@abc1234": {"state": "pending"}}) == []
+    key = waits.want(park(home, seat, ci, "--wait", f"ci:{REPO}@abc1234"))
+    assert key.startswith(f"ci:{REPO}@abc1234 since ")
+    assert waits.forge_wants(wishes(read_facts(home))) == {f"pr:{REPO}#7", key}
+    assert told(home, forge={key: {"state": "pending"}}) == []
     letters = told(home, forge={f"pr:{REPO}#7": {"state": "closed", "at": "x", "url": "u"},
-                                f"ci:{REPO}@abc1234": {"state": "red"}})
+                                key: {"state": "red"}})
     heads = {letter.data["body"].split()[2]: letter.data["body"] for letter in letters}
     assert heads[ci].startswith(f"wait on {ci} resolved: ci:{REPO}@abc1234 is red")
     assert heads[pr].startswith(f"wait on {pr} resolved: pr:{REPO}#7 closed")
+
+
+def test_a_ci_park_made_after_a_rerun_waits_for_the_new_attempt(ledger, monkeypatch):
+    """w-qzo8uh4vluk4: parked in the seconds between `gh run rerun` and GitHub registering
+    the new attempt, the wait read the old attempt's red and resolved on it."""
+    import io
+    from brr.loom.runtime import update
+    home, seat = ledger
+    ident = heard(home, seat, "Rerun it")
+    runs = [{"name": "Backend tests", "status": "completed", "conclusion": "failure",
+             "started_at": "2026-11-01T01:00:00Z", "completed_at": "2026-11-01T01:05:00Z"},
+            {"name": "Lint", "status": "completed", "conclusion": "success",
+             "started_at": "2026-11-01T01:00:00Z", "completed_at": "2026-11-01T01:01:00Z"}]
+    monkeypatch.setattr(update.urllib.request, "urlopen",
+                        lambda req, timeout: io.BytesIO(json.dumps({"check_runs": runs}).encode()))
+    checks = update.GitHubChecks("t")
+    monkeypatch.setattr(checks, "_token", lambda: "t")
+    forge, watcher = waits.Forge(checks), waits.Watcher()
+    read = park(home, seat, ident, "--wait", f"ci:{REPO}@abc1234")
+    since = waits._instant(read["at"])
+
+    def tick(seconds):
+        monkeypatch.setattr(update, "datetime", type("Clock", (datetime,), {
+            "now": classmethod(lambda cls, tz=None: since + timedelta(seconds=seconds))}))
+        watcher._poll(forge, waits.forge_wants(wishes(read_facts(home))))
+        return told(home, forge=watcher.states)
+
+    assert tick(5) == [], "the old attempt's red is not this park's verdict"
+    stamp = (since + timedelta(seconds=20)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    runs[0] = {"name": "Backend tests", "status": "queued", "conclusion": None,
+               "started_at": None, "completed_at": None}
+    assert tick(30) == [], "the rerun is queued"
+    runs[0].update(status="in_progress", started_at=stamp)
+    assert tick(600) == [], "past the grace, the live rerun still holds it"
+    runs[0].update(status="completed", conclusion="success", completed_at=stamp)
+    [letter] = tick(660)
+    assert f"ci:{REPO}@abc1234 is green" in letter.data["body"], "Lint's old green counts; the old red does not"
+
+
+def test_a_ci_park_with_no_run_since_judges_what_is_there_after_the_grace(ledger, monkeypatch):
+    import io
+    from brr.loom.runtime import update
+    runs = [{"name": "Backend tests", "status": "completed", "conclusion": "failure",
+             "started_at": "2026-11-01T01:00:00Z", "completed_at": "2026-11-01T01:05:00Z"}]
+    monkeypatch.setattr(update.urllib.request, "urlopen",
+                        lambda req, timeout: io.BytesIO(json.dumps({"check_runs": runs}).encode()))
+    checks = update.GitHubChecks("t")
+    monkeypatch.setattr(checks, "_token", lambda: "t")
+    url, since = "https://github.com/o/r.git", "2026-11-02T03:00:00+00:00"
+    start = datetime(2026, 11, 2, 3, 0, tzinfo=timezone.utc)
+    assert checks.judge(url, "abc", since=since, now=start + timedelta(seconds=10))[0] == "pending"
+    assert checks.judge(url, "abc", since=since, now=start + timedelta(seconds=200)) == ("red", "Backend tests")
+    assert checks.verdict(url, "abc") == "red", "no since: as before"
+    # Parked mid-run: a job started before the park and failed after it still counts.
+    runs[:] = [{"name": "Backend tests", "status": "completed", "conclusion": "failure",
+                "started_at": "2026-11-02T02:58:00Z", "completed_at": "2026-11-02T03:02:00Z"},
+               {"name": "Lint", "status": "completed", "conclusion": "success",
+                "started_at": "2026-11-02T03:01:00Z", "completed_at": "2026-11-02T03:03:00Z"}]
+    assert checks.judge(url, "abc", since=since, now=start) == ("red", "Backend tests")
 
 
 def test_a_wish_wait_resolves_on_a_settled_state_or_a_citing_letter(ledger):
@@ -188,7 +248,7 @@ def test_the_loop_polls_the_forge_and_its_notice_wakes_the_parked_thread(tmp_pat
             polled.append((repo, number))
             return dict(state)
 
-        def ci(self, repo, sha):
+        def ci(self, repo, sha, since=None):
             return {"state": "pending"}
 
     monkeypatch.setattr(waits, "forge_for", lambda config: Forge())
@@ -394,7 +454,7 @@ def test_one_failing_read_leaves_the_other_waits_resolving(ledger):
                 raise urllib.error.HTTPError("u", 404, "Not Found", None, None)
             return {"state": "merged", "at": "2026-10-27T18:00:00Z", "url": "u"}
 
-        def ci(self, repo, sha):
+        def ci(self, repo, sha, since=None):
             raise AssertionError("no ci wait")
 
     watcher, forge = Watcher(), Forge()

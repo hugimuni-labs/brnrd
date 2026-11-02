@@ -156,8 +156,18 @@ def open_claims(receipts: dict) -> set[str]:
             if not r.merge_commit and pr_repo({"url": r.url})}
 
 
+def want(read) -> str:
+    """The key a park's forge state is polled and kept under.
+
+    A ``ci:`` key carries the park's time, ``ci:<repo>@<sha> since <at>``: the
+    verdict counts only the attempt running since (``GitHubChecks.judge``), so two
+    parks on one sha may read differently."""
+    on = str(read["wait"].get("on", ""))
+    return f"{on} since {read['at']}" if on.startswith("ci:") else on
+
+
 def forge_wants(found: dict) -> set[str]:
-    return {read["wait"]["on"] for _wish, read in live(found)
+    return {want(read) for _wish, read in live(found)
             if str(read["wait"].get("on", "")).startswith(("pr:", "ci:"))}
 
 
@@ -204,7 +214,7 @@ def outcome(wish, read, facts, found: dict, forge: dict, now: datetime) -> str |
         if state and state.get("state") == "unreadable":
             return f"{on} cannot be read: {state.get('error')}"
     elif on.startswith("ci:"):
-        state = forge.get(on)
+        state = forge.get(want(read))
         if state and state.get("state") in ("green", "red"):
             return f"{on} is {state['state']}"
     elif on.startswith("wish:"):
@@ -309,8 +319,8 @@ class Forge:
             return {"state": "closed", "at": body.get("closed_at"), "url": body.get("html_url")}
         return {"state": "open", "url": body.get("html_url")}
 
-    def ci(self, repo: str, sha: str) -> dict:
-        return {"state": self.checks.verdict(f"https://github.com/{repo}.git", sha)}
+    def ci(self, repo: str, sha: str, since: str | None = None) -> dict:
+        return {"state": self.checks.verdict(f"https://github.com/{repo}.git", sha, since)}
 
     def _get(self, path: str) -> dict:
         req = urllib.request.Request(
@@ -446,8 +456,9 @@ class Watcher:
                     repo, _, number = on[3:].partition("#")
                     states[on] = forge.pull(repo, int(number))
                 else:
-                    repo, _, sha = on[3:].partition("@")
-                    states[on] = forge.ci(repo, sha)
+                    target, _, since = on[3:].partition(" since ")
+                    repo, _, sha = target.partition("@")
+                    states[on] = forge.ci(repo, sha, since or None)
                 read += 1
             except urllib.error.HTTPError as exc:
                 if exc.code == 404 and on.startswith("pr:"):
