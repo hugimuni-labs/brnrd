@@ -537,8 +537,106 @@ class Claimed:
     note: str = ""
 
 
+#: The line a pull request's body carries once ``publish --pr`` recorded it.
+_FOOTER = re.compile(r"^Opened by resident brnrd\b", re.M)
+#: Wish ids a footer names before it counts the rest.
+_WISHES = 3
+
+
+class _Forge:
+    """One pull request's body on GitHub, read and rewritten with the home's token."""
+
+    def __init__(self, token, repo: str):
+        self.token, self.repo = token, repo
+
+    def _call(self, number: int, method: str = "GET", body: dict | None = None) -> dict:
+        import json
+        import urllib.request
+        req = urllib.request.Request(
+            f"https://api.github.com/repos/{self.repo}/pulls/{number}", method=method,
+            data=json.dumps(body).encode() if body is not None else None,
+            headers={"Authorization": f"Bearer {self.token()}",
+                     "Accept": "application/vnd.github+json"})
+        with urllib.request.urlopen(req, timeout=20) as resp:
+            return json.load(resp)
+
+    def body(self, number: int) -> str:
+        return str(self._call(number).get("body") or "")
+
+    def set_body(self, number: int, text: str) -> None:
+        self._call(number, "PATCH", {"body": text})
+
+
+def _forge_for(home, source: str) -> _Forge | None:
+    """The forge a source's pull requests live on; none for a source off GitHub."""
+    from .update import GitHubChecks, slug
+    repo = slug(source)
+    if repo is None:
+        return None
+    return _Forge(GitHubChecks(load_config(home.root).forge_token)._token, repo)
+
+
+def footer(who: _Caller) -> str:
+    """Whose the pull request is: the resident, the person its wishes came from,
+    the install, the thread and its wishes, read from the ledger."""
+    from .wishes import told
+    found = [w for w in told(who.facts).values() if w.thread == who.thread and w.sender == "person"]
+    found.sort(key=lambda w: w.born)
+    letters = {str(f.data.get("id", f.id)): f for f in who.facts if f.kind == "letter"}
+    people: list[str] = []
+    for wish in found:
+        for say in wish.says:
+            letter = letters.get(say.letter)
+            sender = str((letter.data if letter else {}).get("from") or "")
+            name = sender.removeprefix("person:")
+            if sender.startswith("person:") and name not in people:
+                people.append(name)
+    parts = ["Opened by resident brnrd" + (f" for {', '.join(people)}" if people else ""),
+             f"install {who.home.install_id()}", f"thread {who.thread}"]
+    # A long thread has said many wishes: the open ones name the work, a few at most.
+    named = [w.id for w in found if w.open] or [w.id for w in found]
+    if named:
+        more = len(named) - _WISHES
+        parts.append(f"wish {', '.join(named[:_WISHES])}" + (f" +{more}" if more > 0 else ""))
+    return " · ".join(parts)
+
+
+def sign(body: str, line: str, who: str) -> str:
+    """``body`` with ``line`` above its brnrd marker, once: a body that carries
+    a footer already is left as it is. No marker: the line and one, at the end."""
+    from .comments import MARK, _MARKED
+    if _FOOTER.search(body):
+        return body
+    found = list(_MARKED.finditer(body))
+    if not found:
+        return body.rstrip() + ("\n\n" if body.strip() else "") + line + "\n\n" + MARK.format(who=who)
+    at = found[-1].start()
+    return body[:at].rstrip() + ("\n\n" if body[:at].strip() else "") + line + "\n\n" + body[at:]
+
+
+def _sign_pr(who: _Caller, source: str, number: int) -> str:
+    """Put the footer on pull request ``number``; a note when that could not be done.
+
+    The receipt is already a fact: a forge that refuses the edit costs the
+    footer, never the record."""
+    try:
+        forge = _forge_for(who.home, source)
+        if forge is None:
+            return ""
+        old = forge.body(number)
+        new = sign(old, footer(who), who.home.install_id())
+        if new != old:
+            forge.set_body(number, new)
+    except Exception as exc:  # noqa: BLE001 - any forge failure is said, not raised
+        return f"publish: recorded, but pull request {number}'s body was not signed: {exc}"
+    return ""
+
+
 def claim_pr(room: Path | str, name: str, number: int, *, merged: bool = False) -> Claimed:
     """``pr.opened`` (or with ``merged``, ``pr.merged``) for this room's own thread.
+
+    An opened pull request on GitHub is signed after its fact lands: one
+    footer line above the body's brnrd marker saying whose it is (``footer``).
 
     git on the declared source is the evidence: the pull request's head ref
     must be a commit this thread published, and a merge needs a merge commit
@@ -558,7 +656,10 @@ def claim_pr(room: Path | str, name: str, number: int, *, merged: bool = False) 
         data["url"] = pr_url(source, number)
         fact = Fact(kind="pr.opened", by=f"strand:{who.strand}", data=data,
                     id=f"pr.opened:{who.thread}:{name}:{number}:{head}")
-    return Claimed(append(who.home, fact), note)
+    fact = append(who.home, fact)
+    if not merged:
+        note = "\n".join(filter(None, [note, _sign_pr(who, source, number)]))
+    return Claimed(fact, note)
 
 
 def _arguments(parser) -> None:
