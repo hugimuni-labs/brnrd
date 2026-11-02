@@ -393,3 +393,24 @@ def test_pin_refuses_inbox_and_an_unseen_install(tmp_path):
     assert [f.data for f in read_facts(a_home) if f.kind == "machines.pin"] == [
         {"thread": "deck", "install": "aaaa", "from": "aaaa"},
         {"thread": "deck", "install": None, "from": "aaaa"}]
+
+
+def test_a_tick_over_quiet_threads_takes_the_lease_lock_only_before_a_write(tmp_path, monkeypatch):
+    """busy-cpu: armed() locks and reads the lease file; a tick asked it for every routable thread (9% of a busy
+    loom's samples). It is asked before each grant, so a home of quiet threads costs the one ask route opens with."""
+    from brr.loom.runtime import router as router_mod
+    remote = tmp_path / "self.git"
+    subprocess.run(["git", "init", "--bare", "-q", str(remote)], check=True)
+    home = _home(tmp_path, "aaaa", remote)
+    a = _router(home, 100)
+    a.begin_tick(read_facts(home))
+    quiet = [f"quiet{n}" for n in range(30)]
+    started = _routing(monkeypatch, [*quiet, "work"])
+    monkeypatch.setattr(router_mod, "letters_for", lambda facts, snap, thread: [] if thread in quiet else [
+        Fact(kind="letter", by="person:operator", id=f"letter:{thread}", data={"to": f"thread:{thread}"})])
+    asked = []
+    real = a.authority.authorize
+    monkeypatch.setattr(a.authority, "authorize", lambda lease: asked.append(1) or real(lease))
+    a.route(read_facts(home), {}, ("fake", "echo"))
+    assert started == [("aaaa", "work")]
+    assert len(asked) <= 4  # route's own ask, the grant's two, the closing one: never one per quiet thread

@@ -71,6 +71,47 @@ def test_the_looms_own_heartbeat_recomputes_nothing(parts, monkeypatch):
     assert computed == [1]
 
 
+def test_a_tape_move_recuts_only_its_thread_paced_and_never_recomputes(parts, monkeypatch):
+    """busy-cpu: a body's tool calls move its tape several times a second; each re-cuts its thread's tapes over the
+    last compute at most once per TAPE s, and the result is the part a whole compute would give."""
+    from brr.loom.runtime import board, tooltrace
+    root = parts.home.root
+    append(parts.home, Fact(kind="router", by="loom:aaaa", data={"gen": 1}))
+    append(parts.home, Fact(kind="lease", by="loom:aaaa", data={
+        "thread": "web", "strand": "s-aaaa-webbod", "gen": 1, "install": "aaaa", "router_gen": 1,
+        "shell": "fake", "core": "fake", "repos": []}))
+    inject_letter(root, to="thread:docs", body="other")
+    assert parts.step()
+    before = dict(parts.hashes)
+    computed = []
+    real = board.compute
+    monkeypatch.setattr(board, "compute", lambda *a: computed.append(1) or real(*a))
+    clock = [time.monotonic()]
+    monkeypatch.setattr(board.time, "monotonic", lambda: clock[0])
+
+    (parts.home.room("s-aaaa-webbod") / "port").mkdir(parents=True)
+
+    def call(n):
+        tooltrace.note(parts.home.room("s-aaaa-webbod"), json.dumps(
+            {"tool_name": "Bash", "tool_input": {"command": f"echo {n}"}, "tool_use_id": f"t{n}"}), "pre")
+    call(1)
+    parts.tape.listed = None  # the room is listed at the next read, as within Tools.EVERY
+    assert not parts.step()  # within TAPE of the compute: held, not lost
+    call(2)
+    clock[0] += board.TAPE
+    assert parts.step()
+    assert computed == []
+    assert [c["cmd"] for c in parts.parts["thread/web"]["tools"]["s-aaaa-webbod"]] == ["echo 1", "echo 2"]
+    assert parts.hashes["thread/docs"] == before["thread/docs"] and parts.hashes["beads"] == before["beads"]
+    assert parts.hashes["thread/web"] != before["thread/web"]
+    assert parts.parts["index"]["parts"] == {k: v for k, v in parts.hashes.items() if k != "index"}
+    assert not parts.step()  # nothing moved since
+    recut = dict(parts.hashes)
+    parts.revision = None  # a whole compute over the same ledger and tapes gives the same parts
+    assert not parts.step()
+    assert parts.hashes == recut and computed == [1]
+
+
 def test_a_wish_ships_in_its_thread_part_and_the_index_keeps_counts(parts):
     root = parts.home.root
     letter = inject_letter(root, to="thread:web", body="make it fast")

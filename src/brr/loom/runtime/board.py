@@ -38,6 +38,7 @@ from . import tooltrace
 from brr import emotes
 
 TICK = 0.25  # seconds between stats of the ledger and the rooms; a still home costs a few stats
+TAPE = 1.0  # a tape alone moves the board at most once per this: its tool calls coalesce, nothing else recomputes
 TOOLS = 120  # tool lines kept per strand
 LETTERS = 200  # letters per thread part; older ones by ?before=
 LABEL = 80  # characters of a bead's label
@@ -55,10 +56,24 @@ def _say(raw) -> tuple:
 
 
 
+_READMES: dict[Path, tuple[tuple, str]] = {}
+
+
+def _readme(self_root: Path, thread: str) -> str:
+    """A thread's README, re-read only when its stat moved: a compute reads every thread's twice."""
+    path = self_root / "threads" / thread / "README.md"
+    st = path.stat()
+    stamp = (st.st_mtime_ns, st.st_size, st.st_ino)
+    held = _READMES.get(path)
+    if held is None or held[0] != stamp:
+        held = _READMES[path] = (stamp, path.read_text())
+    return held[1]
+
+
 def plan_bytes(self_root: Path, thread: str) -> int | None:
     """Bytes of a thread's ``## Plan`` section, the part of its README every wake carries."""
     try:
-        text = (self_root / "threads" / thread / "README.md").read_text()
+        text = _readme(self_root, thread)
     except OSError:
         return None
     found = re.search(r"^## Plan\n(.*?)(?=^## |\Z)", text, re.M | re.S)
@@ -72,7 +87,7 @@ def steps_of(self_root: Path, thread: str) -> list[dict]:
     """A thread's steps (6lozd): the top-level rows of its ``## Plan``, each with the wishes its ``· re:`` tail cites.
     A row is done as the loom's ``receipt`` reads it: a PR or a sha, or an ``[x]`` box; a file link alone is a mention."""
     try:
-        text = (self_root / "threads" / thread / "README.md").read_text()
+        text = _readme(self_root, thread)
     except OSError:
         return []
     found = re.search(r"^## Plan\n(.*?)(?=^## |\Z)", text, re.M | re.S)
@@ -417,11 +432,9 @@ def compute(home: Home, facts, config, tools: dict, live: dict, person: str | No
     counts = {name: dict(Counter(row["state"] for row in rows)) for name, rows in wished.items() if name in known}
     for t in threads:
         mine = by_thread.get(t["id"], [])
-        strands = [s["id"] for s in t.get("strands") or ()]
         parts[f"thread/{t['id']}"] = {
             "id": t["id"], "count": len(mine), "letters": mine, "wishes": wished.get(t["id"], []),
-            "tools": {s: tools[s] for s in strands if s in tools},
-            "live": {s: live[s] for s in strands if s in live}}
+            **taped(t, tools, live)}
     parts["beads"] = beads_of(facts, main_snapshot(home))
     hashes = {name: digest(part) for name, part in parts.items()}
     index = {"v": 1, **{k: v for k, v in snap.items() if k not in {"at", "log"}}, "wishes": counts,
@@ -429,6 +442,12 @@ def compute(home: Home, facts, config, tools: dict, live: dict, person: str | No
              **_as(home, person), "parts": hashes, "faces": FACES}
     parts["index"] = index
     return parts
+
+
+def taped(thread: dict, tools: dict, live: dict) -> dict:
+    """A thread part's ``tools`` and ``live``: its strands' tapes, the one thing a tape move changes."""
+    strands = [s["id"] for s in thread.get("strands") or ()]
+    return {"tools": {s: tools[s] for s in strands if s in tools}, "live": {s: live[s] for s in strands if s in live}}
 
 
 def _as(home: Home, person: str | None) -> dict:
@@ -512,10 +531,13 @@ class Tools:
 
 
 class Parts:
-    """The parts, recomputed whole on their own thread when the ledger or a tape moved (design §D7).
+    """The parts, recomputed whole on their own thread when the ledger moved (design §D7).
 
-    It shares the process's ledger reader (one fold, not two), but keeps its own projection cache: a
-    board never sees a tick's half-written state. ``changed`` wakes the event streams.
+    A tape alone moving (a body's tool call) re-cuts only the ``tools`` and ``live`` of the thread parts
+    over the last compute, at most once per ``TAPE`` s: with bodies live the tapes move several times a
+    second, and a whole compute is a large share of a core (busy-cpu). It shares the process's ledger
+    reader (one fold, not two), but keeps its own projection cache: a board never sees a tick's
+    half-written state. ``changed`` wakes the event streams.
     """
 
     def __init__(self, home: Home, config_of, log=None, person: str | None = None):
@@ -525,30 +547,56 @@ class Parts:
         self.parts: dict[str, dict] = {}
         self.hashes: dict[str, str] = {}
         self.revision = None
+        self.taped, self.tape_at = False, None  # a tape move not shown yet; when the last one was
         # Which strand typed a letter through the board: the board's own note, outside the self repo.
         self.typed_path, self.typed, self.typed_mtime = home.root / "loom/board/typed.json", {}, None
         self.changed = threading.Condition()
         self.stop = threading.Event()
 
     def step(self) -> bool:
-        """One recompute when anything moved; True when a part's hash did."""
+        """One recompute when the ledger moved, one re-cut of the tapes when only they did; True when a part's
+        hash moved."""
         facts = self.reader.refresh(self.home)
-        moved = self.tape.read() | self._typed()
+        self.taped |= self.tape.read()
+        typed = self._typed()
         # semantic_revision: the loom's own router.renewed heartbeat (6 a minute) is no change here.
         revision = (id(facts), facts.semantic_revision)
-        if revision == self.revision and not moved:
+        now = time.monotonic()
+        if revision != self.revision or typed or not self.parts:
+            self.revision, self.taped, self.tape_at = revision, False, now
+            with projection_cache(self.cache):
+                parts = compute(self.home, facts, self.config_of(), self.tape.tools, self.tape.live, self.person,
+                                self.typed)
+            hashes = dict(parts["index"]["parts"], index=digest(parts["index"]))  # compute hashed the others
+        elif self.taped and (self.tape_at is None or now - self.tape_at >= TAPE):
+            self.taped, self.tape_at = False, now
+            parts, hashes = self._retaped()
+        else:
             return False
-        self.revision = revision
-        with projection_cache(self.cache):
-            parts = compute(self.home, facts, self.config_of(), self.tape.tools, self.tape.live, self.person,
-                            self.typed)
-        hashes = {name: digest(part) for name, part in parts.items()}
         if hashes == self.hashes:
             return False
         with self.changed:
             self.parts, self.hashes = parts, hashes
             self.changed.notify_all()
         return True
+
+    def _retaped(self) -> tuple[dict, dict]:
+        """The last compute with each thread part's tapes cut fresh: only a part whose tapes moved is hashed again."""
+        parts, hashes = dict(self.parts), dict(self.hashes)
+        index = parts["index"]
+        for t in index.get("threads") or ():
+            name = f"thread/{t['id']}"
+            part = parts.get(name)
+            if part is None:
+                continue
+            tape = taped(t, self.tape.tools, self.tape.live)
+            if tape["tools"] != part["tools"] or tape["live"] != part["live"]:
+                parts[name] = dict(part, **tape)
+                hashes[name] = digest(parts[name])
+        if hashes != self.hashes:
+            parts["index"] = dict(index, parts={k: v for k, v in hashes.items() if k != "index"})
+            hashes["index"] = digest(parts["index"])
+        return parts, hashes
 
     def _typed(self) -> bool:
         mtime = self.typed_path.stat().st_mtime if self.typed_path.exists() else None
