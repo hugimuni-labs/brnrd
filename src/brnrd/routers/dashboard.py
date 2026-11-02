@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Mapping
 
@@ -1461,6 +1461,10 @@ def enqueue_loom_letter(request: Request, db: Session, account: Account, payload
     repo_id = _loom_letter_repo_id(db, account.id)
     if repo_id is None:
         return JSONResponse({"detail": "connect a repo first: the loom's relay inbox is repo-scoped"}, status_code=409)
+    if payload.wish and payload.verdict:
+        again = _same_verdict(db, repo_id, account.github_login, payload.wish, payload.verdict)
+        if again is not None:
+            return again
     limits.raise_if_denied(
         limits.check_event_admission(db, request.app.state.settings, account, body=payload.text)
     )
@@ -1475,6 +1479,27 @@ def enqueue_loom_letter(request: Request, db: Session, account: Account, payload
     if payload.wish:
         reply_to.update(wish=payload.wish, verdict=payload.verdict)
     return inbox_service.enqueue(db, repo_id=repo_id, body=payload.text, source="web", reply_to=reply_to)
+
+
+#: A repeat of the same verdict on the same wish within this window is the same letter (10099: a slow agree
+#: pressed three times landed three); brr's loopback board folds by the same window (VERDICT_REPEAT_S).
+VERDICT_REPEAT = timedelta(minutes=10)
+
+
+def _same_verdict(db: Session, repo_id: str, login: str, wish: str, verdict: str) -> Event | None:
+    """The board letter already queued from this person with this verdict on this wish, inside the window."""
+    since = datetime.now(timezone.utc).replace(tzinfo=None) - VERDICT_REPEAT
+    rows = db.execute(
+        select(Event)
+        .where(Event.repo_id == repo_id, Event.source == "web", Event.created_at >= since,
+               Event.reply_to.contains(json.dumps(wish)))
+        .order_by(Event.seq.desc())
+    ).scalars()
+    for row in rows:
+        r = json.loads(row.reply_to or "{}")
+        if (r.get("platform"), r.get("user_id"), r.get("wish"), r.get("verdict")) == ("loom", login, wish, verdict):
+            return row
+    return None
 
 
 @router.get("/v1/dashboard/runners")

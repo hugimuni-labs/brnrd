@@ -170,7 +170,8 @@ async def loom_letter(request: Request, db: Session = Depends(get_db)) -> JSONRe
         )
     except ValidationError as exc:
         return JSONResponse({"error": exc.errors(include_url=False, include_context=False)[0]["msg"]}, status_code=400)
-    queued = enqueue_loom_letter(request, db, account, payload)
+    # The admission reads and the commit off the event loop, as the parts push is (10099).
+    queued = await asyncio.to_thread(enqueue_loom_letter, request, db, account, payload)
     if isinstance(queued, JSONResponse):
         return JSONResponse({"error": json.loads(queued.body)["detail"]}, status_code=queued.status_code)
     # The id the loom's ledger letter ends with (relay `message_id`: platform:login:message_id), so the

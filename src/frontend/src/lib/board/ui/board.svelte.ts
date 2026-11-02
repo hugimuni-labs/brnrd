@@ -20,6 +20,8 @@ export class Board {
 	error = $state('');
 	// letters sent from here that the ledger has not shown yet
 	pending = $state<Letter[]>([]);
+	// wishes whose done/agree is in flight: the button shows it at once and takes no second press (10099)
+	sending = new SvelteSet<string>();
 	showAll = $state(local('board.showInternal', '0') === '1');
 	// opened things, by key (board.html's opened, wopen, fopen, epOpen, beatOpen, stopen, copen, dissected)
 	open = new SvelteSet<string>();
@@ -254,11 +256,15 @@ export class Board {
 			this.keep();
 			return;
 		}
+		if (this.sending.has(wish)) return;
+		this.sending.add(wish);
 		const { body, ...v } = verdictLetter(act, wish);
 		try {
 			await this.post(body, v);
 		} catch (e) {
 			this.sendError = (e as Error).message;
+		} finally {
+			this.sending.delete(wish);
 		}
 	}
 }

@@ -56,8 +56,9 @@
 					<button
 						type="button"
 						data-act={ask ? 'done' : 'agree'}
+						disabled={b.sending.has(c.wish)}
 						onclick={(e) => (e.stopPropagation(), b.answer(c.wish, ask ? 'done' : 'agree'))}
-						>{ask ? 'done' : 'agree'}</button
+						>{b.sending.has(c.wish) ? 'sending…' : ask ? 'done' : 'agree'}</button
 					>
 					<button
 						type="button"

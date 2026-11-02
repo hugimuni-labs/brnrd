@@ -328,3 +328,18 @@ def test_two_rooms_moving_in_one_read_survive_the_next_listing(tmp_path):
     tools.listed -= 61
     tools.read()
     assert set(tools.tools) == {"s-aa-one", "s-aa-two"}
+
+
+def test_a_repeat_verdict_on_the_same_wish_is_the_same_letter(parts):
+    """10099: a slow agree pressed three times landed three verdict letters; a repeat answers the first one's id."""
+    root = parts.home.root
+    (root / "loom/config.toml").write_text('connectors = ["mine=fake"]\n')
+    (root / "self/people/ada").mkdir(parents=True)
+    (root / "self/people/ada/channels.toml").write_text('channels = ["mine:42"]\n')
+    first = parts.send("agree &w-abc123", wish="w-abc123", verdict="agree")
+    assert [parts.send("agree &w-abc123", wish="w-abc123", verdict="agree") for _ in range(2)] == [first] * 2
+    assert len(list(root.glob("loom/connectors/mine/state/in/*"))) == 1
+    # another verdict, or another wish, is a letter of its own
+    assert parts.send("Not quite on &w-abc123", wish="w-abc123", verdict="correct") != first
+    assert parts.send("agree &w-def456", wish="w-def456", verdict="agree") != first
+    assert len(list(root.glob("loom/connectors/mine/state/in/*"))) == 3
