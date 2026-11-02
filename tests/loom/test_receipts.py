@@ -14,7 +14,8 @@ from brr.loom.runtime import receipts as receipts_mod, snapshot
 from brr.loom.runtime.asks import asks
 from brr.loom.runtime.config import load_config
 from brr.loom.runtime.home import Home
-from brr.loom.runtime.ledger import read_facts
+from brr.loom.runtime import publish as publish_mod
+from brr.loom.runtime.ledger import Fact, append, read_facts
 from brr.loom.runtime.lifecycle import main_snapshot
 from brr.loom.runtime.receipts import receipts, record_start
 from brr.loom.runtime.selfrepo import git
@@ -122,6 +123,76 @@ def test_a_pull_request_whose_head_this_thread_never_pushed_is_refused(tmp_path:
         assert _kinds(root, "pr.opened") == []
     finally:
         _kill(read_facts(Home(root)))
+
+
+class _FakeForge:
+    """A pull request body the way GitHub keeps it: read, then rewritten whole."""
+
+    def __init__(self, body: str):
+        self.text, self.writes = body, 0
+
+    def body(self, number: int) -> str:
+        return self.text
+
+    def set_body(self, number: int, text: str) -> None:
+        self.text, self.writes = text, self.writes + 1
+
+
+def test_an_opened_pull_request_says_whose_it_is_once(tmp_path: Path, monkeypatch, capsys) -> None:
+    root, room, checkout, bare = _open(tmp_path)
+    try:
+        home = Home(root)
+        append(home, Fact(kind="letter", by=f"loom:{home.install_id()}", id="l-ada", data={
+            "id": "l-ada", "from": "person:ada", "to": "thread:work", "body": "sign the pull requests"}))
+        append(home, Fact(kind="wish", by="person:ada", id="w-sign", data={
+            "wish": "w-sign", "says": [["l-ada", 0, None]], "from": "person",
+            "line": "sign the pull requests", "thread": "work"}))
+        _note(checkout, room, "fix.txt", "fixed\n")
+        assert _verb(room, "widget").returncode == 0
+        _pull(bare, 7, _tip(checkout, "HEAD"))
+        forge = _FakeForge("Fixes the widget.\n\n<!-- brnrd -->")
+        monkeypatch.setattr(publish_mod, "_forge_for", lambda home, source: forge)
+
+        assert publish_mod.main(["widget", "--room", str(room), "--pr", "7"]) == 0, capsys.readouterr().err
+        line = (f"Opened by resident brnrd for ada · install {home.install_id()} · thread work"
+                f" · wish w-sign")
+        # Above the marker, so a person's comment routing still skips what brnrd wrote.
+        assert forge.text == f"Fixes the widget.\n\n{line}\n\n<!-- brnrd -->"
+        assert forge.writes == 1
+
+        # A second record reads the footer and writes nothing.
+        assert publish_mod.main(["widget", "--room", str(room), "--pr", "7"]) == 0
+        assert forge.writes == 1 and forge.text.count("Opened by resident brnrd") == 1
+    finally:
+        _kill(read_facts(Home(root)))
+
+
+def test_a_forge_that_refuses_the_footer_still_leaves_the_receipt(tmp_path: Path, monkeypatch, capsys) -> None:
+    root, room, checkout, bare = _open(tmp_path)
+    try:
+        _note(checkout, room, "fix.txt", "fixed\n")
+        assert _verb(room, "widget").returncode == 0
+        _pull(bare, 7, _tip(checkout, "HEAD"))
+
+        class Refusing(_FakeForge):
+            def set_body(self, number: int, text: str) -> None:
+                raise OSError("403 Resource not accessible by integration")
+
+        monkeypatch.setattr(publish_mod, "_forge_for", lambda home, source: Refusing(""))
+        assert publish_mod.main(["widget", "--room", str(room), "--pr", "7"]) == 0
+        assert "not signed: 403" in capsys.readouterr().err
+        assert len(_kinds(root, "pr.opened")) == 1
+    finally:
+        _kill(read_facts(Home(root)))
+
+
+def test_sign_puts_the_footer_above_the_last_marker_or_adds_one() -> None:
+    sign = publish_mod.sign
+    assert sign("", "Opened by resident brnrd", "ab12") == "Opened by resident brnrd\n\n<!-- brnrd:ab12 -->"
+    assert sign("Body.", "Opened by resident brnrd", "ab12") == (
+        "Body.\n\nOpened by resident brnrd\n\n<!-- brnrd:ab12 -->")
+    signed = "Body.\n\nOpened by resident brnrd for ada\n\n<!-- brnrd -->"
+    assert sign(signed, "Opened by resident brnrd for bo", "ab12") == signed
 
 
 def test_loaded_follows_the_latest_start_and_a_rollback_unloads(tmp_path: Path) -> None:
