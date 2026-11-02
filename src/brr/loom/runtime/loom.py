@@ -1720,8 +1720,10 @@ def _repaired(facts, strand, gen) -> str:
 # read is recorded, not listed: every path it opened or listed (main's ref,
 # config, gauges, a child's jack state, ...) with its stat, every body whose
 # liveness it probed, and the ledger's semantic revision. The clock is the one
-# input no stat sees, so a render is also retired after RENDER_MAX_AGE.
-RENDER_MAX_AGE = 10.0
+# input no stat sees, so a render is also retired after RENDER_MAX_AGE: ages are
+# said in minutes. A harness's own transcripts are read but not watched: a body's
+# grows at every turn, and the spend read from it keeps its own TTL (spend.TTL).
+RENDER_MAX_AGE = 30.0
 _RENDERS: dict[str, tuple] = {}
 _READING: list = [None]
 
@@ -1766,7 +1768,9 @@ def _rendered(facts, key, render):
         text = render()
     finally:
         _READING[0] = None
-    paths = {path: _stat(path) for path in reading[1]}
+    from .spend import claude_projects, codex_home
+    unwatched = (str(claude_projects()) + os.sep, str(codex_home()) + os.sep)
+    paths = {path: _stat(path) for path in reading[1] if not path.startswith(unwatched)}
     _RENDERS[key[0]] = (key, time.monotonic(), paths, reading[2], text, facts)
     return text
 

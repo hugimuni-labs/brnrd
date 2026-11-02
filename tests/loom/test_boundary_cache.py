@@ -119,3 +119,28 @@ def test_kept_boundary_equals_a_fresh_render_and_every_input_re_renders(tmp_path
     held.close()
     for proc in started:
         proc.kill()
+
+
+def test_a_growing_transcript_keeps_the_render_and_a_watched_file_retires_it(tmp_path, monkeypatch):
+    """busy-cpu: a body's transcript grows at every turn; a render that read it was re-rendered at the next tick.
+    The spend read from it keeps its own TTL, so it is read but not watched."""
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path / "claude"))
+    transcript = tmp_path / "claude/projects/-room-self/one.jsonl"
+    transcript.parent.mkdir(parents=True)
+    transcript.write_text("{}\n")
+    watched = tmp_path / "config.toml"
+    watched.write_text("a = 1\n")
+    facts, renders = object(), []
+
+    def render():
+        renders.append(1)
+        return transcript.read_text() + watched.read_text()
+    key = ("s-aaaa-render", 1)
+    loom._rendered(facts, key, render)
+    with transcript.open("a") as out:
+        out.write("{}\n")
+    loom._rendered(facts, key, render)
+    assert len(renders) == 1
+    watched.write_text("a = 2\n")
+    loom._rendered(facts, key, render)
+    assert len(renders) == 2
