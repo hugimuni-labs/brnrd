@@ -75,6 +75,28 @@ def fact_filename(fact: Fact) -> str:
     return f"{strand}.jsonl"
 
 
+#: A ledger row written before a rename, in today's words (10052: molt became reincarnate).
+_FRESH = ("Fresh molt: start from main.", "Fresh reincarnation: start from main.")
+
+
+def renamed(row: dict) -> dict:
+    """The one place an old name is read: kind ``molt``, a letter's ``molt`` marker, the
+    ``molted`` ending and the fresh control text come back as ``reincarnate``'s."""
+    kind, data = row.get("kind"), row.get("data")
+    if kind == "molt":
+        row = {**row, "kind": "reincarnate"}
+    if isinstance(data, dict):
+        if "molt" in data:
+            data = {("reincarnate" if key == "molt" else key): value for key, value in data.items()}
+        if kind == "attempt.ended" and data.get("cause") == "molted":
+            data = {**data, "cause": "reincarnated"}
+        if kind == "letter" and data.get("body") == _FRESH[0]:
+            data = {**data, "body": _FRESH[1]}
+        if data is not row.get("data"):
+            row = {**row, "data": data}
+    return row
+
+
 def read_file(path: Path) -> list[Fact]:
     """Parse one jsonl file, skipping a trailing line the process didn't finish."""
     raw = path.read_bytes()
@@ -86,7 +108,7 @@ def read_file(path: Path) -> list[Fact]:
     facts = []
     for line in raw.decode().splitlines():
         if line.strip():
-            facts.append(Fact.from_row(json.loads(line)))
+            facts.append(Fact.from_row(renamed(json.loads(line))))
     return facts
 
 
@@ -453,7 +475,7 @@ class LedgerReader:
                     handle.seek(0)
                     raw = handle.read()
                 complete = raw[:raw.rfind(b"\n") + 1]
-                added = [Fact.from_row(json.loads(line))
+                added = [Fact.from_row(renamed(json.loads(line)))
                          for line in complete.decode().splitlines() if line.strip()]
                 tail = ((prior[3] if prior is not None and offset else b"") + complete)[-TAIL:]
                 streams[path] = (stamp, offset + len(complete), str(path), tail)
@@ -512,7 +534,7 @@ class WriterIndex:
                 handle.seek(offset)
                 raw = handle.read()
                 complete = raw[:raw.rfind(b'\n') + 1]
-                additions.extend(Fact.from_row(json.loads(line)) for line in complete.splitlines() if line.strip())
+                additions.extend(Fact.from_row(renamed(json.loads(line))) for line in complete.splitlines() if line.strip())
                 stamps[path] = (stamp, offset + len(complete))
         if repair:
             additions = [f for path in paths for f in read_file(path)]

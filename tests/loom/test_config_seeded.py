@@ -31,7 +31,7 @@ def test_declaration_is_the_dataclass():
 
 
 def test_a_retired_key_still_loads_and_is_ignored(tmp_path):
-    # boot-review v2 retired the shed trigger's keys; a file that names them must still load.
+    # boot-review v2 retired the reincarnation trigger's keys; a file that names them must still load.
     from brr.loom.runtime.config import RETIRED, config_path
     path = config_path(tmp_path)
     path.parent.mkdir(parents=True, exist_ok=True)

@@ -948,7 +948,7 @@ class Daemon2:
                     source_file=path.name, verb="stop")
                 return
             # Ownership is the conversation, as for ``to:``: a seat that
-            # molts hands its strands to its successor, whose run id differs
+            # reincarnates hands its strands to its successor, whose run id differs
             # (#2288). Comparing the parent run left them unstoppable.
             if child.conversation != state["conversation"]:
                 raise ValueError("stop target is not a child of this conversation")

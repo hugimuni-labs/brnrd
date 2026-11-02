@@ -477,7 +477,7 @@ def pin_clone(repo: Path) -> None:
 def room(home: Path, strand: str, gen: int | None = None) -> Path:
     """``home/rooms/<strand>/self``, a ``--shared`` clone on ``strand/<strand>``.
 
-    A room that already exists keeps its commits and edits (a molt keeps its
+    A room that already exists keeps its commits and edits (a reincarnation keeps its
     commits), once ``heal_room`` has repaired what a crash left (see there).
     The clone has an empty credential helper. Commit identity is the body's
     environment.

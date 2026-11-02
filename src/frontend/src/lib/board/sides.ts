@@ -3,7 +3,7 @@ import type { Letter, Thread } from './types.ts';
 
 export const INBOX = 'inbox';
 
-// Internal: a resident's letter to a resident or thread (notes, molts, inbox<->threads, loom notices); person
+// Internal: a resident's letter to a resident or thread (notes, reincarnates, inbox<->threads, loom notices); person
 // letters and letters to a channel stay full.
 export const internal = (l: Letter): boolean =>
 	!l.person && !String(l.to || '').startsWith('channel:');

@@ -112,21 +112,21 @@ def gate_for(home: Home, config: LoomConfig):
 def heir_of(home: Home, facts, letters, thread: str, gen: int) -> str | None:
     """The strand whose room the next body of ``thread`` starts from, or None for main.
 
-    A molt hands its room on unless it was fresh. Any other end hands it on
+    A reincarnation hands its room on unless it was fresh. Any other end hands it on
     too (handover): a displaced or crashed body's unlanded work sat in a room
     the next fresh clone never saw. Only the thread's own last body hands on,
     only if it ran (a wake that failed, e.g. a home over budget, left nothing
     worth keeping and a room the repair never reached), and only while its
     room is on this disk.
     """
-    molts = {f.id: f for f in fold(facts).accepted if f.kind == "molt"}
+    reincarnates = {f.id: f for f in fold(facts).accepted if f.kind == "reincarnate"}
     for letter in reversed(letters):
-        molt = molts.get(letter.data.get("molt"))
-        # A molt marker on a letter to another thread would graft a foreign room.
-        if (molt is not None and molt.data.get("strand") == letter.data.get("from")
-                and molt.data.get("gen") == letter.data.get("gen")
+        reincarnate = reincarnates.get(letter.data.get("reincarnate"))
+        # A reincarnation marker on a letter to another thread would graft a foreign room.
+        if (reincarnate is not None and reincarnate.data.get("strand") == letter.data.get("from")
+                and reincarnate.data.get("gen") == letter.data.get("gen")
                 and sender_threads(facts).get(letter.data.get("from")) == thread):
-            return None if molt.data.get("fresh", False) else letter.data["from"]
+            return None if reincarnate.data.get("fresh", False) else letter.data["from"]
     last = next((f for f in reversed(facts) if f.kind == "lease"
                  and str(f.data.get("thread")) == thread
                  and int(f.data.get("gen") or 0) == gen - 1), None)
@@ -567,9 +567,9 @@ class Router:
         state = fold(facts)
         shown = state.shown.get(strand, set())
         letters = [f for f in letters_for(facts, main_snapshot(self.home), thread) if f.id in shown]
-        molted = any(f.kind == 'molt' and f.data.get('strand') == strand and f.data.get('gen') == gen
+        reincarnated = any(f.kind == 'reincarnate' and f.data.get('strand') == strand and f.data.get('gen') == gen
                      for f in state.accepted)
-        cause = ('molted' if molted else 'settled' if read_thread(self.home, thread).get('status') in CLOSED
+        cause = ('reincarnated' if reincarnated else 'settled' if read_thread(self.home, thread).get('status') in CLOSED
                  else 'failed' if letters else 'idle')
         facts = _end_attempt(self.home, facts, strand, thread, gen, None, letters, cause,
                              "holding install went silent", failure_origin="home", repair_thread=thread,

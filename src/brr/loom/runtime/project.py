@@ -274,7 +274,7 @@ class Reducer:
                 thread = _destination(data)
                 if thread is not None and data.get("id"):
                     dest[str(data["id"])] = thread
-                if data.get("molt"):
+                if data.get("reincarnate"):
                     self.handovers.add(fact.id)
                 re = data.get("re")
                 if str(data.get("to", "")).startswith("channel:"):
@@ -288,7 +288,7 @@ class Reducer:
             elif fact.kind == "shown":
                 ids = [str(item) for item in data.get("ids") or ()]
                 state.shown.setdefault(strand, set()).update(ids)
-                # A shed's --why points at the README and asks nothing: once the
+                # A reincarnation's --why points at the README and asks nothing: once the
                 # successor's own boundary showed it, it is read, not owed (the
                 # loom's wake-time show doesn't count, the body may never start).
                 if fact.by == f"strand:{strand}":

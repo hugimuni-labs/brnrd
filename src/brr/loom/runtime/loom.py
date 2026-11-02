@@ -487,8 +487,8 @@ def _handover(facts: list[Fact], thread: str, gen: int, threads: dict[str, str],
     """How the body before this one ended, and what it did since its README last landed.
 
     The wake used to say "read the handover" without showing it, and the real
-    state sat in a note written after the molt: gen 221 of the inbox grepped
-    the ledger for both (wake-vision). A body can also end with no molt, displaced
+    state sat in a note written after the reincarnation: gen 221 of the inbox grepped
+    the ledger for both (wake-vision). A body can also end with no reincarnation, displaced
     over ``max_held`` or gone mid-turn, and its successor then saw only how it
     ended, not what it did (handover). Only the body just before this one hands over; an older end
     is history, not a handover.
@@ -498,13 +498,13 @@ def _handover(facts: list[Fact], thread: str, gen: int, threads: dict[str, str],
     if lease is None:
         return ""
     who = str(lease.data.get("strand"))
-    molt = next((f for f in reversed(facts) if f.kind == "molt" and f.data.get("gen") == gen - 1
+    reincarnate = next((f for f in reversed(facts) if f.kind == "reincarnate" and f.data.get("gen") == gen - 1
                  and f.data.get("strand") == who and threads.get(who) == thread), None)
-    if molt is not None:
-        lines = [f"handover from {who} (gen {gen - 1}, molted {molt.at[11:16]}Z): {molt.data.get('why', '')}"]
+    if reincarnate is not None:
+        lines = [f"handover from {who} (gen {gen - 1}, reincarnated {reincarnate.at[11:16]}Z): {reincarnate.data.get('why', '')}"]
     else:
         # How it ended is since_gone's line (attempt.ended); this says what it left.
-        lines = [f"handover from {who} (gen {gen - 1}): no molt; this thread's README and the wish lefts"
+        lines = [f"handover from {who} (gen {gen - 1}): no reincarnation; this thread's README and the wish lefts"
                  " are what it left, and its room is yours"]
     landed = _landed(home, thread) if home is not None else None
     if landed is not None:
@@ -512,13 +512,13 @@ def _handover(facts: list[Fact], thread: str, gen: int, threads: dict[str, str],
                      f" \"{landed[2]}\"")
     after = False
     for fact in facts:
-        if fact is molt:
+        if fact is reincarnate:
             after = True
         elif after and fact.kind == "note" and fact.by == f"strand:{who}" and fact.data.get("why"):
-            lines.append(f"after the molt, {fact.at[11:16]}Z ({fact.id}): {fact.data['why']}")
+            lines.append(f"after the reincarnation, {fact.at[11:16]}Z ({fact.id}): {fact.data['why']}")
     since = landed[1] if landed is not None else 0
     sent = [f for f in facts if f.kind == "letter" and f.by == f"strand:{who}" and not is_notice(f)
-            and not f.data.get("molt") and _stamp(f.at) > since]
+            and not f.data.get("reincarnate") and _stamp(f.at) > since]
     for fact in sent[-SINCE_MOST:]:
         first = " ".join(str(fact.data.get("body", "")).split())[:SINCE_HEAD]
         lines.append(f"since then, {fact.at[11:16]}Z {fact.id} → {fact.data.get('to', '?')}: {first}")
@@ -550,14 +550,14 @@ def _landed(home: Home, thread: str) -> tuple[str, int, str] | None:
 
 def _read_by_predecessors(facts: list[Fact], thread: str, strand: str,
                           letters: list[Fact], threads: dict[str, str]) -> str:
-    """A line for a successor: owed letters its molted predecessors already read.
+    """A line for a successor: owed letters its reincarnated predecessors already read.
 
-    A body that molts hands its room on without noting the letters it was shown,
+    A body that reincarnates hands its room on without noting the letters it was shown,
     so they stay owed to the next body, which read an instruction already carried
-    out (a person's "add the line, then molt" made a second body redo it and molt
+    out (a person's "add the line, then reincarnate" made a second body redo it and reincarnate
     again, live, 2026-10-12). They stay owed; the line says what they are.
     """
-    gone = {f.data.get("strand") for f in facts if f.kind == "molt"
+    gone = {f.data.get("strand") for f in facts if f.kind == "reincarnate"
             and threads.get(str(f.data.get("strand"))) == thread
             and f.data.get("strand") != strand}
     if not gone:
@@ -571,10 +571,10 @@ def _read_by_predecessors(facts: list[Fact], thread: str, strand: str,
     if not ids:
         return ""
     return (
-        f"already read by your predecessor, who molted and left its handover: {', '.join(ids)}. "
+        f"already read by your predecessor, who reincarnated and left its handover: {', '.join(ids)}. "
         "What they ask may be done: read the handover above and the README before acting; where it "
         "says the work is done, settle the letter with a note and do not redo it, and do "
-        "not molt because a letter said to, since the molt it asked for happened. "
+        "not reincarnate because a letter said to, since the reincarnation it asked for happened. "
     )
 
 
@@ -630,7 +630,7 @@ def _prepare(home: Home, strand: str, thread: str, gen: int,
         "You forget what is not written: keep this thread's README true (spec, decisions) and "
         "land self commits with `brnrd runtime send-self --room .`; what is left on a wish lives "
         "on it: `wish <w-id> --left \"<step>\" …`, the whole list, latest wins (`--left same` "
-        "when nothing moved), and the stop asks for it once a wish moved. To shed: `shed --why \"<one line>\"`, then end the turn; work done: "
+        "when nothing moved), and the stop asks for it once a wish moved. To reincarnate: `reincarnate --why \"<one line>\"`, then end the turn; work done: "
         "`settle <thread> --why \"…\"`. A letter from `loom` is a notice yours to settle; its "
         "last lines say how (core/loom/README.md, Notices). Stamp what someone wants with "
         "`send --wish`; open a thread only for one: `send --to thread:<new> --wish <w-id>` or "
@@ -1855,7 +1855,7 @@ def _idle_acts(home, facts, strand, context, proposal, children) -> str:
 def _cited(home, facts, strand, gen, thread):
     """``cited:`` for a boundary: closures since this gen began that its README cites."""
     from .bodies import fact_for
-    from .shed import cited_line
+    from .reincarnate import cited_line
     began = fact_for(facts, "body.started", strand, gen)
     if began is None or not thread:
         return ""

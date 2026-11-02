@@ -99,7 +99,7 @@ def test_a_bead_walks_a_resident_reply_back_to_the_person_root(ledger):
 
 
 def test_every_root_kind_through_its_writer_and_nothing_dangles(ledger):
-    """A person letter, a loom notice, a molt up to the thread's wish, an
+    """A person letter, a loom notice, a reincarnation up to the thread's wish, an
     incident a person ratified, and a derived wish before and after its verdict."""
     from brr.loom.runtime.asks import Beads, roots
     from brr.loom.runtime.lifecycle import main_snapshot
@@ -137,13 +137,13 @@ def test_every_root_kind_through_its_writer_and_nothing_dangles(ledger):
     (home.root / "self/threads/work/README.md").write_text(
         f"---\nid: work\nstatus: open\ntense: plan\nopened-for: [{wish}]\n---\n# Wish work\n")
     commit(home.root / "self", "opened for")
-    molt = land(write_send(seat, to="thread:work", sender="s-aaaa-test", body="handover",
-                           molt="s-aaaa-test/abcde"))
-    up = [("s-aaaa-test", "molt"), ("thread:work", "thread"), (wish, "opened-for")]
-    assert walk(molt) == (up, "unconfirmed")
+    reincarnate = land(write_send(seat, to="thread:work", sender="s-aaaa-test", body="handover",
+                           reincarnate="s-aaaa-test/abcde"))
+    up = [("s-aaaa-test", "reincarnate"), ("thread:work", "thread"), (wish, "opened-for")]
+    assert walk(reincarnate) == (up, "unconfirmed")
     agreed = cli(["wish", wish, "--room", str(seat), "--accept", "word", "--ref", said])
     assert agreed.returncode == 0, agreed.stderr
-    assert walk(molt) == ([*up, (said, "verdict")], "person")
+    assert walk(reincarnate) == ([*up, (said, "verdict")], "person")
     # The invariant: every letter here ends at a person, a loom fact or an unconfirmed wish.
     assert set(roots(read_facts(home), main_snapshot(home))) <= {"person", "loom", "unconfirmed"}
 

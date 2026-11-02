@@ -21,7 +21,7 @@ from .home import Home, thread_of
 from .project import cached_projection, fold, is_notice, projection_cache, sender_threads
 from .wishes import progress
 
-STATES = {"working", "holding", "idle", "parked", "failed", "molted", "settled", "stopped"}
+STATES = {"working", "holding", "idle", "parked", "failed", "reincarnated", "settled", "stopped"}
 # The threads table's words for a start waiting on fuel; the board says parked.
 _PARKED = {"paced", "pending"}
 _PR = re.compile(r"https://github\.com/[^\s/]+/[^\s/]+/pull/\d+")

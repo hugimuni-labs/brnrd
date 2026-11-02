@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import re
 import sys
@@ -244,19 +245,33 @@ def _tell_delivered(home, args, wish, result) -> None:
 
 
 def _rest_line(args, data) -> None:
-    """A long park is where a shed is a judgement due: say the stakes once, on stderr."""
-    from .shed import long_wait, rest_line
+    """A long park is where reincarnating is a judgement due: say the stakes once, on stderr.
+    Past the mark, a census of the scroll goes above it and the question is what would die."""
+    from .reincarnate import MARK, census, contexts, long_wait, rest_line
     wait = data.get("wait") or {}
     condition = str(wait.get("on") or wait.get("condition") or "") if isinstance(wait, dict) else str(wait)
     if not long_wait(condition):
         return
-    from .jack import _state
+    from .jack import _set_state, _state
     from .verbs_loom import _room
+    said, context = "", 0
     try:
-        context = int(_state(_room(args.room)).get("context") or 0)
+        room = _room(args.room)
+        state = _state(room)
+        # The park has no hook stdin; the jack kept the scroll's path. Its context is 0
+        # before a gen's first stop, and stale after a long turn, so read the scroll here.
+        path = state.get("transcript") or ""
+        context = (contexts(json.dumps({"transcript_path": path}), 0)[1] if path else 0) \
+            or int(state.get("context") or 0)
+        if context >= MARK:
+            from .project import sender_threads
+            facts = read_facts(home_of_room(room))
+            thread = sender_threads(facts).get(strand_of_room(room)) or ""
+            said, kept = census(room, thread, state, facts)
+            _set_state(room, scroll=kept)
     except Exception:  # noqa: BLE001 - the size is a courtesy; the park is already written
-        context = 0
-    print(rest_line(condition, context), file=sys.stderr)
+        pass
+    print(rest_line(condition, context, said), file=sys.stderr)
 
 
 def _related(home, line, facts, thread) -> None:

@@ -99,14 +99,14 @@ class Ctx:
             raise RuntimeError(proc.stderr.strip() or f"send exited {proc.returncode}")
         return proc.stdout.strip()
 
-    def molt(self, why: str, *, fresh: bool = False) -> None:
+    def reincarnate(self, why: str, *, fresh: bool = False) -> None:
         proc = subprocess.run(
-            [sys.executable, "-m", "brr.loom.runtime", "molt",
+            [sys.executable, "-m", "brr.loom.runtime", "reincarnate",
              "--room", str(self.room), "--why", why, *(["--fresh"] if fresh else [])],
             capture_output=True, text=True, env=self.env, cwd=self.room,
         )
         if proc.returncode != 0:
-            raise RuntimeError(proc.stderr.strip() or "molt failed")
+            raise RuntimeError(proc.stderr.strip() or "reincarnate failed")
 
     def trace(self, payload: dict) -> None:
         path = self.room / "port" / "trace.jsonl"
@@ -191,14 +191,14 @@ def ping_two(ctx: Ctx) -> None:
             ctx.send(f"thread:{own}", note="seen", re=letter.id)
 
 
-def molt_once(ctx: Ctx) -> None:
-    flag = ctx.room / "port" / "molted"
+def reincarnate_once(ctx: Ctx) -> None:
+    flag = ctx.room / "port" / "reincarnated"
     if flag.exists():
         (ctx.room / "port" / "wake-seen").write_text(ctx.wake())
         while True:
             time.sleep(0.2)
     flag.write_text("1\n")
-    ctx.molt("fresh body")
+    ctx.reincarnate("fresh body")
     ctx.jack("stop")
 
 
@@ -287,7 +287,7 @@ def echo_wake(ctx: Ctx) -> None:
 POLICIES = {
     "answer-pings": answer_pings,
     "ping-two": ping_two,
-    "molt-once": molt_once,
+    "reincarnate-once": reincarnate_once,
     "die-now": die_now,
     "quit-now": quit_now,
     "hold": hold,

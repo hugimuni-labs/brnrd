@@ -361,7 +361,7 @@ def test_wake_naming_another_body_moves_the_parked_thread_there(tmp_path, monkey
         assert home.starts.read_text() == "spare\n"
         assert _leases(loom) == [(1, "claude", "echo"), (2, "spare", "x")]
         ended = [f for f in loom.facts() if f.kind == "attempt.ended"]
-        assert [(f.data["gen"], f.data.get("cause")) for f in ended] == [(1, "molted")]
+        assert [(f.data["gen"], f.data.get("cause")) for f in ended] == [(1, "reincarnated")]
         assert "letter:relay:telegram:42:move" not in {str(l.data["id"]) for l in mail(home.root, loom.facts(), "inbox")}
     finally:
         loom.halt()
@@ -482,7 +482,7 @@ def test_body_held_dry_woken_on_another_body_ends_molted_and_the_next_gen_runs_t
         assert log.read_text().splitlines()[before:] == ["left"]
         assert _leases(loom) == [(1, "claude", "echo"), (2, "spare", "x")]
         ended = [f for f in loom.facts() if f.kind == "attempt.ended"]
-        assert [(f.data["gen"], f.data.get("cause")) for f in ended] == [(1, "molted")]
+        assert [(f.data["gen"], f.data.get("cause")) for f in ended] == [(1, "reincarnated")]
         owed = {str(l.data["id"]) for l in mail(home.root, loom.facts(), "inbox")}
         assert "letter:relay:telegram:42:again" in owed and "letter:relay:telegram:42:move" not in owed
     finally:
