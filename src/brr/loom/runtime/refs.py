@@ -17,13 +17,19 @@ from .dispositions import letter_index, resolve as resolve_letter
 # character: ``a=1&b=2`` in a URL and ``&&`` in shell are not refs.
 REF = re.compile(r"(?<![^\s(\[])&([A-Za-z0-9][\w:/#.-]*\w|[A-Za-z0-9])")
 CODE = re.compile(r"```.*?```|`[^`\n]*`", re.S)
+# A quoted line is someone else's words: its refs are theirs, never this letter's.
+QUOTE = re.compile(r"^[ \t]*>.*$", re.M)
+# What an id looks like: a wish, a thread, a strand, a letter by number, by id or
+# by sender/stem. A bare word after ``&`` (``&ref``, ``&name``) is a ref only when
+# it resolves (a letter's stem); otherwise it is a word, never a ref that missed.
+SHAPE = re.compile(r"w-[0-9a-z]{4,}|thread:[\w.-]+|s-[a-z0-9]+-[a-z0-9]+|\d+|letter:\S+|[\w.:-]+/[\w.-]+")
 STRAND = re.compile(r"s-[a-z0-9]+-[a-z0-9]+")
 WISH_PREFIX = 4
 
 
 def tokens(body: str) -> list[str]:
-    """Every ref in ``body`` outside code, once each, in order."""
-    return list(dict.fromkeys(REF.findall(CODE.sub("", body or ""))))
+    """Every ref in ``body`` outside code and quotes, once each, in order."""
+    return list(dict.fromkeys(REF.findall(QUOTE.sub("", CODE.sub("", body or "")))))
 
 
 def kind_of(ident: str) -> str:
@@ -62,7 +68,7 @@ class Index:
 
 
 def link(facts, threads, body: str) -> tuple[list[str], list[str]]:
-    """``(links, misses)``: the full ids ``body``'s refs name, and the refs that name nothing."""
+    """``(links, misses)``: the full ids ``body``'s refs name, and the id-shaped refs that name nothing."""
     found = tokens(body)
     if not found:
         return [], []
@@ -71,7 +77,8 @@ def link(facts, threads, body: str) -> tuple[list[str], list[str]]:
     for token in found:
         ident = index.resolve(token)
         if ident is None:
-            misses.append(token)
+            if SHAPE.fullmatch(token):
+                misses.append(token)
         elif ident not in links:
             links.append(ident)
     return links, misses

@@ -296,8 +296,18 @@ def observe_waits(home, facts, armed: bool, forge: dict | None = None, now: date
         head = (f"wait on {wish.id} {'resolved' if resolved else 'ran out'}: {said}. "
                 f"Parked as: {read['reading']}")
         notice(home, facts, "wait", subject(wish, read), head, _advice(wish, read, resolved, said),
-               thread=wish.thread)
+               thread=parker(home, facts, wish, read))
     return facts
+
+
+def parker(home, facts, wish, read) -> str:
+    """The thread a wait's notice wakes: the one whose strand parked, not the
+    wish's, which may be settled or another's (w-fu0i49mzlfa3). A person's park,
+    or a parker whose thread is gone, falls back to the wish's thread."""
+    from .project import sender_threads
+    writer = str(read.get("writer") or "")
+    thread = sender_threads(facts).get(writer.removeprefix("strand:")) if writer.startswith("strand:") else None
+    return thread if thread and home.routable(thread) else wish.thread
 
 
 class Forge:

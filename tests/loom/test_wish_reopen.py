@@ -113,3 +113,22 @@ def test_an_ask_from_a_body_whose_thread_settled_reopens_it(inbox):
     ask = run("ask", "Which colour?", "--room", str(seat), "--for", ident).splitlines()[0]
     assert state(home, "inbox")[1] == "open"
     assert [f.data["wish"] for f in read_facts(home) if f.kind == "thread.reopened"] == [ask]
+
+
+def test_a_cite_on_a_delivered_wish_leaves_its_thread_settled_and_says_so(inbox):
+    """w-fu0i49mzlfa3: citing a letter on a delivered wish is no new work; nobody wakes."""
+    home, seat = inbox
+    first = inject_letter(home.root, to="thread:inbox", body="Build the switch")
+    placed = cli(["wish", "new", "--room", str(seat), "--line", "Build the switch", "--say", first,
+                  "--thread", "work"])
+    assert placed.returncode == 0 and "reopened work (was settled)" in placed.stderr
+    ident = placed.stdout.strip()
+    run("wish", ident, "--room", str(seat), "--result", "pr:https://example.com/1", "--line", "Done", "--deliver")
+    settle(home.root)
+    cite = inject_letter(home.root, to="thread:inbox", body="nice, as I said in the switch letter")
+    said = cli(["wish", ident, "--room", str(seat), "--say", cite])
+    assert said.returncode == 0, said.stderr
+    assert f"recorded on work (settled); nobody wakes: {ident} is not back in hand" in said.stderr
+    assert state(home, "work")[1] == "settled"
+    assert wishes(read_facts(home))[ident].state == "delivered"
+    assert len([f for f in read_facts(home) if f.kind == "thread.reopened"]) == 1

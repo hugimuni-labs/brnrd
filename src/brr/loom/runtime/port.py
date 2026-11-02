@@ -868,8 +868,10 @@ def write_send(room: Path, *, to: str, sender: str, body: str = "",
     text = _front(fields, "" if note is not None else body)
     reopened = []
     if wish_stamps:
-        from .lifecycle import reopen_for
+        from .lifecycle import effects, reopen_for
         reopened = reopen_for(Path(room), wish_stamps)
+        if echo is not None:
+            echo.extend(effects(home, wish_stamps, reopened))
     if opening is not None:
         from .lifecycle import open_thread
         open_thread(Path(room), opening, sender, body, body_choice, repo_sources,

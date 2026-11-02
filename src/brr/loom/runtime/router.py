@@ -760,6 +760,9 @@ class Router:
         return facts
 
 
+LOOM_HEADER = "⌁ loom: an automatic notice, not the resident"
+
+
 def _header(state, letter: Fact, facts: list[Fact] | None = None) -> str:
     """The face the body decided, its thread, and the fact the loom last proposed on.
 
@@ -767,6 +770,9 @@ def _header(state, letter: Fact, facts: list[Fact] | None = None) -> str:
     and proposals read the raw ``facts``: a ``pr.merged`` is never folded in.
     """
     from .faces import faces, voice
+    if letter.data.get("from") == "loom":
+        # A notice is the loom's own words, never the resident's (w-nw1m5avc70qm).
+        return LOOM_HEADER
     strand = letter.by.removeprefix("strand:")
     lease = next((f for f in reversed(state.accepted)
                   if f.kind == "lease" and f.data["strand"] == strand), None)
