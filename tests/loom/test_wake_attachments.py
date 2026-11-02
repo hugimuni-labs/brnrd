@@ -122,12 +122,13 @@ def test_loom_part_points_at_wishes(home, jack):
     facts = read_facts(home)
     room = _prepare(home, STRAND, "inbox", 1, [], sender_threads(facts), facts, jack)
     part = (room / "port/loom.md").read_text()
-    assert "what is left on a wish lives on it: `wish <w-id> --left" in part
-    assert "the stop asks for it once a wish moved" in part
-    assert "Stamp what someone wants with `send --wish`" in part
-    # The rest the loom keeps rides in the core, once: a typed park, then stop; never a sleep loop.
+    # How to reply, leave and end rides in the core's briefing, once, not in the loom part.
     from brr.loom.runtime.waits import GRAMMAR
     core = (room / "port/core.md").read_text()
+    assert "What is left on a wish lives on it: `wish <w-id> --left" in core
+    assert "Stamp what someone wants with `send --wish`" in core
+    assert "--result pr:<url> --line" in core and "--deliver" in core
+    assert "Stamp what someone wants" not in part and "--left" not in part
     assert f'--read "waiting: <what>" --wait <{GRAMMAR}>`' in core
     assert core.count("Stopping is resting, not ending") == 1 and "A sleep or poll loop is never the wait" in core
     assert core.index("## memory/stance.md") < core.index("## loom briefing")
