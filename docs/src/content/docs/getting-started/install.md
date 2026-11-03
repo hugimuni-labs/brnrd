@@ -14,6 +14,10 @@ your `PATH`.
 curl -LsSf https://hugimuni-labs.github.io/brnrd/install.sh | sh
 ```
 
+This one also [runs the loom](#run-the-loom) for you: it ends with
+`brnrd loom install` and `brnrd loom status`. The routes below install only
+the command.
+
 If you have Node:
 
 ```bash

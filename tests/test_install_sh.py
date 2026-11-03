@@ -161,6 +161,10 @@ DEV_TOOLS = {
 }
 
 
+# The release path ends where --dev does: the loom installed and running.
+RELEASE_TAIL = ["brnrd --version", "brnrd loom install", "brnrd loom status"]
+
+
 def _dev_tail(clone: Path) -> list[str]:
     return [
         f"uv tool install --editable {clone}",
@@ -191,7 +195,7 @@ def test_dry_run_installs_with_uv_when_uv_is_present(tmp_path, shell):
     assert commands == [
         "uv tool install brnrd",
         "uv tool update-shell",
-        "brnrd --version",
+        *RELEASE_TAIL,
     ]
 
 
@@ -201,7 +205,7 @@ def test_dry_run_upgrades_when_uv_already_has_brnrd(tmp_path, shell):
     assert commands == [
         "uv tool upgrade brnrd",
         "uv tool update-shell",
-        "brnrd --version",
+        *RELEASE_TAIL,
     ]
 
 
@@ -211,7 +215,7 @@ def test_dry_run_installs_with_pipx_when_only_pipx_is_present(tmp_path, shell):
     assert commands == [
         "pipx install brnrd",
         "pipx ensurepath",
-        "brnrd --version",
+        *RELEASE_TAIL,
     ]
 
 
@@ -221,7 +225,7 @@ def test_dry_run_upgrades_when_pipx_already_has_brnrd(tmp_path, shell):
     assert commands == [
         "pipx upgrade brnrd",
         "pipx ensurepath",
-        "brnrd --version",
+        *RELEASE_TAIL,
     ]
 
 
@@ -234,7 +238,7 @@ def test_dry_run_bootstraps_uv_when_neither_is_present(tmp_path, shell):
         UV_BOOTSTRAP,
         "uv tool install brnrd",
         "uv tool update-shell",
-        "brnrd --version",
+        *RELEASE_TAIL,
     ]
 
 
@@ -247,7 +251,7 @@ def test_uv_wins_when_both_uv_and_pipx_are_present(tmp_path, shell):
 
 @pytest.mark.parametrize("shell", SHELLS)
 def test_a_failed_probe_exits_nonzero_with_one_sentence(tmp_path, shell):
-    result = _run(tmp_path, {"uv": REFUSES}, shell)
+    result = _run(tmp_path, {"uv": REFUSES, "claude": REFUSES}, shell)
     assert result.returncode != 0
     assert result.stdout == ""
     lines = result.stderr.splitlines()
@@ -364,9 +368,10 @@ def test_dev_warns_when_gh_is_signed_out(tmp_path):
     ]
 
 
-def test_dev_warns_when_no_body_cli_is_on_path(tmp_path):
+@pytest.mark.parametrize("args", [(), ("--dev",)])
+def test_no_body_cli_on_path_warns_on_both_paths(tmp_path, args):
     tools = {name: body for name, body in DEV_TOOLS.items() if name != "claude"}
-    result = _run(tmp_path, tools, args=("--dev",))
+    result = _run(tmp_path, tools, args=args)
     _commands(result)
     assert result.stderr.splitlines() == [
         "warning: neither claude nor codex is on PATH, and loom install picks the loom's body from them; "
@@ -434,7 +439,7 @@ def test_dev_warns_about_a_loom_running_from_another_install_only(tmp_path):
 
 
 def test_the_release_path_does_not_ask_about_gh(tmp_path):
-    result = _run(tmp_path, {"uv": UV_ABSENT, "gh": REFUSES})
+    result = _run(tmp_path, {"uv": UV_ABSENT, "gh": REFUSES, "claude": REFUSES})
     _commands(result)
     assert result.stderr == ""
 
