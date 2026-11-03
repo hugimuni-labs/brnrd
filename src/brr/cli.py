@@ -1556,6 +1556,14 @@ def main(argv: list[str] | None = None) -> None:
             from .loom.runtime.setup_channel import main as guided_setup
 
             return guided_setup([])
+        if raw[:1] == ["runtime"]:
+            # The console script lands here, not in __main__: the `brnrd`
+            # an install puts on PATH must answer the verbs its help names.
+            from .loom.runtime.__main__ import main as runtime
+            code = runtime(raw[1:])
+            if code:
+                raise SystemExit(code)
+            return
         if raw[:2] == ["loom", "check"]:
             from .loom.runtime.check import run
             return run(raw[2:])

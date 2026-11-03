@@ -42,3 +42,12 @@ def test_cli_routes_loom_help_and_bare_loom(capsys):
 def test_top_level_help_names_loom_and_runtime():
     text = " ".join(cli.build_parser().format_help().split())
     assert "brnrd loom --help" in text and "brnrd runtime --help" in text
+
+
+def test_cli_routes_runtime_like_the_shim(capsys):
+    # The PATH `brnrd` from an install is brr.cli:main, not `python -m brr`.
+    cli.main(["runtime", "--help"])
+    assert capsys.readouterr().out.startswith("usage: brnrd runtime <verb>")
+    with pytest.raises(SystemExit) as unknown:
+        cli.main(["runtime", "sned"])
+    assert unknown.value.code == 2
