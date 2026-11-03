@@ -359,15 +359,30 @@ def _left_fact(args, facts, by):
     return Fact(kind="wish.left", by=by, id="wish.left:" + mint(12), data=data)
 
 
-def _person_dm(home, person: str | None) -> str | None:
-    """The person's direct channel an ask is mailed to (the operator's is the
-    first person page with one), or None when there is none."""
-    from .board import person_channel
+def _person_dm(home, facts, person: str | None) -> str | None:
+    """The person's direct channel an ask is mailed to, or None when there is none.
+
+    The chat their latest letter came from, as a reply would go: the first entry
+    in channels.toml is only the fallback. An ask that went there reached an old
+    own bot for days while he wrote from the cloud one (11-03). The operator is
+    the first person page with a channel, else whoever wrote last.
+    """
+    from .board import person_of
+    from .connector import person_dm
+    from .project import reply_channels
     try:
-        instance, user = person_channel(home, person)
+        name, instance, user = person_of(home, person)
+        static = f"channel:{instance}/{user}"
     except LookupError:
-        return None
-    return f"channel:{instance}/{user}"
+        name, static = person, None
+    channels = reply_channels(facts, home)
+    for fact in sorted((f for f in facts if f.kind == "letter"), key=lambda f: f.at, reverse=True):
+        sender = str(fact.data.get("from", ""))
+        channel = channels.get(str(fact.data.get("id")))
+        if (channel and sender.startswith("person:") and (name is None or sender == f"person:{name}")
+                and person_dm(home, channel) == sender):
+            return channel
+    return static
 
 
 def _mailed(facts, room, to, marker):
@@ -440,10 +455,10 @@ def cmd_ask(args):
         elif head == "operator" or head.startswith("person:"):
             # Typing an ask is sending it (requests R3): any thread may write the
             # person, and the &ref binds his reply-to on this message to the ask.
-            to = _person_dm(home, head.removeprefix("person:") if head != "operator" else None)
+            to = _person_dm(home, facts, head.removeprefix("person:") if head != "operator" else None)
             if to is None:
                 print(f"ask: {ident} waits on the person, but no person has a direct channel: "
-                      "raise it from the inbox", file=sys.stderr)
+                      "it is on the board only; raise it from the inbox", file=sys.stderr)
             elif not _mailed(facts, room, to, marker):
                 body = marker + args.what + "\n"
                 if args.rec is not None:
@@ -451,6 +466,8 @@ def cmd_ask(args):
                 body += f"Reply to this message to answer &{ident}.\n"
                 write_send(room, to=to, sender=strand_of_room(room), body=body)
                 _say([f"sent to {to}: their reply answers {ident}"])
+            else:
+                _say([f"already sent to {to}: not sent again"])
         if args.default_at is not None:
             # The asking wish parks on the ask; at its deadline the body is woken with its own rec.
             append(home, Fact(kind="wish.read", by=by, id="wish.read:" + mint(12), data={
