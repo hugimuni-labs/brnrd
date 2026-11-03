@@ -247,4 +247,46 @@ def over_line(thread: str, opener: str, spent: int, allocated: int) -> str:
     return (f"budget: thread {thread} has spent {format_tokens(spent)} of {format_tokens(allocated)} tokens (+{over}%). "
             f"Write to {opener}: what is done, what is left, and how much more you ask. "
             f"Its answer raises the allocation with `send --to thread:{thread} --budget <n>`. "
-            "This warns; nothing stops you.")
+            "Past it, only landing runs: reads, edits under self/, git add/commit, `brnrd runtime …`.")
+
+
+# Past the allocation a body may still land what it did (trust-guards, inbox's i1jbi):
+# reads, the self's files, git's recording verbs and the loom's own verbs. Everything
+# else is refused until the opener raises the allocation.
+LANDING_TOOLS = frozenset({"Read", "Glob", "Grep", "LS", "TodoWrite", "ToolSearch"})
+_FILE_TOOLS = frozenset({"Edit", "MultiEdit", "Write", "NotebookEdit"})
+_LANDING_COMMAND = re.compile(
+    r"(?:[A-Za-z_][A-Za-z0-9_]*=\S*\s+)*(?:"
+    r"git(?:\s+-C\s+\S+)?\s+(?:add|commit|status|diff|log|show|rev-parse|stash\s+list)\b"
+    r"|(?:\S*/)?brnrd\s+runtime\b|python3?\s+-m\s+brr\.loom\.runtime\b"
+    r"|(?:cd|cat|head|tail|ls|wc|grep|rg|pwd|echo|true)\b|sed\s+-n\b)")
+_SEGMENT = re.compile(r"&&|\|\||[;|\n]")
+
+
+def landing_call(tool: str, tool_input, self_dir) -> bool:
+    """True when a call over budget is part of landing, not of more work."""
+    if tool in LANDING_TOOLS:
+        return True
+    if not isinstance(tool_input, dict):
+        return False
+    if tool in _FILE_TOOLS:
+        path = str(tool_input.get("file_path") or tool_input.get("notebook_path") or "")
+        try:
+            Path(path).resolve().relative_to(Path(self_dir).resolve())
+            return True
+        except (ValueError, OSError):
+            return False
+    if tool == "Bash":
+        command = str(tool_input.get("command") or "")
+        parts = [part.strip() for part in _SEGMENT.split(command)]
+        return bool(command.strip()) and all(not part or _LANDING_COMMAND.match(part) for part in parts)
+    return False
+
+
+def over_refusal(thread: str, opener: str, line: str) -> str:
+    """The budget refusal: what, that nothing raised it, the override, and what stays open."""
+    spent = line.partition(" has spent ")[2].partition(" tokens")[0]
+    return (f"refused: spend past allocation (thread {thread} has spent {spent} tokens); "
+            f"no `send --budget` from {opener} raises it.\n"
+            f"override: {opener} raises it with `send --to thread:{thread} --budget <n>`; write to it what is done and left.\n"
+            "still open: reads, edits under self/, git add/commit/status/diff/log, `brnrd runtime …` (send-self, send, wish).")
