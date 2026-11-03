@@ -2,23 +2,21 @@
 
 from __future__ import annotations
 
-import argparse
-import sys
 from pathlib import Path
 
 from brr.loom.runtime.merge import SendError, send_to_self
+from .refusals import Parser, refuse
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(prog="python -m brr.loom.runtime send-self")
+    parser = Parser(verb="send-self", prog="python -m brr.loom.runtime send-self")
     parser.add_argument("--room", required=True)
     parser.add_argument("--widening", default=None)
     ns = parser.parse_args(argv)
     try:
         outcome = send_to_self(ns.room, widening=ns.widening)
     except SendError as exc:
-        print(str(exc), file=sys.stderr)
-        return 1
+        return refuse("send-self", exc)
     return _emit(outcome)
 
 
@@ -37,7 +35,4 @@ def _emit(outcome) -> int:
             print(path)
         return 3
     # send_to_self's remaining outcome is refused; no external status enters.
-    sys.stderr.write(outcome.stderr)
-    if outcome.stderr and not outcome.stderr.endswith("\n"):
-        sys.stderr.write("\n")
-    return 1
+    return refuse("send-self", outcome.stderr)

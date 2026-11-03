@@ -16,6 +16,7 @@ from .port import PortError, write_reincarnate, write_send
 from .spend import parse_tokens
 from .project import fold, is_notice
 from .selfrepo import SelfError
+from .refusals import Parser, refuse
 
 
 def _room(arg: str | None) -> Path:
@@ -26,7 +27,7 @@ def _room(arg: str | None) -> Path:
 
 
 def _loom(argv: list[str]) -> int:
-    parser = argparse.ArgumentParser(prog="python -m brr.loom.runtime loom")
+    parser = Parser(verb="loom", prog="python -m brr.loom.runtime loom")
     parser.add_argument("--home")
     parser.add_argument("--install", default=None)
     parser.add_argument("--adapter", default=None)
@@ -57,7 +58,7 @@ def _loom(argv: list[str]) -> int:
 
 
 def _attention(argv: list[str]) -> int:
-    parser = argparse.ArgumentParser(prog="python -m brr.loom.runtime attention")
+    parser = Parser(verb="attention", prog="python -m brr.loom.runtime attention")
     parser.add_argument("--home")
     parser.add_argument("--install", default=None)
     parser.add_argument("--note", metavar="LETTER_ID")
@@ -123,7 +124,7 @@ class _Wish(argparse.Action):
 
 
 def _send(argv: list[str]) -> int:
-    parser = argparse.ArgumentParser(prog="python -m brr.loom.runtime send")
+    parser = Parser(verb="send", prog="python -m brr.loom.runtime send")
     parser.add_argument("--room")
     parser.add_argument("--to", required=True)
     parser.add_argument("--re")
@@ -170,8 +171,7 @@ def _send(argv: list[str]) -> int:
             echo=echo, reopen=args.reopen is not None,
         )
     except (PortError, SelfError, ValueError, OSError) as exc:
-        sys.stderr.write(f"{exc}\n")
-        return 1
+        return refuse("send", exc)
     sys.stdout.write(letter_id + "\n")
     # stdout stays the letter id; the graph this send wrote goes beside it.
     sys.stderr.write("".join(line + "\n" for line in echo))
@@ -181,7 +181,7 @@ def _send(argv: list[str]) -> int:
 def _reincarnate(argv: list[str]) -> int:
     """``reincarnate``: hand the seat on. The stakes and the README's facts come
     first, on stderr, so the choice is an informed one."""
-    parser = argparse.ArgumentParser(prog="python -m brr.loom.runtime reincarnate")
+    parser = Parser(verb="reincarnate", prog="python -m brr.loom.runtime reincarnate")
     parser.add_argument("--room")
     parser.add_argument("--why", required=True)
     parser.add_argument("--fresh", action="store_true")
@@ -192,8 +192,7 @@ def _reincarnate(argv: list[str]) -> int:
             sys.stderr.write(_stakes(room))
         fact_id = write_reincarnate(room, args.why, fresh=args.fresh)
     except (PortError, SelfError, ValueError, OSError) as exc:
-        sys.stderr.write(f"{exc}\n")
-        return 1
+        return refuse("reincarnate", exc)
     sys.stdout.write(fact_id + "\n")
     return 0
 
@@ -233,16 +232,15 @@ def _hold(argv: list[str]) -> int:
     from .ledger import append
     from .reincarnate import contexts
     from brr.daemon2.facts import Fact
-    parser = argparse.ArgumentParser(prog="python -m brr.loom.runtime hold")
+    parser = Parser(verb="hold", prog="python -m brr.loom.runtime hold")
     parser.add_argument("--room")
     parser.add_argument("--why", required=True)
     args = parser.parse_args(argv)
     why = " ".join(args.why.split())
     if bare(why):
-        sys.stderr.write("hold: name what would die, by name (a decision mid-way, a person's "
-                         "conversation, a reasoning not yet written); a generic why is no hold. "
-                         "If nothing would, reincarnate --why \"<what the successor picks up>\".\n")
-        return 1
+        return refuse("hold", "hold: name what would die, by name (a decision mid-way, a person's "
+                              "conversation, a reasoning not yet written); a generic why is no hold. "
+                              "If nothing would, reincarnate --why \"<what the successor picks up>\".")
     try:
         room = _room(args.room)
         state = _state(room)
@@ -258,15 +256,14 @@ def _hold(argv: list[str]) -> int:
         # The mark's ask stays quiet until the context grows past this hold.
         _set_state(room, mark_at=context)
     except (PortError, SelfError, ValueError, OSError) as exc:
-        sys.stderr.write(f"{exc}\n")
-        return 1
+        return refuse("hold", exc)
     sys.stdout.write(fact.id + "\n")
     return 0
 
 
 def _settle(argv: list[str]) -> int:
     from .lifecycle import settle
-    parser = argparse.ArgumentParser(prog="python -m brr.loom.runtime settle")
+    parser = Parser(verb="settle", prog="python -m brr.loom.runtime settle")
     parser.add_argument("thread")
     parser.add_argument("--room")
     parser.add_argument("--why", required=True)
@@ -278,15 +275,14 @@ def _settle(argv: list[str]) -> int:
         room = _room(args.room)
         settle(room, args.thread, args.why, args.retire, args.hand_to, args.word)
     except (PortError, SelfError, ValueError, OSError) as exc:
-        sys.stderr.write(f"{exc}\n")
-        return 1
+        return refuse("settle", exc)
     from .jack import declare
     declare(room, "settle")
     return 0
 
 
 def _jack(argv: list[str]) -> int:
-    parser = argparse.ArgumentParser(prog="python -m brr.loom.runtime jack")
+    parser = Parser(verb="jack", prog="python -m brr.loom.runtime jack")
     parser.add_argument("--event", required=True, choices=("start", "pre", "post", "stop", "subagent-stop"))
     parser.add_argument("--room", required=True)
     args = parser.parse_args(argv)
@@ -299,7 +295,7 @@ def _jack(argv: list[str]) -> int:
 def _paused(verb: str, act, argv: list[str]) -> int:
     """``resume``/``drop``: the body's answer to a ``paused:`` line (pausing.py)."""
     from brr.pause import describe_paused
-    parser = argparse.ArgumentParser(prog=f"python -m brr.loom.runtime {verb}")
+    parser = Parser(verb=verb, prog=f"python -m brr.loom.runtime {verb}")
     parser.add_argument("--room")
     args = parser.parse_args(argv)
     done = act(_room(args.room) / "port")

@@ -15,7 +15,6 @@ the opener read the diff does not ride along.
 
 from __future__ import annotations
 
-import argparse
 import os
 import re
 import subprocess
@@ -28,6 +27,7 @@ from .config import ConfigError, load_config, resolve_secret
 from .home import check_thread_id, home_of_room, strand_of_room
 from .ledger import Fact, append, read_facts
 from .selfrepo import SelfError, _env_without_pin, _segment, git, resolve_clone
+from .refusals import Parser, refuse
 
 _PUSH_TIMEOUT = 600
 _SHA = re.compile(r"[0-9a-f]{7,64}")
@@ -701,8 +701,7 @@ def cmd_publish(args) -> int:
             return 0
         done = publish(_room(args.room), args.name, worker=args.worker, commit=args.commit)
     except (PublishError, SelfError, ValueError, OSError) as exc:
-        sys.stderr.write(str(exc).rstrip("\n") + "\n")
-        return 1
+        return refuse("publish", exc)
     if done.note:
         sys.stderr.write(done.note + "\n")
     sys.stdout.write(f"{done.branch} {done.commit}\n")
@@ -716,6 +715,6 @@ def add_publish_parser(subparsers) -> None:
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(prog="python -m brr.loom.runtime publish")
+    parser = Parser(verb="publish", prog="python -m brr.loom.runtime publish")
     _arguments(parser)
     return cmd_publish(parser.parse_args(argv))

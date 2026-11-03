@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import argparse
 import json
 import os
 import re
@@ -14,6 +13,7 @@ from .home import Home, home_of_room, mint, resolve_home, strand_of_room
 from .ledger import append, read_facts
 from .waits import GRAMMAR
 from .wishes import Say, waits_on, waits_word, wishes, wish_line
+from .refusals import Parser, refuse
 
 
 def _context(args):
@@ -200,8 +200,7 @@ def cmd_wish(args):
         print(fact.data["wish"])
         return 0
     except (ValueError, OSError, RuntimeError) as exc:
-        print(str(exc), file=sys.stderr)
-        return 1
+        return refuse("wish", exc)
 
 
 def _rank_fact(args, facts, by):
@@ -463,8 +462,7 @@ def cmd_ask(args):
         print(ident)
         return 0
     except (ValueError, OSError, RuntimeError) as exc:
-        print(str(exc), file=sys.stderr)
-        return 1
+        return refuse("ask", exc)
 
 
 def _ask_arguments(parser):
@@ -501,8 +499,7 @@ def cmd_wishes(args):
                 print(name + "\n" + "\n".join(lines))
         return 0
     except (ValueError, OSError, RuntimeError) as exc:
-        print(str(exc), file=sys.stderr)
-        return 1
+        return refuse("wishes", exc)
 
 
 def add_wishes_parsers(subparsers):
@@ -517,19 +514,19 @@ def add_wishes_parsers(subparsers):
 
 
 def _wish(argv):
-    parser = argparse.ArgumentParser(prog="python -m brr.loom.runtime wish")
+    parser = Parser(verb="wish", prog="python -m brr.loom.runtime wish")
     _wish_arguments(parser)
     return cmd_wish(parser.parse_args(argv))
 
 
 def _ask(argv):
-    parser = argparse.ArgumentParser(prog="python -m brr.loom.runtime ask")
+    parser = Parser(verb="ask", prog="python -m brr.loom.runtime ask")
     _ask_arguments(parser)
     return cmd_ask(parser.parse_args(argv))
 
 
 def _wishes(argv):
-    parser = argparse.ArgumentParser(prog="python -m brr.loom.runtime wishes")
+    parser = Parser(verb="wishes", prog="python -m brr.loom.runtime wishes")
     _arguments(parser)
     parser.add_argument("--all", action="store_true")
     parser.add_argument("--queues", action="store_true", help="mine in the person's order, theirs, Next build")

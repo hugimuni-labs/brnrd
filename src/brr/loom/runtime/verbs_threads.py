@@ -1,8 +1,8 @@
 """The thread table has one command, in the runtime and the operator CLI."""
 
-import argparse
 import os
 import sys
+from .refusals import Parser, refuse
 
 
 def add_threads_parser(subparsers) -> None:
@@ -64,8 +64,7 @@ def cmd_threads(args) -> int:
             if not bodies:
                 raise PortError('force: start was taken or preparation failed; reread threads and attention for its owner and next act')
         except (PortError, ValueError) as exc:
-            sys.stderr.write(str(exc) + '\n')
-            return 1
+            return refuse("threads", exc)
     facts = read_facts(home)
     # The inventory runs git in every room and fetches each project source,
     # so the plain table never pays for it: only --left asks.
@@ -90,6 +89,6 @@ def cmd_threads(args) -> int:
 
 
 def _threads(argv: list[str]) -> int:
-    parser = argparse.ArgumentParser(prog="python -m brr.loom.runtime threads")
+    parser = Parser(verb="threads", prog="python -m brr.loom.runtime threads")
     _threads_arguments(parser)
     return cmd_threads(parser.parse_args(argv))
