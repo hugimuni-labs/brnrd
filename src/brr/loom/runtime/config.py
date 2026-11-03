@@ -109,6 +109,10 @@ KEYS: tuple[Key, ...] = (
     Key("thread_budget", "positive", 2_000_000,
         "Weighted tokens a thread opened by another thread may spend before its strand is told, at "
         "every boundary, to write to its parent for more. `send --budget` overrides it."),
+    Key("turn", "seconds", 7200.0,
+        "Seconds between a park's turns. A park that waits on someone (letter:, wish:, pr:, prose) "
+        "wakes its thread once a turn while the week's fuel is ahead of pace and the thread has acts "
+        "it could move; the park stays. 0: parks carry no turn."),
     Key("stop_grace", "seconds", DEFAULT_STOP_GRACE,
         "Seconds a settled thread's body may take to land and exit before it is signalled."),
     Key("router_ttl", "positive", DEFAULT_TTL,

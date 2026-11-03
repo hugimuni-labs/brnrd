@@ -1820,6 +1820,23 @@ def _render_boundary(home, facts, strand, gen, context):
     return text
 
 
+def _turn_pace(home, facts, config):
+    """``pace(thread)`` for a park's turn: the week's pace when the shell that thread runs on is
+    ahead of it, else ``""``. The shell is the thread's latest lease's, else the configured body's."""
+    from . import idle
+    from .usage import reading
+
+    def pace(thread: str) -> str:
+        shell = next((str(f.data["shell"]) for f in reversed(kind_facts(facts, "lease"))
+                      if f.data.get("thread") == thread and f.data.get("shell")), None)
+        shell = shell or str(getattr(config, "body", None) or "").partition("/")[0]
+        if not shell:
+            return ""
+        value = reading(home, shell)
+        return idle.pace(value) if idle.ahead(value) else ""
+    return pace
+
+
 def _idle_acts(home, facts, strand, context, proposal, children) -> str:
     """Writes ``port/in/idle.md`` for the jack's keepalive; returns the block when the face is quiet and the
     week is ahead of pace (w-i1xohccy9ht0). Information only: a failure costs no boundary.
@@ -2212,7 +2229,8 @@ def tick_once(home: Home, bodies: dict[str, Body], adapter: str, core: str,
         facts = observe_due(home, facts, router.armed())
         # A park's condition is checked the same way; the forge is read off the loop.
         watcher = getattr(router, "watcher", None)
-        facts = observe_waits(home, facts, router.armed(), watcher.states if watcher else None)
+        facts = observe_waits(home, facts, router.armed(), watcher.states if watcher else None,
+                              pace=_turn_pace(home, facts, router.config))
         if watcher is not None:
             from .comments import claims, observe_comments
             from .receipts import receipts
