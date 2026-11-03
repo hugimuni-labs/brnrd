@@ -84,6 +84,7 @@ REGISTRY = (
     _kind("shown",             "letter",  "strand gen ids",                                   "loom strand", "global"),
     _kind("reincarnate",              "letter",  "strand gen why fresh?",                            "strand",      "global"),
     _kind("hold",              "letter",  "strand gen why context",                           "strand",      "global"),
+    _kind("guard.granted",     "letter",  "strand thread class target letter wish",           "strand",      "global"),
     _kind("attempt.ended",     "attempt", "thread strand gen ids cause code dispositions evidence", "loom",  "global",  once=True),
     _kind("port.drained",      "port",    "thread strand gen",                                "loom",        "global",  once=True),
     _kind("loom.started",      "loom",    "install pid commit? loaded merges?",               "loom",        "global"),
