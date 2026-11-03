@@ -58,10 +58,9 @@ def test_public_surfaces_copy_the_dashboard_boundary_from_security_md():
     #417 existed because each reassuring surface drifted independently. The
     marker chooses the canonical paragraph in SECURITY.md; the assertion then
     compares text, so a rewrite must move every public copy in the same diff.
-    README carries it once: the security section is the copy. The feature
-    table's "Local means local" row (since #1804, 2026-09-06) states only the
-    first clause and *links* to that section for the caveat — a pointer, not
-    a paraphrase, so it is not a second surface that can drift.
+    The sentence is the daemon's `account connect` boundary. The README
+    describes the loom and gives the daemon one line (#2604), so it carries
+    none and states the loom's own crossing under its Trust & privacy section.
     """
     security = SECURITY_MD.read_text(encoding="utf-8")
     assert security.count(_COPY_TRUTH_MARKER) == 1
@@ -69,7 +68,7 @@ def test_public_surfaces_copy_the_dashboard_boundary_from_security_md():
     canonical = _normalise_markdown(canonical)
 
     expected_counts = {
-        REPO_ROOT / "README.md": 1,
+        REPO_ROOT / "README.md": 0,
         REPO_ROOT / "docs/src/content/docs/security.md": 1,
         REPO_ROOT / "docs/src/content/docs/index.md": 1,
     }

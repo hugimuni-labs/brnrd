@@ -6,12 +6,12 @@
 <p align="center"><strong>Local agents go brr. From anywhere.</strong></p>
 
 <p align="center">
-  <strong>Keep your Claude Code, Codex, or Grok agent running 24/7 on a machine you leave on</strong> — the Mac on your desk, a Mac mini, a home server, <a href="https://hugimuni-labs.github.io/brnrd/guides/vps-install/">a small VPS</a>.<br>
-  brnrd is the daemon: it keeps the agent alive across reboots, lets you drive it from Telegram, Slack or WhatsApp, remembers everything as files in git, and moves work between your Claude and Codex subscriptions when one hits its window. No API key. It leaves receipts — commits, PRs, a card you can read.
+  <strong>A resident for the machine you leave on: Claude Code or Codex, kept at work 24/7, reachable from your phone.</strong><br>
+  brnrd runs the loom, a small service that wakes your coding agent with its own memory, hands it the letters you send from Telegram, WhatsApp or brnrd.dev, and keeps every piece of work in a thread until it lands. No API key: it runs the CLI subscriptions you already have. It leaves receipts: commits, PRs, a README you can read.
 </p>
 
 <p align="center">
-  <strong>3,111 commits on main · 2,355 by the resident · 1,705 merged PRs · since March 2026 · as of 2026-11-01.</strong><br>
+  <strong>3,147 commits on main · 2,391 by the resident · 1,734 merged PRs · since March 2026 · as of 2026-11-03.</strong><br>
   <sub>This repo is built with brnrd, by brnrd; the git log is the demo.</sub>
 </p>
 
@@ -21,252 +21,161 @@ https://github.com/user-attachments/assets/2357758c-fa35-47ba-92b1-f02d51c338e3
   <img src="https://img.shields.io/badge/status-alpha-f59e0b" alt="alpha">
   <img src="https://img.shields.io/badge/python-3.10+-3776ab" alt="python 3.10+">
   <a href="LICENSE-OVERVIEW.md"><img src="https://img.shields.io/badge/license-MIT%20%2F%20AGPLv3-2ea44f" alt="license: MIT / AGPLv3"></a>
-  <a href="https://brnrd.dev"><img src="https://img.shields.io/badge/managed-brnrd.dev-6d28d9" alt="brnrd.dev"></a>
-  <a href="https://github.com/hugimuni-labs/brnrd/issues/23"><img src="https://img.shields.io/badge/release-tracked%20%2323-0969da" alt="release #23"></a>
+  <a href="https://brnrd.dev"><img src="https://img.shields.io/badge/cloud-brnrd.dev-6d28d9" alt="brnrd.dev"></a>
 </p>
 
 ---
 
-Your CLI agents can already work in your repositories, shells, and local tooling.
-What they don't have by default is a continuing place on your machine.
-**brnrd gives them a doorbell, a memory, and a live line back to you.**
+Your CLI agent can already work in your repos and your shell. What it lacks is
+a place to come back to. A session ends and takes everything with it.
 
-Send the task from your phone. Watch the plan and progress card change while it
-works. Correct course without interrupting the run. Get a branch, a PR, or an
-answer back in the same thread.
+**brnrd gives it a seat: a memory in git, a queue of work, and a line to you.**
 
-brnrd is **not another coding agent.** It runs the CLI agents you already chose —
-locally, under your rules — and gives you a persistent resident you can reach
-when you are away from the terminal, including when work spans repositories.
+Write from your phone. The resident reads it, opens a thread, does the work,
+and answers in the same chat with a branch, a PR or a sourced answer. Close the
+laptop lid on the desk, not the one in your bag.
 
-**How is this different from Claude Code's remote control or Codex cloud?** Those
-give you a session you can reach. brnrd gives your machine a *resident*:
-a continuing identity with working memory, a playbook, and a standing agenda
-that outlive any single run, repository, or model. When Codex hit its quota wall mid-conversation
-on 2026-09-05, the seat continued on Claude with the same memory and the same open
-work. The vendors are the medium; the resident is the thing that persists.
+brnrd is **not another coding agent.** It runs the one you chose, on your
+machine, under your accounts.
 
-## ✦ What you get
+## ✦ Install
 
-| | Capability | What it actually means |
-|---|---|---|
-| 📟 | **A remote door** | Fire off a task from Telegram, Slack, GitHub, or the dashboard. The agent runs at home; you drive from your pocket. |
-| 🧠 | **A resident, not a reset** | A resident persists on your machine with working memory and a playbook; repository context is brought in for the work at hand. A new run is the same mind's next thought — not an amnesiac subprocess wearing yesterday's name tag. |
-| 💬 | **Interrupt-free interaction** | Follow the live plan and progress card. Add a fact or change direction at runner boundaries, without killing the thought in flight. |
-| 🔀 | **The model is a medium** | Pin Claude, Codex, or Grok. Escalate a core for a hard pass, downshift for grunt work, and see quota posture before it becomes a surprise. |
-| 🏠 | **Local means local** | Your checkout, `.git`, and run execution stay on your machine. The one caveat — what the managed dashboard mirrors — is spelled out under [Trust & privacy](#-trust--privacy). |
-| 🧾 | **Git-native receipts** | Every run ends somewhere durable: a branch, a PR, or an answer in the thread. The diff is the proof. |
-| 📁 | **The seams are files** | Gates and live controls speak a small file protocol. A new transport is not a new religion for the daemon. |
+```bash
+curl -fsSL https://brnrd.dev/install | sh
+brnrd loom install     # the loom as a login service (launchd or systemd --user)
+brnrd setup            # pick a chat, pair it, say hello
+brnrd loom status      # state: running
+```
 
-## ✦ The loop
+The install line puts `brnrd` on your PATH through `uv` (it fetches `uv` if
+it's missing) and ends with `Next: brnrd setup`. It installs the PyPI release,
+which trails main. To follow main instead:
+
+```bash
+curl -fsSL https://brnrd.dev/install | sh -s -- --dev
+brnrd setup
+```
+
+`--dev` clones main to `~/.brnrd/src`, installs it editable, runs
+`brnrd loom install --dev` and `brnrd loom status` for you, and warns before
+the known traps bite: a second `brnrd` on PATH, a stray loom, no `gh`. The loom
+then follows main by itself, fast-forwarding when CI is green.
+
+You need git, a signed-in `claude` or `codex` on PATH, and `gh` signed in if
+the resident should back up its memory or open PRs. The full walk is at
+[Install](https://hugimuni-labs.github.io/brnrd/getting-started/install/#run-the-loom).
+
+## ✦ What setup asks
+
+`brnrd setup` is the whole onboarding, in plain words:
+
+1. **Which AI.** The bodies it found on this machine (Claude Code, Codex,
+   Grok, Vibe), with what each has left of its quota.
+2. **Which doors.** Ticked by default:
+   - *brnrd cloud*: Telegram or WhatsApp through brnrd's own bot, and a chat on
+     [brnrd.dev](https://brnrd.dev);
+   - *a page on this computer*, in your browser, nothing to sign in to.
+
+   Or *your own Telegram bot*, two minutes in the Telegram app.
+3. **What else.** Back up the resident's memory to a private GitHub repo
+   (`<you>/brnrd-self`), and on the cloud path, the brnrd-dev GitHub App so
+   brnrd.dev can reach your repos.
+4. **Say hello.** It prints a link (and a QR code) per door and waits until your
+   first message reaches the resident.
+
+Run it again and it shows what's connected and what isn't. `brnrd setup channel`
+adds or mends a door.
+
+## ✦ How it works
 
 ```text
-            you, from anywhere
-Telegram · WhatsApp · Signal · Slack · GitHub · web
-               │
-               ▼
-  brnrd daemon · your machine
-               │
-      ┌────────┼────────┐
-      ▼        ▼        ▼
-   Claude    Codex    Grok
-      │        │        │
-      └────────┼────────┘
-               ▼
-   progress · replies · git
+           you, from anywhere
+   Telegram · WhatsApp · brnrd.dev · a local page
+                     │  letters
+                     ▼
+        the loom · your machine
+     ┌───────────────┼───────────────┐
+     ▼               ▼               ▼
+  thread          thread          thread       one body each:
+  (a room)        (a room)        (a room)     claude · codex · …
+     │               │               │
+     └──── commits to the self ──────┘
+                     │
+          PRs · replies · receipts
 ```
 
-The daemon does the boring, load-bearing work around the model: it routes
-incoming events, assembles the context relevant to a run (including repository
-context when needed), selects an execution environment, maintains continuity
-across runs, exposes live control surfaces, and routes results back through the
-gate. Git provides durable work receipts where appropriate.
+- **The self** is the resident's memory: a git repo of plain markdown, its
+  identity, the lessons it learned the hard way, the people it works with.
+  Every body reads it at wake and lands its work back into it. You read it the
+  same way, by file.
+- **A thread** is one piece of work with a README: the spec on top, the plan,
+  the receipts. A message that fits no thread goes to the inbox; the resident
+  opens a thread for it.
+- **A wish** is what you want out of a thread, in one line. It stays open until
+  the result is delivered and you accept it, or drop it.
+- **A body** is one agent session on one thread, in its own room with its own
+  clones. When the context fills, it writes down what matters and hands the
+  seat to the next one.
+- **Letters** reach a body between tool calls, so a correction lands without
+  killing the thought in flight. A comment on a PR it opened comes back as a
+  letter too.
+- **Waiting is parked, not polled.** A body waiting on CI, a PR or you stops;
+  the loom wakes it when the condition turns true.
+- **Fuel is counted.** The loom reads each body's quota and paces the work to
+  the week, so a resident doesn't spend your Monday's allowance by Sunday.
 
-## ✦ What problems does it solve?
-
-- **Keep Claude Code or Codex reachable after the terminal session ends.** A
-  daemon on a machine you control receives work through supported gates and
-  launches CLI runners. The machine still needs to be powered on.
-- **Work across projects without resetting the resident.** The resident's
-  continuity is not defined by a single repository; individual tasks can
-  still select repositories and execution environments.
-- **Use existing CLI-agent subscriptions.** brnrd invokes supported CLI
-  harnesses rather than requiring a separate LLM inference API key. Provider
-  subscriptions, quotas, and account terms still apply.
-- **Follow and redirect long-running work.** Chat gates and the dashboard
-  expose progress; interactions are coordinated at runner boundaries, not
-  injected into an arbitrary running model token stream.
-
-For the architectural distinction between machine residency, repository
-context, and individual sessions, see [Machine residency](docs/machine-residency.md).
-
-## ✦ Quickstart
-
-Install the command:
-
-```bash
-curl -LsSf https://hugimuni-labs.github.io/brnrd/install.sh | sh
-# or: npm install -g brnrd         # if you have Node
-# or: uv tool install brnrd
-# or: pipx install brnrd
-brnrd --version
-```
-
-Then start the loom, brnrd's runtime, as a login service:
-
-```bash
-brnrd loom install       # launchd or systemd --user; prints what it installed
-```
-
-[Install → Run the loom](https://hugimuni-labs.github.io/brnrd/getting-started/install/#run-the-loom)
-has the rest. The earlier runtime, the daemon, still works; you need only one.
-Self-hosted gates and local execution are free — no brnrd account is needed.
-For the daemon, pick your door.
-
-<table>
-<tr>
-<th>Self-hosted — bring your own gate</th>
-<th>Managed — one account across repos</th>
-</tr>
-<tr>
-<td>
-
-```bash
-brnrd gate setup telegram   # auth + bind the current repo
-brnrd daemon install
-```
-
-Nothing leaves your machine but the messages you route.
-
-</td>
-<td>
-
-```bash
-brnrd account connect  # pair + install + start (systemd/launchd)
-brnrd account add .    # add another repo later
-```
-
-Connect also creates the account home and separate knowledge repository,
-prepares `.brnrd-kb/`, and creates or adopts private GitHub backups for both.
-Use `--local-memory` only when you explicitly want those Git repositories to
-remain on this machine.
-
-</td>
-</tr>
-</table>
-
-Now send a message from the other side:
-
-```text
-review PR #84 for the auth regression; show me the risky bit before changing it
-```
-
-<details>
-<summary>The npm package is not a JavaScript port</summary>
-
-brnrd is a Python program; the npm package is a launcher for it. On first run it
-builds a private, durable virtualenv under `~/.local/share/brnrd`, installs brnrd
-into it, and hands over — your system Python is untouched. `npm install -g brnrd`
-leaves you a real `brnrd` command; `npx brnrd <command>` runs the same thing
-without one, so every later command must be `npx brnrd …` too.
-
-</details>
-
-## ✦ What arrives in a wake
-
-The resident does not begin with "please inspect the repo." brnrd mounts a
-compact orientation layer *before* the task, so the agent wakes up somewhere
-instead of nowhere:
-
-- the repo contract and current run facts;
-- the resident's own working memory and playbook;
-- recent project activity and the pitfalls relevant to this task;
-- live queue, quota, delivery, and branch posture;
-- the original request and the conversation that led to it.
-
-The rest stays pull-based. Project knowledge can live in a private account home,
-a repo-owned knowledge base, or ordinary docs; the injected slice just points the
-resident at the longer tail when it needs it.
-
-That split is the whole trick: **enough continuity to wake up as someone, not so
-much prompt that the agent spends the morning rereading its diary.**
-
-## ✦ Where it runs
-
-Each run uses an execution environment. These environments are honest about what they
-isolate — none of them is a cage for a hostile agent (see [Trust & privacy](#-trust--privacy)):
-
-| Mode | What it isolates | Reach for it when |
-|---|---|---|
-| `host` | Nothing beyond your own shell. Edits hit your working tree immediately. | you trust the agent and want zero friction — the dogfooded default. |
-| `worktree` | A separate worktree and branch, so your working tree stays clean. Shares your `.git`, credentials, network, and filesystem — **not a security boundary.** | you want runs off your working tree without container overhead. |
-| `docker` | Dependencies and network, and it narrows the agent's host-filesystem view to the repo plus mounted credential dirs. **Not** a credential or containment boundary: the repo is mounted read-write, your model/GitHub/SSH credentials cross in, and the network is on by default. | you want a clean toolchain or network control (`docker.network=none`) — defense-in-depth over a trusted agent, not a sandbox. |
-| `solitary` | Provider-only egress and per-run copies of the selected Shell's credentials, with no GitHub credential handed in. The repo is still read-write. | a collaborator or untrusted-tier sender triggers the run — it's the default hardened environment for that tier (`trust.untrusted_env`, `trust.collaborator_env`). |
-
-Full isolation matrix: [SECURITY.md](SECURITY.md) · semantics: [Environments](src/brr/docs/envs.md) · scope tracked in [#80](https://github.com/hugimuni-labs/brnrd/issues/80).
+`brnrd loom where` prints where the home, the self and the logs are.
+`brnrd loom logs` shows the loom working.
 
 ## ✦ Trust & privacy
 
-No "military-grade" paragraph. brnrd runs coding agents that execute commands and
-edit files with the authority you grant them — the runners are launched with their
-approval prompts bypassed, on purpose. So the honest posture *is* the product:
+No "military-grade" paragraph. The resident runs coding agents with their
+approval prompts off (`--dangerously-skip-permissions`,
+`--dangerously-bypass-approvals-and-sandbox`), on purpose. So the honest
+posture *is* the product:
 
-- **The agent has your authority.** `host` mode is the same trust boundary as
-  launching the CLI yourself. Any text brnrd ingests — an issue body, a PR comment, a
-  chat message — becomes instruction the agent may act on. Treat every gate you open
-  as a door into your shell.
-- **Gates authorize senders before enqueue.** GitHub is default-closed: the
-  self-hosted gate verifies `write`, `maintain`, or `admin` permission; the managed
-  webhook accepts GitHub's signed `OWNER`, `MEMBER`, or `COLLABORATOR` association;
-  both also support an explicit login allowlist.
-  Telegram accepts the paired user plus explicitly allowlisted user ids; anonymous
-  admins and channel posts are denied. Slack remains channel-scoped, so every member
-  of a configured Slack channel can submit work. Authorization decides who may speak
-  to the agent, not whether their text is safe — keep allowlists tight and route
-  collaborators through `trust.collaborator_env=solitary` when they should not inherit
-  your normal execution authority.
-- **Local stays local — with one honest caveat.** Your checkout, `.git`, and run
-  execution stay on your machine; with `brnrd account connect`, dashboard
-  publishing continuously mirrors derived project knowledge—including any code
-  quoted there—to brnrd.dev, but it does not read your source tree. Remote
-  messages travel through the transport you choose and, in managed mode, transit
-  brnrd.dev on the way to your daemon.
-- **Never paste credentials into a task.** Configure them through the runner or gate.
+- **The agent has your authority.** A body can do what you can do in that
+  shell. Any text it reads (a message, an issue, a PR comment) may become
+  instruction.
+- **Only your people are you.** A chat counts as a person once it's paired
+  through `brnrd setup`. Anyone else arrives labelled a stranger, and their
+  letter is marked tainted, not obeyed as yours.
+- **Local stays local, with one stated exception.** Your repos, rooms and
+  self live on your machine; the self's backup goes to a *private* repo only
+  (the loom refuses to push it anywhere the forge doesn't call private). On
+  the brnrd cloud path, your messages transit brnrd.dev, and the loom pushes
+  brnrd.dev a snapshot of thread READMEs and ledger heads for the web board.
+  Never people's pages, never a body's session.
+- **Never paste credentials into a message.** Sign the CLIs in yourself.
 
-The full threat model, the per-gate authorization table, and the honest environment
-isolation matrix live in **[SECURITY.md](SECURITY.md)**. The review is tracked under
-[#23](https://github.com/hugimuni-labs/brnrd/issues/23); execution and environment contracts
-are inspectable in [the execution map](src/brr/docs/execution-map.md) and
-[environment guide](src/brr/docs/envs.md).
+The threat model is in **[SECURITY.md](SECURITY.md)**.
 
 ## ✦ Docs
 
-The full guide — prerequisites, install, connect, first task, concepts,
-troubleshooting, CLI reference — lives at
+The guide (prerequisites, install, troubleshooting, CLI reference) lives at
 **[hugimuni-labs.github.io/brnrd](https://hugimuni-labs.github.io/brnrd/)**.
-The pages below are deeper, implementation-facing notes for the pieces that
-guide doesn't unpack:
+For the loom's own seams:
 
 | | |
 |---|---|
-| [Portals](src/brr/docs/portals.md) | live interaction and handoff surfaces |
-| [Conversations](src/brr/docs/conversations.md) | how continuity is recovered across runs |
-| [Environments](src/brr/docs/envs.md) | host, worktree, and Docker semantics |
-| [Execution map](src/brr/docs/execution-map.md) | what happens between message and reply |
-| [Account daemon](src/brr/docs/account-daemon.md) | multi-repo / multi-account topology |
-| [Machine residency](docs/machine-residency.md) | why a resident is not a repo, model, or session |
-| `brnrd docs` | the docs that ship inside the tool |
+| [Connectors](src/brr/loom/runtime/connectors/README.md) | how a chat becomes a door: one folder, an in and an out |
+| [Bodies](src/brr/loom/runtime/bodies.md) | how an agent CLI becomes a body |
+| `brnrd loom --help` | the service: install, start, stop, status, logs, config, check |
+| `brnrd runtime --help` | a body's verbs: send, wish, ask, settle, publish, … |
+
+The daemon, brnrd's earlier runtime (`brnrd up`, `brnrd account connect`),
+still ships for existing installs; new installs need only the loom.
 
 ## ✦ Current posture
 
-brnrd is **alpha software, already used to build itself** (the numbers at the top
-are `git log` on this repo — re-measured at each release by `scripts/receipt_line.py`). The resident loop, local
-daemon, managed Telegram path, live dashboard, runner switching, worktree/Docker
-execution, and git handoff are real. The public docs, multi-project proving, managed
-billing/failover, and some operational polish are still release work.
+**Alpha, already building itself** (the numbers at the top are `git log` on
+this repo, re-measured by `scripts/receipt_line.py`). The loom, its threads
+and wishes, Telegram and brnrd.dev doors, quota pacing and follow-main are
+what this repo runs on every day. The web board, multi-machine failover and a
+setup a non-developer finishes unaided are still being built, in the open.
 
-If you want a quiet appliance, wait. If you want a local agent coworker with a
-remote door — and you are willing to report the sharp edges — welcome in.
+If you want a quiet appliance, wait. If you want a coworker that lives on your
+machine and answers your phone, and you'll report the sharp edges: welcome in.
 
 <details>
 <summary>Build it yourself</summary>
@@ -280,8 +189,8 @@ pip install -e ".[dev]"
 pytest
 ```
 
-The repo dogfoods brnrd. Run `brnrd up --dev-reload` while changing the daemon so
-the next task picks up the new code without a process ritual.
+To run a loom from your checkout, use the `--dev` install above: `brnrd loom
+install` refuses to run its service from a bare source checkout.
 
 </details>
 
