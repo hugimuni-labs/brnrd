@@ -445,6 +445,20 @@ def _turn(room: Path, stdin_text: str) -> None:
                turn_open=False, readme_seen=readme, readme_acts=unread)
 
 
+def _people(room: Path, parsed: Boundary, at: str) -> str:
+    """The people lines (people.py): tallied at every boundary, said at a post only when a
+    person or their page date is new, and carried by a stop block that blocks anyway.
+    It never blocks a stop by itself: the body decides whether something happened."""
+    from . import people
+    state = _state(room)
+    lines, key, kept = people.tally(room / "self", parsed, state.get("people") or {})
+    news = key != state.get("people_said")
+    _set_state(room, people=kept, **({"people_said": key} if at == "post" else {}))
+    if at == "stop" or (at == "post" and news):
+        return "\n".join(lines)
+    return ""
+
+
 def _transcript_path(stdin_text: str) -> str:
     try:
         return str(json.loads(stdin_text).get("transcript_path") or "")
@@ -673,6 +687,7 @@ def execute(event: str, room: Path, stdin_text: str) -> str:
     plan = next((line.partition(" · plan ")[2] for line in text.splitlines()
                  if line.startswith("status:")), "")
     if event == "start":
+        _soft(room, _people, room, parsed, "start")
         broken = _guards(room)[1]
         if broken:
             text = "".join(f"guards: skipped {line}\n" for line in broken) + text
@@ -694,6 +709,7 @@ def execute(event: str, room: Path, stdin_text: str) -> str:
         hook = _hook_event(stdin_text)
         over = _over(room, next((line for line in text.splitlines() if line.startswith("budget: ")), ""))
         left = _left(room, False).rstrip("\n")
+        people = _soft(room, _people, room, parsed, "post", default="")
         # A left in room is news when it changes; the stop still holds on it every time.
         if left == state.get("left_said", ""):
             left = ""
@@ -708,11 +724,13 @@ def execute(event: str, room: Path, stdin_text: str) -> str:
             _set_state(room, plan=plan)
             if parsed.settled is not None:
                 _set_state(room, settled=parsed.settled)
-            if not paused and not over and not guarded and not left:
+            if not paused and not over and not guarded and not left and not people:
                 return ""
             return _json({"hookSpecificOutput": {"hookEventName": hook, "additionalContext": "\n".join(
-                filter(None, (guarded, paused, over, left)))}})
+                filter(None, (guarded, paused, over, left, people)))}})
         text = news
+        if people:
+            text = text.rstrip("\n") + "\n" + people + "\n"
         if over:
             text = over + "\n" + text
         if left:
@@ -819,7 +837,9 @@ def _stop_block(room: Path, text: str, plan: str) -> str:
     _working(room, stop_blocks=count + 1, stop_said=seen)
     head = STOP.format(n=f"{len(sections)} thing{'s' * (len(sections) > 1)}")
     news = _stop_news(room, text, parsed) if parsed.ids else ""
-    return _json({"decision": "block", "reason": "\n\n".join([head, *sections, *([news] if news else [])])})
+    people = _soft(room, _people, room, parsed, "stop", default="")
+    return _json({"decision": "block", "reason": "\n\n".join(
+        [head, *sections, *([news] if news else []), *([people] if people else [])])})
 
 
 END = """work is left on this thread (plan {plan}) and this body has not said how it ends. Do one:

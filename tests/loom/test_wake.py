@@ -548,3 +548,93 @@ def test_missing_loom_part_and_bad_owed_are_loud(tmp_path: Path) -> None:
     bad_room = cli(["wake", "--room", str(tmp_path), "--thread", "inbox"])
     assert bad_room.returncode == 1
     assert "no self clone" in bad_room.stderr
+
+
+PAGE = """# arseni
+
+Who he is.
+
+## who
+
+- Owner [1]
+
+## just do
+
+- Merge on green [9903]
+
+## ask first
+
+- Act as him [p6o5]
+
+## never
+
+- Delete loom-home [inbox]
+
+## between us
+
+- 11-03: newest-line-77 [10176]
+- 11-02: older-line-55 [10158]
+"""
+
+
+def test_the_people_in_hand_wake_with_their_lists_and_latest_line(tmp_path: Path) -> None:
+    home = tmp_path / "home"
+    assert cli(["init", "--home", str(home), "--person", "arseni"]).returncode == 0
+    self_dir = home / "self"
+    write_thread(self_dir, "w-1", "The w-1 headline")
+    (self_dir / "people" / "arseni" / "page.md").write_text(PAGE, encoding="utf-8")
+    commit(self_dir, "page")
+    clone = selfrepo.room(home, "s1")
+    owed = tmp_path / "owed.json"
+    owed.write_text(json.dumps([{"id": "p-arseni/ab12", "from": "person:arseni", "body": "hi\n"}]),
+                    encoding="utf-8")
+    out = wake(clone, "w-1", owed).stdout
+    people = out.split("## People\n", 1)[1].split("## Loom\n", 1)[0]
+    assert "### arseni\n" in people
+    assert "just do:\n- Merge on green [9903]\n" in people
+    assert "ask first:\n- Act as him [p6o5]\n" in people
+    assert "never:\n- Delete loom-home [inbox]\n" in people
+    assert "between us, latest: 11-03: newest-line-77 [10176]" in people
+    assert "older-line-55" not in people
+    assert "whole page: people/arseni/page.md" in people
+    assert out.index("## People\n") < out.index("## Loom\n") < out.index("## Occasion\n")
+
+    # A strand's letter: nobody in hand, so every page gives its latest line and nothing more.
+    owed.write_text(json.dumps([{"id": "s-1/x", "from": "s-1", "body": "go\n"}]), encoding="utf-8")
+    out = wake(clone, "w-1", owed).stdout
+    people = out.split("## People\n", 1)[1].split("## Loom\n", 1)[0]
+    assert people == "arseni: 11-03: newest-line-77 [10176]\n"
+
+
+def test_a_fat_page_is_capped_with_a_receipt_and_the_letter_still_wakes(tmp_path: Path) -> None:
+    home = tmp_path / "home"
+    assert cli(["init", "--home", str(home), "--person", "arseni"]).returncode == 0
+    self_dir = home / "self"
+    write_thread(self_dir, "w-1", "The w-1 headline")
+    fat = PAGE.replace("## never\n", "## never\n" + "".join(f"- never-{i:03} " + "x" * 60 + "\n" for i in range(80)))
+    (self_dir / "people" / "arseni" / "page.md").write_text(fat, encoding="utf-8")
+    commit(self_dir, "fat page")
+    clone = selfrepo.room(home, "s1")
+    owed = tmp_path / "owed.json"
+    owed.write_text(json.dumps([{"id": "p-arseni/ab12", "from": "p-arseni", "body": "letter-body-42\n"}]),
+                    encoding="utf-8")
+    result = wake(clone, "w-1", owed)
+    assert result.returncode == 0, result.stderr
+    people = result.stdout.split("## People\n", 1)[1].split("## Loom\n", 1)[0]
+    assert len(people.encode("utf-8")) <= 2400
+    assert people.endswith("people/arseni/page.md is whole on disk]\n")
+    assert "letter-body-42" in result.stdout
+
+
+def test_no_page_no_people_section(tmp_path: Path) -> None:
+    home = tmp_path / "home"
+    assert cli(["init", "--home", str(home), "--person", "arseni"]).returncode == 0
+    write_thread(home / "self", "w-1", "The w-1 headline")
+    commit(home / "self", "w-1")
+    clone = selfrepo.room(home, "s1")
+    owed = tmp_path / "owed.json"
+    owed.write_text(json.dumps([{"id": "p-arseni/ab12", "from": "person:arseni", "body": "hi\n"}]),
+                    encoding="utf-8")
+    result = wake(clone, "w-1", owed)
+    assert result.returncode == 0, result.stderr
+    assert "## People\n" not in result.stdout
