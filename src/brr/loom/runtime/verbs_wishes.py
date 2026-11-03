@@ -149,7 +149,7 @@ def cmd_wish(args):
                 if args.wait is not None and not args.read.startswith("waiting:"):
                     data["reading"] = "waiting: " + args.read
                 if data["reading"].startswith("waiting:"):
-                    data["wait"] = _wait(facts, args.id, args.wait, args.until)
+                    data["wait"] = _wait(home, facts, args.id, args.wait, args.until)
             elif args.result is not None:
                 result_kind, sep, ref = args.result.partition(":")
                 if not sep or not result_kind or not ref or not args.line:
@@ -304,17 +304,19 @@ def _related(home, line, facts, thread) -> None:
         print(said, file=sys.stderr)
 
 
-def _wait(facts, ident, condition, until, default=None):
-    """A park's ``wait``: its condition with the repo filled in, and its deadline."""
+def _wait(home, facts, ident, condition, until, default=None):
+    """A park's ``wait``: its condition with the repo filled in, its deadline and its turn."""
     from datetime import datetime, timezone
     from . import waits
+    from .config import load_config
     now = datetime.now(timezone.utc)
     found = wishes(facts)
     if condition is not None:
         condition = waits.canonical(condition, now, repo=lambda number: _repo(facts, number))
         if condition.startswith("wish:") and condition[5:] not in found:
             raise ValueError(f"--wait {condition}: no wish {condition[5:]}")
-    return waits.park(found[ident], condition, until, now, found=found, default=default)
+    return waits.park(found[ident], condition, until, now, found=found, default=default,
+                      turn=float(load_config(home.root).turn or 0))
 
 
 def _repo(facts, number):
@@ -454,7 +456,7 @@ def cmd_ask(args):
             # The asking wish parks on the ask; at its deadline the body is woken with its own rec.
             append(home, Fact(kind="wish.read", by=by, id="wish.read:" + mint(12), data={
                 "wish": args.wish, "reading": f"waiting: ask {ident}: {args.what}", "by": "resident",
-                "wait": _wait(facts, args.wish, "wish:" + ident, args.default_at, default=args.rec)}))
+                "wait": _wait(home, facts, args.wish, "wish:" + ident, args.default_at, default=args.rec)}))
         _declare(args, "ask")
         if same is None:
             _related(home, args.what, facts, thread)

@@ -23,6 +23,14 @@ Conditions, one row each in ``KINDS``, resolve on any terminal outcome:
   jack holds it and the notice says what the file says. The shell creates the
   file before it writes it, so an empty file is still pending. The loom reads the path on
   its own machine, so it is absolute, and it is the room's machine.
+
+A park that waits on someone (``TURNED``, or prose) also carries a ``turn``
+(config ``turn``): each time one passes while it still waits, the loom judges
+that slot once, and writes one ``turn`` notice to the thread only if the
+week's fuel is ahead of pace and the thread has acts it could move
+(``idle.candidates``). The park stays. A slot that fails is skipped, never
+made up: a long wait on a person wakes the body to work its own queue, at a
+pace the fuel can carry, without the body arming a timer (continuous).
 """
 
 from __future__ import annotations
@@ -53,6 +61,8 @@ _PR = re.compile(r"^pr:(?:([\w.-]+/[\w.-]+))?#(\d+)$")
 _CI = re.compile(r"^ci:(?:([\w.-]+/[\w.-]+))?@([0-9a-f]{7,40})$")
 _WISH = re.compile(r"^wish:(w-[a-z0-9]+)$")
 _LETTER = re.compile(r"^letter:(\S+)$")
+#: Conditions that wait on someone, so a park on them carries a turn; a prose park does too.
+TURNED = ("letter:", "wish:", "pr:")
 GRAMMAR = "pr:[owner/repo]#N, ci:[owner/repo]@sha, wish:<w-id>, letter:<id>, at:<when>, file:<path>"
 
 
@@ -104,8 +114,9 @@ def canonical(text: str, now: datetime, repo=None) -> str:
 
 
 def park(wish, condition: str | None, until: str | None, now: datetime, *, found=None,
-         default: str | None = None) -> dict:
-    """The ``wait`` a new park stores; a prose park backs off over its re-parks."""
+         default: str | None = None, turn: float = 0) -> dict:
+    """The ``wait`` a new park stores; a prose park backs off over its re-parks.
+    A park on someone stores ``turn``, the seconds between its turns, when it is not 0."""
     wait: dict = {}
     if condition is not None:
         wait["on"] = condition
@@ -123,6 +134,8 @@ def park(wish, condition: str | None, until: str | None, now: datetime, *, found
     wait["until"] = when(until, now, "--until") if until is not None else _iso(now + span)
     if default is not None:
         wait["default"] = default
+    if turn > 0 and (condition is None or condition.startswith(TURNED)):
+        wait["turn"] = int(turn)
     return wait
 
 
@@ -277,8 +290,67 @@ def subject(wish, read) -> str:
     return f"{wish.id}|{read['at']}|{read.get('writer', '')}"
 
 
-def observe_waits(home, facts, armed: bool, forge: dict | None = None, now: datetime | None = None):
-    """Write a notice for each live wait that came true or ran out; only the lease holder writes."""
+#: Turn slots this process has judged, by ``turn_subject``: each is judged once, pass or fail.
+_JUDGED: set[str] = set()
+#: When each thread last took a turn in this process: two parks on one thread share one pace.
+_TURNED: dict[str, datetime] = {}
+
+
+def turn_slot(read, now: datetime) -> int:
+    """How many turns have passed on this park: 0 before the first, or with no turn."""
+    turn = int(read["wait"].get("turn") or 0)
+    began = _instant(str(read.get("at", "")))
+    if turn <= 0 or began is None:
+        return 0
+    return max(int((now - began).total_seconds() // turn), 0)
+
+
+def turn_subject(wish, read, slot: int) -> str:
+    return f"{subject(wish, read)}|turn {slot}"
+
+
+def _turn(home, facts, wish, read, now: datetime, pace, held) -> None:
+    """One ``turn`` notice for this park's current slot, when the pace and the thread allow it.
+
+    A thread with a live body takes none: held, its keepalive already carries the same acts."""
+    slot = turn_slot(read, now)
+    if slot < 1:
+        return
+    key = turn_subject(wish, read, slot)
+    if key in _JUDGED:
+        return
+    _JUDGED.add(key)
+    last = _TURNED.get(wish.thread)
+    if last is not None and (now - last).total_seconds() < int(read["wait"]["turn"]):
+        return
+    if wish.thread in held():
+        return
+    said = pace(wish.thread)
+    if not said:
+        return
+    from . import idle
+    from .loom import notice
+    lines = idle.candidates(home, facts, wish.thread, now=now.timestamp())
+    if not lines:
+        return
+    from .wishes import _short
+    began = _instant(str(read["at"]))
+    reading = _short(read["reading"].removeprefix("waiting:").strip(), 60)
+    nxt = _iso(began + timedelta(seconds=int(read["wait"]["turn"]) * (slot + 1)))
+    head = (f"turn: {wish.id} parked {idle._age((now - began).total_seconds())} on \"{reading}\" and still waits; "
+            f"{said}. This thread could move:\n" + "".join(f"  - {line}\n" for line in lines))
+    if notice(home, facts, "turn", key, head.rstrip("\n"),
+              f"the park stays; its next turn is {nxt}, if the week is still ahead then",
+              thread=wish.thread):
+        _TURNED[wish.thread] = now
+
+
+def observe_waits(home, facts, armed: bool, forge: dict | None = None, now: datetime | None = None,
+                  pace=None):
+    """Write a notice for each live wait that came true or ran out; only the lease holder writes.
+
+    ``pace(thread)`` says the week's pace when that thread's fuel is ahead of it, else ``""``;
+    without it no park takes its turn."""
     if not armed:
         return facts
     from .loom import notice
@@ -288,9 +360,21 @@ def observe_waits(home, facts, armed: bool, forge: dict | None = None, now: date
     if not rows:
         return facts
     now = now or datetime.now(timezone.utc)
+    from functools import cache
+
+    @cache
+    def held() -> frozenset:
+        from .project import fold
+        return frozenset(fold(facts).holder)
     for wish, read in rows:
         said = outcome(wish, read, facts, found, forge or {}, now)
         if said is None:
+            if pace is not None and read["wait"].get("turn"):
+                try:
+                    _turn(home, facts, wish, read, now, pace, held)
+                except Exception as exc:  # noqa: BLE001 - a turn is an offer; it never costs the waits
+                    from .loom import _log
+                    _log(home, f"turn: skipped {wish.id} ({type(exc).__name__}: {exc})")
             continue
         resolved = not said.startswith("nothing resolved by")
         head = (f"wait on {wish.id} {'resolved' if resolved else 'ran out'}: {said}. "
