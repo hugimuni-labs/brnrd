@@ -452,14 +452,15 @@ def test_shellcheck_sh_when_installed():
     assert result.returncode == 0, result.stdout + result.stderr
 
 
-def test_quickstart_and_install_page_lead_with_the_curl_line():
+def test_readme_and_install_page_lead_with_the_curl_line():
     readme = (ROOT / "README.md").read_text(encoding="utf-8")
     install = (ROOT / "docs" / "src" / "content" / "docs" / "getting-started" / "install.md").read_text(
         encoding="utf-8"
     )
     assert CURL in install
-    start = readme.index("## ✦ Quickstart")
-    window = readme[start:readme.index("## ✦ What arrives", start)]
-    assert window.index(CURL) < window.index("npm install -g brnrd")
-    assert window.index(CURL) < window.index("uv tool install brnrd")
-    assert window.index(CURL) < window.index("pipx install brnrd")
+    # The README installs through brnrd.dev, which serves this same script (src/brnrd/spa.py).
+    start = readme.index("## ✦ Install")
+    window = readme[start:readme.index("\n## ", start + 1)]
+    first = window.split("```bash\n", 1)[1].splitlines()[0]
+    assert first == "curl -fsSL https://brnrd.dev/install | sh"
+    assert "curl -fsSL https://brnrd.dev/install | sh -s -- --dev" in window
