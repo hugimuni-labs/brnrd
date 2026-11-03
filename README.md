@@ -38,91 +38,62 @@ laptop lid on the desk, not the one in your bag.
 brnrd is **not another coding agent.** It runs the one you chose, on your
 machine, under your accounts.
 
+**Reach it from Telegram, WhatsApp, brnrd.dev or a page on this machine.** Or
+run your own Telegram bot, with more locally managed connectors coming.
+
 ## ✦ Install
 
 ```bash
 curl -fsSL https://brnrd.dev/install | sh
-brnrd loom install     # the loom as a login service (launchd or systemd --user)
-brnrd setup            # pick a chat, pair it, say hello
-brnrd loom status      # state: running
-```
-
-The install line puts `brnrd` on your PATH through `uv` (it fetches `uv` if
-it's missing) and ends with `Next: brnrd setup`. It installs the PyPI release,
-which trails main. To follow main instead:
-
-```bash
-curl -fsSL https://brnrd.dev/install | sh -s -- --dev
 brnrd setup
 ```
 
-`--dev` clones main to `~/.brnrd/src`, installs it editable, runs
-`brnrd loom install --dev` and `brnrd loom status` for you, and warns before
-the known traps bite: a second `brnrd` on PATH, a stray loom, no `gh`. The loom
-then follows main by itself, fast-forwarding when CI is green.
+The first line puts `brnrd` on your PATH through `uv` (fetching `uv` if it's
+missing), installs the loom as a login service (launchd or systemd --user) and
+shows its status. `brnrd setup` picks the AI and the doors, pairs them, and
+waits for your first message to reach the resident.
+
+To follow main instead of the PyPI release, pipe it to `sh -s -- --dev`
+(`curl -fsSL https://brnrd.dev/install | sh -s -- --dev`): it clones main to
+`~/.brnrd/src`, and the loom fast-forwards it whenever CI is green.
 
 You need git, a signed-in `claude` or `codex` on PATH, and `gh` signed in if
 the resident should back up its memory or open PRs. The full walk is at
 [Install](https://hugimuni-labs.github.io/brnrd/getting-started/install/#run-the-loom).
 
-## ✦ What setup asks
-
-`brnrd setup` is the whole onboarding, in plain words:
-
-1. **Which AI.** The bodies it found on this machine (Claude Code, Codex,
-   Grok, Vibe), with what each has left of its quota.
-2. **Which doors.** Ticked by default:
-   - *brnrd cloud*: Telegram or WhatsApp through brnrd's own bot, and a chat on
-     [brnrd.dev](https://brnrd.dev);
-   - *a page on this computer*, in your browser, nothing to sign in to.
-
-   Or *your own Telegram bot*, two minutes in the Telegram app.
-3. **What else.** Back up the resident's memory to a private GitHub repo
-   (`<you>/brnrd-self`), and on the cloud path, the brnrd-dev GitHub App so
-   brnrd.dev can reach your repos.
-4. **Say hello.** It prints a link (and a QR code) per door and waits until your
-   first message reaches the resident.
-
-Run it again and it shows what's connected and what isn't. `brnrd setup channel`
-adds or mends a door.
-
 ## ✦ How it works
 
 ```text
-           you, from anywhere
-   Telegram · WhatsApp · brnrd.dev · a local page
-                     │  letters
-                     ▼
-        the loom · your machine
-     ┌───────────────┼───────────────┐
-     ▼               ▼               ▼
-  thread          thread          thread       one body each:
-  (a room)        (a room)        (a room)     claude · codex · …
-     │               │               │
-     └──── commits to the self ──────┘
+            you, from anywhere
+ Telegram · WhatsApp · brnrd.dev · a local page
                      │
-          PRs · replies · receipts
+                     ▼
+           the loom · your machine
+                     │
+            ┌────────┼────────┐
+            ▼        ▼        ▼
+         Claude    Codex    Grok
+            │        │        │
+            └────────┼────────┘
+                     ▼
+         progress · replies · git
 ```
 
-- **The self** is the resident's memory: a git repo of plain markdown, its
-  identity, the lessons it learned the hard way, the people it works with.
-  Every body reads it at wake and lands its work back into it. You read it the
-  same way, by file.
-- **A thread** is one piece of work with a README: the spec on top, the plan,
-  the receipts. A message that fits no thread goes to the inbox; the resident
-  opens a thread for it.
-- **A wish** is what you want out of a thread, in one line. It stays open until
-  the result is delivered and you accept it, or drop it.
-- **A body** is one agent session on one thread, in its own room with its own
-  clones. When the context fills, it writes down what matters and hands the
-  seat to the next one.
-- **Letters** reach a body between tool calls, so a correction lands without
-  killing the thought in flight. A comment on a PR it opened comes back as a
-  letter too.
-- **Waiting is parked, not polled.** A body waiting on CI, a PR or you stops;
-  the loom wakes it when the condition turns true.
-- **Fuel is counted.** The loom reads each body's quota and paces the work to
-  the week, so a resident doesn't spend your Monday's allowance by Sunday.
+Each thread gets its own body, on whichever AI has fuel left; the loom paces
+the work to each quota's week.
+
+- **The self** is the resident's memory: plain markdown in git, read at every
+  wake and landed back into. You read it the same way.
+- **A thread** is one piece of work: a README with the spec, the plan, the
+  receipts. A message that fits none goes to the inbox.
+- **A wish** is what you want from a thread, in one line, open until you accept
+  the result or drop it.
+- **A body** is one agent session on one thread. When its context fills, it
+  writes down what matters and hands over.
+- **Letters** reach a body between tool calls, PR comments included, so a
+  correction lands without killing the thought in flight.
+- **Waiting is parked, not polled:** the loom wakes the body when CI, a PR or
+  you answer.
 
 `brnrd loom where` prints where the home, the self and the logs are.
 `brnrd loom logs` shows the loom working.
