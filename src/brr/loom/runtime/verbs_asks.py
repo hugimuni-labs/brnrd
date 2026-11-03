@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
-import argparse
 import os
 import sys
+from .refusals import Parser
 
 
 def _home(args):
@@ -64,12 +64,12 @@ def add_graph_parser(subparsers) -> None:
 
 
 def _asks(argv: list[str]) -> int:
-    parser = argparse.ArgumentParser(prog="python -m brr.loom.runtime asks")
+    parser = Parser(verb="asks", prog="python -m brr.loom.runtime asks")
     asks_arguments(parser)
     return cmd_asks(parser.parse_args(argv))
 
 
 def _graph(argv: list[str]) -> int:
-    parser = argparse.ArgumentParser(prog="python -m brr.loom.runtime graph")
+    parser = Parser(verb="graph", prog="python -m brr.loom.runtime graph")
     graph_arguments(parser)
     return cmd_graph(parser.parse_args(argv))

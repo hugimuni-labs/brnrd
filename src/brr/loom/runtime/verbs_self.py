@@ -2,17 +2,16 @@
 
 from __future__ import annotations
 
-import argparse
 import os
-import sys
 from pathlib import Path
 
 from brr.loom.runtime.selfrepo import SelfError, init_self, run_wake
 from .home import resolve_home
+from .refusals import Parser, refuse
 
 
 def cmd_init(argv: list[str]) -> int:
-    parser = argparse.ArgumentParser(prog="python -m brr.loom.runtime init")
+    parser = Parser(verb="init", prog="python -m brr.loom.runtime init")
     parser.add_argument("--home")
     parser.add_argument("--person", default=None)
     parser.add_argument("--remote", default=None)
@@ -21,13 +20,12 @@ def cmd_init(argv: list[str]) -> int:
     try:
         print(init_self(home, person=args.person, remote=args.remote))
     except SelfError as exc:
-        print(str(exc), file=sys.stderr)
-        return 1
+        return refuse("init", exc)
     return 0
 
 
 def cmd_wake(argv: list[str]) -> int:
-    parser = argparse.ArgumentParser(prog="python -m brr.loom.runtime wake")
+    parser = Parser(verb="wake", prog="python -m brr.loom.runtime wake")
     parser.add_argument("--room", required=True)
     parser.add_argument("--thread", required=True)
     parser.add_argument("--owed", default=None)
@@ -36,13 +34,12 @@ def cmd_wake(argv: list[str]) -> int:
         owed = Path(args.owed) if args.owed else None
         return run_wake(Path(args.room), args.thread, owed)
     except SelfError as exc:
-        print(str(exc), file=sys.stderr)
-        return 1
+        return refuse("wake", exc)
 
 
 def cmd_lib(argv: list[str]) -> int:
     from brr.loom.runtime import library
-    parser = argparse.ArgumentParser(prog="python -m brr.loom.runtime lib")
+    parser = Parser(verb="lib", prog="python -m brr.loom.runtime lib")
     sub = parser.add_subparsers(dest="verb", required=True)
     add = sub.add_parser("add", help="name a folder or repo in the library")
     add.add_argument("name")
@@ -102,6 +99,5 @@ def cmd_lib(argv: list[str]) -> int:
             library.drop(room, args.name)
             print(f"dropped library/{args.name}.md (the folder is untouched); land it with send-self")
     except (library.LibraryError, SelfError) as exc:
-        print(f"lib: {exc}", file=sys.stderr)
-        return 1
+        return refuse("lib", exc, prefix="lib: ")
     return 0

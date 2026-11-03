@@ -10,7 +10,6 @@ shuttle. The holder releases inbox to the preferred install
 
 from __future__ import annotations
 
-import argparse
 import os
 import sys
 from pathlib import Path
@@ -19,10 +18,11 @@ from brr.daemon2.facts import Fact
 
 from .home import HOME_THREAD, Home, check_install, mint, resolve_home
 from .ledger import append
+from .refusals import Parser, refuse
 
 
 def _machines(argv: list[str]) -> int:
-    parser = argparse.ArgumentParser(prog="python -m brr.loom.runtime machines")
+    parser = Parser(verb="machines", prog="python -m brr.loom.runtime machines")
     parser.add_argument("--home")
     parser.add_argument("--install", default=None)
     sub = parser.add_subparsers(dest="verb", required=True)
@@ -44,8 +44,7 @@ def _machines(argv: list[str]) -> int:
         try:
             sys.stdout.write(join_home(resolve_home(target)[0], args.url) + "\n")
         except (JoinError, SelfError) as exc:
-            sys.stderr.write(f"not joined: {exc}\n")
-            return 1
+            return refuse("machines", exc, prefix="not joined: ")
         return 0
     root, _ = resolve_home(args.home)
     home = Home(root, install=args.install)
@@ -54,17 +53,14 @@ def _machines(argv: list[str]) -> int:
         try:
             to = check_install(args.to)
         except ValueError as exc:
-            sys.stderr.write(f"{exc}\n")
-            return 2
+            return refuse("machines", exc, 2)
         if to != home.install_id() and not (root / "ledger" / "facts" / to).is_dir():
             # A typo would hand inbox, or the thread, to nobody: the bodies
             # here leave and nothing takes over.
-            sys.stderr.write(f"{to}: no ledger from that install here; is it joined and shuttled?\n")
-            return 2
+            return refuse("machines", f"{to}: no ledger from that install here; is it joined and shuttled?", 2)
     if args.verb != "prefer":
         if args.thread == HOME_THREAD:
-            sys.stderr.write(f"{HOME_THREAD} follows the inbox lease; use `machines prefer`\n")
-            return 2
+            return refuse("machines", f"{HOME_THREAD} follows the inbox lease; use `machines prefer`", 2)
         fact = append(home, Fact(kind="machines.pin", by="person:operator",
                                  id="machines.pin:" + mint(12),
                                  data={"thread": args.thread, "install": to, "from": home.install_id()}))
