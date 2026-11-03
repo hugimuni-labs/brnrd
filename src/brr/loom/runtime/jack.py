@@ -561,7 +561,8 @@ def _guards(room: Path):
 
 def _guard_warnings(room: Path, at: str, stdin_text: str) -> tuple[str, bool]:
     """A call that trips a guard hears the guard's own words, and whether a
-    ``refuse`` match among them denies it. Warn unless the guard says refuse."""
+    ``refuse`` match among them denies it. Warn unless the guard says refuse;
+    a refusal the owner's letter grants (grants.py) runs, and says so."""
     from .guards import trips
     try:
         payload = json.loads(stdin_text) if stdin_text and stdin_text.strip() else {}
@@ -571,7 +572,13 @@ def _guard_warnings(room: Path, at: str, stdin_text: str) -> tuple[str, bool]:
         return "", False
     guards, _errors = _guards(room)
     hits = trips(guards, room, at, payload)
-    return "\n".join(label for label, _ in hits), any(refuse for _, refuse in hits)
+    said = [label for label, _, _ in hits]
+    asks = [ask for _, refuse, ask in hits if refuse]
+    if not asks:
+        return "\n".join(said), False
+    from .grants import judge
+    granted, lines = judge(room, asks)
+    return "\n".join(said + lines), not granted
 
 
 def _guard_miss(room: Path) -> str:

@@ -113,6 +113,53 @@ fi
 """
 
 
+# Two never guards at the gh door (threads/trust-guards): a merge whose checks
+# are not green and a release go only on the owner's letter, which
+# ``guard`` finds on the thread's wishes. Runs after GH_TOKEN is set, since
+# reading the checks needs it. {gh} is the real gh, {brnrd} the shim.
+_NEVER_GATE = r"""cls= target= why= n= repo= prev= skip=
+if [ "$1" = pr ] && [ "$2" = merge ]; then
+  cls=merge-red i=0
+  for a in "$@"; do
+    i=$((i+1)); [ $i -le 2 ] && continue
+    if [ -n "$skip" ]; then skip=; case "$prev" in -R|--repo) repo=$a ;; esac; prev=$a; continue; fi
+    case "$a" in
+      -b|--body|-F|--body-file|-t|--subject|-A|--author-email|--match-head-commit|-R|--repo) skip=1 ;;
+      --repo=*) repo=${a#--repo=} ;;
+      -*) ;;
+      *) [ -z "$n" ] && n=$a ;;
+    esac
+    prev=$a
+  done
+elif [ "$1" = api ]; then
+  for a in "$@"; do
+    r=${a%%\?*}; r=${r#/}
+    case "$r" in repos/*/*/pulls/*/merge) cls=merge-red; repo=${r#repos/}; repo=${repo%%/pulls/*}; n=${r#*/pulls/}; n=${n%/merge} ;; esac
+  done
+elif [ "$1" = release ] && [ "$2" = create ]; then
+  cls=publish i=0
+  for a in "$@"; do
+    i=$((i+1)); [ $i -le 2 ] && continue
+    if [ -n "$skip" ]; then skip=; continue; fi
+    case "$a" in
+      -n|--notes|-F|--notes-file|-t|--title|--target|--discussion-category|--notes-start-tag|-R|--repo) skip=1 ;;
+      -*) ;;
+      *) [ -z "$target" ] && target=$a ;;
+    esac
+  done
+  why="a release is public"
+fi
+if [ "$cls" = merge-red ]; then
+  n=${n%/}; n=${n##*/pull/}; n=${n%%/*}
+  [ -n "$n" ] || n=$({gh} pr view ${repo:+-R "$repo"} --json number -q .number 2>/dev/null)
+  target="#$n"
+  if {gh} pr checks "$n" ${repo:+-R "$repo"} >/dev/null 2>&1; then cls=; else why="its checks are not all green"; fi
+fi
+if [ -n "$cls" ]; then
+  {brnrd} runtime guard "$cls" "${target:-?}" --why "$why" || exit 1
+fi
+"""
+
 def _forge_env(room: Path, env: dict[str, str]) -> None:
     """Keep a configured forge identity isolated even when a shell bypasses the shim."""
     from .config import ConfigError, load_config, resolve_secret, secret_shell
@@ -147,6 +194,7 @@ def _forge_env(room: Path, env: dict[str, str]) -> None:
         real_gh = str(Path(real_gh).absolute())
         bin_dir = room / "port" / "bin"
         bin_dir.mkdir(parents=True, exist_ok=True)
+        from . import entry
         snippet = secret_shell(spec)
         if source_token is not None:
             env["BRNRD_GH_SECRET_SOURCE"] = source_token
@@ -162,6 +210,7 @@ def _forge_env(room: Path, env: dict[str, str]) -> None:
             "[ -n \"$GH_TOKEN\" ] || { echo 'gh: forge_token source gave nothing' >&2; exit 1; }\n"
             "export GH_TOKEN\n"
             "unset BRNRD_GH_SECRET_SOURCE\n"
+            + _NEVER_GATE.replace("{gh}", shlex.quote(real_gh)).replace("{brnrd}", shlex.quote(str(entry.shim()))) +
             f"exec {shlex.quote(real_gh)} \"$@\"\n"
         )
         shim = bin_dir / "gh"
