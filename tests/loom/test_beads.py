@@ -16,25 +16,35 @@ def notices(home, kind):
     return [f for f in read_facts(home) if f.kind == "letter" and f.id.startswith(f"loom/{kind}-")]
 
 
-def test_tokens_skip_code_urls_and_shell():
-    body = "see &4529, (&w-qa0b) and &thread:beads.\n`&nope` ```\n&nope\n``` a?x=1&y=2 a && b"
+def test_tokens_skip_code_quotes_urls_and_shell():
+    body = ("see &4529, (&w-qa0b) and &thread:beads.\n`&nope` ```\n&nope\n``` a?x=1&y=2 a && b\n"
+            "> you wrote &w-quoted and &s-ab12-cd34ef\n  > &4530 nested\n")
     assert tokens(body) == ["4529", "w-qa0b", "thread:beads"]
+
+
+def test_a_word_after_an_ampersand_is_no_miss_and_an_id_shape_is(ledger):
+    """w-nw1m5avc70qm: a placeholder like &ref or &name is a word, not a ref that missed."""
+    from brr.loom.runtime.refs import link
+    home, _ = ledger
+    from brr.loom.runtime.lifecycle import main_snapshot
+    links, misses = link(read_facts(home), main_snapshot(home), "fill &ref and &name, see &w-zzzz9 and &s-ab12-cd34ef")
+    assert links == [] and misses == ["w-zzzz9", "s-ab12-cd34ef"]
 
 
 def test_a_resident_send_links_the_known_ref_and_is_told_the_unknown(ledger):
     home, seat = ledger
     known = inject_letter(home.root, to="thread:work", body="the spec")
     stem = known.rsplit("/", 1)[-1]
-    sent = send(seat, f"read &{stem} and &nope first")
+    sent = send(seat, f"read &{stem} and &w-nope first")
     assert sent.returncode == 0, sent.stderr
-    assert "no &nope in the ledger" in sent.stderr
+    assert "no &w-nope in the ledger" in sent.stderr
     letter = sent.stdout.strip()
     fm = parse_frontmatter(out_file(seat, letter).read_text())
     assert fm["links"] == known
     assert fact_from_port(fm, "s-aaaa-test", 1).data["links"] == [known]
     [told] = notices(home, "ref-unknown")
     assert told.data["to"] == "thread:other" and told.data["notice"] is True
-    assert "&nope" in told.data["body"] and letter in told.data["body"]
+    assert "&w-nope" in told.data["body"] and letter in told.data["body"]
 
 
 def test_a_thread_letter_that_cites_nothing_is_refused(ledger):
@@ -162,3 +172,10 @@ def test_a_follow_up_that_cites_nothing_is_told_the_letter_to_cite(ledger):
     assert refused.returncode == 1 and "--re s-aaaa-othr/abcde" in refused.stderr
     assert "&<w-id>" in refused.stderr
     assert send(seat, "--re", "s-aaaa-othr/abcde", "another one").returncode == 0
+
+
+def test_a_loom_notice_on_a_persons_chat_is_headed_as_the_loom():
+    """w-nw1m5avc70qm: the ref-told notice posted under the resident's resting face."""
+    from brr.loom.runtime.router import LOOM_HEADER, _header
+    told = Fact(kind="letter", by="loom:aaaa", id="loom/ref-told-x", data={"from": "loom", "body": "x"})
+    assert _header(None, told) == LOOM_HEADER and "not the resident" in LOOM_HEADER

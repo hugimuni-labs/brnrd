@@ -486,3 +486,21 @@ def test_the_cards_poll_the_owner_the_opened_url_names(ledger):
     append(home, Fact(kind="pr.merged", by="strand:s-aaaa-test", data={
         "thread": "work", "repo": "brnrd", "number": 52, "head": "abc", "merge_commit": "def"}))
     assert waits.open_claims(receipts(read_facts(home), "i")) == {f"{REPO}#51"}
+
+
+def test_a_wait_wakes_the_thread_that_parked_not_the_wishs(ledger):
+    """w-fu0i49mzlfa3: a body parked on another thread's wish is the one the notice wakes."""
+    from test_wake import cli
+    home, seat = ledger
+    letter = inject_letter(home.root, to="thread:other", body="Please: ship other")
+    ident = command(home, seat, "wish", "new", "--line", "Ship other", "--say", letter, "--thread", "other")
+    parked = cli(["wish", ident, "--room", str(seat), "--read", "waiting: the merge", "--wait", f"pr:{REPO}#12"])
+    assert parked.returncode == 0, parked.stderr
+    assert f"parked: wakes thread:work when pr:{REPO}#12 resolves" in parked.stderr
+    append(home, Fact(kind="pr.opened", by="strand:s-aaaa-test", data={
+        "thread": "work", "repo": "brnrd", "number": 12, "head": "loom/x",
+        "url": f"https://github.com/{REPO}/pull/12"}))
+    append(home, Fact(kind="pr.merged", by="strand:s-aaaa-test", data={
+        "thread": "work", "repo": "brnrd", "number": 12, "head": "loom/x", "merge_commit": "abcdef1234"}))
+    [notice] = told(home)
+    assert notice.data["to"] == "thread:work"

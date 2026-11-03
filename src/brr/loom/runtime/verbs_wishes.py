@@ -177,9 +177,12 @@ def cmd_wish(args):
                     raise ValueError(f"wish: {target} is closed on main, and a wish placed there "
                                      "reopens it; place it from a strand room, which lands the reopen")
             else:
+                from .lifecycle import effects
                 from .verbs_loom import _room
-                for reopened in reopen_for(_room(args.room), [fact]):
-                    append(home, reopened)
+                reopened = reopen_for(_room(args.room), [fact])
+                for opened in reopened:
+                    append(home, opened)
+                _say(effects(home, [fact], reopened))
         append(home, fact)
         if left is not None:
             append(home, left)
@@ -190,6 +193,7 @@ def cmd_wish(args):
             _declare(args, "result")
         elif actions and kind == "wish.read" and by.startswith("strand:") and "wait" in data:
             _declare(args, "park")
+            _say([_wakes(home, facts, by, data)])
             _rest_line(args, data)
         if fact.kind == "wish" and args.id == "new":
             _related(home, fact.data["line"], facts, fact.data["thread"])
@@ -272,6 +276,24 @@ def _rest_line(args, data) -> None:
     except Exception:  # noqa: BLE001 - the size is a courtesy; the park is already written
         pass
     print(rest_line(condition, context, said), file=sys.stderr)
+
+
+def _say(lines) -> None:
+    """A verb's side effects, on stderr: stdout stays the id."""
+    for line in lines:
+        if line:
+            print(line, file=sys.stderr)
+
+
+def _wakes(home, facts, by: str, data: dict) -> str:
+    """Which thread a park's notice wakes, and on what (waits.parker)."""
+    from .waits import parker
+    wait = data.get("wait") or {}
+    on, until = wait.get("on"), wait.get("until")
+    thread = parker(home, facts, wishes(facts)[data["wish"]], {"writer": by})
+    when = (f"when {on} resolves" + (f", or at {until} if it has not" if until else "")) if on else \
+        (f"at {until} to re-judge it" if until else "")
+    return f"parked: wakes thread:{thread} {when}".rstrip() if when else "parked: nothing wakes it; re-read it yourself"
 
 
 def _related(home, line, facts, thread) -> None:
@@ -386,8 +408,11 @@ def cmd_ask(args):
             from .lifecycle import reopen_for
             from .verbs_loom import _room
             # A body that settled its own thread and asks again holds open work there.
-            for reopened in reopen_for(_room(args.room), [fact]):
-                append(home, reopened)
+            from .lifecycle import effects
+            reopened = reopen_for(_room(args.room), [fact])
+            for opened in reopened:
+                append(home, opened)
+            _say(effects(home, [fact], reopened))
             append(home, fact)
             ident = fact.data["wish"]
         else:
@@ -410,6 +435,7 @@ def cmd_ask(args):
             # The &ref is the mail's parent: a thread letter cites what it answers.
             body += f"Answer &{ident}, or ask onward with: ask \"<what>\" --for {ident}\n"
             write_send(room, to=head, sender=strand_of_room(room), body=body)
+            _say([f"mailed {head}: a body there wakes on it"])
         elif head == "operator" or head.startswith("person:"):
             # Typing an ask is sending it (requests R3): any thread may write the
             # person, and the &ref binds his reply-to on this message to the ask.
@@ -423,6 +449,7 @@ def cmd_ask(args):
                     body += f"rec: {args.rec}\n"
                 body += f"Reply to this message to answer &{ident}.\n"
                 write_send(room, to=to, sender=strand_of_room(room), body=body)
+                _say([f"sent to {to}: their reply answers {ident}"])
         if args.default_at is not None:
             # The asking wish parks on the ask; at its deadline the body is woken with its own rec.
             append(home, Fact(kind="wish.read", by=by, id="wish.read:" + mint(12), data={

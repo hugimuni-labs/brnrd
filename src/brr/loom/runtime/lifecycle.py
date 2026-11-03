@@ -236,27 +236,40 @@ def settle(room: Path, thread: str, why: str, retire: bool = False,
     land_status(room, thread, "retired" if retire else "settled", f"settle {thread}: {why}")
 
 
-def reopen_for(room: Path, stamps) -> list:
-    """A wish placed on a closed thread opens it again, whatever placed it.
+IN_HAND = frozenset({"heard", "read", "scoped", "granting"})
 
-    Every ``wish`` stamp names a thread and leaves the wish open, so a closed
-    thread holding it would hold open work. The status line on main stays the
-    one store: it flips to ``open`` here, before the stamp lands. The returned
-    ``thread.reopened`` facts are the event the next wake reads, never a state.
+
+def reopen_for(room: Path, stamps) -> list:
+    """Work placed on a closed thread opens it again, whatever placed it.
+
+    A stamp is work when the wish is in hand after it: new, or moved back from
+    a verdict to heard, read or granting. A letter cited on a delivered wish
+    leaves it delivered, waiting on the person, so the thread stays settled
+    and no body wakes for it (w-fu0i49mzlfa3). The status line on main stays
+    the one store: it flips to ``open`` here, before the stamp lands. The
+    returned ``thread.reopened`` facts are the event the next wake reads,
+    never a state.
     """
     from brr.daemon2.facts import Fact
     from .home import mint
+    from .ledger import read_facts
     from .registry import admit
+    from .wishes import wishes
     home = home_of_room(room)
     out, seen = [], set()
+    facts = None
     for stamp in stamps:
         thread = stamp.data.get("thread")
         if not thread or thread in seen:
             continue
-        seen.add(thread)
         status = read_thread(home, thread).get("status")
         if status not in CLOSED:
             continue
+        facts = read_facts(home) if facts is None else facts
+        after = wishes([*facts, stamp]).get(stamp.data["wish"])
+        if after is None or after.state not in IN_HAND:
+            continue
+        seen.add(thread)
         sha, why, _ = closing_commit(home, thread)
         land_status(room, thread, "open", f"reopen {thread}: {stamp.data['wish']} placed on it")
         fact = Fact(kind="thread.reopened", by=stamp.by, id="thread.reopened:" + mint(12),
@@ -264,6 +277,23 @@ def reopen_for(room: Path, stamps) -> list:
                           "closed": sha, "why": why})
         admit(fact)
         out.append(fact)
+    return out
+
+
+def effects(home: Home, stamps, reopened) -> list[str]:
+    """What placing ``stamps`` did beyond the ledger, one line each, for the verb's
+    output: a thread reopened, or a stamp on a closed thread that wakes nobody."""
+    out = [f"reopened {f.data['thread']} (was {f.data['was']}): {f.data['wish']} is work there; a body wakes on it"
+           for f in reopened]
+    done = {f.data["thread"] for f in reopened}
+    for stamp in stamps:
+        thread = stamp.data.get("thread")
+        if not thread or thread in done:
+            continue
+        status = read_thread(home, thread).get("status")
+        if status in CLOSED:
+            done.add(thread)
+            out.append(f"recorded on {thread} ({status}); nobody wakes: {stamp.data['wish']} is not back in hand")
     return out
 
 
