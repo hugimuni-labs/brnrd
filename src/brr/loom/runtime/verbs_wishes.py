@@ -303,6 +303,22 @@ def _related(home, line, facts, thread) -> None:
         print(said, file=sys.stderr)
 
 
+def _recall(argv: list[str]) -> int:
+    """``recall "<words>"``: the closest topic pages with their heads, then the closest threads."""
+    from .recall import recall_text
+    parser = Parser(verb="recall", prog="python -m brr.loom.runtime recall")
+    parser.add_argument("words", nargs="+")
+    parser.add_argument("--room")
+    parser.add_argument("--home")
+    args = parser.parse_args(argv)
+    try:
+        home = _context(args)[0]
+        sys.stdout.write(recall_text(home, " ".join(args.words), facts=read_facts(home)))
+    except (OSError, ValueError) as exc:
+        return refuse("recall", exc)
+    return 0
+
+
 def _wait(home, facts, ident, condition, until, default=None):
     """A park's ``wait``: its condition with the repo filled in, its deadline and its turn."""
     from datetime import datetime, timezone

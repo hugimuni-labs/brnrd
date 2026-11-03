@@ -67,6 +67,7 @@ VERB: dict[str, str] = {
     "wish": 'wish <w-id> --left "next step"',
     "wishes": "wishes --all",
     "ask": 'ask "merge #12?" --for <w-id> --rec "yes"',
+    "recall": 'recall "wake budget topic heads"',
     "threads": "threads --left",
     "asks": "asks",
     "graph": "graph",

@@ -5,7 +5,9 @@ hook to ``port/tools.jsonl``; the two share the call's ``id``
 (``tool_use_id``). A start carries ``cmd``, a Bash command's first line with
 its secrets masked, and ``say``, the body's last sentence when it changed.
 ``arg`` is the one safe word: a Bash call's description, a file's basename,
-a search pattern. The append is one write and never raises: a lost line
+a search pattern. A start whose file sits in the room's self also carries
+``path``, relative to the self (``threads/wiki/design.md``), so the reads of
+one page can be counted across rooms. The append is one write and never raises: a lost line
 costs nothing, a slowed or failed hook costs the body. The file rotates to
 ``tools.jsonl.1`` past ``CAP`` bytes, so a room holds at most twice that.
 
@@ -77,6 +79,30 @@ def arg_of(tool: str, given: object) -> str:
     return _cap(text, ARG_MAX)
 
 
+def self_path(room: Path, given: object, cwd: object = None) -> str:
+    """A file call's path relative to the room's self, or ``""`` outside it."""
+    if not isinstance(given, dict):
+        return ""
+    raw = next((given[key] for key in _PATH_KEYS if isinstance(given.get(key), str) and given[key]), None)
+    if raw is None:
+        return ""
+    path = Path(raw).expanduser()
+    if not path.is_absolute():
+        path = Path(cwd if isinstance(cwd, str) and cwd else room) / path
+    path = Path(os.path.normpath(path))
+    room = Path(room)
+    for base in (room / "self", room):
+        if not (base / "core" / "loom").is_dir():
+            continue
+        for root in {base, base.resolve()}:
+            try:
+                rel = path.relative_to(root).as_posix()
+            except ValueError:
+                continue
+            return _cap(rel, 200)
+    return ""
+
+
 def _masked(text: str) -> str:
     text = _USERINFO_RE.sub("://<redacted>@", redact_detail(text))
     text = _USERPASS_RE.sub(r"\1<redacted>", text)
@@ -141,6 +167,9 @@ def note(room: Path, stdin_text: str, phase: str = "post") -> None:
         if phase == "pre":
             if tool == "Bash" and isinstance(given, dict):
                 row["cmd"] = cmd_of(given.get("command"))
+            where = self_path(room, given, payload.get("cwd"))
+            if where:
+                row["path"] = where
             if isinstance(payload.get("agent_id"), str):
                 row["by"] = payload["agent_id"][:40]
             try:
@@ -174,7 +203,7 @@ def note(room: Path, stdin_text: str, phase: str = "post") -> None:
 def _call(at: float, row: dict) -> dict:
     return {"at": at, "end": None, "ms": None, "tool": str(row.get("tool", "")), "arg": str(row.get("arg", "")),
             "cmd": str(row.get("cmd", "")), "say": str(row.get("say", "")), "by": str(row.get("by", "")),
-            "failed": False}
+            "path": str(row.get("path", "")), "failed": False}
 
 
 def _close(call: dict, at: float, row: dict) -> None:
@@ -376,7 +405,7 @@ def _calls(room: Path, tail: int = 0) -> tuple[list[dict], str]:
 def read(room: Path, since: float = 0.0, limit: int = 500) -> list[dict]:
     """The room's last ``limit`` calls still running or ended after ``since``, oldest first.
 
-    Each is ``{at, end, ms, tool, arg, cmd, say, by, failed}``: ``at`` is its
+    Each is ``{at, end, ms, tool, arg, cmd, say, by, path, failed}``: ``at`` is its
     start, ``end`` is None while it runs.
     """
     rows = [dict(c) for c in _calls(room)[0] if c["end"] is None or c["end"] > since]

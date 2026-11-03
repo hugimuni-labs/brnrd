@@ -824,6 +824,25 @@ def insert_briefing(prompt: str, briefing: str) -> str:
     return prompt[:start] + briefing + prompt[start:]
 
 
+def _wake_topics(clone: Path, thread: str, owed: Path | None) -> str:
+    """The wake's ``## Topics`` heads, or ``""``; a broken page never costs the wake."""
+    from .recall import wake_query, wake_topics
+    try:
+        readme = (clone / "threads" / thread / "README.md").read_text(encoding="utf-8")
+        return wake_topics(clone, readme, wake_query(readme, owed))
+    except (OSError, UnicodeDecodeError, ValueError):
+        return ""
+
+
+def insert_topics(prompt: str, section: str) -> str:
+    """Before the tree: a head carries a decision, a tree line only names a file."""
+    for mark in ("## Tree\n", "## Loom\n", "## Occasion\n"):
+        start = prompt.find(mark)
+        if start >= 0 and (start == 0 or prompt[start - 1] == "\n"):
+            return prompt[:start] + section + prompt[start:]
+    return prompt + "\n" + section
+
+
 def run_wake(room_dir: Path, thread: str, owed: Path | None = None, *,
              loom_part: Path | None = None, repos: Path | None = None,
              core: Path | None = None, stdout=None, stderr=None,
@@ -871,9 +890,11 @@ def run_wake(room_dir: Path, thread: str, owed: Path | None = None, *,
             section += render(queues(found, waits_on(found, main_snapshot(home))))
     from .briefing import section as briefing_section
     briefing = briefing_section()
-    # Reserve what the loom adds before the recipe fits its tree/README to the budget.
+    topics = _wake_topics(clone, thread, owed)
+    # Reserve what the loom adds before the recipe fits its tree/README to the budget:
+    # the tree is what gives way to the topic heads.
     limit = int(env.get("LOOM_BUDGET_BYTES") or 24000)
-    env["LOOM_BUDGET_BYTES"] = str(max(0, limit - len((section + briefing).encode("utf-8"))))
+    env["LOOM_BUDGET_BYTES"] = str(max(0, limit - len((section + briefing + topics).encode("utf-8"))))
     if core is not None:
         # Absent after the run means the recipe kept the core in stdout.
         Path(core).unlink(missing_ok=True)
@@ -905,6 +926,8 @@ def run_wake(room_dir: Path, thread: str, owed: Path | None = None, *,
                 output = insert_briefing(output, briefing)
         if proc.returncode == 0 and section:
             output = insert_wishes(output, section)
+        if proc.returncode == 0 and topics:
+            output = insert_topics(output, topics)
         (stdout or sys.stdout).write(output)
         return proc.returncode
     finally:
