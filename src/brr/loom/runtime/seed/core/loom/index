@@ -21,11 +21,23 @@ plus the first SCAR_HEAD non-blank lines after it, title included. The
 core/immune.d/45-scars refuses a changed scar without; the same head is
 read here, so the two agree on where a scar's trigger and date must sit.
 
+Topic pages (topics/<slug>.md) come first, one row each: title, entry
+count (its `### ` lines) and size, alphabetical, topics/README.md linked
+from the section's head when the tree has it.
+
 Generation only derives from what a writer already wrote: titles, first
 lines, sizes, frontmatter, wish lines, link targets. It never summarises,
 never moves a file and never closes anything. Order is newest first by the
 commit that last touched a path, counted in topological order, so the same
 tree gives the same index after a rebase or a relabel.
+
+Open threads split by when their folder was last written, by author time
+measured from the newest author time in the history, so a rebase does not
+move a thread between groups: moving (within QUIET_DAYS), quiet (older, its
+age shown), and untouched since opened (no commit after the one that made
+the folder wrote to it alone; sweeps across many threads do not count).
+A thread row prints its wish line in place of its first line when it has
+one: the first line is often the spec's head, and the wish is its purpose.
 """
 
 from __future__ import annotations
@@ -35,9 +47,10 @@ import subprocess
 import sys
 from pathlib import Path
 
-ROOTS = ("threads", "memory", "people")
+ROOTS = ("topics", "threads", "memory", "people")
 OPEN = ("open", "live", "dormant")
 HEADLINE = 200
+QUIET_DAYS = 3
 SCAR_HEAD = 10
 SCARS = "memory/scars/"
 DATE = re.compile(r"(?<!\d)\d{4}-\d{2}-\d{2}(?!\d)")
@@ -100,6 +113,34 @@ def blobs(shas: list[str]) -> dict[str, str]:
         out[sha] = data[pos:pos + size].decode("utf-8", "replace")
         pos += size + 1
     return out
+
+
+def activity(rev: str) -> tuple[dict[str, int], set[str], int]:
+    """Thread -> last author time in its folder; threads written since opened; the newest author time.
+
+    Written since opened: some commit after the one that created the folder touched that
+    folder and no other thread's, the way a body lands its own work. A sweep across many
+    threads, or a migration, does not wake one."""
+    proc = git("log", "--topo-order", "--format=%x00%at", "--name-only", rev, "--", "threads")
+    last: dict[str, int] = {}
+    commits: list[set[str]] = []
+    newest = 0
+    if proc.returncode != 0:
+        return last, set(), newest
+    stamp = 0
+    for line in proc.stdout.decode("utf-8", "surrogateescape").splitlines():
+        if line.startswith("\x00"):
+            stamp = int(line[1:]) if line[1:].isdigit() else 0
+            newest = max(newest, stamp)
+            commits.append(set())
+        elif commits and line.startswith("threads/") and line.count("/") >= 2:
+            name = line.split("/")[1]
+            last.setdefault(name, stamp)
+            commits[-1].add(name)
+    oldest = {name: index for index, names in enumerate(commits) for name in names}
+    woken = {name for index, names in enumerate(commits) if len(names) == 1
+             for name in names if index != oldest[name]}
+    return last, woken, newest
 
 
 def ranks(rev: str) -> dict[str, int]:
@@ -209,7 +250,26 @@ def wish_lines(data: dict[str, str]) -> str:
     return "; ".join(parts)
 
 
-def thread_rows(files: dict[str, tuple[str, int]], text: dict[str, str], order: dict[str, int]) -> str:
+def topic_rows(files: dict[str, tuple[str, int]], text: dict[str, str]) -> str:
+    pages = sorted(path for path in files
+                   if path.startswith("topics/") and path.count("/") == 1 and path.endswith(".md")
+                   and path != "topics/README.md")
+    if not pages:
+        return ""
+    out = [f"## topics ({len(pages)})\n\n"]
+    if "topics/README.md" in files:
+        out.append("What was decided and why, one page per area; the shape is in "
+                   "[topics/README.md](topics/README.md).\n\n")
+    for path in pages:
+        sha, size = files[path]
+        _, first = frontmatter(text[sha])
+        entries = sum(1 for line in text[sha].splitlines() if line.startswith("### "))
+        out.append(f"- **[{path[7:-3]}]({path})** · {title(first)} · {entries} entr{'y' if entries == 1 else 'ies'} · {kb(size)}\n")
+    return "".join(out) + "\n"
+
+
+def thread_rows(files: dict[str, tuple[str, int]], text: dict[str, str], order: dict[str, int],
+                seen: tuple[dict[str, int], set[str], int] = ({}, set(), 0)) -> str:
     threads: dict[str, list[str]] = {}
     for path in files:
         parts = path.split("/")
@@ -222,10 +282,17 @@ def thread_rows(files: dict[str, tuple[str, int]], text: dict[str, str], order: 
         status = data.get("status", "")
         head = f"- **[{name}]({readme})**" if readme in files else f"- **{name}**"
         head += f" · {status or 'no README'}"
+        last, woken, newest = seen
+        group = 3
+        if status in OPEN or not status:
+            days = max(0, newest - last.get(name, newest)) // 86400
+            group = 2 if name not in woken else 1 if days >= QUIET_DAYS else 0
+            if group == 1:
+                head += f" · quiet {days}d"
         wishes = wish_lines(data)
         if wishes:
             head += f" · {wishes}"
-        if first:
+        if first and not any(data.get(key) for key in data if key.startswith("wish-")):
             head += f" · {title(first)}"
         lines = [head]
         for path in sorted(paths):
@@ -236,11 +303,10 @@ def thread_rows(files: dict[str, tuple[str, int]], text: dict[str, str], order: 
             _, line = frontmatter(text[sha])
             lines.append(f"  - [{rel}]({path}) · {title(line)} · {kb(size)}")
         rank = min(order.get(path, 10**9) for path in paths)
-        group = 0 if (status in OPEN or not status) else 1
         rows.append((group, rank, name, "\n".join(lines)))
     rows.sort(key=lambda row: (row[0], row[1], row[2]))
     out = ["## threads\n"]
-    for label, group in (("open", 0), ("settled", 1)):
+    for label, group in (("open, moving", 0), ("open, quiet", 1), ("open, untouched since opened", 2), ("settled", 3)):
         chosen = [row for row in rows if row[0] == group]
         out.append(f"\n### {label} ({len(chosen)})\n\n")
         out.extend(row[3] + "\n" for row in chosen)
@@ -288,9 +354,9 @@ def generate(rev: str, loaded: tuple[dict[str, tuple[str, int]], dict[str, str]]
     order = ranks(rev)
     head = ("# Index\n\n"
             "Generated by `core/loom/index` at every landing: do not edit. "
-            "Read [AGENTS.md](AGENTS.md) first. One row per thread, open first, newest first; "
+            "Read [AGENTS.md](AGENTS.md) first. Topic pages first, then one row per thread, open first (moving, quiet, untouched since opened), newest first; "
             "under it, the thread's files with their first line and size.\n\n")
-    return head + thread_rows(files, text, order) + memory_rows(files, text) + people_rows(files)
+    return head + topic_rows(files, text) + thread_rows(files, text, order, activity(rev)) + memory_rows(files, text) + people_rows(files)
 
 
 def check_scars(rev: str, old: str | None, loaded: tuple[dict[str, tuple[str, int]], dict[str, str]]) -> int:
