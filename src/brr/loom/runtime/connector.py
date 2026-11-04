@@ -32,9 +32,9 @@ def carries(home):
     for name, kind in instances(home).items():
         folder = resolve(home, kind, "connectors")
         flags = (folder / "carries").read_text().split()
-        if flags not in ([], ["edit"]):
-            raise ValueError(f"{folder}/carries: expected only an optional edit line")
-        found[name] = (name, folder, bool(flags))
+        if len(set(flags)) != len(flags) or not set(flags) <= {"edit", "attach"}:
+            raise ValueError(f"{folder}/carries: expected only optional edit and attach lines")
+        found[name] = (name, folder, frozenset(flags))
     return found
 
 

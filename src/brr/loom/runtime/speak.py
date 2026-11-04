@@ -23,10 +23,17 @@ def speak(home, router_lease, key, text, *, channel=None, context=None):
             raise ValueError('speak requires an explicit channel when there is not exactly one instance')
         channel = f'channel:{next(iter(names))}'
     name, chat = channel_parts(channel, home)
-    _name, folder, edits = carries(home)[name]
+    _name, folder, flags = carries(home)[name]
     fields = dict(kind='letter', id=key, **(context or {}), to=chat or '')
-    if fields.get('edit') and not edits:
+    if fields.get('edit') and 'edit' not in flags:
         raise ValueError(f'{name} does not carry edits')
+    # A file rides only where the channel takes files; elsewhere the text
+    # already names its path on the host.
+    attach = fields.pop('attach', None)
+    if attach and 'attach' in flags:
+        from .port import _blob_of
+        fields['attach'] = str(_blob_of(home.root, attach))
+        fields['attach-name'] = attach.partition(' ')[2]
     authority = LocalLeaseAuthority(home.root / 'ledger/leases', clock=loom_clock)
     if not authority.authorize(router_lease):
         return 'stepped-down', None, []
@@ -41,7 +48,8 @@ def speak(home, router_lease, key, text, *, channel=None, context=None):
                 path = Path(tmp) / 'letter.md'
                 path.write_text(_front(fields, text), encoding='utf-8')
                 proc = subprocess.run([str(folder / 'out'), str(path)], env=environment(home, name),
-                                      capture_output=True, text=True, timeout=60)
+                                      capture_output=True, text=True,
+                                      timeout=600 if 'attach' in fields else 60)
             if proc.returncode == 3:
                 return dict(status='not-sent', reason=proc.stderr.strip(), ids=[])
             if proc.returncode != 0:

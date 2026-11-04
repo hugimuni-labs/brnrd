@@ -36,7 +36,9 @@ def bot(tmp_path, monkeypatch):
             self.wfile.write(json.dumps(value).encode())
 
         def do_POST(self):
-            data = json.loads(self.rfile.read(int(self.headers['Content-Length'])))
+            raw = self.rfile.read(int(self.headers['Content-Length']))
+            multipart = self.headers['Content-Type'].startswith('multipart/form-data')
+            data = dict(multipart=raw) if multipart else json.loads(raw)
             method = self.path.rsplit('/', 1)[-1]
             if method == 'getUpdates':
                 bot.offsets.append(data['offset'])
@@ -288,3 +290,59 @@ def test_telegram_setup_interrupted_during_the_check_keeps_the_old_token(bot, mo
     with pytest.raises(KeyboardInterrupt):
         run_setup(bot, monkeypatch, '123:ABC-def_9')
     assert (bot.state / 'token').read_text() == before
+
+
+def test_out_sends_an_attached_file_as_a_document_under_the_text(bot, tmp_path):
+    blob = tmp_path / 'blob'
+    blob.write_bytes(b'%PDF the report')
+    result = run_out(bot, tmp_path, 'delivered', attach=str(blob), **{'attach-name': 'report.pdf'})
+    assert result.returncode == 0, result.stderr
+    assert json.loads(result.stdout) == dict(ids=['42:101', '42:102'])
+    (method, text), (document, form) = bot.sent
+    assert (method, text['text'], document) == ('sendMessage', 'delivered', 'sendDocument')
+    body = form['multipart']
+    assert b'filename="report.pdf"' in body and b'%PDF the report' in body
+    assert b'"message_id": 101' in body  # a reply to the text it belongs to
+
+
+def test_out_past_the_bot_limit_says_the_file_stays_on_the_host(bot, tmp_path):
+    blob = tmp_path / 'blob'
+    with blob.open('wb') as f:
+        f.truncate(50 * 2**20 + 1)
+    result = run_out(bot, tmp_path, 'delivered', attach=str(blob), **{'attach-name': 'big.bin'})
+    assert result.returncode == 0, result.stderr
+    assert [m for m, _ in bot.sent] == ['sendMessage', 'sendMessage']
+    assert bot.sent[1][1]['text'].startswith('big.bin is 50 MB, past the 50 MB')
+
+
+def test_a_channel_that_does_not_carry_files_never_sees_the_field(tmp_path, monkeypatch):
+    from brr.loom.runtime import speak as speak_mod
+    seen = {}
+
+    def fake_carries(home):
+        return {'plain': ('plain', tmp_path, frozenset()), 'files': ('files', tmp_path, frozenset({'attach'}))}
+    monkeypatch.setattr(speak_mod, 'carries', fake_carries)
+    home = Home(tmp_path, 'aaaa')
+    (tmp_path / 'blobs').mkdir()
+    sha = '0' * 64
+    (tmp_path / 'blobs' / sha).write_bytes(b'x')
+    out = tmp_path / 'out'
+    out.write_text('#!/bin/sh\ncp "$1" "$(dirname "$0")/seen-$$.md"; echo \'{"ids": [1]}\'\n')
+    out.chmod(0o755)
+
+    class Lease:
+        gen = 1
+    monkeypatch.setattr(speak_mod.LocalLeaseAuthority, 'authorize', lambda self, lease: True)
+    monkeypatch.setattr(speak_mod.LocalLeaseAuthority, 'effect_once',
+                        lambda self, lease, safe, run: run(safe, 1))
+    monkeypatch.setattr(speak_mod, 'append', lambda home, fact: fact)
+    monkeypatch.setattr(speak_mod, 'channel_parts', lambda channel, home: (channel.split(':')[1], '42'))
+    for name in ('plain', 'files'):
+        speak_mod.speak(home, Lease(), f'k-{name}', 'hi', channel=f'channel:{name}',
+                        context=dict(attach=f'{sha} x.txt'))
+        seen[name] = parse_frontmatter(next(tmp_path.glob('seen-*.md')).read_text())
+        for p in tmp_path.glob('seen-*.md'):
+            p.unlink()
+    assert 'attach' not in seen['plain']
+    assert seen['files']['attach'] == str(tmp_path / 'blobs' / sha)
+    assert seen['files']['attach-name'] == 'x.txt'
