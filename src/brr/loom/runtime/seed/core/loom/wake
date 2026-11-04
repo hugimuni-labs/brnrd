@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Wake recipe. The self owns this file; it imports nothing from brnrd.
+A live self's core/loom/wake is the source; this packaged seed follows it.
 
     core/loom/wake <thread-id> <owed.json>
 
@@ -7,15 +8,15 @@ stdout is the prompt. Exit 0 is ok, exit 3 is over budget (stderr says
 what did not fit), anything else is a broken recipe.
 
 LOOM_BUDGET_BYTES defaults to 24000. LOOM_PART is a file, written by the loom.
-When LOOM_CORE names a file, the core (identity, stance and role) is written there
+When LOOM_CORE names a file, the core (identity and stance) is written there
 and left out of stdout: a body that has a system slot carries it there, where
 automated turns and compaction do not wear it down. The budget still counts it.
 The tree is cut from the bottom, and a narrowed wake says how many entries
 were left out. Then the thread's README folds whole `## ` sections but `## Now` to their
 titles, last first, and only then is cut from its end; each cut says so: it
 is the one part the waking body can fix, so it never costs a letter. The
-identity, the stance, the role, the notes, the people in hand and the occasion are
-never cut; a person's page renders capped at PAGE_CAP, and the recent topics at
+identity, the stance, the notes, the people in hand and the occasion are never
+cut; a person's page renders capped at PAGE_CAP, and the recent topics at
 TOPICS_CAP, each with a receipt.
 """
 
@@ -102,6 +103,27 @@ def first_line(path: Path, why: str) -> str:
     return next((line for line in lines if line.strip()), "")
 
 
+def wish_line(path: Path, why: str) -> str:
+    """A thread README's wishes as `<w-id> <line>`, joined by '; '; empty without any.
+
+    The loom writes `opened-for: [w-…]` and a `wish-<id>: "<line>"` beside it, so
+    the purpose is already one sentence; the first line is often the spec's head."""
+    lines = read_exact(path, why).splitlines()
+    if not (lines and lines[0] == "---" and "---" in lines[1:]):
+        return ""
+    data = {}
+    for line in lines[1 : lines.index("---", 1)]:
+        key, sep, raw = line.partition(":")
+        if sep and key[:1] not in " \t":
+            value = raw.strip()
+            if len(value) >= 2 and value[0] == value[-1] == '"':
+                value = value[1:-1]
+            data[key.strip()] = value
+    ids = [part.strip().strip('"') for part in data.get("opened-for", "").strip("[]").split(",")]
+    return "; ".join(f"{ident} {data[f'wish-{ident}']}".strip()
+                     for ident in ids if ident and data.get(f"wish-{ident}"))
+
+
 def tree_lines(root: Path, thread: str) -> list[str]:
     rows: list[tuple[int, str, str]] = []
     times = git_times(root)
@@ -128,7 +150,10 @@ def tree_lines(root: Path, thread: str) -> list[str]:
                 and parts[2] == "notes"
             ):
                 continue
-            line = f"{posix} · {first_line(path, posix)} · {path.stat().st_size}"
+            head = ""
+            if len(parts) == 3 and parts[0] == "threads" and parts[2] == "README.md":
+                head = wish_line(path, posix)
+            line = f"{posix} · {head or first_line(path, posix)} · {path.stat().st_size}"
             rows.append((times.get(posix, 0), posix, line))
     rows.sort(key=lambda row: (-row[0], row[1]))
     return [row[2] for row in rows]
