@@ -211,17 +211,17 @@ boundary. Each claim says whether code enforces it or the design only states it.
 
   | Class | Where it is refused | State |
   |---|---|---|
-  | Force-push to a branch not the body's own | `publish` (fixed branch, no `+`); `git push` refused by `pushurl` | Enforced at the loom gate |
+  | Force-push to a branch not the body's own | `publish` (fixed branch, no `+`); `git push` refused by `pushurl`; Claude Code PreToolUse via `core/guards/never-force-push.toml` | Enforced at the loom gate and, for a Claude Code body, at the hook |
   | Merge without green | gh shim | Enforced at the wrapper |
-  | Publish (release) | gh shim, `gh release create` | Enforced at the wrapper; `twine`/`uv publish` from a body is not gated |
+  | Publish (release) | gh shim, `gh release create`; Claude Code PreToolUse via `core/guards/never-publish.toml` (`twine upload`, `uv`/`npm`/`pnpm`/`yarn publish`) | Enforced at the wrapper and, for a Claude Code body, at the hook |
   | Spend past allocation | the jack, against the thread's budget | Enforced |
-  | Delete under a home root | Claude Code PreToolUse, via `core/guards/never-*.toml` on the self's main | **No gate yet:** the refuse mode and grant exist in code, but the tomls are not seeded; trust-guards' C1e lands `core/guards/never-*.toml` on the self's main after #2615. Until then nothing refuses `rm -rf` under the home |
+  | Delete under a home root | Claude Code PreToolUse, via `core/guards/never-delete-home.toml` on the self's main (`rm -r`, `rmdir`, `git clean -f` on a path under the home, its rooms, ledger or self) | Enforced at the hook for a Claude Code body; a harness that runs no hooks has only the loom's gates |
 
   These guards catch careless acts, not clever ones. The threat they are sized
   for is a careless resident, not a determined one.
 - **The receipt check at stop** (C2,
-  [#2615](https://github.com/hugimuni-labs/brnrd/pull/2615), **draft, not
-  merged**). At stop it lists every irreversible act since the last stop that
+  [#2615](https://github.com/hugimuni-labs/brnrd/pull/2615), merged at
+  489667fb). At stop it lists every irreversible act since the last stop that
   cites no grant letter: the five classes plus settle, reincarnate and a send
   outside the thread's grant. It holds the stop until each one cites a letter or
   is written up as a miss. It is designed to work after the fact, as
@@ -462,7 +462,7 @@ backend relays, it does not run your agent.
 | Untrusted text → approval-bypassed agent with operator authority (umbrella) | Critical | via [#23](https://github.com/hugimuni-labs/brnrd/issues/23) |
 | Slack authorizes the configured channel, not individual senders | High | Use only with a channel whose full membership may drive the daemon |
 | Docker is not a credential/containment boundary | High | [#80](https://github.com/hugimuni-labs/brnrd/issues/80) |
-| Never guards catch careless destructive acts, not clever ones | Medium | The loom refuses a merge whose checks are not green and a `gh release create` at the gh shim, spend past a thread's allocation at the jack, and, once seeded, (Claude Code) destructive commands matched by `core/guards/never-*.toml` with `grant` (not yet seeded: trust-guards' C1e lands them on the self's main, so delete under a home root has no gate today); each goes through on the owner's letter stamped on the thread's wish, recorded as `guard.granted`. They catch `rm -rf` and `gh pr merge`, not `find -delete`, a script, or the forge token used directly: the threat they size is a careless resident, not a determined one. Harness line: Claude Code denies; vibe maps a deny to a block; grok's PreToolUse deny is unverified; codex runs no hooks, so it has only the loom's gates. See [The loom](#the-loom) for the class-by-class state |
+| Never guards catch careless destructive acts, not clever ones | Medium | The loom refuses a merge whose checks are not green and a `gh release create` at the gh shim, spend past a thread's allocation at the jack, and (Claude Code) destructive commands matched by the three `core/guards/never-*.toml` on the self's main (delete under a home root, force-push, package publish), each with a `grant` class; each goes through on the owner's letter stamped on the thread's wish, recorded as `guard.granted`. They catch `rm -rf` and `gh pr merge`, not `find -delete`, a script, or the forge token used directly: the threat they size is a careless resident, not a determined one. Harness line: Claude Code denies; vibe maps a deny to a block; grok's PreToolUse deny is unverified; codex runs no hooks, so it has only the loom's gates. See [The loom](#the-loom) for the class-by-class state |
 | Full-scope GitHub token handed to the agent | High | [#415](https://github.com/hugimuni-labs/brnrd/issues/415) — managed path is a repo-scoped App token since [#498](https://github.com/hugimuni-labs/brnrd/pull/498)/[#520](https://github.com/hugimuni-labs/brnrd/pull/520); the self-hosted fallback chain remains |
 
 ## Found a gap?
