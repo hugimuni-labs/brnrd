@@ -33,7 +33,6 @@ CLASSES = {
     "delete-home": "delete under a home root",
     "merge-red": "merge without green",
     "publish": "publish",
-    "budget": "spend past allocation",
 }
 
 # A letter grants a class only when it says one of these too: the target alone is a common word.
@@ -42,7 +41,6 @@ VERBS = {
     "delete-home": r"delet|remov|\brm\b|wipe|clean",
     "merge-red": r"merg",
     "publish": r"releas|publish|upload|post|tag",
-    "budget": r"rais|budget|allocat|spend|more",
 }
 
 

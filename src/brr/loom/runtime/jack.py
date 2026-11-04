@@ -595,27 +595,6 @@ def _guard_warnings(room: Path, at: str, stdin_text: str) -> tuple[str, bool]:
     return "\n".join(said + lines), not granted
 
 
-_OVER_LINE = re.compile(r"^budget: thread (\S+) has spent .* \(\+\d+%\)\. Write to (\S+): ", re.M)
-
-
-def _over_refusal(room: Path, stdin_text: str) -> tuple[str, bool] | None:
-    """Past the allocation only landing runs (spend.landing_call); the rest is refused
-    until the opener raises it. The loom renders the ``budget:`` line only when over."""
-    from .spend import landing_call, over_refusal
-    found = _OVER_LINE.search(_boundary_text(room))
-    if not found:
-        return None
-    try:
-        payload = json.loads(stdin_text) if stdin_text and stdin_text.strip() else {}
-    except json.JSONDecodeError:
-        return None
-    if not isinstance(payload, dict) or not payload.get("tool_name"):
-        return None
-    if landing_call(str(payload["tool_name"]), payload.get("tool_input"), room / "self"):
-        return None
-    return over_refusal(found.group(1), found.group(2), found.group(0)), True
-
-
 def _guard_miss(room: Path) -> str:
     """A broken path guard, as one section of the stop's block."""
     from .guards import violations
@@ -682,7 +661,7 @@ def execute(event: str, room: Path, stdin_text: str) -> str:
     if event == "pre":
         # Not a boundary: letters wait for the call's result. A delegate's
         # call is guarded too, since the act is the strand's.
-        said, refuse = _over_refusal(room, stdin_text) or _guard_warnings(room, "pre", stdin_text)
+        said, refuse = _guard_warnings(room, "pre", stdin_text)
         tooltrace.note(room, stdin_text, "pre")
         if refuse:
             # A refused call gets no post hook; its end is written here.
@@ -792,7 +771,7 @@ def execute(event: str, room: Path, stdin_text: str) -> str:
     return out
 
 
-_OVER = re.compile(r" of (\S+) tokens \(\+(\d+)%\)")
+_OVER = re.compile(r" of (\S+), \+(\d+)%\)")
 OVER_STEP = 5
 
 
