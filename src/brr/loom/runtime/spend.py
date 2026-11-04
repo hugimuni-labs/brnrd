@@ -260,7 +260,36 @@ _LANDING_COMMAND = re.compile(
     r"git(?:\s+-C\s+\S+)?\s+(?:add|commit|status|diff|log|show|rev-parse|stash\s+list)\b"
     r"|(?:\S*/)?brnrd\s+runtime\b|python3?\s+-m\s+brr\.loom\.runtime\b"
     r"|(?:cd|cat|head|tail|ls|wc|grep|rg|pwd|echo|true)\b|sed\s+-n\b)")
-_SEGMENT = re.compile(r"&&|\|\||[;|\n]")
+
+
+def _segments(command: str) -> list[str] | None:
+    """The command's parts between ``;``, ``&``, ``|`` and newlines outside quotes, so a
+    commit message's ``;`` is no separator. ``None`` for a command substitution outside
+    single quotes: what it runs is not a landing verb, whatever the part starts with."""
+    parts, part, quote, i = [], [], "", 0
+    while i < len(command):
+        char = command[i]
+        if quote != "'" and (char == "`" or command.startswith("$(", i)):
+            return None
+        if char == "\\" and quote != "'" and i + 1 < len(command):
+            part.append(command[i:i + 2])
+            i += 2
+            continue
+        if quote:
+            quote = "" if char == quote else quote
+        elif char in "'\"":
+            quote = char
+        elif char == "&" and (command[i - 1:i] in "<>" and i or command[i + 1:i + 2] == ">"):
+            pass  # a redirect (``2>&1``, ``&>``), not a separator
+        elif char in ";&|\n":
+            parts.append("".join(part))
+            part = []
+            i += 1
+            continue
+        part.append(char)
+        i += 1
+    parts.append("".join(part))
+    return parts
 
 
 def landing_call(tool: str, tool_input, self_dir) -> bool:
@@ -278,8 +307,9 @@ def landing_call(tool: str, tool_input, self_dir) -> bool:
             return False
     if tool == "Bash":
         command = str(tool_input.get("command") or "")
-        parts = [part.strip() for part in _SEGMENT.split(command)]
-        return bool(command.strip()) and all(not part or _LANDING_COMMAND.match(part) for part in parts)
+        parts = _segments(command)
+        return parts is not None and bool(command.strip()) and all(
+            not part.strip() or _LANDING_COMMAND.match(part.strip()) for part in parts)
     return False
 
 

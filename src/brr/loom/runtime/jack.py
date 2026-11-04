@@ -639,6 +639,12 @@ def _kept_miss(room: Path) -> str:
         "Leave what is the person's; the loom reports it after an hour:\n") + "\n".join(lines)) if lines else ""
 
 
+def _receipt_miss(room: Path) -> str:
+    """This gen's channel sends that cite nothing (cites.py)."""
+    from .cites import section
+    return section(room)
+
+
 def _known_miss(room: Path) -> str:
     """A known folder this body touched: a nudge to tidy or note it, once per folder (library.known_nudge)."""
     from .library import known_nudge
@@ -825,7 +831,8 @@ def _stop_block(room: Path, text: str, plan: str) -> str:
 
     Each miss is a section with its exact command: owed letters, a left in
     room, wishes whose left moved, an end not yet said, a broken guard, a
-    kept folder's writes, a known folder touched. The block comes back whole at
+    kept folder's writes, an irreversible act with no receipt, a known
+    folder touched. The block comes back whole at
     every stop after a call until it is empty. A stop again with no call and
     the same misses passes: a body that has read the list and cannot clear it
     is never trapped; the wishes asked about become ``left.asked`` facts then,
@@ -845,6 +852,7 @@ def _stop_block(room: Path, text: str, plan: str) -> str:
         _end_miss(room, plan),
         _guard_miss(room),
         _kept_miss(room),
+        _receipt_miss(room),
     ]
     sections = [section for section in sections if section]
     state = _state(room)

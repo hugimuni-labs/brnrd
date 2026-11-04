@@ -917,7 +917,7 @@ def _carried(home, facts, stamped, re, target, sender) -> list:
     return out
 
 
-def write_reincarnate(room: Path, why: str, *, fresh: bool = False) -> str:
+def write_reincarnate(room: Path, why: str, *, fresh: bool = False, cites: str | None = None) -> str:
     """``reincarnate``: hand the seat to a successor."""
     if not why:
         raise PortError("reincarnate: --why is empty")
@@ -933,6 +933,9 @@ def write_reincarnate(room: Path, why: str, *, fresh: bool = False) -> str:
     thread = sender_threads(facts).get(strand)
     if thread is None:
         raise PortError("reincarnate: room has no thread")
+    if cites:
+        from .cites import check_cite
+        check_cite(facts, cites, thread)
     from .wishes import owed_lefts, wishes
     owed = owed_lefts(wishes(facts), facts, thread, strand)
     if owed:
@@ -960,6 +963,8 @@ def write_reincarnate(room: Path, why: str, *, fresh: bool = False) -> str:
     fields = {"kind": "reincarnate", "id": fact_id, "why": why}
     if fresh:
         fields["fresh"] = "true"
+    if cites:
+        fields["cites"] = cites
     write_port(room, stem, _front(fields))
     write_send(room, to=f"thread:{thread}", sender=strand,
                body="Fresh reincarnation: start from main." if fresh else why, reincarnate=fact_id)
@@ -1141,7 +1146,8 @@ def fact_from_port(fm: dict[str, str], strand: str, gen: int | None,
             raise PortError(f"reincarnate {fact_id} has no why")
         return Fact(
             kind="reincarnate", by=f"strand:{strand}", id=fact_id,
-            data={"strand": strand, "gen": gen, "why": fm["why"], **({"fresh": True} if fm.get("fresh") == "true" else {})},
+            data={"strand": strand, "gen": gen, "why": fm["why"], **({"fresh": True} if fm.get("fresh") == "true" else {}),
+                  **({"cites": fm["cites"]} if fm.get("cites") else {})},
         )
     if kind == "face":
         from .faces import face_of
