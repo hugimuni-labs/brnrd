@@ -9,8 +9,12 @@ a search pattern. The append is one write and never raises: a lost line
 costs nothing, a slowed or failed hook costs the body. The file rotates to
 ``tools.jsonl.1`` past ``CAP`` bytes, so a room holds at most twice that.
 
+A start carries ``w`` when the call produces (an edit, a commit, a letter);
+an end carries ``out``, the bytes the call brought back. ``reads`` folds the
+two into the gauge's reads before a body's first line.
+
 ``read`` pairs the lines into calls and ``live`` says what is open now. A
-codex body runs no tool hooks; both read its rollout log instead.
+codex body runs no tool hooks; all three read its rollout log instead.
 """
 
 from __future__ import annotations
@@ -46,6 +50,11 @@ _USERPASS_RE = re.compile(r"(?<!\S)((?:-u|--user)(?:=|\s*)(?:'[^':]*:|\"[^\":]*:
 # plugin. A quoted value is masked whole, quotes kept.
 _SHORT_P_RE = re.compile(r"(?<!\S)(-p\s*)(?:(['\"])(?:(?!\2).)*\2|(?![\d:]+(?:\s|$)|[-/.~$]|no:)[^\s/'\"]+(?=\s|$))")
 _SENTENCE_RE = re.compile(r"(?<=[.!?:])\s")
+_PRODUCE_TOOLS = frozenset({"Edit", "MultiEdit", "Write", "NotebookEdit", "apply_patch"})
+_VERBS = r"(?:send-self|send|publish|wish|ask|settle)\b"
+_PRODUCE_RE = re.compile(
+    r"(?:[A-Za-z_][A-Za-z0-9_]*=\S*\s+)*(?:git(?:\s+-C\s+\S+)?\s+commit\b"
+    rf"|(?:\S*/)?brnrd\s+runtime\s+{_VERBS}|python3?\s+-m\s+brr\.loom\.runtime\s+{_VERBS})")
 
 
 def _path(room: Path) -> Path:
@@ -99,6 +108,31 @@ def cmd_of(command: object) -> str:
     return _cap(_masked(head), CMD_MAX)
 
 
+def produces(tool: str, given: object) -> bool:
+    """A call that leaves a line: a file written, a commit, a letter or a wish moved.
+
+    The whole command is read, not ``cmd``: a room's commands open with a long
+    ``cd`` and a commit past the cut would read as a read.
+    """
+    if tool in _PRODUCE_TOOLS:
+        return True
+    command = given.get("command") if isinstance(given, dict) else None
+    if tool not in ("Bash", "exec", "exec_command", "shell") or not isinstance(command, (str, list)):
+        return False
+    if isinstance(command, list):
+        command = " ".join(str(part) for part in command)
+    from .spend import _segments
+    parts = _segments(command) or [command]
+    return any(_PRODUCE_RE.match(part.strip()) for part in parts)
+
+
+def _size(value: object) -> int:
+    if value is None:
+        return 0
+    text = value if isinstance(value, str) else json.dumps(value, ensure_ascii=False, default=str)
+    return len(text.encode("utf-8", errors="replace"))
+
+
 def _sentence(text: str) -> str:
     text = " ".join(text.split())
     return _cap(_masked(_SENTENCE_RE.split(text, 1)[0]), SAY_MAX) if text else ""
@@ -143,6 +177,8 @@ def note(room: Path, stdin_text: str, phase: str = "post") -> None:
                 row["cmd"] = cmd_of(given.get("command"))
             if isinstance(payload.get("agent_id"), str):
                 row["by"] = payload["agent_id"][:40]
+            if produces(tool, given):
+                row["w"] = 1
             try:
                 said = _said(payload.get("transcript_path"))
                 last = path.with_suffix(".say")
@@ -154,6 +190,8 @@ def note(room: Path, stdin_text: str, phase: str = "post") -> None:
         else:
             if isinstance(payload.get("duration_ms"), (int, float)):
                 row["ms"] = int(payload["duration_ms"])
+            if "tool_response" in payload:
+                row["out"] = _size(payload["tool_response"])
             if phase == "refused" or payload.get("hook_event_name") == "PostToolUseFailure":
                 row["failed"] = 1
         line = json.dumps(row, ensure_ascii=False, separators=(",", ":")) + "\n"
@@ -174,13 +212,15 @@ def note(room: Path, stdin_text: str, phase: str = "post") -> None:
 def _call(at: float, row: dict) -> dict:
     return {"at": at, "end": None, "ms": None, "tool": str(row.get("tool", "")), "arg": str(row.get("arg", "")),
             "cmd": str(row.get("cmd", "")), "say": str(row.get("say", "")), "by": str(row.get("by", "")),
-            "failed": False}
+            "failed": False, "w": bool(row.get("w")), "out": None}
 
 
 def _close(call: dict, at: float, row: dict) -> None:
     ms = row.get("ms")
     call.update(end=at, ms=int(ms) if isinstance(ms, (int, float)) else round((at - call["at"]) * 1000),
                 failed=bool(row.get("failed")))
+    if isinstance(row.get("out"), int):
+        call["out"] = row["out"]
 
 
 def _hooked(room: Path, tail: int = 0) -> list[dict]:
@@ -276,13 +316,14 @@ def _stamp(text: object) -> float | None:
         return None
 
 
-def _codex_cmd(name: str, given: object) -> str:
+def _codex_command(name: str, given: object) -> str:
+    """The whole command a codex call ran, unmasked: for ``produces``, never stored."""
     if isinstance(given, str) and name == "exec":
         found = _CMD_RE.search(given)
         if not found:
             return ""
         quoted = found[1] if found[1] is not None else found[2]
-        return cmd_of(re.sub(r"\\(.)", lambda m: {"n": "\n", "t": "\t"}.get(m[1], m[1]), quoted))
+        return re.sub(r"\\(.)", lambda m: {"n": "\n", "t": "\t"}.get(m[1], m[1]), quoted)
     if isinstance(given, str):
         try:
             given = json.loads(given)
@@ -292,8 +333,13 @@ def _codex_cmd(name: str, given: object) -> str:
         command = given.get("cmd") or given.get("command")
         if isinstance(command, list):
             command = " ".join(map(str, command))
-        return cmd_of(command)
+        return command if isinstance(command, str) else ""
     return ""
+
+
+def _codex_cmd(name: str, given: object) -> str:
+    command = _codex_command(name, given)
+    return cmd_of(command) if command else ""
 
 
 def _codex_step(state: dict, record: dict) -> None:
@@ -324,7 +370,9 @@ def _codex_step(state: dict, record: dict) -> None:
                 running.update(end=None, ms=None)
                 state["open"][ident] = running
                 return
-        call = _call(at, {"tool": name, "cmd": _codex_cmd(name, given)})
+        command = _codex_command(name, given)
+        call = _call(at, {"tool": name, "cmd": cmd_of(command) if command else "",
+                          "w": produces(name, {"command": command}) if command else name in _PRODUCE_TOOLS})
         if state.pop("said", False):
             call["say"] = state["say"]
         state["calls"].append(call)
@@ -333,7 +381,7 @@ def _codex_step(state: dict, record: dict) -> None:
         call = state["open"].pop(ident, None)
         if call is None:
             return
-        _close(call, at, {})
+        _close(call, at, {"out": (call["out"] or 0) + _size(payload.get("output"))})
         cell = _CELL_RE.search(json.dumps(payload.get("output"))[:2000])
         if cell:
             state["cells"][cell[1]] = call
@@ -376,11 +424,31 @@ def _calls(room: Path, tail: int = 0) -> tuple[list[dict], str]:
 def read(room: Path, since: float = 0.0, limit: int = 500) -> list[dict]:
     """The room's last ``limit`` calls still running or ended after ``since``, oldest first.
 
-    Each is ``{at, end, ms, tool, arg, cmd, say, by, failed}``: ``at`` is its
-    start, ``end`` is None while it runs.
+    Each is ``{at, end, ms, tool, arg, cmd, say, by, failed, w, out}``: ``at``
+    is its start, ``end`` is None while it runs.
     """
     rows = [dict(c) for c in _calls(room)[0] if c["end"] is None or c["end"] > since]
     return rows[-limit:] if limit else rows
+
+
+def reads(room: Path, since: float) -> dict | None:
+    """What a body read before its first line, from the calls started at or after ``since``.
+
+    ``before`` counts the calls before the first that produces, and
+    ``before_bytes`` what they brought back; ``first_s`` is the seconds from
+    ``since`` to that call, None when the body made none. Bytes are None when
+    no call carried them (a trace from before ``out``). None: no calls traced.
+    """
+    calls = [c for c in _calls(room)[0] if c["at"] >= since]
+    if not calls:
+        return None
+    first = next((i for i, c in enumerate(calls) if c["w"]), None)
+    before = calls if first is None else calls[:first]
+    sized = any(c["out"] is not None for c in calls)
+    return {"calls": len(calls), "before": len(before),
+            "before_bytes": sum(c["out"] or 0 for c in before) if sized else None,
+            "bytes": sum(c["out"] or 0 for c in calls) if sized else None,
+            "first_s": None if first is None else round(calls[first]["at"] - since)}
 
 
 def live(room: Path) -> dict:

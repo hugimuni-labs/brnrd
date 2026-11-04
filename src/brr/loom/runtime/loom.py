@@ -291,7 +291,8 @@ class WakeFailure(SelfError):
 def _run_recipe(clone, thread, owed_path, part_path, repo_file, core_path, recipe=None):
     with tempfile.TemporaryFile(mode="w+") as wake, tempfile.TemporaryFile(mode="w+") as why:
         code = run_wake(clone, thread, owed_path, loom_part=part_path, repos=repo_file,
-                        core=core_path, stdout=wake, stderr=why, recipe=recipe)
+                        core=core_path, stdout=wake, stderr=why, recipe=recipe,
+                        sizes=core_path.with_name("sizes.json"))
         wake.seek(0)
         why.seek(0)
         return code, wake.read(), why.read().strip()
@@ -352,9 +353,10 @@ def _build_wake(home, strand, gen, clone, thread, rows, part, owed_path, part_pa
             else:
                 high = mid - 1
         if best is not None:
-            mid, text, (code, occasion, why) = best
-            atomic_write(owed_path, json.dumps(rows[:mid]))
-            atomic_write(part_path, text)
+            mid, text, _ = best
+            # The search's last run may have failed, and a run unlinks the core
+            # and sizes files it would write: the best fit is run again, last.
+            code, occasion, why = attempt(rows[:mid], text, recipe)
             _log(home, f"start {strand}: the wake carries {mid} of {len(rows)} owed letters; "
                        "the rest arrive at the first boundary")
             record(home, WAKE_FALLBACK, strand, gen, "letters", {
@@ -367,6 +369,18 @@ def _build_wake(home, strand, gen, clone, thread, rows, part, owed_path, part_pa
                           _oversized_letters(clone, thread, owed_path, part_path, repo_file,
                                              recipe=recipe))
     return occasion
+
+
+def _record_sizes(home, room, strand, gen, thread):
+    """``wake.sizes``, the wake gauge's fact for this boot; a failure costs the fact, never the wake."""
+    try:
+        sizes = json.loads((room / "port" / "sizes.json").read_text())
+        _record(home, "wake.sizes", {
+            "thread": thread, "strand": strand, "gen": gen,
+            "budget": int(os.environ.get("LOOM_BUDGET_BYTES") or 24000),
+            "total": int(sizes["total"]), "parts": dict(sizes["parts"])}, f"wake.sizes:{strand}:{gen}")
+    except Exception as exc:  # noqa: BLE001
+        _log(home, f"start {strand}: wake sizes not recorded ({exc})")
 
 
 def _deferred_line(rest, total):
@@ -710,6 +724,7 @@ def _prepare(home: Home, strand: str, thread: str, gen: int,
     # compaction do not wear it down. wake.md stays whole, so a body that
     # reads only BRNRD_WAKE never loses it. An older recipe writes no core.
     core = core_path.read_text() if core_path.is_file() else ""
+    _record_sizes(home, room, strand, gen, thread)
     atomic_write(core_path, core)
     atomic_write(room / "port" / "occasion.md", occasion)
     atomic_write(room / "port" / "wake.md", core + occasion)
@@ -1247,6 +1262,17 @@ def _home_streak(facts, thread: str, gen: int) -> int:
     return start
 
 
+def _reads(room, start):
+    """What this gen read before its first line (``tooltrace.reads``); None without a start or a trace."""
+    if start is None:
+        return None
+    try:
+        from . import tooltrace
+        return tooltrace.reads(room, datetime.fromisoformat(start.at).timestamp())
+    except Exception:  # noqa: BLE001 - the gauge never costs the attempt's end
+        return None
+
+
 def _end_attempt(home, facts, strand, thread, gen, code, letters, cause, failure="",
                  failure_origin="", failure_letters=(), repair_thread=None,
                  await_repair=True):
@@ -1270,6 +1296,7 @@ def _end_attempt(home, facts, strand, thread, gen, code, letters, cause, failure
     from .usage import fuel
     changed = _readme(room, thread) != start.data.get("readme") if start else "unknown"
     tank = fuel(home, start.data["shell"]) if start else ""
+    reads = _reads(room, start)
     dispositions = []
     writers = sender_threads(facts)
     channels = reply_channels(facts, home)
@@ -1373,6 +1400,7 @@ def _end_attempt(home, facts, strand, thread, gen, code, letters, cause, failure
         "evidence": {"tail": tail, "readme_changed": changed, "fuel": tank,
                      **({"home_failure": True} if cause == "failed" and failure_origin == "home" else {}),
                      **({"self_revision": retry_revision} if retry_revision else {}),
+                     **({"reads": reads} if reads else {}),
                      **({"unpublished": left} if left else {}),
                      **({"kept": kept} if kept else {}),
                      **({"why": stopped_why} if cause == "stopped" else {})},
