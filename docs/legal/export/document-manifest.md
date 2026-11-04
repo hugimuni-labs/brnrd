@@ -13,7 +13,7 @@ Hash snapshot:
 
 - Date: 2026-11-04
 - Source revision (parent of this export-only change):
-  `5c27201b4030ad6618f70c8541cd0667c0f396ae`
+  `8ef8811b03d804ab803d568c16493b20661c041d`
 - Algorithm: SHA-256 over raw repository file bytes
 - Machine-readable list: [`SHA256SUMS`](SHA256SUMS)
 - Verification from the repository root:
@@ -47,7 +47,7 @@ hashes below remain authoritative for the snapshot if a deployed page changes.
 | Sub-processor list | [`src/frontend/src/routes/sub-processors/+page.svelte`](../../../src/frontend/src/routes/sub-processors/+page.svelte) | `4e0f5df17271fcc32fb4ab677b4ff499a6493a0cab0a68a49fcdfd702230fb75` |
 | Data Processing Agreement | [`docs/legal/dpa.md`](../dpa.md) | `ee366853701826282da0326092fc4ff504aab99f726e6dfcf234f4d9854f43fd` |
 | Article 30 record of processing | [`docs/legal/art-30-record.md`](../art-30-record.md) | `84d3186f7cf3263cf67d5377aca4d6a94fc56facf0416710cfc0390abb4c446f` |
-| Driven data-flow and trust inventory | [`SECURITY.md`](../../../SECURITY.md) | `2318d61897a105581e04c1d9c4d8a7893bc1906d3829b115e4e23a278dbe7eec` |
+| Driven data-flow and trust inventory | [`SECURITY.md`](../../../SECURITY.md) | `45952280550d89a2834be03da9e109d448b64e240ab68e4cd1aaf96147d0574c` |
 | Pricing and offer page | [`src/frontend/src/routes/pricing/+page.svelte`](../../../src/frontend/src/routes/pricing/+page.svelte) | `bbbe96d6db93ed6a875ddb4e6ce6849734de6cbc96414853479e97c9eb2c2e3d` |
 | MIT license | [`LICENSE`](../../../LICENSE) | `3101d42b24f94e634de450ea11eca86b144900590896948376f67936acf02d92` |
 | License boundary overview | [`LICENSE-OVERVIEW.md`](../../../LICENSE-OVERVIEW.md) | `37ed3bb589c5b2a46bcb4a674548d49d433efdda573c003332f7c13405ada0d8` |
