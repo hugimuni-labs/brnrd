@@ -699,3 +699,58 @@ def test_fat_topics_are_capped_with_a_receipt(tmp_path: Path) -> None:
 def test_no_dated_topic_no_topics_section(tmp_path: Path) -> None:
     out = _topics_wake(tmp_path, {"plain.md": "# plain\n\nNothing dated.\n"})
     assert "## Topics\n" not in out
+
+
+def _fixture_home_wake(tmp_path: Path) -> str:
+    """A fixture home with a wished thread, a person's page, a topic and a person's letter."""
+    home = tmp_path / "home"
+    assert cli(["init", "--home", str(home), "--person", "arseni"]).returncode == 0
+    self_dir = home / "self"
+    write_thread(self_dir, "w-1", "The w-1 headline")
+    folder = self_dir / "threads" / "w-2"
+    folder.mkdir(parents=True)
+    (folder / "README.md").write_text(
+        "---\nid: w-2\nstatus: open\ntense: plan\nopened-for: [w-abc123]\n"
+        'wish-w-abc123: "A new home wakes like a live one"\n---\n# The w-2 spec head\n\nThe page.\n',
+        encoding="utf-8",
+    )
+    (self_dir / "people" / "arseni" / "page.md").write_text(PAGE, encoding="utf-8")
+    (self_dir / "topics").mkdir(exist_ok=True)
+    (self_dir / "topics" / "wake.md").write_text("# wake\n\n### 2026-11-02 · the-wake-entry-61\n", encoding="utf-8")
+    commit(self_dir, "fixture home")
+    clone = selfrepo.room(home, "s1")
+    owed = tmp_path / "owed.json"
+    owed.write_text(json.dumps([{"id": "p-arseni/ab12", "from": "person:arseni", "body": "letter-body-42\n"}]),
+                    encoding="utf-8")
+    result = wake(clone, "w-1", owed)
+    assert result.returncode == 0, result.stderr
+    return result.stdout
+
+
+def test_the_seed_wakes_a_fixture_home_with_the_live_selfs_tail(tmp_path: Path) -> None:
+    # A live self's core/loom/wake renders this tail for this home; the seed follows it.
+    out = _fixture_home_wake(tmp_path)
+    tail = out[out.index("## People\n"):]
+    assert tail == (
+        "## People\n"
+        "### arseni\n"
+        "just do:\n- Merge on green [9903]\n"
+        "ask first:\n- Act as him [p6o5]\n"
+        "never:\n- Delete loom-home [inbox]\n"
+        "between us, latest: 11-03: newest-line-77 [10176]\n"
+        "whole page: people/arseni/page.md\n"
+        "## Topics\n"
+        "topics/wake.md · 2026-11-02 · the-wake-entry-61\n"
+        "## Loom\n"
+        "loom part goes here verbatim\n"
+        "## Occasion\n"
+        "### p-arseni/ab12 from person:arseni · reply -\n"
+        "letter-body-42\n"
+    )
+
+
+def test_the_tree_names_a_thread_by_its_wish(tmp_path: Path) -> None:
+    tree = _fixture_home_wake(tmp_path).split("## Tree\n", 1)[1]
+    assert "threads/w-2/README.md · w-abc123 A new home wakes like a live one · " in tree
+    # A README without a wish still shows its first line.
+    assert "threads/inbox/README.md · # Letters with no thread yet · " in tree
