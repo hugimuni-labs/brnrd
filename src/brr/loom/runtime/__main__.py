@@ -31,6 +31,7 @@ VERBS = {
     "send-self": ("verbs_merge", "main"),
     "publish": ("publish", "main"),
     "forge-token": ("gates", "main"),
+    "guard": ("grants", "main"),
     "reap": ("reap", "main"),
     "merge-driver": ("merge_driver", "main"),
 }
@@ -60,6 +61,7 @@ SUMMARY = {
     "init": "create a home and its self",
     "wake": "print the wake a room's body would get",
     "forge-token": "print the forge token bodies use",
+    "guard": "whether the owner's letter grants an act a never guard refuses (loom machinery)",
     "reap": "remove a finished strand's room",
     "loom": "the loom process itself (loom machinery)",
     "jack": "a body's hook (loom machinery)",

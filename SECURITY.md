@@ -368,6 +368,7 @@ backend relays, it does not run your agent.
 | Untrusted text → approval-bypassed agent with operator authority (umbrella) | Critical | via [#23](https://github.com/hugimuni-labs/brnrd/issues/23) |
 | Slack authorizes the configured channel, not individual senders | High | Use only with a channel whose full membership may drive the daemon |
 | Docker is not a credential/containment boundary | High | [#80](https://github.com/hugimuni-labs/brnrd/issues/80) |
+| Never guards catch careless destructive acts, not clever ones | Medium | The loom refuses a merge whose checks are not green and a `gh release create` at the gh shim, spend past a thread's allocation at the jack, and (Claude Code) destructive commands matched by `core/guards/*.toml` with `grant`; each goes through on the owner's letter stamped on the thread's wish, recorded as `guard.granted`. They catch `rm -rf` and `gh pr merge`, not `find -delete`, a script, or the forge token used directly: the threat they size is a careless resident, not a determined one. Harness line: Claude Code denies; vibe maps a deny to a block; grok's PreToolUse deny is unverified; codex runs no hooks, so it has only the loom's gates. Tracked by the self's w-jngqgvvk832f |
 | Full-scope GitHub token handed to the agent | High | [#415](https://github.com/hugimuni-labs/brnrd/issues/415) — managed path is a repo-scoped App token since [#498](https://github.com/hugimuni-labs/brnrd/pull/498)/[#520](https://github.com/hugimuni-labs/brnrd/pull/520); the self-hosted fallback chain remains |
 
 ## Found a gap?
