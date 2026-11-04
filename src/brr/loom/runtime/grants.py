@@ -109,11 +109,11 @@ def refusal(cls: str, target: str, why: str, owner: set[str]) -> str:
             f"override: a letter from {who} naming {target} and the act, stamped on the wish it serves.")
 
 
-def record(home, strand: str, thread: str, cls: str, target: str, grant: Grant) -> Fact:
+def record(home, strand: str, gen: int | None, thread: str, cls: str, target: str, grant: Grant) -> Fact:
     from .ledger import append
     from .home import mint
     return append(home, Fact(kind="guard.granted", by=f"strand:{strand}", id="guard.granted:" + mint(12),
-                             data={"strand": strand, "thread": thread, "class": cls, "target": target,
+                             data={"strand": strand, "gen": gen, "thread": thread, "class": cls, "target": target,
                                    "letter": grant.letter, "wish": grant.wish}))
 
 
@@ -137,10 +137,12 @@ def judge(room: Path, asks: list[tuple[str, str] | None], why: str = "") -> tupl
     missing = [ask for ask, grant in found.items() if grant is None]
     if missing:
         return False, [refusal(cls, target, why, owner) for cls, target in missing]
+    from .publish import _gen
     strand = strand_of_room(room)
+    gen = _gen(facts, strand)
     lines = []
     for (cls, target), grant in found.items():
-        record(home, strand, thread, cls, target, grant)
+        record(home, strand, gen, thread, cls, target, grant)
         lines.append(f"granted: {CLASSES[cls]} ({target}) by {grant.letter} on {grant.wish}")
     return True, lines
 
@@ -148,10 +150,9 @@ def judge(room: Path, asks: list[tuple[str, str] | None], why: str = "") -> tupl
 def main(argv: list[str]) -> int:
     """``guard <class> <target>``: a gate's question (the gh shim's), answered by exit code.
     0 and the grant on stdout; 1 and the refusal on stderr."""
-    import argparse
     import sys
-    from .verbs_loom import _room
-    parser = argparse.ArgumentParser(prog="brnrd runtime guard")
+    from .verbs_loom import Parser, _room
+    parser = Parser(verb="guard", prog="brnrd runtime guard")
     parser.add_argument("cls", choices=sorted(CLASSES))
     parser.add_argument("target")
     parser.add_argument("--why", default="")
