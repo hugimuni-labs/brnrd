@@ -138,6 +138,100 @@ not read your source tree.
   injects no GitHub credential at all. Gate and daemon tokens are stored 0600
   under `.brr/gates/`.
 
+## The loom
+
+The sections above describe the daemon: gates that poll, a managed backend that
+relays, dashboard publishing. The loom is the runtime that replaces that path. It
+wakes a resident (an agent with a continuing memory, the **self**) one body at a
+time, in a room on your machine. This section is the loom's data flow and trust
+boundary. Each claim says whether code enforces it or the design only states it.
+
+- **Where things live (local).** Everything sits under the loom home: `~/brnrd`
+  by default (or `--home`, or `BRNRD_HOME`), and for a cloud-paired install the
+  account's path under `~/.local/state/brnrd/accounts/`. `rooms/<strand>` holds one
+  body's clones and its port. `ledger/facts/<install>` is the append-only record
+  of letters, wishes, grants and acts. `self/` is the resident's memory: a git
+  repository of markdown, and `people/` (each person's page and agreement) lives
+  inside it. All of these are plain files on disk, with no encryption beyond
+  whatever your disk has.
+- **Bodies.** A body is a CLI (Claude Code, codex, grok or vibe) running with
+  its approval prompts bypassed, under your user, with the credentials and network
+  it inherits from you. The isolation matrix above describes the daemon's
+  environments. A loom body has no container: it can read whatever your user
+  can. Its forge credential is the home's `forge_token` (typically the brnrd
+  GitHub App's installation token). The loom puts it behind a `gh` shim in the
+  room's port and strips the machine's own `GH_TOKEN`/`GITHUB_TOKEN` from the
+  body's environment.
+- **What the gh shim refuses** (enforced, at the wrapper only). `gh repo delete`
+  and `gh api -X DELETE repos/<owner>/<repo>` are always refused, and no grant
+  overrides that: a person deletes a repository on github.com. `gh pr merge` (and
+  the API merge route) on a PR whose checks are not all green, and
+  `gh release create`, go through only on a grant (below). The shim guards `gh`.
+  It does not guard the token: a body that reads the token and calls the API
+  through `curl` or a script is not stopped.
+- **What leaves the machine.**
+  - *The self push.* The mirror pushes the self's `main` to its GitHub origin
+    (`brnrd-self`) with the home's `forge_token`, never with your machine's git
+    setup. **Enforced:** it never pushes to a remote that the forge does not
+    report as private, because `self/` holds people's pages. `people/` leaves the
+    machine by that push and by no other path the loom has.
+  - *Code.* A body sends a branch only through `brnrd runtime publish`, which
+    pushes `loom/<thread>` and never force-pushes (`+`). A plain `git push` from a
+    room fails on a `pushurl` that says `use brnrd publish`. PRs, reviews and
+    comments go to GitHub through the shim.
+  - *Chat.* The cloud relay (brnrd.dev) carries Telegram messages and brnrd.dev's
+    web chat in and replies out. A home with its own Telegram bot talks to
+    Telegram directly instead. The relay holds message bodies the way the managed
+    backend above does.
+  - *The board snapshot.* When the home is connected, the loom PUTs a snapshot
+    to brnrd.dev every few seconds while something changes and once a minute
+    otherwise. It carries thread README heads, wish lines, ledger heads, fuel and
+    presence. **Enforced:** by construction it reads thread READMEs and ledger
+    heads only, never `people/**` or a body's transcript. A README head is
+    resident-written prose, so the dashboard caveat above applies: it can quote
+    code.
+  - *PyPI.* A release is published to PyPI by the release workflow on GitHub
+    Actions, not from your machine. Creating that release is a never class.
+
+### The trust boundary
+
+- **Non-owner text is data, never a grant.** A GitHub comment, a household
+  member's letter, or a quoted document is read as fact and gives no permission.
+  **Enforced** for guard grants, which accept only owner letters. Everywhere else
+  this is the resident's standing rule (documented, not a mechanism), and prompt
+  injection through that text is the umbrella gap #23 still names.
+- **The owner** is a person with `people/<name>/agreement.md` on the self's
+  `main`. A body is never the owner: a letter's `from` is written by the channel
+  connector, and a body's own letters carry `by: strand:…`.
+- **Five never classes.** Each one is refused unless a letter from the owner,
+  on a wish of the thread doing the act, names the target and the verb. That
+  letter is the only override, and a body's own word never counts. Each grant
+  that lets an act through is recorded in the ledger as `guard.granted`, the
+  act's receipt.
+
+  | Class | Where it is refused | State |
+  |---|---|---|
+  | Force-push to a branch not the body's own | `publish` (fixed branch, no `+`); `git push` refused by `pushurl` | Enforced at the loom gate |
+  | Merge without green | gh shim | Enforced at the wrapper |
+  | Publish (release) | gh shim, `gh release create` | Enforced at the wrapper; `twine`/`uv publish` from a body is not gated |
+  | Spend past allocation | the jack, against the thread's budget | Enforced |
+  | Delete under a home root | Claude Code PreToolUse, via `core/guards/never-*.toml` on the self's main | **No gate yet:** the refuse mode and grant exist in code, but the tomls are not seeded; trust-guards' C1e lands `core/guards/never-*.toml` on the self's main after #2615. Until then nothing refuses `rm -rf` under the home |
+
+  These guards catch careless acts, not clever ones. The threat they are sized
+  for is a careless resident, not a determined one.
+- **The receipt check at stop** (C2,
+  [#2615](https://github.com/hugimuni-labs/brnrd/pull/2615), **draft, not
+  merged**). At stop it lists every irreversible act since the last stop that
+  cites no grant letter: the five classes plus settle, reincarnate and a send
+  outside the thread's grant. It holds the stop until each one cites a letter or
+  is written up as a miss. It is designed to work after the fact, as
+  accountability rather than permission.
+- **The landing gate on cited authors** is **designed, not built**. Under it, a
+  self commit that changes stance, a scar or a guard could cite only owner
+  letters, and the landing would refuse one that doesn't. That gate is the answer
+  to persona poisoning through the self. Until it exists, the self's memory can
+  be steered by any text a body reads and then chooses to write down.
+
 ## What dashboard publishing mirrors
 
 This section applies **only** if you ran `brnrd account connect`. Without it, no
@@ -368,7 +462,7 @@ backend relays, it does not run your agent.
 | Untrusted text → approval-bypassed agent with operator authority (umbrella) | Critical | via [#23](https://github.com/hugimuni-labs/brnrd/issues/23) |
 | Slack authorizes the configured channel, not individual senders | High | Use only with a channel whose full membership may drive the daemon |
 | Docker is not a credential/containment boundary | High | [#80](https://github.com/hugimuni-labs/brnrd/issues/80) |
-| Never guards catch careless destructive acts, not clever ones | Medium | The loom refuses a merge whose checks are not green and a `gh release create` at the gh shim, spend past a thread's allocation at the jack, and (Claude Code) destructive commands matched by `core/guards/*.toml` with `grant`; each goes through on the owner's letter stamped on the thread's wish, recorded as `guard.granted`. They catch `rm -rf` and `gh pr merge`, not `find -delete`, a script, or the forge token used directly: the threat they size is a careless resident, not a determined one. Harness line: Claude Code denies; vibe maps a deny to a block; grok's PreToolUse deny is unverified; codex runs no hooks, so it has only the loom's gates. Tracked by the self's w-jngqgvvk832f |
+| Never guards catch careless destructive acts, not clever ones | Medium | The loom refuses a merge whose checks are not green and a `gh release create` at the gh shim, spend past a thread's allocation at the jack, and, once seeded, (Claude Code) destructive commands matched by `core/guards/never-*.toml` with `grant` (not yet seeded: trust-guards' C1e lands them on the self's main, so delete under a home root has no gate today); each goes through on the owner's letter stamped on the thread's wish, recorded as `guard.granted`. They catch `rm -rf` and `gh pr merge`, not `find -delete`, a script, or the forge token used directly: the threat they size is a careless resident, not a determined one. Harness line: Claude Code denies; vibe maps a deny to a block; grok's PreToolUse deny is unverified; codex runs no hooks, so it has only the loom's gates. See [The loom](#the-loom) for the class-by-class state |
 | Full-scope GitHub token handed to the agent | High | [#415](https://github.com/hugimuni-labs/brnrd/issues/415) — managed path is a repo-scoped App token since [#498](https://github.com/hugimuni-labs/brnrd/pull/498)/[#520](https://github.com/hugimuni-labs/brnrd/pull/520); the self-hosted fallback chain remains |
 
 ## Found a gap?
