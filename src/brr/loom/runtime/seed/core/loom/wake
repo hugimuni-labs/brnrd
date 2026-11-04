@@ -15,7 +15,8 @@ were left out. Then the thread's README folds whole `## ` sections but `## Now` 
 titles, last first, and only then is cut from its end; each cut says so: it
 is the one part the waking body can fix, so it never costs a letter. The
 identity, the stance, the role, the notes, the people in hand and the occasion are
-never cut; a person's page renders capped at PAGE_CAP, with a receipt.
+never cut; a person's page renders capped at PAGE_CAP, and the recent topics at
+TOPICS_CAP, each with a receipt.
 """
 
 from __future__ import annotations
@@ -297,6 +298,55 @@ def people_block(root: Path, owed: Path) -> str:
     return section("People", "".join(ensure_nl(row) for row in rows)) if rows else ""
 
 
+TOPICS_SHOWN = 10
+TOPICS_CAP = 1200
+TITLE_CUT = 80
+
+
+def topic_newest(text: str) -> tuple[str, str]:
+    """A topic page's newest ``### YYYY-MM-DD · title`` entry as (date, title), its
+    links dropped; the first listed wins a tie. ``("", "")`` without a dated entry."""
+    best = ("", "")
+    for line in text.splitlines():
+        if not line.startswith("### "):
+            continue
+        date, sep, rest = line[4:].partition(" · ")
+        if not (sep and len(date) == 10 and date[4] == date[7] == "-"
+                and date.replace("-", "").isdigit()):
+            continue
+        title = rest.split(" · [", 1)[0].strip()
+        if title and date > best[0]:
+            best = (date, title)
+    return best
+
+
+def topics_block(root: Path) -> str:
+    """The ``TOPICS_SHOWN`` topic pages with the newest dated entry, newest first, ties by
+    name: ``<page> · <date> · <title>``, the title copied and cut at ``TITLE_CUT``. The
+    section is capped at ``TOPICS_CAP`` with a receipt; a page with no entry has no line."""
+    folder = root / "topics"
+    found = []
+    for page in sorted(folder.glob("*.md")) if folder.is_dir() else ():
+        if page.name == "README.md" or page.is_symlink() or not page.is_file():
+            continue
+        rel = f"topics/{page.name}"
+        date, title = topic_newest(read_exact(page, rel))
+        if date:
+            if len(title) > TITLE_CUT:
+                title = title[: TITLE_CUT - 1].rstrip() + "\u2026"
+            found.append((date, rel, title))
+    found.sort(key=lambda item: (-int(item[0].replace("-", "")), item[1]))
+    block = "".join(f"{rel} · {date} · {title}\n" for date, rel, title in found[:TOPICS_SHOWN])
+    if not block:
+        return ""
+    size = len(block.encode("utf-8"))
+    if size > TOPICS_CAP:
+        note = f"[the wake cut this section's render at {TOPICS_CAP} of {size} bytes; topics/ is whole on disk]\n"
+        kept = block.encode("utf-8")[: TOPICS_CAP - len(note.encode("utf-8"))].decode("utf-8", "ignore")
+        block = kept[: kept.rfind("\n") + 1] + note
+    return section("Topics", block)
+
+
 def fixed_text(root: Path, thread: str, loom: str, owed: Path, excess: int = 0, limit: int = 0) -> tuple[str, str]:
     """The parts never cut, as (before the tree, after the tree).
 
@@ -315,7 +365,7 @@ def fixed_text(root: Path, thread: str, loom: str, owed: Path, excess: int = 0, 
         section(f"threads/{thread}/README.md", readme),
         notes_block(root, thread),
     ]
-    return "".join(parts), people_block(root, owed) + section("Loom", loom) + occasion(owed)
+    return "".join(parts), people_block(root, owed) + topics_block(root) + section("Loom", loom) + occasion(owed)
 
 
 def piece_sizes(text: str) -> list[tuple[str, int]]:

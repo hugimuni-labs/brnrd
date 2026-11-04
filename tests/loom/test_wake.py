@@ -638,3 +638,64 @@ def test_no_page_no_people_section(tmp_path: Path) -> None:
     result = wake(clone, "w-1", owed)
     assert result.returncode == 0, result.stderr
     assert "## People\n" not in result.stdout
+
+
+def _topics_wake(tmp_path: Path, pages: dict[str, str]) -> str:
+    home = tmp_path / "home"
+    assert cli(["init", "--home", str(home), "--person", "arseni"]).returncode == 0
+    self_dir = home / "self"
+    write_thread(self_dir, "w-1", "The w-1 headline")
+    folder = self_dir / "topics"
+    folder.mkdir(exist_ok=True)
+    for name, text in pages.items():
+        (folder / name).write_text(text, encoding="utf-8")
+    commit(self_dir, "topics")
+    clone = selfrepo.room(home, "s1")
+    owed = tmp_path / "owed.json"
+    owed.write_text(json.dumps([{"id": "s-1/x", "from": "s-1", "body": "go\n"}]), encoding="utf-8")
+    result = wake(clone, "w-1", owed)
+    assert result.returncode == 0, result.stderr
+    return result.stdout
+
+
+def _topics(out: str) -> str:
+    return out.split("## Topics\n", 1)[1].split("## Loom\n", 1)[0]
+
+
+def test_the_wake_shows_each_topic_pages_newest_entry_newest_first(tmp_path: Path) -> None:
+    out = _topics_wake(tmp_path, {
+        "README.md": "# Topics\n\n### 2026-12-01 · not-a-topic-31\n",
+        "alpha.md": ("# alpha\n\n### 2026-10-28 · older-alpha-12 · [t](../threads/t/README.md)\n\n"
+                     "### 2026-11-02 · newest-alpha-34 · [t](../threads/t/README.md) · [u](../threads/u/README.md)\n"),
+        "beta.md": "# beta\n\n### 2026-11-02 · beta-tie-56\n",
+        "gamma.md": "# gamma\n\n### 2026-11-03 · gamma-" + "y" * 120 + "\n",
+        "empty.md": "# empty\n\nNo dated entry, only prose.\n### not a date · undated-78\n",
+    })
+    topics = _topics(out)
+    assert topics.splitlines() == [
+        "topics/gamma.md · 2026-11-03 · gamma-" + "y" * 73 + "…",
+        "topics/alpha.md · 2026-11-02 · newest-alpha-34",
+        "topics/beta.md · 2026-11-02 · beta-tie-56",
+    ]
+    assert "older-alpha-12" not in out and "not-a-topic-31" not in out and "undated-78" not in out
+    assert out.index("## Topics\n") < out.index("## Loom\n") < out.index("## Occasion\n")
+
+
+def test_eleven_topic_pages_show_ten(tmp_path: Path) -> None:
+    pages = {f"t{i:02}.md": f"# t{i:02}\n\n### 2026-10-{i + 1:02} · entry-{i:02}\n" for i in range(11)}
+    topics = _topics(_topics_wake(tmp_path, pages)).splitlines()
+    assert topics == [f"topics/t{i:02}.md · 2026-10-{i + 1:02} · entry-{i:02}" for i in range(10, 0, -1)]
+
+
+def test_fat_topics_are_capped_with_a_receipt(tmp_path: Path) -> None:
+    pages = {f"a-long-topic-page-name-{i:02}.md": f"# t\n\n### 2026-10-{i + 1:02} · entry-{i:02}-" + "z" * 90 + "\n"
+             for i in range(10)}
+    topics = _topics(_topics_wake(tmp_path, pages))
+    assert len(topics.encode("utf-8")) <= 1200
+    assert topics.startswith("topics/a-long-topic-page-name-09.md · 2026-10-10 · entry-09-")
+    assert topics.endswith("bytes; topics/ is whole on disk]\n")
+
+
+def test_no_dated_topic_no_topics_section(tmp_path: Path) -> None:
+    out = _topics_wake(tmp_path, {"plain.md": "# plain\n\nNothing dated.\n"})
+    assert "## Topics\n" not in out
