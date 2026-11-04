@@ -539,13 +539,15 @@ def _check_grant(home, to: str, sender: str, opening: str | None, note, reincarn
     from .ledger import read_facts
     from .lifecycle import read_thread
     from .project import sender_threads
+    from .spend import door
     thread = thread_of(to)
     opener = str(read_thread(home, thread).get("opened-by", ""))
+    hears = door(home, opener) if opener.startswith("thread:") else None
     mine = sender_threads(read_facts(home)).get(sender)
-    if not mine or opener != f"thread:{mine}":
+    if not mine or mine != hears:
         raise PortError(
-            f"send: --budget raises thread {thread}'s allocation, and only its opener "
-            f"({opener or 'none'}) may: ask it by letter")
+            f"send: --budget raises thread {thread}'s allocation, and only "
+            f"{f'thread:{hears}' if hears else 'its opener (none)'} may: ask it by letter")
 
 
 OPEN_NEEDS_WISH = ('send: opening a thread needs the wish behind it: '

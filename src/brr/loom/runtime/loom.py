@@ -729,7 +729,7 @@ def _prepare(home: Home, strand: str, thread: str, gen: int,
                         face=proposal_line(propose(facts, strand, gen, thread)),
                         left=_left(facts, thread, strand),
                         **_pull(home, facts, thread, strand, room),
-                        **_budget(home, thread, facts)),
+                        **_budget(home, thread, facts, strand)),
     )
     return room
 
@@ -1145,19 +1145,43 @@ def _reply_context(facts, thread: str, letters, room: Path | None = None) -> dic
     return dict(letter_replies(facts))
 
 
-def _budget(home: Home, thread: str, facts) -> dict[str, str]:
-    """``spent/allocation`` for the status line, and the warning once past it."""
+def _budget(home: Home, thread: str, facts, strand: str | None = None) -> dict[str, str]:
+    """``spent/allocation`` for the status line, and the fact once past it."""
+    over = _over(home, thread, facts, strand)
+    return {"budget": over["budget"], "over": over["line"]} if over else {}
+
+
+def _over(home: Home, thread: str, facts, strand: str | None) -> dict:
     from .config import load_config
     from .lifecycle import read_thread
-    from .spend import allocation, budget_text, over_line, thread_spent
+    from .spend import allocation, body_spent, budget_text, door, over_line, thread_spent
     spent = thread_spent(home, facts, thread)
     if spent is None:
         return {}
     opener = str(read_thread(home, thread).get("opened-by", ""))
+    hears = door(home, opener) if opener.startswith("thread:") else None
     allocated = allocation(facts, thread, opener, sender_threads(facts),
-                           int(load_config(home.root).thread_budget)) if opener.startswith("thread:") else None
-    over = over_line(thread, opener, spent, allocated) if allocated and spent > allocated else ""
-    return {"budget": budget_text(spent, allocated), "over": over}
+                           int(load_config(home.root).thread_budget), hears) if hears else None
+    out = {"budget": budget_text(spent, allocated), "line": "", "spent": spent,
+           "allocated": allocated, "door": hears, "boot": None}
+    if allocated and spent > allocated:
+        shell = next((str(lease.data.get("shell")) for lease in reversed(list(kind_facts(facts, "lease")))
+                      if lease.kind == "lease" and lease.data.get("strand") == strand), "") if strand else ""
+        body, out["boot"] = body_spent(home.room(strand), shell) if shell else (None, None)
+        out["line"] = over_line(thread, hears, spent, allocated, body, out["boot"])
+    return out
+
+
+def _over_notice(home: Home, facts, thread: str, strand: str) -> None:
+    """At the crossing the door hears it once per allocation: a raise then a new breach is news."""
+    from .spend import over_notice
+    try:
+        over = _over(home, thread, facts, strand)
+    except Exception:  # noqa: BLE001 - a lost notice costs a letter, never the boundary
+        return
+    if over.get("line"):
+        what, can = over_notice(thread, over["spent"], over["allocated"], over["boot"])
+        notice(home, facts, "over", f"{thread}:{over['allocated']}", what, can, thread=over["door"])
 
 
 def _release(home, facts, strand, thread, gen):
@@ -1790,6 +1814,7 @@ def _rendered(facts, key, render):
 
 
 def _boundary(home, facts, strand, gen, context):
+    _over_notice(home, facts, context.thread, strand)
     if isinstance(facts, LedgerView):
         # The view is replaced on repair and only appended to otherwise; a
         # renewal is the one append no boundary reads.
@@ -1829,7 +1854,7 @@ def _render_boundary(home, facts, strand, gen, context):
         idle=_idle_acts(home, facts, strand, context, proposal, opened),
         left=_left(facts, context.thread, strand),
         **_pull(home, facts, context.thread, strand, home.room(strand)),
-        **_budget(home, context.thread, facts),
+        **_budget(home, context.thread, facts, strand),
     )
     return text
 

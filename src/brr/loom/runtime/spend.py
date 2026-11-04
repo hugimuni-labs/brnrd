@@ -49,7 +49,7 @@ class _Reader:
     """One file read forward from where the last tick stopped."""
 
     def __init__(self):
-        self.offset, self.total, self.seen = 0, 0.0, set()
+        self.offset, self.total, self.seen, self.first = 0, 0.0, set(), None
 
 
 _FILES: dict[Path, _Reader] = {}
@@ -87,10 +87,13 @@ def _claude_rows(path: Path) -> float:
             continue
         if key:
             reader.seen.add(key)
-        reader.total += sum(WEIGHTS[name] * float(usage.get(field) or 0) for name, field in (
+        weighted = sum(WEIGHTS[name] * float(usage.get(field) or 0) for name, field in (
             ("input", "input_tokens"), ("output", "output_tokens"),
             ("cache_read", "cache_read_input_tokens"),
             ("cache_creation", "cache_creation_input_tokens")))
+        reader.total += weighted
+        if reader.first is None:
+            reader.first = weighted
     return reader.total
 
 
@@ -199,33 +202,33 @@ def thread_spent(home, facts, thread: str) -> int | None:
     return value
 
 
-def allocation(facts, thread: str, opener: str, writers: dict[str, str], default: int) -> int | None:
+def allocation(facts, thread: str, opener: str, writers: dict[str, str], default: int,
+               door: str | None = None) -> int | None:
     """The opening letter's ``budget`` (or ``default``), plus each later grant.
 
     Only a thread opened by another thread has one: it is the parent a
-    strand returns to. A grant counts only from a strand of that parent, so
-    a body cannot raise its own by writing a port file.
+    strand returns to. A grant counts only from a strand of that parent or
+    of its ``door``, so a body cannot raise its own by writing a port file.
     """
     if not opener.startswith("thread:"):
         return None
-    key = (id(facts), thread, len(facts), opener, default)
+    key = (id(facts), thread, len(facts), opener, default, door)
     if key not in _ALLOCATED:
         _ALLOCATED.clear()
-        _ALLOCATED[key] = _allocation(facts, thread, opener, writers, default)
+        _ALLOCATED[key] = _allocation(facts, thread, {opener.removeprefix("thread:"), door}, writers, default)
     return _ALLOCATED[key]
 
 
 _ALLOCATED: dict[tuple, int] = {}
 
 
-def _allocation(facts, thread, opener, writers, default) -> int:
-    parent = opener.removeprefix("thread:")
+def _allocation(facts, thread, parents, writers, default) -> int:
     total, first = None, True
     for letter in kind_facts(facts, "letter"):
         if letter.kind != "letter" or letter.data.get("to") != f"thread:{thread}":
             continue
         grant = letter.data.get("budget")
-        from_parent = writers.get(str(letter.data.get("from"))) == parent
+        from_parent = writers.get(str(letter.data.get("from"))) in parents
         if first:
             first = False
             total = int(grant) if from_parent and isinstance(grant, int) and grant > 0 else default
@@ -241,82 +244,62 @@ def budget_text(spent: int | None, allocated: int | None) -> str:
     return f"spent {format_tokens(spent)}" + (f"/{format_tokens(allocated)}" if allocated else "")
 
 
-def over_line(thread: str, opener: str, spent: int, allocated: int) -> str:
-    """The warning a strand past its allocation reads at the crossing and every +5% (jack ``_over``)."""
-    over = (spent - allocated) * 100 // allocated
-    return (f"budget: thread {thread} has spent {format_tokens(spent)} of {format_tokens(allocated)} tokens (+{over}%). "
-            f"Write to {opener}: what is done, what is left, and how much more you ask. "
-            f"Its answer raises the allocation with `send --to thread:{thread} --budget <n>`. "
-            "Past it, only landing runs: reads, edits under self/, git add/commit, `brnrd runtime …`.")
+def door(home, opener: str) -> str:
+    """The thread that hears a breach and may raise it: the opener when a body can
+    run there, else the home thread. A ``for:`` naming another loom (or prose) is
+    never run here, so a letter there reaches nobody (brnrd#2619)."""
+    from .config import load_config
+    from .router import readme_for
+    thread = opener.removeprefix("thread:")
+    if opener.startswith("thread:") and home.routable(thread):
+        target = readme_for(home, thread)
+        if not target or target == load_config(home.root).name:
+            return thread
+    return home.main_thread()
 
 
-# Past the allocation a body may still land what it did (trust-guards, inbox's i1jbi):
-# reads, the self's files, git's recording verbs and the loom's own verbs. Everything
-# else is refused until the opener raises the allocation.
-LANDING_TOOLS = frozenset({"Read", "Glob", "Grep", "LS", "TodoWrite", "ToolSearch"})
-_FILE_TOOLS = frozenset({"Edit", "MultiEdit", "Write", "NotebookEdit"})
-_LANDING_COMMAND = re.compile(
-    r"(?:[A-Za-z_][A-Za-z0-9_]*=\S*\s+)*(?:"
-    r"git(?:\s+-C\s+\S+)?\s+(?:add|commit|status|diff|log|show|rev-parse|stash\s+list)\b"
-    r"|(?:\S*/)?brnrd\s+runtime\b|python3?\s+-m\s+brr\.loom\.runtime\b"
-    r"|(?:cd|cat|head|tail|ls|wc|grep|rg|pwd|echo|true)\b|sed\s+-n\b)")
-
-
-def _segments(command: str) -> list[str] | None:
-    """The command's parts between ``;``, ``&``, ``|`` and newlines outside quotes, so a
-    commit message's ``;`` is no separator. ``None`` for a command substitution outside
-    single quotes: what it runs is not a landing verb, whatever the part starts with."""
-    parts, part, quote, i = [], [], "", 0
-    while i < len(command):
-        char = command[i]
-        if quote != "'" and (char == "`" or command.startswith("$(", i)):
-            return None
-        if char == "\\" and quote != "'" and i + 1 < len(command):
-            part.append(command[i:i + 2])
-            i += 2
-            continue
-        if quote:
-            quote = "" if char == quote else quote
-        elif char in "'\"":
-            quote = char
-        elif char == "&" and (command[i - 1:i] in "<>" and i or command[i + 1:i + 2] == ">"):
-            pass  # a redirect (``2>&1``, ``&>``), not a separator
-        elif char in ";&|\n":
-            parts.append("".join(part))
-            part = []
-            i += 1
-            continue
-        part.append(char)
-        i += 1
-    parts.append("".join(part))
-    return parts
-
-
-def landing_call(tool: str, tool_input, self_dir) -> bool:
-    """True when a call over budget is part of landing, not of more work."""
-    if tool in LANDING_TOOLS:
-        return True
-    if not isinstance(tool_input, dict):
-        return False
-    if tool in _FILE_TOOLS:
-        path = str(tool_input.get("file_path") or tool_input.get("notebook_path") or "")
+def body_spent(room: Path, shell: str) -> tuple[int | None, int | None]:
+    """``(this body, its boot)``: the newest session's weighted total, and its first
+    message's (the wake read in, before the first act). None where unknown."""
+    if shell == "codex":
         try:
-            Path(path).resolve().relative_to(Path(self_dir).resolve())
-            return True
-        except (ValueError, OSError):
-            return False
-    if tool == "Bash":
-        command = str(tool_input.get("command") or "")
-        parts = _segments(command)
-        return parts is not None and bool(command.strip()) and all(
-            not part.strip() or _LANDING_COMMAND.match(part.strip()) for part in parts)
-    return False
+            text = (Path(room) / "port" / "body.log").read_text(errors="replace")
+        except OSError:
+            return None, None
+        idents = re.findall(r'"type":"thread\.started","thread_id":"([0-9a-f-]+)"', text)
+        path = _ROLLOUTS.get(idents[-1]) if idents else None
+        return (int(_codex_total(path)), None) if path else (None, None)
+    if shell != "claude":
+        return None, None
+    folder = claude_projects() / re.sub(r"[^A-Za-z0-9]", "-", str(Path(room).resolve() / "self"))
+    try:
+        session = max(folder.glob("*.jsonl"), key=lambda path: path.stat().st_mtime)
+    except (ValueError, OSError):
+        return None, None
+    total = _claude_rows(session) + sum(_claude_rows(path) for path in folder.glob(f"{session.stem}/subagents/*.jsonl"))
+    first = _FILES[session].first
+    return int(total), None if first is None else int(first)
 
 
-def over_refusal(thread: str, opener: str, line: str) -> str:
-    """The budget refusal: what, that nothing raised it, the override, and what stays open."""
-    spent = line.partition(" has spent ")[2].partition(" tokens")[0]
-    return (f"refused: spend past allocation (thread {thread} has spent {spent} tokens); "
-            f"no `send --budget` from {opener} raises it.\n"
-            f"override: {opener} raises it with `send --to thread:{thread} --budget <n>`; write to it what is done and left.\n"
-            "still open: reads, edits under self/, git add/commit/status/diff/log, `brnrd runtime …` (send-self, send, wish).")
+def over_line(thread: str, door: str, spent: int, allocated: int,
+              body: int | None = None, boot: int | None = None) -> str:
+    """The fact a strand past its allocation reads at the crossing and every +5% (jack ``_over``).
+    Nothing is refused: the boot already spent what a refusal would save (his 10224, 10228)."""
+    over = (spent - allocated) * 100 // allocated
+    this = ("; this body " + format_tokens(body) + (f", its boot {format_tokens(boot)}" if boot else "")) if body else ""
+    return (f"budget: thread {thread} is over its allocation by {format_tokens(spent - allocated)} "
+            f"({format_tokens(spent)} of {format_tokens(allocated)}, +{over}%){this}. "
+            f"thread:{door} has the notice and decides a raise; you go on.")
+
+
+def over_notice(thread: str, spent: int, allocated: int, boot: int | None) -> tuple[str, str]:
+    """The opener's notice at the crossing: what and how a raise is sized, then the act."""
+    size = ""
+    if boot:
+        boots = 1_000_000 // boot
+        size = f" A boot there costs about {format_tokens(boot)}" + (
+            f": 1M more is about {boots} boot{'s' * (boots != 1)}." if boots else ".")
+    return (f"thread {thread} is over its allocation by {format_tokens(spent - allocated)} "
+            f"({format_tokens(spent)} of {format_tokens(allocated)}).{size} "
+            "Read what it spent against what came back.",
+            f'raise with `send --to thread:{thread} --budget <n> "…"`, or settle it')
