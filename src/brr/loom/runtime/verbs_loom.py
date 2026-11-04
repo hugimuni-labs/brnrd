@@ -185,12 +185,13 @@ def _reincarnate(argv: list[str]) -> int:
     parser.add_argument("--room")
     parser.add_argument("--why", required=True)
     parser.add_argument("--fresh", action="store_true")
+    parser.add_argument("--cites", metavar="LETTER_ID", help="the letter on this thread it answers: its receipt")
     args = parser.parse_args(argv)
     room = _room(args.room)
     try:
         if not args.fresh:
             sys.stderr.write(_stakes(room))
-        fact_id = write_reincarnate(room, args.why, fresh=args.fresh)
+        fact_id = write_reincarnate(room, args.why, fresh=args.fresh, cites=args.cites)
     except (PortError, SelfError, ValueError, OSError) as exc:
         return refuse("reincarnate", exc)
     sys.stdout.write(fact_id + "\n")
@@ -270,10 +271,11 @@ def _settle(argv: list[str]) -> int:
     parser.add_argument("--retire", action="store_true")
     parser.add_argument("--hand-to")
     parser.add_argument("--word", metavar="LETTER_ID")
+    parser.add_argument("--cites", metavar="LETTER_ID", help="the letter on this thread it answers: its receipt")
     args = parser.parse_args(argv)
     try:
         room = _room(args.room)
-        settle(room, args.thread, args.why, args.retire, args.hand_to, args.word)
+        settle(room, args.thread, args.why, args.retire, args.hand_to, args.word, args.cites)
     except (PortError, SelfError, ValueError, OSError) as exc:
         return refuse("settle", exc)
     from .jack import declare

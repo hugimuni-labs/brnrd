@@ -175,7 +175,7 @@ def open_thread(room: Path, thread: str, sender: str, text: str,
 
 
 def settle(room: Path, thread: str, why: str, retire: bool = False,
-           hand_to: str | None = None, word: str | None = None) -> None:
+           hand_to: str | None = None, word: str | None = None, cites: str | None = None) -> None:
     if not why.strip():
         raise PortError("settle: --why is empty")
     home = home_of_room(room)
@@ -194,6 +194,9 @@ def settle(room: Path, thread: str, why: str, retire: bool = False,
     from .wishes import wishes
 
     facts = read_facts(home)
+    if cites:
+        from .cites import check_cite
+        check_cite(facts, cites, thread)
     mine = [w for w in wishes(facts).values() if w.thread == thread]
     in_hand = sorted(w.id for w in mine if w.state in {"heard", "read", "granting"})
     if opener != f"thread:{own}" and in_hand:
@@ -233,7 +236,7 @@ def settle(room: Path, thread: str, why: str, retire: bool = False,
         append(home, fact)
     for stamp in handed:
         append(home, stamp)
-    land_status(room, thread, "retired" if retire else "settled", f"settle {thread}: {why}")
+    land_status(room, thread, "retired" if retire else "settled", f"settle {thread}: {why}" + (f" (cites {cites})" if cites else ""))
 
 
 IN_HAND = frozenset({"heard", "read", "scoped", "granting"})
