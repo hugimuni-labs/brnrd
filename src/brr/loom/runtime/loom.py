@@ -42,6 +42,7 @@ from .project import projection_cache, fold, generation, is_notice, reply_channe
 from .owners import active_owners, letters_for, letter_owners
 from .lifecycle import main_snapshot
 from .timers import observe_due
+from .collectors import observe_collectors
 from .conditions import observe_conditions
 from .waits import Watcher, forge_wants, observe_waits
 from .selfrepo import (
@@ -418,7 +419,7 @@ def notice(home: Home, facts: list[Fact], kind: str, subject: str, what: str, ca
            thread: str | None = None, about: Fact | None = None, stands: bool = False,
            taint: bool = False, channel: str | None = None,
            source_strand: str | None = None, passive: bool = False,
-           draft_only: bool = False, supersedes=False) -> bool | Fact:
+           draft_only: bool = False, supersedes=False, links=()) -> bool | Fact:
     """The one writer of loom notices: what the loom cannot settle, a body is told.
 
     A notice is an owed letter from ``loom``, so it is shown at every
@@ -442,6 +443,9 @@ def notice(home: Home, facts: list[Fact], kind: str, subject: str, what: str, ca
                   "to": channel or f"thread:{thread if home.routable(thread) else home.main_thread()}"}
     if passive:
         data["notice"] = True
+    if links:
+        # What the letter raises: a reply to it answers each linked ask.
+        data["links"] = list(links)
     if about is not None:
         data["about"] = str(about.data["id"])
         label = join(label, _sender_label(about, facts, home.root / "self", frozenset()))
@@ -2273,6 +2277,8 @@ def tick_once(home: Home, bodies: dict[str, Body], adapter: str, core: str,
                               pace=_turn_pace(home, facts, router.config))
         # The tick's sweeps as conditions: each firing told once, to its seat or a cond: park.
         facts = observe_conditions(home, facts, router.armed())
+        # A fuel collector's error is an ask to the person, with the act that fixes it.
+        facts = observe_collectors(home, facts, router.armed())
         if watcher is not None:
             from .comments import claims, observe_comments
             from .receipts import receipts
