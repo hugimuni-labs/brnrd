@@ -200,3 +200,27 @@ def test_redirect_cannot_forward_bearer_key(tmp_path, monkeypatch, _no_grok_usag
         server.shutdown()
         server.server_close()
         worker.join(timeout=2)
+
+
+@pytest.fixture
+def live_billing_2026_11_05():
+    """capture_usage_raw, verbatim; Grok 1.0.77 /usage showed 10% used."""
+    return '''{"config":{"currentPeriod":{"type":"USAGE_PERIOD_TYPE_WEEKLY","start":"2026-11-02T11:59:55.857848+00:00","end":"2026-11-09T11:59:55.857848+00:00"},"creditUsagePercent":10.0,"onDemandCap":{"val":0},"onDemandUsed":{"val":0},"productUsage":[{"product":"GrokBuild","usagePercent":10.0},{"product":"GrokChat"}],"isUnifiedBillingUser":true,"prepaidBalance":{"val":0},"topUpMethod":"TOP_UP_METHOD_SAVED_PAYMENT_METHOD","billingPeriodStart":"2026-11-02T11:59:55.857848+00:00","billingPeriodEnd":"2026-11-09T11:59:55.857848+00:00"}}'''
+
+
+def test_live_unified_billing_matches_cli_weekly_limit(live_billing_2026_11_05):
+    levels = grok_usage.parse_billing(live_billing_2026_11_05)
+    assert levels["week_used_percentage"] == 10
+    assert levels["quota"]["buckets"]["week"]["remaining_percentage"] == 90
+    assert levels["week_reset"] == "2026-11-09T11:59:55.857848+00:00"
+
+
+def test_monetary_only_billing_cannot_supply_weekly_quota(live_billing_2026_11_05, monkeypatch):
+    data = json.loads(live_billing_2026_11_05)
+    del data["config"]["creditUsagePercent"]
+    del data["config"]["productUsage"]
+    monkeypatch.setattr(grok_usage, "capture_usage_raw", lambda **kw: json.dumps(data))
+    levels = grok_usage.capture_levels()
+    assert levels["error"] == "grok billing response has no valid usage percentage"
+    assert "quota" not in levels
+    assert "week_used_percentage" not in levels
