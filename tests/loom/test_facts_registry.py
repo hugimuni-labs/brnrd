@@ -155,7 +155,7 @@ def test_a_live_run_writes_only_facts_the_registry_accepts(tmp_path, capsys):
             data = {k: v for k, v in f.data.items() if k not in {"strand", "gen", "dispositions", "evidence", "repos"}}
             print(f"{f.kind:18} {f.by:10} {data}")
     assert [f.kind for f in mine if KINDS[f.kind].resource != "letter"] == [
-        "lease", "body.started", "body.leaving", "body.stopped", "body.exited",
+        "lease", "wake.sizes", "body.started", "body.leaving", "body.stopped", "body.exited",
         "attempt.ended", "port.drained", "released"]
     # Every declared kind in the whole ledger, the opener's and the open resources' too.
     assert [(f.id, problems(f)) for f in facts if f.kind in KINDS and problems(f)] == []

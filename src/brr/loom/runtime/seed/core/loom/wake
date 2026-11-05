@@ -17,7 +17,8 @@ titles, last first, and only then is cut from its end; each cut says so: it
 is the one part the waking body can fix, so it never costs a letter. The
 identity, the stance, the notes, the people in hand and the occasion are never
 cut; a person's page renders capped at PAGE_CAP, and the recent topics at
-TOPICS_CAP, each with a receipt.
+TOPICS_CAP, each with a receipt. When LOOM_SIZES names a file, the bytes of
+each part the recipe printed are written there as JSON, for the wake gauge.
 """
 
 from __future__ import annotations
@@ -377,6 +378,17 @@ def fixed_text(root: Path, thread: str, loom: str, owed: Path, excess: int = 0, 
 
     The occasion goes last: it is what this wake is for.
     """
+    return split(fixed_parts(root, thread, loom, owed, excess, limit))
+
+
+def split(parts: dict[str, str]) -> tuple[str, str]:
+    """(before the tree, after the tree)."""
+    head = parts["core"] + parts["readme"] + parts["notes"]
+    return head, parts["people"] + parts["topics"] + parts["loom"] + parts["occasion"]
+
+
+def fixed_parts(root: Path, thread: str, loom: str, owed: Path, excess: int = 0, limit: int = 0) -> dict[str, str]:
+    """The fixed parts by name, in wake order; ``LOOM_SIZES`` reports them."""
     readme_path = root / "threads" / thread / "README.md"
     readme = read_exact(readme_path, f"threads/{thread}/README.md")
     if excess:
@@ -385,12 +397,25 @@ def fixed_text(root: Path, thread: str, loom: str, owed: Path, excess: int = 0, 
         rest = excess - (size - len(readme.encode("utf-8")))
         if rest > 0:
             readme = clip(readme, rest, limit) or readme
-    parts = [
-        core_text(root),
-        section(f"threads/{thread}/README.md", readme),
-        notes_block(root, thread),
-    ]
-    return "".join(parts), people_block(root, owed) + topics_block(root) + section("Loom", loom) + occasion(owed)
+    return {
+        "core": core_text(root),
+        "readme": section(f"threads/{thread}/README.md", readme),
+        "notes": notes_block(root, thread),
+        "people": people_block(root, owed),
+        "topics": topics_block(root),
+        "loom": section("Loom", loom),
+        "occasion": occasion(owed),
+    }
+
+
+def write_sizes(parts: dict[str, str], tree: str) -> None:
+    """Bytes per part to ``LOOM_SIZES``, when the loom names a file: the wake gauge's input."""
+    target = os.environ.get("LOOM_SIZES")
+    if not target:
+        return
+    sizes = {name: len(text.encode("utf-8")) for name, text in parts.items()}
+    sizes["tree"] = len(tree.encode("utf-8"))
+    Path(target).write_text(json.dumps(sizes), encoding="utf-8")
 
 
 def piece_sizes(text: str) -> list[tuple[str, int]]:
@@ -464,12 +489,12 @@ def main() -> None:
                 loom += "\n"
             loom += extra
     root = Path.cwd()
-    head, tail = fixed_text(root, thread, loom, owed)
-    fixed = head + tail
-    total = len(fixed.encode("utf-8"))
+    parts = fixed_parts(root, thread, loom, owed)
+    total = sum(len(text.encode("utf-8")) for text in parts.values())
     if total > limit:
-        head, tail = fixed_text(root, thread, loom, owed, total - limit, limit)
-        fixed = head + tail
+        parts = fixed_parts(root, thread, loom, owed, total - limit, limit)
+    head, tail = split(parts)
+    fixed = head + tail
     total = len(fixed.encode("utf-8"))
     if total > limit:
         sizes = sorted(piece_sizes(fixed), key=lambda item: -item[1])
@@ -480,7 +505,9 @@ def main() -> None:
             f"core/identity.md, memory/stance.md and the letters are never cut.",
             3,
         )
-    out = head + fit_tree(fixed, tree_lines(root, thread), limit) + tail
+    tree = fit_tree(fixed, tree_lines(root, thread), limit)
+    out = head + tree + tail
+    write_sizes(parts, tree)
     core = os.environ.get("LOOM_CORE")
     if core:
         text = core_text(root)
