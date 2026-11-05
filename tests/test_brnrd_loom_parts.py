@@ -51,11 +51,29 @@ def test_pushed_parts_read_back_for_their_account(client):
     assert index.headers["etag"] == '"h-index"'
     assert client.get("/v1/loom/index", headers={"If-None-Match": '"h-index"'}).status_code == 304
     assert client.get("/v1/loom/beads").json() == {"items": []}
+    assert client.get("/v1/loom/beads", params={"since": "b0"}).json() == {"items": []}
     thread = client.get("/v1/loom/thread/web-main").json()
     assert [row["id"] for row in thread["letters"]] == [row["id"] for row in LETTERS]
     older = client.get("/v1/loom/thread/web-main", params={"before": "letter:3"}).json()
     assert [row["id"] for row in older["letters"]] == ["letter:0", "letter:1", "letter:2"]
     assert client.get("/v1/loom/thread/nope").status_code == 404
+
+
+def test_beads_since_reads_the_index_delta(client):
+    """GET /v1/loom/beads?since=<hash> is the index's last patch, so a letter does not refetch the part."""
+    headers, session = _account(client)
+    relay = _relay_token(client, headers, _repo(client, headers))
+    delta = {"since": "b0", "hash": "b1", "set": {"letter:new": [None, "person", "p-ada", "t", "hi"]}, "drop": []}
+    parts = {
+        "index": {"v": 1, "threads": [], "parts": {"beads": "b1"}, "beads_delta": delta},
+        "beads": {"letter:old": [None, "person", "p-ada", "t", "old"], "letter:new": delta["set"]["letter:new"]},
+    }
+    assert _push(client, relay, parts=parts, hashes={"index": "h-index", "beads": "b1"}).status_code == 200
+    _signed_in(client, session)
+    assert client.get("/v1/loom/beads", params={"since": "b0"}).json() == delta
+    assert client.get("/v1/loom/beads", params={"since": "b1"}).json() == {
+        "since": "b1", "hash": "b1", "set": {}, "drop": [],
+    }
 
 
 def test_a_second_account_sees_none_of_the_parts(client):

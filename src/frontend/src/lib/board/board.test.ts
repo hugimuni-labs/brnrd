@@ -8,8 +8,8 @@ import { pipOn, stages, stageWord } from './stages.ts';
 import { answered, stack, verdictLetter } from './calls.ts';
 import { inboxCards, ledger, threadWishes, unechoed } from './ledger.ts';
 import { bar, beats, liveOf, withTools } from './tape.ts';
-import { ancestors, children, moved, Store, type Beads } from './parts.ts';
-import { face, moves, seen } from './rail.ts';
+import { ancestors, children, moved, patchBeads, Store, type Beads } from './parts.ts';
+import { face, moves, seen, waitOf } from './rail.ts';
 import { stamps } from './stamps.ts';
 
 const L = (id: string, at: string, o: Partial<Letter> = {}): Letter => ({
@@ -364,8 +364,87 @@ test('beads: the chain walks up to the source; children hang below oldest first'
 	deepEqual(ancestors(b, 'loop'), []);
 });
 
+test('beads: a delta patches the held map; drop removes', () => {
+	const held: Beads = {
+		a: [null, 'person', 'person:ada', '1', 'ask'],
+		gone: [null, 'person', 'person:ada', '0', 'old']
+	};
+	deepEqual(
+		patchBeads(held, {
+			since: 'b1',
+			hash: 'b2',
+			set: { b: ['a', 're', 's', '2', 'on it'] },
+			drop: ['gone']
+		}),
+		{
+			a: held.a,
+			b: ['a', 're', 's', '2', 'on it']
+		}
+	);
+});
+
+test('parts: beads patch from the index delta, a letter does not refetch the part', async () => {
+	const row: Beads[string] = [null, 'person', 'person:ada', '1', 'ask'];
+	let beads: Beads = { a: row };
+	let idx = index({ 'thread/web': 'h1', beads: 'b1' });
+	const asked: string[] = [];
+	const store = new Store(async (p) => {
+		asked.push(p);
+		if (p === '/v1/loom/index') return idx;
+		if (p === '/v1/loom/thread/web') return part('web', []);
+		return beads;
+	});
+	await store.sync();
+	await store.loadBeads();
+	asked.length = 0;
+	const added: Beads[string] = ['a', 're', 's', '2', 'on it'];
+	idx = index({ 'thread/web': 'h1', beads: 'b2' });
+	idx.beads_delta = { since: 'b1', hash: 'b2', set: { b: added }, drop: [] };
+	ok(await store.sync());
+	deepEqual(asked, ['/v1/loom/index']);
+	deepEqual(store.beads, { a: row, b: added });
+	equal(store.held.get('beads'), 'b2');
+});
+
+test('from the inbox: person letters in the chain, oldest first; another thread is marked', () => {
+	const chain: Beads = {
+		ask: [null, 'person', 'person:ada', '1', 'please make alpha'],
+		'w-alpha0000000': ['ask', 'says', 'person:ada', '2', 'alpha happens'],
+		other: [null, 'person', 'person:ada', '0', 'from charlie'],
+		reply: ['other', 're', 's-x', '3', 'on it']
+	};
+	const byId = new Map<string, Letter>([
+		[
+			'ask',
+			L('ask', '1', {
+				person: true,
+				from: 'person:ada',
+				threads: ['inbox'],
+				body: 'please make alpha'
+			})
+		],
+		[
+			'other',
+			L('other', '0', {
+				person: true,
+				from: 'person:ada',
+				threads: ['charlie'],
+				body: 'from charlie'
+			})
+		]
+	]);
+	const rows = fromInbox(chain, byId, 'alpha');
+	deepEqual(
+		rows.map((r) => [r.id, r.who, r.thread, r.line]),
+		[
+			['other', 'ada', 'charlie', 'from charlie'],
+			['ask', 'ada', undefined, 'please make alpha']
+		]
+	);
+});
+
 // The bead sheet walks the beads part in the client (no /bead on the loopback): chain up to the source, what hangs below.
-import { kindOf, panelIds, refOf, resolveRef, timeline, trace } from './bead.ts';
+import { fromInbox, kindOf, panelIds, refOf, resolveRef, timeline, trace } from './bead.ts';
 test('a bead timeline walks the parent map up to its source and down to its children', () => {
 	const beads = {
 		'letter:tg:1': [null, null, 'person:ada', '2026-10-27T10:00:00Z', 'make the board'],
@@ -466,6 +545,27 @@ test('the rail logs a moved strand once, the first load moves none, and a workin
 	equal(face(faces, 'working', 3), 'b');
 	equal(face(faces, 'holding', 3), 'c');
 	equal(face(undefined, 'working', 3), 'brnrd');
+	equal(waitOf(T('bravo', { board: { state: 'your-call' } }), 'idle'), 'waits on you');
+	equal(
+		waitOf(
+			T('echo', { board: { state: 'waiting', why: 'waiting: the forge to come back' } }),
+			'parked'
+		),
+		'waits: the forge to come back'
+	);
+	equal(
+		waitOf(
+			T('long', {
+				board: {
+					state: 'waiting',
+					why: 'waiting: ' + 'x'.repeat(60)
+				}
+			}),
+			'parked'
+		),
+		'waits: ' + 'x'.repeat(39) + '…'
+	);
+	equal(waitOf(T('charlie', { board: { state: 'mine' } }), 'idle'), 'idle');
 });
 
 test('a letter stamps who picked it up first, then its disposition, its send and its wishes in board.html order', () => {

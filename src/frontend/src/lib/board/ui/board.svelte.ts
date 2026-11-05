@@ -83,7 +83,8 @@ export class Board {
 			if (await this.store.sync()) {
 				this.model = this.store.model();
 				this.pending = unechoed(this.pending, this.model!.letters);
-				if (this.beads && !this.store.beads) this.beads = await this.store.loadBeads();
+				if (this.store.beads) this.beads = this.store.beads;
+				else if (this.beads && !this.store.beads) this.beads = await this.store.loadBeads();
 			}
 			// eslint-disable-next-line svelte/prefer-svelte-reactivity -- a temporary, not state
 			this.heard = new Date().toISOString();
@@ -150,7 +151,8 @@ export class Board {
 		if (how !== 'back' && this.beadId && this.beadId !== id)
 			this.beadHist = [...this.beadHist, this.beadId];
 		this.beadId = id;
-		if (!this.beads) this.beads = await this.store.loadBeads();
+		if (!this.store.beads) this.beads = await this.store.loadBeads();
+		else this.beads = this.store.beads;
 	}
 	back() {
 		const h = [...this.beadHist],
@@ -165,10 +167,18 @@ export class Board {
 	select(id: string | null, col: string | null = null) {
 		this.sel = id;
 		this.selCol = id ? col : null;
-		if (id && !this.beads) this.store.loadBeads().then((x) => (this.beads ??= x));
+		if (id && !this.store.beads) this.store.loadBeads().then((x) => (this.beads ??= x));
 	}
-	// What the selection links to (Links.svelte draws the lines); the item alone until the beads are in.
-	linked = $derived<ReadonlySet<string>>(panelIds(this.beads || {}, this.sel));
+	// Thread chain roots plus the beads part, so a press draws the chain before the 1 MB part lands.
+	merged = $derived.by((): Beads | null => {
+		void this.model;
+		const chain: Beads = {};
+		for (const p of this.store.threads.values()) Object.assign(chain, p.chain || {});
+		if (!this.beads && !Object.keys(chain).length) return null;
+		return { ...chain, ...(this.beads || {}) };
+	});
+	// What the sheet (or, with it closed, the selection) links to; the item alone until the beads are in.
+	linked = $derived<ReadonlySet<string>>(panelIds(this.merged || {}, this.beadId || this.sel));
 	isSel(id: string, col: string) {
 		return this.sel === id && this.selCol === col;
 	}
@@ -183,14 +193,14 @@ export class Board {
 			this.select(id, el.closest<HTMLElement>('[data-column]')?.dataset.column ?? null);
 	}
 	timeline = $derived.by((): Timeline | null =>
-		this.beadId && this.beads ? timeline(this.beads, this.model, this.beadId) : null
+		this.beadId && this.merged ? timeline(this.merged, this.model, this.beadId) : null
 	);
 
 	// The composer's &refs, checked against the beads as he types; an unknown one is named before it goes.
 	refs = $derived.by(() =>
 		refTokens(this.draft).map((t) => ({
 			t,
-			id: this.beads ? resolveRef(this.beads, this.model, t) : null
+			id: this.merged ? resolveRef(this.merged, this.model, t) : null
 		}))
 	);
 	keep() {
@@ -231,7 +241,8 @@ export class Board {
 		const body = this.draft;
 		if (!body.trim()) return;
 		this.sendError = '';
-		if (!this.beads) this.beads = await this.store.loadBeads();
+		if (!this.store.beads) this.beads = await this.store.loadBeads();
+		else this.beads = this.store.beads;
 		const miss = this.refs.filter((r) => !r.id).map((r) => r.t);
 		if (miss.length && !this.force) {
 			this.force = true;

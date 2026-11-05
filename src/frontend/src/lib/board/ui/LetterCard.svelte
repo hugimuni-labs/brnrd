@@ -45,7 +45,7 @@
 	class:collapsed={shut}
 	class:pending={l.pendingNote}
 	class:sel={b.isSel(l.id, col)}
-	class:linked={b.linked.has(l.id) && !b.isSel(l.id, col)}
+	class:linked={b.linked.has(l.id) && (b.beadId || b.sel) !== l.id}
 	style:--h={mark.thread ? hue(mark.thread) : ME}
 	style:--line={mark.line}
 	onclick={press}

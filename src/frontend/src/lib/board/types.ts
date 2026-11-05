@@ -126,6 +126,15 @@ export type Index = {
 	// the channel a letter typed on the board goes out through
 	via?: string | null;
 	parts: Record<string, string>;
+	// the patch from the previous beads hash; a client that holds `since` applies it and skips the 1 MB GET
+	beads_delta?: BeadsDelta;
+};
+
+export type BeadsDelta = {
+	since: string;
+	hash: string;
+	set: Record<string, [string | null, string | null, string | null, string | null, string]>;
+	drop: string[];
 };
 
 export type ThreadPart = {
@@ -136,6 +145,8 @@ export type ThreadPart = {
 	tools: Record<string, ToolCall[]>;
 	live: Record<string, Live>;
 	more?: boolean;
+	// each wish's ancestors up to its root, and the person letters among them (board-chain)
+	chain?: Record<string, [string | null, string | null, string | null, string | null, string]>;
 };
 
 // What the board reads at once, assembled from the parts (parts.ts).

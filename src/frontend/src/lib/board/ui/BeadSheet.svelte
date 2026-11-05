@@ -37,7 +37,7 @@
 	);
 	const rows = $derived(T ? trace(wish, T) : []);
 	const steps = $derived((b.model?.threads || []).flatMap((t) => t.steps || []));
-	const ref = (r: string) => refOf(r, b.beads || {}, steps);
+	const ref = (r: string) => refOf(r, b.merged || {}, steps);
 	// a rail time drops its day when the stage before it fell on the same one
 	const when = $derived.by(() => {
 		let day = '';
@@ -120,7 +120,7 @@
 <aside
 	id="bead"
 	class:on={!!b.beadId}
-	class:loading={!!b.beadId && !b.beads}
+	class:loading={!!b.beadId && !b.timeline}
 	aria-label="bead: where an item comes from and what came out of it"
 >
 	<div class="bh">

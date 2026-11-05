@@ -101,7 +101,30 @@ def loom_index(request: Request, db: Session = Depends(get_db)) -> Response:
 
 
 @router.get("/beads")
-def loom_beads(request: Request, db: Session = Depends(get_db)) -> Response:
+def loom_beads(request: Request, since: str | None = None, db: Session = Depends(get_db)) -> Response:
+    """The beads part, or the delta from ``since`` when the index still carries that patch."""
+    if since:
+        account_id = _account_id(request, db)
+        if account_id is None:
+            return JSONResponse({"error": "unauthenticated"}, status_code=401)
+        row = _part(db, account_id, "index")
+        if row is not None:
+            index = json.loads(gzip.decompress(row.body))
+            current = (index.get("parts") or {}).get("beads")
+            if current == since:
+                headers = {"Cache-Control": "no-cache", "ETag": f'"{since}"'}
+                if (held := _not_modified(request, since)) is not None:
+                    return held
+                return JSONResponse({"since": since, "hash": since, "set": {}, "drop": []}, headers=headers)
+            delta = index.get("beads_delta")
+            if isinstance(delta, dict) and delta.get("since") == since:
+                etag = str(delta.get("hash") or current or "")
+                headers = {"Cache-Control": "no-cache"}
+                if etag:
+                    if (held := _not_modified(request, etag)) is not None:
+                        return held
+                    headers["ETag"] = f'"{etag}"'
+                return JSONResponse(delta, headers=headers)
     return _read(request, db, "beads")
 
 

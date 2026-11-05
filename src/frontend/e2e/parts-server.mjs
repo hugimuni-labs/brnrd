@@ -75,8 +75,33 @@ export function partsServer(dir, port = 0, consent = null) {
 			req.on('close', () => (clearInterval(t), streams.delete(res)));
 			return;
 		}
-		const raw =
-			path === 'index' || path === 'beads' || path.startsWith('thread/') ? read(path) : null;
+		if (path === 'beads') {
+			const rawBeads = read('beads');
+			if (!rawBeads) {
+				res.writeHead(404, { 'content-type': 'application/json' });
+				res.end(JSON.stringify({ error: 'no part beads' }));
+				return;
+			}
+			const since = url.searchParams.get('since');
+			if (since) {
+				const index = JSON.parse(read('index') || '{}');
+				if (index.parts?.beads === since) {
+					res.writeHead(200, { 'content-type': 'application/json' });
+					res.end(JSON.stringify({ since, hash: since, set: {}, drop: [] }));
+					return;
+				}
+				const delta = index.beads_delta;
+				if (delta && delta.since === since) {
+					res.writeHead(200, { 'content-type': 'application/json' });
+					res.end(JSON.stringify(delta));
+					return;
+				}
+			}
+			res.writeHead(200, { 'content-type': 'application/json', 'cache-control': 'no-cache' });
+			res.end(rawBeads);
+			return;
+		}
+		const raw = path === 'index' || path.startsWith('thread/') ? read(path) : null;
 		if (!raw) {
 			res.writeHead(404, { 'content-type': 'application/json' });
 			res.end(JSON.stringify({ error: `no part ${path}` }));

@@ -1,7 +1,7 @@
 // The bead panel's timeline, built in the client from the beads part (design §D3): the loopback has no /bead and no
 // /resolve, so the chain up, what hangs below and the composer's ref check all walk `id → [parent, edge, from, at,
 // label]`, with the model adding what the beads do not carry (a letter's body, a wish's stamps and verdict).
-import type { Model, Step, Wish } from './types.ts';
+import type { Letter, Model, Step, Wish } from './types.ts';
 import { ancestors, children, type Beads } from './parts.ts';
 import { stageOf } from './stages.ts';
 import { short, stepText } from './text.ts';
@@ -80,6 +80,42 @@ export function resolveRef(beads: Beads, model: Model | null, token: string): st
 export function panelIds(beads: Beads, id: string | null): ReadonlySet<string> {
 	if (!id) return new Set();
 	return new Set([...ancestors(beads, id).map((a) => a.id), id, ...children(beads, id)]);
+}
+
+const PERSON = /^(person:|p-|stranger:)/;
+export type FromLine = {
+	id: string;
+	who: string;
+	at: string;
+	line: string;
+	body: string;
+	thread?: string;
+};
+
+// Person letters behind a thread's wishes (the chain roots), oldest first. A letter that lives on another
+// thread is marked with that thread; inbox roots have no mark.
+export function fromInbox(chain: Beads, byId: Map<string, Letter>, col: string): FromLine[] {
+	const rows: FromLine[] = [];
+	for (const [id, b] of Object.entries(chain)) {
+		if (id.startsWith('thread:') || id.startsWith('w-') || /^s-[a-z0-9]{2,8}-/.test(id)) continue;
+		const from = String(b[2] || '');
+		if (b[1] !== 'person' && !PERSON.test(from)) continue;
+		const l = byId.get(id);
+		const threads = l?.threads || [];
+		if (threads.includes(col)) continue;
+		const other = threads.find((t) => t !== col && t !== 'inbox');
+		const body = l?.body || b[4] || '';
+		rows.push({
+			id,
+			who: from.replace(PERSON, '').split('/')[0] || from,
+			at: String(b[3] || l?.at || ''),
+			line: (b[4] || body.replace(/\s+/g, ' ').trim()).slice(0, 80),
+			body,
+			thread: other
+		});
+	}
+	rows.sort((a, c) => a.at.localeCompare(c.at) || a.id.localeCompare(c.id));
+	return rows;
 }
 
 // A ref opens what it names (49phu 2, ko9os d): a URL or a PR goes to the forge, a ledger id to its bead by its first

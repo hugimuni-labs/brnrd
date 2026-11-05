@@ -6,7 +6,8 @@
 .brd .cfold,
 .brd .stp-h,
 .brd .pips,
-.brd .unsettle {
+.brd .unsettle,
+.brd .from-line {
 	font: inherit;
 	background: none;
 	border: 0;
@@ -1926,6 +1927,36 @@
 }
 .brd .band {
 	display: none;
+}
+.brd .from {
+	flex: 0 0 auto;
+	border-bottom: 1px solid #ccc;
+	max-height: 30%;
+	overflow-y: auto;
+	scrollbar-width: thin;
+}
+.brd .from-line {
+	display: block;
+	width: 100%;
+	padding: 4px 10px;
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	font-size: 11px;
+	line-height: 16px;
+	color: #444;
+}
+.brd .from-line.open {
+	white-space: pre-wrap;
+	overflow: visible;
+}
+.brd .from-line .th {
+	opacity: 0.65;
+}
+.brd .from-body {
+	margin-top: 4px;
+	white-space: pre-wrap;
+	color: #171717;
 }
 .brd .column.threadcol .band {
 	display: block;
