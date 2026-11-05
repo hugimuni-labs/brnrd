@@ -1,4 +1,4 @@
-// A loopback loom made of recorded parts: GET /v1/loom/{index,thread/<id>,beads} from a directory of
+// A loopback loom made of recorded parts: GET /v1/loom/{index,thread/<id>,beads,topics,unthreaded} from a directory of
 // <name>.json files (a thread's slash is `__`), /v1/loom/events as an SSE stream that names the index hash,
 // POST /v1/loom/letters kept in memory. `node e2e/parts-server.mjs <dir> <port>`. Given an object ({ name: json }, as
 // fixture.mjs makes) instead of a directory, `set(parts)` swaps it and sends the new index hash to every open stream.
@@ -131,7 +131,9 @@ export function partsServer(dir, port = 0, consent = null) {
 			return;
 		}
 		const raw =
-			path === 'index' || path === 'topics' || path.startsWith('thread/') ? read(path) : null;
+			path === 'index' || path === 'topics' || path === 'unthreaded' || path.startsWith('thread/')
+				? read(path)
+				: null;
 		if (!raw) {
 			res.writeHead(404, { 'content-type': 'application/json' });
 			res.end(JSON.stringify({ error: `no part ${path}` }));

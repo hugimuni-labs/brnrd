@@ -55,7 +55,7 @@ test('a working strand plays the running frames and its live line ticks', async 
 
 test('a strand whose state moves flashes and logs was→now', async () => {
 	const parts = fixture();
-	const t = parts.index.threads.find((t) => t.strands.slice(-1)[0]?.state === 'working');
+	const t = Object.values(parts).find((p) => p?.strands?.slice(-1)[0]?.state === 'working');
 	const s = t.strands.slice(-1)[0];
 	s.state = 'holding';
 	// catch the flash the moment the span takes it: it lasts two frames

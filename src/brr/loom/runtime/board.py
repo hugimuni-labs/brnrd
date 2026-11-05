@@ -636,9 +636,11 @@ def compute(home: Home, facts, config, tools: dict, live: dict, person: str | No
     for t in threads:
         mine = by_thread.get(t["id"], [])
         wished_here = wished.get(t["id"], [])
+        # thread_body first: a snapshot key named id, count, letters or wishes must not overwrite the part.
         part = {
+            **thread_body(t),
             "id": t["id"], "count": len(mine), "letters": mine, "wishes": wished_here,
-            **thread_body(t), **taped(t, tools, live)}
+            **taped(t, tools, live)}
         if t["id"] != inbox:
             part["chain"] = chain_of(walker, chain_starts(walker, t, mine, wished_here))
         parts[f"thread/{t['id']}"] = part

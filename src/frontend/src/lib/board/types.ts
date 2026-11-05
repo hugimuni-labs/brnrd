@@ -123,7 +123,7 @@ export type Index = {
 	// the rail's face frames by 'running' / 'idle' (brr.emotes.for_telemetry)
 	faces?: Record<string, string[]>;
 	wishes: Record<string, Record<string, number>>;
-	// absent once those wishes ride in the unthreaded part; kept for a fixture that still sends them
+	// absent once those wishes ride in the unthreaded part; kept for an index that still sends them
 	unthreaded?: Wish[];
 	person: string | null;
 	// the channel a letter typed on the board goes out through

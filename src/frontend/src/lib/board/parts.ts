@@ -42,7 +42,8 @@ const PART_ONLY = new Set(['letters', 'wishes', 'tools', 'live', 'chain', 'more'
 export function join(row: Thread, part?: ThreadPart): Thread {
 	if (!part) return row;
 	const head: Partial<Thread> = {};
-	for (const [k, v] of Object.entries(part)) if (!PART_ONLY.has(k)) (head as Record<string, unknown>)[k] = v;
+	for (const [k, v] of Object.entries(part))
+		if (!PART_ONLY.has(k)) (head as Record<string, unknown>)[k] = v;
 	return { ...head, ...row, board: { ...(head.board || {}), ...(row.board || {}) } };
 }
 

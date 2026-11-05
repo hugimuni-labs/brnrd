@@ -32,7 +32,7 @@ test('the header carries the loom clock and it moves with the index', async () =
 	match(was, /^loom \d\d:\d\d:\d\dZ · \d+ letters · as /);
 	await B.page.waitForTimeout(1100);
 	const parts = fixture();
-	parts.index.threads[1].strands.slice(-1)[0].state = 'parked';
+	parts['thread/alpha'].strands.slice(-1)[0].state = 'parked';
 	B.loom.set(reindex(parts));
 	await B.page.waitForFunction((w) => document.querySelector('#at').textContent.trim() !== w, was);
 	notEqual(await clock(), was);

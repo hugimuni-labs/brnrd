@@ -318,7 +318,13 @@ test('parts: a short index row joins its part; unthreaded wishes load from their
 		says: [{ id: 'l', quote: 'a long quote', cites: 'whole' }]
 	});
 	const idx = index({ 'thread/web': 'h', unthreaded: 'u' }, [
-		T('web', { title: 'Web', status: 'open', last_at: 't', board: { state: 'quiet' }, counts: { heard: 1 } })
+		T('web', {
+			title: 'Web',
+			status: 'open',
+			last_at: 't',
+			board: { state: 'quiet' },
+			counts: { heard: 1 }
+		})
 	]);
 	const asked: string[] = [];
 	const store = new Store(async (p) => {
@@ -338,7 +344,10 @@ test('parts: a short index row joins its part; unthreaded wishes load from their
 		};
 	});
 	ok(await store.sync());
-	deepEqual(asked.filter((p) => p.includes('unthreaded')), ['/v1/loom/unthreaded']);
+	deepEqual(
+		asked.filter((p) => p.includes('unthreaded')),
+		['/v1/loom/unthreaded']
+	);
 	const t = store.model()!.threads.find((row) => row.id === 'web')!;
 	equal(t.title, 'Web');
 	equal(t.board?.state, 'quiet');
