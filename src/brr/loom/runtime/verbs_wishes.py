@@ -290,8 +290,11 @@ def _wakes(home, facts, by: str, data: dict) -> str:
     wait = data.get("wait") or {}
     on, until = wait.get("on"), wait.get("until")
     thread = parker(home, facts, wishes(facts)[data["wish"]], {"writer": by})
-    when = (f"when {on} resolves" + (f", or at {until} if it has not" if until else "")) if on else \
-        (f"at {until} to re-judge it" if until else "")
+    if on and on.startswith("cond:"):
+        when = f"on each firing of {on}, until it is re-read" + (f" or {until}" if until else "")
+    else:
+        when = (f"when {on} resolves" + (f", or at {until} if it has not" if until else "")) if on else \
+            (f"at {until} to re-judge it" if until else "")
     return f"parked: wakes thread:{thread} {when}".rstrip() if when else "parked: nothing wakes it; re-read it yourself"
 
 

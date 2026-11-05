@@ -42,6 +42,7 @@ from .project import projection_cache, fold, generation, is_notice, reply_channe
 from .owners import active_owners, letters_for, letter_owners
 from .lifecycle import main_snapshot
 from .timers import observe_due
+from .conditions import observe_conditions
 from .waits import Watcher, forge_wants, observe_waits
 from .selfrepo import (
     AUTHOR_EMAIL, AUTHOR_NAME, SelfError, _env_without_pin, git,
@@ -2270,6 +2271,8 @@ def tick_once(home: Home, bodies: dict[str, Body], adapter: str, core: str,
         watcher = getattr(router, "watcher", None)
         facts = observe_waits(home, facts, router.armed(), watcher.states if watcher else None,
                               pace=_turn_pace(home, facts, router.config))
+        # The tick's sweeps as conditions: each firing told once, to its seat or a cond: park.
+        facts = observe_conditions(home, facts, router.armed())
         if watcher is not None:
             from .comments import claims, observe_comments
             from .receipts import receipts
