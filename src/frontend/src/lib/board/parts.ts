@@ -1,6 +1,8 @@
 // The board's data, as parts (design §D1): GET /v1/loom/index carries every other part's hash; a thread part or beads
-// is fetched again only when its hash in the index moves. /v1/loom/events sends the index hash whenever it moves.
-import type { Index, Letter, Model, ThreadPart } from './types.ts';
+// is fetched again only when its hash in the index moves. Beads then patch from the index's beads_delta or
+// GET /v1/loom/beads?since=<hash>, so a letter does not refetch the whole part. /v1/loom/events sends the index hash
+// whenever it moves.
+import type { BeadsDelta, Index, Letter, Model, ThreadPart } from './types.ts';
 import { byAt } from './text.ts';
 
 export const BASE = '/v1/loom';
@@ -8,7 +10,25 @@ export type Beads = Record<
 	string,
 	[string | null, string | null, string | null, string | null, string]
 >;
+export type { BeadsDelta };
 type Get = (path: string) => Promise<unknown>;
+
+export function isDelta(got: unknown): got is BeadsDelta {
+	return (
+		!!got &&
+		typeof got === 'object' &&
+		'set' in got &&
+		'drop' in got &&
+		Array.isArray((got as BeadsDelta).drop) &&
+		typeof (got as BeadsDelta).set === 'object'
+	);
+}
+
+export function patchBeads(held: Beads, delta: BeadsDelta): Beads {
+	const next = { ...held, ...delta.set };
+	for (const id of delta.drop) delete next[id];
+	return next;
+}
 
 export async function getJSON(path: string): Promise<unknown> {
 	const r = await fetch(path, { cache: 'no-store' });
@@ -72,6 +92,7 @@ export class Store {
 	beads: Beads | null = null;
 	held = new Map<string, string>();
 	private get: Get;
+	private loading: Promise<Beads> | null = null;
 	constructor(get: Get) {
 		this.get = get;
 	}
@@ -92,18 +113,49 @@ export class Store {
 			this.threads.delete(n.slice(7));
 			this.held.delete(n);
 		}
-		if (this.beads && this.held.get('beads') !== index.parts.beads) this.beads = null;
+		if (this.beads && this.held.get('beads') !== index.parts.beads) await this.patchBeads(index);
 		this.index = index;
 		return true;
 	}
 
-	// Beads load on the first press, then follow the index.
-	async loadBeads(): Promise<Beads> {
-		if (!this.beads && this.index) {
-			this.beads = (await this.get(`${BASE}/beads`)) as Beads;
-			this.held.set('beads', this.index.parts.beads);
+	// Apply the index's last delta when we hold its `since`; otherwise GET ?since= and fall back to the whole part.
+	private async patchBeads(index: Index) {
+		const since = this.held.get('beads');
+		const want = index.parts.beads;
+		if (!this.beads || !since || since === want) return;
+		const delta = index.beads_delta;
+		if (delta && delta.since === since) {
+			this.beads = patchBeads(this.beads, delta);
+			this.held.set('beads', delta.hash || want);
+			return;
 		}
-		return this.beads || {};
+		const got = await this.get(`${BASE}/beads?since=${encodeURIComponent(since)}`);
+		if (isDelta(got)) {
+			this.beads = patchBeads(this.beads, got);
+			this.held.set('beads', got.hash || want);
+			return;
+		}
+		this.beads = got as Beads;
+		this.held.set('beads', want);
+	}
+
+	// Beads load on the first press, then follow the index by patch. One in-flight GET: select and openBead
+	// both ask, and a second 1 MB fetch is the thing this diet exists to stop.
+	async loadBeads(): Promise<Beads> {
+		if (this.beads) return this.beads;
+		if (this.loading) return this.loading;
+		if (!this.index) return {};
+		const index = this.index;
+		this.loading = this.get(`${BASE}/beads`)
+			.then((got) => {
+				this.beads = got as Beads;
+				this.held.set('beads', index.parts.beads);
+				return this.beads;
+			})
+			.finally(() => {
+				this.loading = null;
+			});
+		return this.loading;
 	}
 
 	// History: the 200 letters before the oldest one held, or back to `until` (a verdict, bead or link's letter).

@@ -1,12 +1,16 @@
 """The board: one view model, computed in the loom, shipped in parts (self threads/web-main design §D1, §D2, §D7).
 
 ``compute`` derives every part from what the loom already holds: ``index`` (threads with their board
-state, calls and steps, wishes, presence, fuel, every other part's hash), one ``thread/<id>`` per
-thread (its newest letters and its strands' tool tape) and ``beads`` (each item's parent and a label,
-so a client walks chains itself). ``Parts`` recomputes them on its own thread whenever the ledger or
-a room's trace moves; ``serve`` is the loopback shell over it on 127.0.0.1 (config ``board_port``), which also
-serves the SvelteKit build, so the board needs no cloud hop and no dev server.
-The cloud PUT of parts stays off until brnrd.dev stores them.
+state, calls and steps, wishes, presence, fuel, every other part's hash, and ``beads_delta`` when
+the beads part moved), one ``thread/<id>`` per thread (its newest letters, its strands' tool tape,
+and ``chain``: each wish's ancestors up to its root plus the person letters among them) and
+``beads`` (each item's parent and a label, so a client walks chains itself). ``GET /v1/loom/beads?since=<hash>``
+returns the delta from that hash when the loopback still holds it, else the whole part. ``Parts``
+recomputes them on its own thread whenever the ledger or a room's trace moves; ``serve`` is the
+loopback shell over it on 127.0.0.1 (config ``board_port``), which also serves the SvelteKit build,
+so the board needs no cloud hop and no dev server.
+The cloud PUT of parts stays off until brnrd.dev stores them. The index carries the last beads
+delta so a cloud reader patches without a second 1 MB GET.
 """
 
 from __future__ import annotations
@@ -46,6 +50,7 @@ TOOLS = 120  # tool lines kept per strand
 LETTERS = 200  # letters per thread part; older ones by ?before=
 LABEL = 80  # characters of a bead's label
 PLAN_CAP = 2048  # the inbox README's own rule for its Plan; the loom enforces no cap
+BEAD_DELTAS = 8  # previous beads hashes a ?since= GET can still patch from
 
 
 def _person_side(sender: str) -> bool:
@@ -388,24 +393,111 @@ def board_threads(home: Home, facts, config, person: str | None = None, typed: d
     return snap, raw, letters, told
 
 
-def beads_of(facts, main: dict) -> dict[str, list]:
+def _label(text) -> str:
+    return " ".join(str(text or "").split())[:LABEL]
+
+
+def _bead_row(beads, ident: str) -> list | None:
+    """One ``beads_of`` row for ``ident``, or None when the walker has no parent map for it."""
+    if ident in beads.letters:
+        f = beads.letters[ident]
+        sender = "loom" if is_notice(f) else str(f.data.get("from") or f.by)
+        return [*beads.parent(ident), sender, _iso(f.at), _label(f.data.get("body"))]
+    if ident in beads.wishes:
+        w = beads.wishes[ident]
+        return [*beads.parent(ident), w.sender, _iso(w.at), _label(w.line)]
+    if ident in beads.writers:
+        return [*beads.parent(ident), None, None, beads.writers[ident]]
+    name = ident.removeprefix("thread:")
+    if ident.startswith("thread:") and name in beads.main:
+        return [*beads.parent(ident), None, None, _label(beads.main[name].get("title"))]
+    return None
+
+
+def beads_of(facts, main: dict, beads=None) -> dict[str, list]:
     """Every letter, wish, strand and thread as ``id → [parent, edge, from, at, label]`` (design §D3)."""
     from .asks import Beads
-    beads = Beads(facts, main)
+    beads = beads or Beads(facts, main)
     out: dict[str, list] = {}
-
-    def line(text) -> str:
-        return " ".join(str(text or "").split())[:LABEL]
-    for ident, f in beads.letters.items():
-        sender = "loom" if is_notice(f) else str(f.data.get("from") or f.by)
-        out[ident] = [*beads.parent(ident), sender, _iso(f.at), line(f.data.get("body"))]
-    for ident, w in beads.wishes.items():
-        out[ident] = [*beads.parent(ident), w.sender, _iso(w.at), line(w.line)]
+    for ident in beads.letters:
+        out[ident] = _bead_row(beads, ident)
+    for ident in beads.wishes:
+        out[ident] = _bead_row(beads, ident)
     for strand, thread in beads.writers.items():
-        out.setdefault(strand, [*beads.parent(strand), None, None, thread])
-    for name, data in main.items():
-        out.setdefault(f"thread:{name}", [*beads.parent(f"thread:{name}"), None, None, line(data.get("title"))])
+        out.setdefault(strand, _bead_row(beads, strand))
+    for name in beads.main:
+        out.setdefault(f"thread:{name}", _bead_row(beads, f"thread:{name}"))
     return out
+
+
+def chain_of(beads, idents) -> dict[str, list]:
+    """``idents`` and each one's ancestors up to its root, as ``beads_of`` rows (a few KB per thread)."""
+    out: dict[str, list] = {}
+    for ident in idents:
+        if not ident:
+            continue
+        row = _bead_row(beads, ident)
+        if row:
+            out[ident] = row
+        for up, _edge in beads.chain(ident)[0]:
+            if up in out:
+                continue
+            row = _bead_row(beads, up)
+            if row:
+                out[up] = row
+    return out
+
+
+def beads_delta(since: str, was: dict, now: dict, new_hash: str) -> dict:
+    """The patch from beads at ``since`` to ``now``: ``set`` the rows that moved, ``drop`` the ids that left."""
+    return {
+        "since": since,
+        "hash": new_hash,
+        "set": {k: v for k, v in now.items() if was.get(k) != v},
+        "drop": [k for k in was if k not in now],
+    }
+
+
+def compose_deltas(deltas: dict, since: str, current: str | None) -> dict | None:
+    """Walk ``deltas[cur] → hash`` from ``since`` to ``current``, merging set/drop. None if the walk breaks.
+
+    A later set undoes an earlier drop, and the reverse. The inbox sends letters in bursts, so a client
+    that held b1 while the index moved b1→b2→b3 asks ``?since=b1`` and must get both rows at hash=current.
+    """
+    if not current:
+        return None
+    if since == current:
+        return {"since": since, "hash": current, "set": {}, "drop": []}
+    set_, drop, cur, seen = {}, set(), since, set()
+    while cur != current:
+        if cur in seen:
+            return None
+        seen.add(cur)
+        step = deltas.get(cur)
+        if step is None:
+            return None
+        for ident, row in (step.get("set") or {}).items():
+            set_[ident] = row
+            drop.discard(ident)
+        for ident in step.get("drop") or ():
+            drop.add(ident)
+            set_.pop(ident, None)
+        cur = step.get("hash")
+        if not cur:
+            return None
+    return {"since": since, "hash": current, "set": set_, "drop": list(drop)}
+
+
+def chain_starts(walker, thread: dict, mine: list, wished_here: list) -> list[str]:
+    """Wish roots, opened-for, and letters whose parent is a letter outside this part — not every letter."""
+    mine_ids = {row["id"] for row in mine}
+    starts = [w["wish"] for w in wished_here]
+    starts += [o["wish"] for o in thread.get("opened_for") or []]
+    for row in mine:
+        up, _edge = walker.parent(row["id"])
+        if up and up not in mine_ids and up in walker.letters:
+            starts.append(row["id"])
+    return starts
 
 
 def digest(part) -> str:
@@ -420,6 +512,7 @@ FACES = {s: list(emotes.for_telemetry(s).frames) for s in ("idle", "running")}
 def compute(home: Home, facts, config, tools: dict, live: dict, person: str | None = None,
             typed: dict | None = None) -> dict[str, dict]:
     """Every part by name: ``index``, ``thread/<id>`` per thread, ``beads``. The index carries the others' hashes."""
+    from .asks import Beads
     snap, raw, letters, told = board_threads(home, facts, config, person, typed)
     threads = snap.get("threads") or []
     parts: dict[str, dict] = {}
@@ -433,12 +526,19 @@ def compute(home: Home, facts, config, tools: dict, live: dict, person: str | No
         wished.setdefault(row.get("thread"), []).append(row)
     known = {t["id"] for t in threads}
     counts = {name: dict(Counter(row["state"] for row in rows)) for name, rows in wished.items() if name in known}
+    main = main_snapshot(home)
+    walker = Beads(facts, main)
+    inbox = home.main_thread()
     for t in threads:
         mine = by_thread.get(t["id"], [])
-        parts[f"thread/{t['id']}"] = {
-            "id": t["id"], "count": len(mine), "letters": mine, "wishes": wished.get(t["id"], []),
+        wished_here = wished.get(t["id"], [])
+        part = {
+            "id": t["id"], "count": len(mine), "letters": mine, "wishes": wished_here,
             **taped(t, tools, live)}
-    parts["beads"] = beads_of(facts, main_snapshot(home))
+        if t["id"] != inbox:
+            part["chain"] = chain_of(walker, chain_starts(walker, t, mine, wished_here))
+        parts[f"thread/{t['id']}"] = part
+    parts["beads"] = beads_of(facts, main, walker)
     hashes = {name: digest(part) for name, part in parts.items()}
     index = {"v": 1, **{k: v for k, v in snap.items() if k not in {"at", "log"}}, "wishes": counts,
              "unthreaded": [row for name, rows in wished.items() if name not in known for row in rows],
@@ -549,6 +649,7 @@ class Parts:
         self.reader, self.cache, self.tape = shared_reader(home), {}, Tools(home)
         self.parts: dict[str, dict] = {}
         self.hashes: dict[str, str] = {}
+        self.bead_deltas: dict[str, dict] = {}  # previous beads hash → delta, for GET ?since=
         self.revision = None
         self.taped, self.tape_at = False, None  # a tape move not shown yet; when the last one was
         # Which strand typed a letter through the board: the board's own note, outside the self repo.
@@ -572,6 +673,15 @@ class Parts:
                 parts = compute(self.home, facts, self.config_of(), self.tape.tools, self.tape.live, self.person,
                                 self.typed)
             hashes = dict(parts["index"]["parts"], index=digest(parts["index"]))  # compute hashed the others
+            old_hash, old_beads = self.hashes.get("beads"), self.parts.get("beads")
+            new_hash = hashes.get("beads")
+            if old_beads is not None and old_hash and old_hash != new_hash:
+                delta = beads_delta(old_hash, old_beads, parts["beads"], new_hash)
+                self.bead_deltas[old_hash] = delta
+                while len(self.bead_deltas) > BEAD_DELTAS:
+                    self.bead_deltas.pop(next(iter(self.bead_deltas)))
+                parts["index"] = dict(parts["index"], beads_delta=delta, beads_deltas=dict(self.bead_deltas))
+                hashes["index"] = digest(parts["index"])
         elif self.taped and (self.tape_at is None or now - self.tape_at >= TAPE):
             self.taped, self.tape_at = False, now
             parts, hashes = self._retaped()
@@ -834,9 +944,19 @@ def handler(parts: Parts, port: int, spa=spa_root):
             query = {k: v[0] for k, v in parse_qs(url.query).items()}
             path = url.path.removeprefix("/v1/loom/")
             with parts.changed:
-                held, hashes = parts.parts, parts.hashes
+                held, hashes, deltas = parts.parts, parts.hashes, parts.bead_deltas
             if url.path == "/v1/loom/events":
                 return self._events()
+            if path == "beads" and query.get("since"):
+                since = query["since"]
+                current = hashes.get("beads")
+                composed = compose_deltas(deltas, since, current)
+                if composed is not None:
+                    return self._json(composed, composed["hash"])
+                part = held.get("beads")
+                if part is None:
+                    return self._json({"error": "no part beads"})
+                return self._json(part, current)
             if path in {"index", "beads"} or path.startswith("thread/"):
                 part = held.get(path)
                 if part is None:
@@ -926,8 +1046,9 @@ def handler(parts: Parts, port: int, spa=spa_root):
 
 
 def serve(parts: Parts, port: int, spa=spa_root) -> ThreadingHTTPServer:
-    """The loopback shell: GET ``/v1/loom/{index,thread/<id>,beads,events}``, POST ``/v1/loom/letters``, and every
-    other GET outside ``/v1/`` from the SPA build ``spa()`` names (its ``/`` is the board), on 127.0.0.1."""
+    """The loopback shell: GET ``/v1/loom/{index,thread/<id>,beads,events}`` (beads takes ``?since=<hash>``),
+    POST ``/v1/loom/letters``, and every other GET outside ``/v1/`` from the SPA build ``spa()`` names
+    (its ``/`` is the board), on 127.0.0.1."""
     server = ThreadingHTTPServer(("127.0.0.1", port), handler(parts, port, spa))
     server.daemon_threads = True
     if port == 0:  # a test's free port: the Host check needs the bound one

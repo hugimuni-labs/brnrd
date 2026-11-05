@@ -233,6 +233,21 @@ export function fixture() {
 	for (const [id, ws] of Object.entries(wishes))
 		for (const w of ws) beads[w.wish] = [w.letters?.[0] || null, 'wish', id, w.at, w.line];
 	parts.beads = beads;
+	const walk = (id, out) => {
+		const seen = new Set();
+		let cur = id;
+		while (cur && beads[cur] && !seen.has(cur)) {
+			out[cur] = beads[cur];
+			seen.add(cur);
+			cur = beads[cur][0];
+		}
+	};
+	for (const t of threads) {
+		const chain = {};
+		for (const w of wishes[t.id] || []) walk(w.wish, chain);
+		for (const l of parts[`thread/${t.id}`].letters) walk(l.id, chain);
+		parts[`thread/${t.id}`].chain = chain;
+	}
 	return reindex(parts, {
 		v: 1,
 		threads: [inbox, ...threads],

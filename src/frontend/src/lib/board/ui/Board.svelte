@@ -9,7 +9,7 @@
 	import { INBOX } from '../sides.ts';
 	import { dur, hue, secs } from '../text.ts';
 	import { liveOf, what } from '../tape.ts';
-	import { face, LIVE, LOG, moves, seen, type Seen } from '../rail.ts';
+	import { face, LIVE, LOG, moves, seen, waitOf, type Seen } from '../rail.ts';
 	import Column from './Column.svelte';
 	import Stack from './Stack.svelte';
 	import BeadSheet from './BeadSheet.svelte';
@@ -133,7 +133,8 @@
 				>{#if r.t.board?.state === 'seated'}<b class="pulse"></b>{/if}<i data-state={r.s.state}
 					>{face(b.model?.faces, r.s.state, tick)}</i
 				>
-				{r.t.id} · {r.s.id.slice(-6)} · {r.s.state}{#if r.lv}<em data-since={r.lv.since}
+				{r.t.id} · {r.s.id.slice(-6)} · {waitOf(r.t, r.s.state)}{#if r.lv}<em
+						data-since={r.lv.since}
 						>{` · ${r.lv.verb} ${dur(secs(r.lv.since, new Date(b.now).toISOString()))}`}</em
 					>{#if r.lv.open[0]}{` · ${what(r.lv.open[0]).slice(0, 40)}`}{/if}{/if}</span
 			>{/each}{#each railLog as x, i (i)}<span class="log">{x}</span>{/each}

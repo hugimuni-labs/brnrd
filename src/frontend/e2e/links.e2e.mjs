@@ -145,3 +145,67 @@ test('ordinary taps draw every line the page can draw (proof-taps)', async () =>
 	deepEqual(drew.sort(), ['s-test-alph0/a1', LINK], `taps that drew a line of ${tapped}`);
 	assert.deepEqual(B.errors, []);
 });
+
+test('opening a bead in the sheet moves the lines; the selected letter stays', async () => {
+	await B.page.evaluate((id) => {
+		window.__board.select(null);
+		window.__board.closeBead();
+		document.querySelector('#board')?.scrollTo(0, 0);
+		document
+			.querySelector(`[data-column="charlie"] article.letter[data-letter="${id}"]`)
+			?.scrollIntoView({ block: 'center', inline: 'center' });
+	}, LINK);
+	await B.page.$eval(`[data-column="charlie"] article.letter[data-letter="${LINK}"]`, (a) =>
+		a.click()
+	);
+	await B.page.waitForSelector('#bead.on');
+	await frames();
+	const before = await B.page.evaluate(() => {
+		const s = document.querySelector('.brd article.letter.sel');
+		const d = document.querySelector('#links path')?.getAttribute('d') || '';
+		return { sel: s?.dataset.letter, start: d.match(/^M([-\d.]+)/)?.[1] };
+	});
+	assert.equal(before.sel, LINK);
+	await B.page.click(`#bead [data-bead="${WISH}"]`);
+	await B.page.waitForFunction((id) => window.__board.beadId === id, WISH);
+	await frames();
+	await frames();
+	const after = await B.page.evaluate((wish) => {
+		const s = document.querySelector('.brd article.letter.sel');
+		const id = window.__board.beadId || window.__board.sel;
+		const cards = [
+			...document.querySelectorAll(
+				`.brd article.letter[data-letter="${id}"], .brd [data-wish="${id}"]`
+			)
+		].filter((e) => e.offsetParent);
+		const origin = (s && cards.includes(s) ? s : cards[0]) || s;
+		const card = [...document.querySelectorAll(`.brd [data-wish="${wish}"]`)].find(
+			(e) => e.offsetParent
+		);
+		const d = document.querySelector('#links path')?.getAttribute('d') || '';
+		const x = d.match(/^M([-\d.]+)/) ? Number(d.match(/^M([-\d.]+)/)[1]) : null;
+		const r = card?.getBoundingClientRect();
+		const sr = s?.getBoundingClientRect();
+		return {
+			sel: s?.dataset.letter,
+			bead: window.__board.beadId,
+			start: x,
+			paths: document.querySelectorAll('#links path').length,
+			linked: [...document.querySelectorAll('.brd .linked')].map(
+				(t) => t.dataset.letter || t.dataset.wish
+			),
+			origin: origin?.dataset.letter || origin?.dataset.wish || null,
+			onCard: r != null && x != null && (Math.abs(x - r.left) < 2 || Math.abs(x - r.right) < 2),
+			onSel: sr != null && x != null && (Math.abs(x - sr.left) < 2 || Math.abs(x - sr.right) < 2)
+		};
+	}, WISH);
+	assert.equal(after.sel, LINK);
+	assert.equal(after.bead, WISH);
+	assert.equal(after.onSel, false, `lines left the selected letter: ${JSON.stringify(after)}`);
+	assert.ok(
+		after.paths > 0 && after.onCard,
+		`line starts on the sheet’s bead card: ${JSON.stringify(after)}`
+	);
+	assert.deepEqual(B.errors, []);
+	await B.page.evaluate(() => (window.__board.select(null), window.__board.closeBead()));
+});

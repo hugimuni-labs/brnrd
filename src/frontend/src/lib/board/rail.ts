@@ -42,3 +42,18 @@ export function face(faces: Faces | undefined, state: string | undefined, tick: 
 	const f = faces?.[state === 'working' ? 'running' : 'idle'];
 	return f?.length ? f[tick % f.length] : 'brnrd';
 }
+
+const WAIT = 40;
+
+// The rail chip: a your-call thread waits on you, a waiting one names what, idle only when the thread is idle.
+export function waitOf(t: Thread, strandState?: string): string {
+	const st = t.board?.state;
+	if (st === 'your-call') return 'waits on you';
+	if (st === 'waiting') {
+		const what = String(t.board?.why || '')
+			.replace(/^waiting:\s*/i, '')
+			.trim();
+		return 'waits: ' + (what.length > WAIT ? what.slice(0, WAIT - 1) + '…' : what);
+	}
+	return strandState || '';
+}

@@ -101,7 +101,30 @@ def loom_index(request: Request, db: Session = Depends(get_db)) -> Response:
 
 
 @router.get("/beads")
-def loom_beads(request: Request, db: Session = Depends(get_db)) -> Response:
+def loom_beads(request: Request, since: str | None = None, db: Session = Depends(get_db)) -> Response:
+    """The beads part, or the delta from ``since`` when the index still carries that patch."""
+    if since:
+        account_id = _account_id(request, db)
+        if account_id is None:
+            return JSONResponse({"error": "unauthenticated"}, status_code=401)
+        row = _part(db, account_id, "index")
+        if row is not None:
+            index = json.loads(gzip.decompress(row.body))
+            current = (index.get("parts") or {}).get("beads")
+            deltas = dict(index.get("beads_deltas") or {})
+            last = index.get("beads_delta")
+            if isinstance(last, dict) and last.get("since"):
+                deltas[last["since"]] = last
+            from brr.loom.runtime.board import compose_deltas
+            composed = compose_deltas(deltas, since, current)
+            if composed is not None:
+                etag = composed["hash"]
+                headers = {"Cache-Control": "no-cache"}
+                if etag:
+                    if (held := _not_modified(request, etag)) is not None:
+                        return held
+                    headers["ETag"] = f'"{etag}"'
+                return JSONResponse(composed, headers=headers)
     return _read(request, db, "beads")
 
 
