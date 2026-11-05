@@ -149,6 +149,8 @@ def test_a_resting_stop_asks_once_for_the_readme_acts_left_behind(room, tmp_path
     time.sleep(0.01)
     execute("post", room, json.dumps({"tool_name": "Bash"}))
     _fact(room, "pr.merged", number=7)
+    # An mtime comes from the kernel's coarse clock and may trail the fact's: leave a gap.
+    time.sleep(0.02)
     readme.write_text("# Work\n\n## Now\n- Next build: C, PR #7 merged\n")
     assert execute("stop", room, stdin) == ""
     # An act after the rewrite, in the same turn, is still left behind.
