@@ -1,6 +1,6 @@
 # The booth trailer
 
-One 49 to 50 second edit, rendered twice: `booth.mp4` (muted, made to loop, a caption on every shot, the brnrd.dev QR in the corner throughout) and `readme.mp4` (the same cut, linear, with a music bed when a licensed track is supplied). Real recordings for the shots, generated cards for everything else; the resident cut it.
+One 50-second edit, rendered twice: `booth.mp4` (muted, made to loop, a caption on every shot, the brnrd.dev QR in the corner throughout) and `readme.mp4` (the same cut, linear, with a music bed when a licensed track is supplied). Real recordings for the shots, generated cards for everything else; the resident cut it.
 
 ```sh
 cd media/booth && npm ci          # once: remotion, react, qrcode, local to this folder

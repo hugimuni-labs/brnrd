@@ -93,7 +93,7 @@ def timeline(cut: dict, raw: Path, public: Path) -> tuple[list, list]:
                     out[-1]["sec"] += e["sec"]
                 continue
             if src is None:
-                missing.append(e["raw"])
+                missing.append(e["raw"] + (" (its fallback card)" if e.get("fallback") else ""))
             else:
                 e["file"], src_of[id(e)] = f"raw/{e['raw']}.mp4", src
         out.append(e)
