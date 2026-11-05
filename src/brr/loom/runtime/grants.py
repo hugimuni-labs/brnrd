@@ -115,6 +115,14 @@ def record(home, strand: str, gen: int | None, thread: str, cls: str, target: st
                                    "letter": grant.letter, "wish": grant.wish}))
 
 
+def refused(home, strand: str, gen: int | None, thread: str, cls: str, target: str) -> Fact:
+    """A never guard stopped an act: the other side of ``guard.granted``, counted by ``trust``."""
+    from .ledger import append
+    from .home import mint
+    return append(home, Fact(kind="guard.refused", by=f"strand:{strand}", id="guard.refused:" + mint(12),
+                             data={"strand": strand, "gen": gen, "thread": thread, "class": cls, "target": target}))
+
+
 def judge(room: Path, asks: list[tuple[str, str] | None], why: str = "") -> tuple[bool, list[str]]:
     """``(granted, lines)`` for one call's refusals in this room's thread.
 
@@ -133,11 +141,13 @@ def judge(room: Path, asks: list[tuple[str, str] | None], why: str = "") -> tupl
     facts = read_facts(home) if thread else []
     found = {ask: find(facts, thread, *ask, owner) if thread else None for ask in dict.fromkeys(asks)}
     missing = [ask for ask, grant in found.items() if grant is None]
-    if missing:
-        return False, [refusal(cls, target, why, owner) for cls, target in missing]
     from .publish import _gen
     strand = strand_of_room(room)
     gen = _gen(facts, strand)
+    if missing:
+        for cls, target in missing:
+            refused(home, strand, gen, thread, cls, target)
+        return False, [refusal(cls, target, why, owner) for cls, target in missing]
     lines = []
     for (cls, target), grant in found.items():
         record(home, strand, gen, thread, cls, target, grant)

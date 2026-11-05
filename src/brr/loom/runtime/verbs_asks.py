@@ -22,6 +22,10 @@ def cmd_asks(args) -> int:
     from .ledger import read_facts
     from .lifecycle import main_snapshot
     home = _home(args)
+    if args.calibrate:
+        from .trust import calibrate, table
+        sys.stdout.write(table(calibrate(read_facts(home), args.days), args.days))
+        return 0
     sys.stdout.write(asks(read_facts(home), main_snapshot(home), args.thread, args.all,
                           install=home.install_id()))
     return 0
@@ -45,6 +49,9 @@ def asks_arguments(parser) -> None:
     _arguments(parser)
     parser.add_argument("--thread")
     parser.add_argument("--all", action="store_true", help="list done rows instead of their count")
+    parser.add_argument("--calibrate", action="store_true",
+                        help="per ask kind: asks, answered, took-rec rate, lapsed rate, median age at answer")
+    parser.add_argument("--days", type=float, default=30, help="the window --calibrate reads")
 
 
 def graph_arguments(parser) -> None:

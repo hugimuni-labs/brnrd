@@ -73,6 +73,8 @@ class Wish:
     reading: str = ""
     # An ask's recommendation: the asker's proposal, never a reading of the person's answer.
     rec: str = ""
+    # An ask's kind: the verb and act it was for (ASK_KINDS), the row its answer counts in.
+    kind: str = ""
     reads: list[dict] = field(default_factory=list)
     results: list[dict] = field(default_factory=list)
     verdict: dict | None = None
@@ -170,6 +172,7 @@ def wishes(facts: Iterable[Fact]) -> dict[str, Wish]:
             wish.sender, wish.line, wish.thread = d["from"], d["line"], d["thread"]
             wish.parent = d.get("parent") or wish.parent
             wish.rec = d.get("rec") or wish.rec
+            wish.kind = d.get("kind") or wish.kind
             wish.verdict = None
         else:
             if ident not in found:
@@ -192,7 +195,7 @@ def wishes(facts: Iterable[Fact]) -> dict[str, Wish]:
                 # A left is the plan, not news on the wish: its age stays the last stamp's.
                 continue
             else:
-                wish.verdict = dict(d, at=fact.at)
+                wish.verdict = dict(d, at=fact.at, writer=fact.by)
         wish.at = fact.at
     asked = [w for w in found.values() if w.sender == "resident"]
     if asked:

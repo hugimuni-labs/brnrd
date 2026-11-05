@@ -287,6 +287,10 @@ def _advice(wish, read, resolved: bool, said: str = "") -> str:
                 "or deliver, ask or settle")
     if resolved and str(wait.get("on", "")).startswith("pr:") and "cannot be read" in said:
         return f"the forge has no such pull request: re-park {wish.id} with the repo and number corrected"
+    on = str(wait.get("on") or "")
+    if resolved and on.startswith("wish:") and " was answered by " in said:
+        return (f"record how it was answered: wish {on[5:]} --answer took|changed|never; "
+                f"then go on with {wish.id}: deliver, re-park with a new --wait, or ask")
     if resolved:
         return f"go on with {wish.id}: deliver, re-park with a new --wait, or ask"
     return f"re-judge {wish.id}: re-park with a new --wait or --until, deliver, ask or drop it"
@@ -364,6 +368,7 @@ def observe_waits(home, facts, armed: bool, forge: dict | None = None, now: date
     without it no park takes its turn."""
     if not armed:
         return facts
+    from .home import notice_id
     from .loom import notice
     from .wishes import told
     found = told(facts)
@@ -390,8 +395,14 @@ def observe_waits(home, facts, armed: bool, forge: dict | None = None, now: date
         resolved = not said.startswith("nothing resolved by")
         head = (f"wait on {wish.id} {'resolved' if resolved else 'ran out'}: {said}. "
                 f"Parked as: {read['reading']}")
-        notice(home, facts, "wait", subject(wish, read), head, _advice(wish, read, resolved, said),
-               thread=parker(home, facts, wish, read))
+        wrote = notice(home, facts, "wait", subject(wish, read), head, _advice(wish, read, resolved, said),
+                       thread=parker(home, facts, wish, read))
+        on = str(read["wait"].get("on") or "")
+        if wrote and not resolved and read["wait"].get("default") is not None and on.startswith("wish:"):
+            # The default date passed unanswered and the body is told to do its rec: the ask lapsed.
+            from .ledger import append
+            from .trust import answer_fact
+            append(home, answer_fact(f"loom:{home.install_id()}", on[5:], "lapsed", notice_id("wait", subject(wish, read))))
     return facts
 
 
