@@ -197,7 +197,13 @@ def capture_usage_raw(
 
 
 def parse_billing(raw: bytes | str) -> dict[str, Any]:
-    """Only a weekly bucket actually declared by the billing service is fuel."""
+    """Only a weekly bucket actually declared by the billing service is fuel.
+
+    Grok 1.0.77 /usage matches creditUsagePercent even with unified billing.
+    onDemandCap, onDemandUsed and prepaidBalance are monetary amounts, not
+    the subscription limit: all three can be zero while weekly usage is 10%.
+    Their presence alone cannot supply a weekly percentage.
+    """
     data = json.loads(raw)
     config = data.get("config") if isinstance(data, dict) else None
     if not isinstance(config, dict):
