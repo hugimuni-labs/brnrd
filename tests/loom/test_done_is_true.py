@@ -179,3 +179,20 @@ def test_a_diff_of_only_tests_or_only_code_says_nothing():
     assert verify.weakened("diff --git a/tests" + tests) == ""
     moved = WEAK.replace("+    pass\n", "+    assert total([]) == 0\n+    assert isinstance(total([]), int)\n")
     assert "drops" not in verify.weakened(moved)
+
+
+def test_a_rerun_shard_is_counted_once(monkeypatch):
+    """Forge.passed sums the newest check run of each name: a shard's rerun
+    leaves its first run at the sha, and that one does not count again."""
+    runs = [{"id": 1, "name": "Backend shard 1/2"}, {"id": 2, "name": "Backend shard 2/2"},
+            {"id": 3, "name": "Backend shard 2/2"}]
+    notes = {1: "1000 passed", 2: "990 passed", 3: "1001 passed"}
+
+    class Checks:
+        def _runs(self, repo, sha):
+            return runs
+
+    forge = verify.Forge(Checks())
+    monkeypatch.setattr(forge, "_call", lambda path: [
+        {"title": "tests", "message": notes[int(path.split("/")[-2])]}])
+    assert forge.passed(REPO, HEAD) == 2001

@@ -85,9 +85,16 @@ class Forge:
 
     def passed(self, repo: str, sha: str) -> int | None:
         """The tests CI says passed at ``sha``: the sum of its ``tests`` notices
-        (ci.yml writes one per shard), or ``None`` when no check reported one."""
-        total, seen = 0, False
+        (ci.yml writes one per shard), or ``None`` when no check reported one.
+        A rerun leaves its old check run at the sha too; only the newest of
+        each name counts, so a rerun shard is not summed twice."""
+        latest: dict[str, dict] = {}
         for run in self.checks._runs(repo, sha):
+            name = str(run.get("name"))
+            if name not in latest or int(run.get("id") or 0) > int(latest[name].get("id") or 0):
+                latest[name] = run
+        total, seen = 0, False
+        for run in latest.values():
             for note in self._call(f"{repo}/check-runs/{run['id']}/annotations?per_page=100") or ():
                 found = _PASSED.search(str(note.get("message") or ""))
                 if note.get("title") == "tests" and found:

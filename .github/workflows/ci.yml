@@ -42,8 +42,8 @@ jobs:
       # `tests` notice per shard, read back from the check run's annotations.
       - name: Report the count
         run: >-
-          python -c "import xml.etree.ElementTree as E;
-          r=E.parse('pytest-times.xml').getroot(); s=r if r.tag=='testsuite' else r.find('testsuite');
+          python -c "import glob, xml.etree.ElementTree as E;
+          r=E.parse(glob.glob('*-times.xml')[0]).getroot(); s=r if r.tag=='testsuite' else r.find('testsuite');
           n=int(s.get('tests'))-sum(int(s.get(k) or 0) for k in ('failures','errors','skipped'));
           print(f'::notice title=tests::{n} passed')"
       - name: Upload test times
