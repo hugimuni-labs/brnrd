@@ -70,6 +70,7 @@ VERB: dict[str, str] = {
     "threads": "threads --left",
     "asks": "asks",
     "graph": "graph",
+    "gauge": "gauge --days 7",
     "face": "face take",
     "machines": "machines",
     "attention": 'attention --note <letter id> --why "what was done"',

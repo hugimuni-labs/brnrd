@@ -108,6 +108,36 @@ def cmd_of(command: object) -> str:
     return _cap(_masked(head), CMD_MAX)
 
 
+def _segments(command: str) -> list[str] | None:
+    """The command's parts between ``;``, ``&``, ``|`` and newlines outside quotes, so a
+    commit message's ``;`` is no separator. ``None`` for a command substitution outside
+    single quotes: what it runs is not a landing verb, whatever the part starts with."""
+    parts, part, quote, i = [], [], "", 0
+    while i < len(command):
+        char = command[i]
+        if quote != "'" and (char == "`" or command.startswith("$(", i)):
+            return None
+        if char == "\\" and quote != "'" and i + 1 < len(command):
+            part.append(command[i:i + 2])
+            i += 2
+            continue
+        if quote:
+            quote = "" if char == quote else quote
+        elif char in "'\"":
+            quote = char
+        elif char == "&" and (command[i - 1:i] in "<>" and i or command[i + 1:i + 2] == ">"):
+            pass  # a redirect (``2>&1``, ``&>``), not a separator
+        elif char in ";&|\n":
+            parts.append("".join(part))
+            part = []
+            i += 1
+            continue
+        part.append(char)
+        i += 1
+    parts.append("".join(part))
+    return parts
+
+
 def produces(tool: str, given: object) -> bool:
     """A call that leaves a line: a file written, a commit, a letter or a wish moved.
 
@@ -121,7 +151,6 @@ def produces(tool: str, given: object) -> bool:
         return False
     if isinstance(command, list):
         command = " ".join(str(part) for part in command)
-    from .spend import _segments
     parts = _segments(command) or [command]
     return any(_PRODUCE_RE.match(part.strip()) for part in parts)
 
