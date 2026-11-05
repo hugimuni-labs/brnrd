@@ -668,8 +668,17 @@ def claim_pr(room: Path | str, name: str, number: int, *, merged: bool = False) 
                     id=f"pr.opened:{who.thread}:{name}:{number}:{head}")
     fact = append(who.home, fact)
     if not merged:
-        note = "\n".join(filter(None, [note, _sign_pr(who, source, number)]))
+        note = "\n".join(filter(None, [note, _sign_pr(who, source, number), _weakened(who, source, number)]))
     return Claimed(fact, note)
+
+
+def _weakened(who: _Caller, source: str, number: int) -> str:
+    """The reviewer's fact, on the pull request as it opens: the asserts its tests lose
+    beside a code change (``verify.weakened``), said back to the body too."""
+    from .update import slug
+    from .verify import mark
+    repo = slug(source)
+    return mark(who.home, repo, number) if repo else ""
 
 
 def _arguments(parser) -> None:

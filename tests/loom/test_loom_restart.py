@@ -144,7 +144,7 @@ ctx.send("thread:work", note="begin", re=letter)
 deadline = time.monotonic() + 30
 until("plan 0/2")
 assert ctx.jack("post").raw == ""
-wish(one, "--result", "pr:https://example.com/1", "--line", "First done", "--deliver")
+wish(one, "--result", "url:https://example.com/1", "--line", "First done", "--deliver")
 view = until("plan 1/2")
 text = json.loads(view.raw)["hookSpecificOutput"]["additionalContext"]
 next_row = text.split(" · next: ")[1].split("\\n")[0]
@@ -159,7 +159,7 @@ while not view.letters:
 ctx.handoff({str(complete)!r}, view.raw)
 for later in view.letters:
     ctx.send("thread:work", note="followup read", re=later.id)
-wish(two, "--result", "pr:https://example.com/2", "--line", "Second done", "--deliver")
+wish(two, "--result", "url:https://example.com/2", "--line", "Second done", "--deliver")
 view = until("plan 2/2")
 assert " · next: " not in view.raw, view.raw
 while ctx.jack("post").raw:

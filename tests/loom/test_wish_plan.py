@@ -33,7 +33,7 @@ def table(home, capsys):
 
 
 def deliver(home, seat, ident):
-    command(home, seat, "wish", ident, "--result", "pr:https://example.com/1", "--line", "Done", "--deliver")
+    command(home, seat, "wish", ident, "--result", "url:https://example.com/1", "--line", "Done", "--deliver")
 
 
 def test_progress_is_delivered_and_accepted_over_person_wishes(ledger, capsys):

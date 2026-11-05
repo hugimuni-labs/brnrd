@@ -92,7 +92,7 @@ def test_a_parked_or_asked_or_delivered_wish_is_never_stale(ledger):
     parked = elsewhere(home, seat, "Parked")
     command(home, seat, "wish", parked, "--read", "waiting: CI", "--wait", "at:+30d")
     root = elsewhere(home, seat, "Delivered")
-    command(home, seat, "wish", root, "--result", "pr:https://example.com/1", "--line", "Done", "--deliver")
+    command(home, seat, "wish", root, "--result", "url:https://example.com/1", "--line", "Done", "--deliver")
     letters = told(home, now=later(days=8))
     bodies = "\n".join(f.data["body"] for f in letters)
     assert parked not in bodies and root not in bodies
