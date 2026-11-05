@@ -8,7 +8,6 @@ An unknown is said, never counted as zero.
 
 from __future__ import annotations
 
-import argparse
 import sys
 from datetime import datetime, timedelta, timezone
 
@@ -89,7 +88,8 @@ def _spent(home, facts):
 def main(argv):
     from .home import Home, resolve_home
     from .ledger import read_facts
-    parser = argparse.ArgumentParser(prog="python -m brr.loom.runtime gauge")
+    from .refusals import Parser
+    parser = Parser(verb="gauge")
     parser.add_argument("--home")
     parser.add_argument("--days", type=float, default=7)
     args = parser.parse_args(argv)
