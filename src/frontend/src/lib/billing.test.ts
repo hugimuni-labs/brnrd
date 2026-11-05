@@ -9,14 +9,13 @@ import {
 	withoutBillingParam
 } from './billing.ts';
 
-test('subscribeOffer always returns the single subscriber price', () => {
-	assert.deepEqual(subscribeOffer('monthly'), { usd: 7, label: '$7/mo' });
-	assert.deepEqual(subscribeOffer('annual'), { usd: 70, label: '$70/yr' });
+test('subscribeOffer returns the one monthly premium price, in euros', () => {
+	assert.deepEqual(subscribeOffer(), { eur: 12, cadence: 'monthly', label: '€12/mo' });
 });
 
-test('pricing constants match the accepted single-price decision', () => {
-	assert.equal(PRICING.monthly, 7);
-	assert.equal(PRICING.annual, 70);
+test('pricing constants match the 2026-11-05 decision: monthly only', () => {
+	assert.equal(PRICING.monthly, 12);
+	assert.ok(!('annual' in PRICING), 'an annual figure is back in the offer');
 });
 
 test('billingReturnNotice maps the four return params and nothing else', () => {

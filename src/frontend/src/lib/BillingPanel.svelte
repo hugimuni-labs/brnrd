@@ -11,7 +11,6 @@
 		startSubscriptionCheckout,
 		subscribeOffer,
 		withoutBillingParam,
-		type Cadence,
 		type BillingNotice,
 		type SubscriptionState
 	} from './billing';
@@ -29,10 +28,9 @@
 	// the whole page or rewrites subscription state; parallel taps only
 	// manufacture races with Stripe.
 	let busy = $state<string | null>(null);
-	let cadence = $state<Cadence>('monthly');
 	let notice = $state<BillingNotice | null>(null);
 
-	let offer = $derived(subscribeOffer(cadence));
+	const offer = subscribeOffer();
 	let hasSubscription = $derived(subscription !== null && subscription.status !== null);
 	let periodEndLabel = $derived(
 		subscription?.current_period_end ? dateLabel(subscription.current_period_end) : null
@@ -76,7 +74,7 @@
 
 	const subscribe = () =>
 		act('subscribe', async () => {
-			window.location.href = await startSubscriptionCheckout(cadence);
+			window.location.href = await startSubscriptionCheckout(offer.cadence);
 		});
 
 	const openPortal = () =>
@@ -134,24 +132,6 @@
 				the free tier's hosted event limits while funding the open-source engine.
 			</p>
 			<div class="mt-3 flex flex-wrap items-center gap-3">
-				<div
-					class="flex border border-stone-700 font-mono text-[11px] tracking-wide uppercase"
-					role="group"
-					aria-label="billing cadence"
-				>
-					{#each ['monthly', 'annual'] as const as option (option)}
-						<button
-							type="button"
-							class="cursor-pointer px-3 py-1.5 {cadence === option
-								? 'bg-amber-950/60 text-amber-200'
-								: 'text-ink-quiet hover:text-stone-300'}"
-							aria-pressed={cadence === option}
-							onclick={() => (cadence = option)}
-						>
-							{option}
-						</button>
-					{/each}
-				</div>
 				<button
 					type="button"
 					class="cursor-pointer border border-amber-700 bg-amber-950/40 px-3 py-1.5 font-mono text-[11px] tracking-wide text-amber-200 uppercase hover:bg-amber-950/70 disabled:cursor-default disabled:opacity-50"
@@ -162,7 +142,8 @@
 				</button>
 			</div>
 			<p class="mt-2 font-mono text-[10px] text-ink-quiet">
-				Stripe-hosted checkout · price shown before you pay
+				Stripe-hosted checkout · VAT included · a founding price, unchanged while your subscription
+				is live
 			</p>
 		{:else}
 			<div class="mt-3 flex flex-wrap items-center gap-3">

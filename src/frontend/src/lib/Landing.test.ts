@@ -32,6 +32,7 @@ async function renderLanding(): Promise<string> {
 		)
 		.replace(/import ShelfIcon from '\$lib\/ShelfIcon\.svelte';/, 'const ShelfIcon = () => {};')
 		.replace(/'\$lib\/publicStats'/g, "'./publicStats.ts'")
+		.replace(/'\$lib\/install'/g, "'./install.ts'")
 		.replace(/'\$lib\/legalNotice'/g, "'./legalNotice.ts'")
 		.replace(/'\$lib\/transitions'/g, "'./transitions.ts'")
 		.replace(/'\$lib\/supportMatrix'/g, "'./supportMatrix.ts'")
