@@ -95,6 +95,21 @@ def test_the_wake_names_each_library_entry(tmp_path: Path) -> None:
     assert f"known old: Ada's MISSING at {gone.resolve()}; read and work on request" in wake
 
 
+def test_the_wake_names_library_repos_in_one_line(tmp_path: Path) -> None:
+    """A repo costs its name in the wake; a folder keeps its line."""
+    root = _home(tmp_path)
+    kb = tmp_path / "kb"
+    kb.mkdir()
+    for name in ("brnrd", "site"):
+        assert _add(root, name, f"https://github.com/ada/{name}", "--kind", "known", "--whose", "Ada",
+                    "--for", "x" * 150) == 0
+    assert _add(root, "kb", str(kb), "--kind", "known", "--whose", "Ada", "--for", "notes") == 0
+    lines = library.wake_text(Home(root)).splitlines()
+    assert lines[0] == "repos: brnrd, site"
+    assert [line.split(":")[0] for line in lines[1:]] == ["known kb"]
+    assert "github.com" not in library.wake_text(Home(root))
+
+
 def test_a_long_library_is_capped_in_the_wake(tmp_path: Path) -> None:
     root = _home(tmp_path)
     for index in range(library.SHOWN + 2):
@@ -125,7 +140,8 @@ def test_a_seat_names_a_library_repo_by_name(tmp_path: Path) -> None:
     assert git(checkout, "remote", "get-url", "origin").stdout.strip() == f"file://{bare}"
     wake = (room / "port" / "wake.md").read_text()
     assert f"repo widget: {checkout} on loom/work" in wake
-    assert "kept widget: Ada's file://" in wake
+    assert "repos: widget\n" in wake
+    assert "kept widget:" not in wake
 
 
 def test_a_seat_naming_a_library_repo_publishes_to_its_source(tmp_path: Path) -> None:

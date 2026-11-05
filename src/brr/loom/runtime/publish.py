@@ -154,12 +154,22 @@ def read_command(root: Path, source: str, tail: list[str],
 
 
 def _declared(home, thread: str, name: str) -> str:
+    """The source ``name`` pushes to: the seat's ``repo:`` line, else its library page.
+
+    The library is the grant for repos; a seat line only wins where it names one.
+    """
     from .adapters import repos, seat_text
+    from .library import sources
     for found, source in repos(seat_text(home, thread), home=home):
         if found == name:
             return source
+    shelf = sources(home)
+    if name in shelf:
+        return shelf[name]
     raise PublishError(
-        f"publish: thread {thread}'s seat on main declares no repo named {name}"
+        f"publish: thread {thread}'s seat on main declares no repo named {name}, "
+        f"and the library has no library/{name}.md with a source; add it with "
+        f"`lib add {name} <url> --kind known --whose <person> --for <why>` and land it"
     )
 
 

@@ -13,7 +13,6 @@ from brr.loom.runtime.guards import GuardError, parse
 from brr.loom.runtime.home import Home
 from brr.loom.runtime.jack import execute
 from brr.loom.runtime.ledger import append, read_facts
-from brr.loom.runtime.spend import landing_call
 from test_guards import STRAND, _call, _repo
 
 MERGE = r"""
@@ -136,53 +135,17 @@ def test_a_letter_for_another_pr_grants_nothing(tmp_path, monkeypatch):
     assert not [f for f in read_facts(home) if f.kind == "guard.granted"]
 
 
-# Over the allocation, landing stays open (inbox's i1jbi): reads, the self's files,
-# git's recording verbs and the loom's verbs. The rest is more work, refused.
-@pytest.mark.parametrize("tool,tool_input,lands", [
-    ("Read", {"file_path": "/x"}, True),
-    ("Bash", {"command": "git add -A && git commit -m 'land'"}, True),
-    ("Bash", {"command": "git -C /r/self status"}, True),
-    ("Bash", {"command": "cd self && brnrd runtime send-self --room ."}, True),
-    ("Bash", {"command": "/home/u/.brnrd/bin/brnrd runtime send --to thread:inbox 'done'"}, True),
-    ("Bash", {"command": "sed -n 1,20p README.md | head"}, True),
-    # A separator inside quotes is part of the message, not a second command.
-    ("Bash", {"command": "git commit -am \"a; b | c && d\""}, True),
-    ("Bash", {"command": "git commit -m 'it\\'s; ok'"}, False),
-    ("Bash", {"command": "git commit -m \"say \\\"x; y\\\"\""}, True),
-    ("Bash", {"command": "git status & uv run pytest"}, False),
-    ("Bash", {"command": "git log -3 2>&1 | tail -2"}, True),
-    ("Bash", {"command": "git log $(uv run x)"}, False),
-    ("Bash", {"command": "echo `make`"}, False),
-    ("Bash", {"command": "git commit -m 'costs $(nothing)'"}, True),
-    ("Bash", {"command": "uv run pytest tests"}, False),
-    ("Bash", {"command": "git add -A && git push"}, False),
-    ("Bash", {"command": "sed -i '' s/a/b/ x.py"}, False),
-    ("Agent", {"prompt": "go"}, False),
-])
-def test_landing_calls_over_the_allocation(tmp_path, tool, tool_input, lands):
-    assert landing_call(tool, tool_input, tmp_path / "self") is lands
+OVER = ("budget: thread ta is over its allocation by 81k (881k of 800k, +10%); this body 300k, its boot 120k. "
+        "thread:inbox has the notice and decides a raise; you go on.\n")
 
 
-def test_an_edit_lands_only_under_the_self(tmp_path):
-    (tmp_path / "self").mkdir()
-    assert landing_call("Edit", {"file_path": str(tmp_path / "self" / "threads/ta/README.md")}, tmp_path / "self")
-    assert not landing_call("Edit", {"file_path": str(tmp_path / "brnrd" / "src/a.py")}, tmp_path / "self")
-
-
-OVER = ("budget: thread ta has spent 881k of 800k tokens (+10%). Write to thread:inbox: what is done, what is "
-        "left, and how much more you ask.\n")
-
-
-def test_over_the_allocation_the_jack_refuses_more_work_and_lets_landing_run(tmp_path, monkeypatch):
+@pytest.mark.parametrize("command", ["uv run pytest", "git push", "python -c 1"])
+def test_over_the_allocation_the_jack_refuses_nothing(tmp_path, monkeypatch, command):
+    """The boot already spent what a refusal would save (his 10224, 10228)."""
     monkeypatch.setenv("BRNRD_THREAD", "ta")
     room, _home = _room(tmp_path)
     (room / "port" / "in" / "boundary.md").write_text(OVER)
-    said = json.loads(execute("pre", room, _call("Bash", command="uv run pytest")))["hookSpecificOutput"]
-    assert said["permissionDecision"] == "deny"
-    reason = said["permissionDecisionReason"]
-    assert "refused: spend past allocation (thread ta has spent 881k of 800k tokens)" in reason
-    assert "override: thread:inbox raises it with `send --to thread:ta --budget <n>`" in reason
-    assert execute("pre", room, _call("Bash", command="git commit -qm land")) == ""
+    assert "deny" not in execute("pre", room, _call("Bash", command=command))
 
 
 def test_under_the_allocation_nothing_is_refused_for_spend(tmp_path, monkeypatch):
