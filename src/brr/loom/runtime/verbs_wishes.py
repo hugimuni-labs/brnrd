@@ -48,7 +48,7 @@ def say_span(raw: str, facts) -> Say:
     return Say(ident, off, size)
 
 
-def wish_fact(facts, *, by, ident, says=(), line=None, thread=None, sender=None, parent=None, rec=None):
+def wish_fact(facts, *, by, ident, says=(), line=None, thread=None, sender=None, parent=None, rec=None, kind=None):
     known = wishes(facts)
     current = known.get(ident)
     if parent is not None and parent not in known:
@@ -71,6 +71,8 @@ def wish_fact(facts, *, by, ident, says=(), line=None, thread=None, sender=None,
         data["parent"] = parent
     if rec is not None:
         data["rec"] = rec
+    if kind is not None:
+        data["kind"] = kind
     if data["from"] == "resident" and not (parent or (current and current.parent)):
         raise ValueError("an ask needs the wish it unblocks: ask --for <wish>")
     return Fact(kind="wish", by=by, id=ident if current is None else "wish:" + mint(12), data=data)
@@ -101,6 +103,9 @@ def _wish_arguments(parser):
     parser.add_argument("--top", metavar="LETTER",
                         help="the person's letter that puts this wish on top of their order")
     parser.add_argument("--pick", metavar="WHY", help="the resident works this wish next, and why")
+    from .trust import ANSWERS
+    parser.add_argument("--answer", choices=ANSWERS,
+                        help="how the person answered this ask: took the rec, changed it, or said never")
     parser.add_argument("--left", action="append", default=[],
                         help="a step still to do; repeat for each, the whole list (or: same)")
 
@@ -111,6 +116,10 @@ def cmd_wish(args):
         facts = read_facts(home)
         if args.top is not None or args.pick is not None:
             append(home, _rank_fact(args, facts, by))
+            print(args.id)
+            return 0
+        if args.answer is not None:
+            append(home, _answer_fact(args, facts, by))
             print(args.id)
             return 0
         actions = any(x is not None for x in (args.read, args.result, args.accept, args.drop))
@@ -126,8 +135,8 @@ def cmd_wish(args):
             raise ValueError("--left goes alone or with --result")
         if args.deliver and args.result is None:
             raise ValueError("--deliver requires --result")
-        if args.ref is not None and args.accept is None:
-            raise ValueError("--ref requires --accept")
+        if args.ref is not None and args.accept is None and args.answer is None:
+            raise ValueError("--ref requires --accept or --answer")
         if (args.wait is not None or args.until is not None) and args.read is None:
             raise ValueError("--wait and --until go with --read \"waiting: …\"")
         touches = args.say or any(x is not None for x in (args.line, args.sender, args.thread, args.parent))
@@ -213,6 +222,20 @@ def cmd_wish(args):
         return 0
     except (ValueError, OSError, RuntimeError) as exc:
         return refuse("wish", exc)
+
+
+def _answer_fact(args, facts, by):
+    """``--answer``: the reader's word on how an ask was answered, against its rec."""
+    from .trust import answer_fact
+    ask = wishes(facts).get(args.id)
+    if ask is None or ask.sender != "resident":
+        raise ValueError(f"--answer: {args.id} is not an ask")
+    if not ask.rec:
+        raise ValueError(f"--answer: {args.id} has no rec, so there is nothing to take or change")
+    ref = args.ref or ask.answer
+    if not ref:
+        raise ValueError(f"--answer: no reply is bound to {args.id} yet; name it with --ref <letter>")
+    return answer_fact(by, args.id, args.answer, ref)
 
 
 def _rank_fact(args, facts, by):
@@ -513,7 +536,7 @@ def cmd_ask(args):
         if same is None:
             # The rec rides on the ask itself: a wish.read would read as the person's answer.
             fact = wish_fact(facts, by=by, ident="new", line=args.what, thread=thread,
-                             sender="resident", parent=args.wish, rec=args.rec)
+                             sender="resident", parent=args.wish, rec=args.rec, kind=args.kind)
             from .lifecycle import reopen_for
             from .verbs_loom import _room
             # A body that settled its own thread and asks again holds open work there.
@@ -527,8 +550,9 @@ def cmd_ask(args):
         else:
             ident = same.id
             print(f"ask: reused {ident}, the open ask with this line for {args.wish}", file=sys.stderr)
-        if same is not None and args.rec is not None and same.rec != args.rec:
-            append(home, wish_fact(facts, by=by, ident=ident, rec=args.rec))
+        if same is not None and ((args.rec is not None and same.rec != args.rec)
+                                 or (args.kind is not None and same.kind != args.kind)):
+            append(home, wish_fact(facts, by=by, ident=ident, rec=args.rec, kind=args.kind))
         # A thread that waits on another must wake it: a wish alone is mail to nobody.
         from .lifecycle import main_snapshot
         from .port import write_send
@@ -567,6 +591,8 @@ def cmd_ask(args):
                 "wish": args.wish, "reading": f"waiting: ask {ident}: {args.what}", "by": "resident",
                 "wait": _wait(home, facts, args.wish, "wish:" + ident, args.default_at, default=args.rec)}))
         _declare(args, "ask")
+        if args.kind is None and (same is None or not same.kind):
+            print("ask: no --kind; its answer counts under (no kind) in asks --calibrate", file=sys.stderr)
         if same is None:
             _related(home, args.what, facts, thread)
         print(ident)
@@ -583,6 +609,9 @@ def _ask_arguments(parser):
     parser.add_argument("--rec", help="what you recommend; kept on the ask as its rec, apart from the answer")
     parser.add_argument("--default-at", dest="default_at",
                         help="if nobody answers by then, you are woken to carry out your rec")
+    from .trust import ASK_KINDS
+    parser.add_argument("--kind", choices=ASK_KINDS,
+                        help="the act the ask is for: the row its answer counts in (asks --calibrate)")
 
 
 def cmd_wishes(args):

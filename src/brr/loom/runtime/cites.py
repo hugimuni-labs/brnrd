@@ -109,9 +109,12 @@ def _within(channel: str, allowed: set[str]) -> bool:
 def missed(readme: Path) -> str:
     """The README's ``## Misses`` section, or nothing."""
     try:
-        text = readme.read_text()
+        return missed_text(readme.read_text())
     except OSError:
         return ""
+
+
+def missed_text(text: str) -> str:
     found = re.search(r"^## Misses\s*$(.*?)(?=^## |\Z)", text, re.M | re.S)
     return found.group(1) if found else ""
 
