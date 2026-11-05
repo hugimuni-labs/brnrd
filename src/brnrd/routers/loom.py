@@ -128,6 +128,11 @@ def loom_beads(request: Request, since: str | None = None, db: Session = Depends
     return _read(request, db, "beads")
 
 
+@router.get("/topics")
+def loom_topics(request: Request, db: Session = Depends(get_db)) -> Response:
+    return _read(request, db, "topics")
+
+
 @router.get("/thread/{thread_id}")
 def loom_thread(
     thread_id: str, request: Request, before: str | None = None, until: str | None = None,

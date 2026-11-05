@@ -30,7 +30,7 @@ test('columns stand inbox, seated, your call, mine, waiting, no body, quiet, the
 	);
 	assert.deepEqual(
 		cols.map((c) => c.id),
-		['inbox', 'alpha', 'bravo', 'charlie', 'echo', 'delta', 'foxtrot', '~settled']
+		['inbox', 'topics', 'alpha', 'bravo', 'charlie', 'echo', 'delta', 'foxtrot', '~settled']
 	);
 	assert.deepEqual(
 		cols.filter((c) => c.stall).map((c) => c.id),
@@ -47,6 +47,16 @@ test('columns stand inbox, seated, your call, mine, waiting, no body, quiet, the
 		'waiting: the forge to come back'
 	);
 	assert.equal(await B.page.locator('[data-column="bravo"] .badge').innerText(), 'verdict');
+});
+
+test('the topics column sits after the inbox; a press unfolds the newest quote', async () => {
+	const cols = await B.page.$$eval('#board > .column', (cs) => cs.map((c) => c.dataset.column));
+	assert.equal(cols[1], 'topics');
+	const row = B.page.locator('[data-column="topics"] [data-topic="board"]');
+	assert.match(await row.innerText(), /board/);
+	assert.equal(await row.locator('.from-body').count(), 0);
+	await row.click();
+	assert.match(await row.locator('.from-body').innerText(), /Chose four states/);
 });
 
 test('a thread column shows the person letters behind its wishes, collapsed', async () => {

@@ -5,12 +5,13 @@
 	import { onMount, untrack } from 'svelte';
 	import { updated } from '$app/state';
 	import './board.css';
-	import { arrange, bst, byThread, SETTLED, sortThreads, wanted } from '../order.ts';
+	import { arrange, bst, byThread, SETTLED, TOPICS, sortThreads, wanted } from '../order.ts';
 	import { INBOX } from '../sides.ts';
 	import { dur, hue, secs } from '../text.ts';
 	import { liveOf, what } from '../tape.ts';
 	import { face, LIVE, LOG, moves, seen, waitOf, type Seen } from '../rail.ts';
 	import Column from './Column.svelte';
+	import Topics from './Topics.svelte';
 	import Stack from './Stack.svelte';
 	import BeadSheet from './BeadSheet.svelte';
 	import Links from './Links.svelte';
@@ -155,6 +156,7 @@
 		{#if !b.model}<div class="empty">{b.error || 'loading the board'}</div>{/if}
 		{#each order as id (id)}
 			{#if id === INBOX}<Column t={inbox} inbox letters={b.letters} />
+			{:else if id === TOPICS}<Topics />
 			{:else if id === SETTLED}<Stack {settled} {by} />
 			{:else if byId.get(id)}<Column t={byId.get(id)!} letters={by.get(id) || []} />{/if}
 		{/each}

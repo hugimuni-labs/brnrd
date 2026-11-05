@@ -2,7 +2,7 @@
 // is fetched again only when its hash in the index moves. Beads then patch from the index's beads_delta or
 // GET /v1/loom/beads?since=<hash>, so a letter does not refetch the whole part. /v1/loom/events sends the index hash
 // whenever it moves.
-import type { BeadsDelta, Index, Letter, Model, ThreadPart } from './types.ts';
+import type { BeadsDelta, Index, Letter, Model, ThreadPart, Topic } from './types.ts';
 import { byAt } from './text.ts';
 
 export const BASE = '/v1/loom';
@@ -58,7 +58,8 @@ export function assemble(index: Index, threads: Map<string, ThreadPart>): Model 
 		fuel: index.fuel || [],
 		faces: index.faces,
 		person: index.person,
-		via: index.via
+		via: index.via,
+		topics: []
 	};
 }
 
@@ -90,6 +91,7 @@ export class Store {
 	index: Index | null = null;
 	threads = new Map<string, ThreadPart>();
 	beads: Beads | null = null;
+	topics: Topic[] = [];
 	held = new Map<string, string>();
 	private get: Get;
 	private loading: Promise<Beads> | null = null;
@@ -114,6 +116,14 @@ export class Store {
 			this.held.delete(n);
 		}
 		if (this.beads && this.held.get('beads') !== index.parts.beads) await this.patchBeads(index);
+		if (index.parts.topics && this.held.get('topics') !== index.parts.topics) {
+			this.topics = (await this.get(`${BASE}/topics`)) as Topic[];
+			this.held.set('topics', index.parts.topics);
+		}
+		if (!index.parts.topics) {
+			this.topics = [];
+			this.held.delete('topics');
+		}
 		this.index = index;
 		return true;
 	}
@@ -176,7 +186,10 @@ export class Store {
 	}
 
 	model(): Model | null {
-		return this.index ? assemble(this.index, this.threads) : null;
+		if (!this.index) return null;
+		const m = assemble(this.index, this.threads);
+		m.topics = this.topics;
+		return m;
 	}
 }
 

@@ -5,6 +5,7 @@ import gzip
 import http.client
 import json
 import time
+from pathlib import Path
 
 import pytest
 
@@ -434,6 +435,65 @@ def test_beads_since_composes_two_letters_to_the_current_hash(parts):
         got = json.loads(body)
         assert status == 200 and got["hash"] == current and got["since"] == h1
         assert second in got["set"] and third in got["set"]
+    finally:
+        parts.stop.set()
+        server.shutdown()
+        server.server_close()
+
+
+def test_topic_newest_matches_the_seed_wake():
+    """board.topic_newest is a copy of the seed wake's; a drift in either fails."""
+    import importlib.machinery
+    import importlib.util
+    from brr.loom.runtime.board import topic_newest as board_newest
+    wake = Path(__file__).resolve().parents[2] / "src/brr/loom/runtime/seed/core/loom/wake"
+    loader = importlib.machinery.SourceFileLoader("seed_wake", str(wake))
+    spec = importlib.util.spec_from_loader("seed_wake", loader)
+    mod = importlib.util.module_from_spec(spec)
+    loader.exec_module(mod)
+    page = (
+        "# Board: how wishes and threads are drawn\n\n"
+        "### 2026-10-24 · Older entry · [x](y)\n\nbody\n\n"
+        "### 2026-10-25 · A thread shows the face its strand chose · [faces](x)\n\n"
+        "Chose four states.\n"
+    )
+    assert board_newest(page) == mod.topic_newest(page) == (
+        "2026-10-25", "A thread shows the face its strand chose")
+    assert board_newest("# no entries\n") == mod.topic_newest("# no entries\n") == ("", "")
+
+
+def test_topics_is_its_own_part_not_on_the_index(parts):
+    root = parts.home.root
+    page = root / "self/topics/board.md"
+    page.parent.mkdir(parents=True, exist_ok=True)
+    page.write_text(
+        "# Board: how wishes and threads are drawn\n\n"
+        "### 2026-10-25 · A thread shows the face its strand chose · [faces](x)\n\n"
+        "Chose four states, in order.\n"
+    )
+    cited = inject_letter(root, to="thread:web", body="see topics/board for the column order")
+    assert parts.step()
+    index = parts.parts["index"]
+    assert "topics" in index["parts"]
+    assert "topics" not in {k for k in index if k != "parts"}
+    rows = parts.parts["topics"]
+    assert rows[0]["id"] == "board"
+    assert rows[0]["at"] == "2026-10-25"
+    assert rows[0]["line"].startswith("A thread shows the face")
+    assert cited in rows[0]["cites"]
+    assert "Chose four states" in rows[0]["quote"]
+    before = parts.hashes["topics"]
+    inject_letter(root, to="thread:web", body="unrelated")
+    assert parts.step()
+    assert parts.hashes["topics"] == before
+    server = serve(parts, 0)
+    port = server.server_address[1]
+    try:
+        status, _, body = get(port, "/v1/loom/topics")
+        assert status == 200 and json.loads(body)[0]["id"] == "board"
+        idx = json.loads(get(port, "/v1/loom/index")[2])
+        assert "topics" not in idx
+        assert idx["parts"]["topics"] == parts.hashes["topics"]
     finally:
         parts.stop.set()
         server.shutdown()

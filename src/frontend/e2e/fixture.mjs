@@ -233,6 +233,17 @@ export function fixture() {
 	for (const [id, ws] of Object.entries(wishes))
 		for (const w of ws) beads[w.wish] = [w.letters?.[0] || null, 'wish', id, w.at, w.line];
 	parts.beads = beads;
+	parts.topics = [
+		{
+			id: 'board',
+			title: 'Board: how wishes and threads are drawn',
+			at: '2026-10-25',
+			line: 'A thread shows the face its strand chose',
+			entries: 2,
+			cites: ['letter:mine:100'],
+			quote: 'Chose four states, in order.'
+		}
+	];
 	const walk = (id, out) => {
 		const seen = new Set();
 		let cur = id;
