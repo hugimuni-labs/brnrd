@@ -86,14 +86,15 @@ def _spent(home, facts):
 
 
 def main(argv):
-    from .home import Home, resolve_home
+    from .home import home_for
     from .ledger import read_facts
     from .refusals import Parser
     parser = Parser(verb="gauge")
     parser.add_argument("--home")
+    parser.add_argument("--room")
     parser.add_argument("--days", type=float, default=7)
     args = parser.parse_args(argv)
-    home = Home(resolve_home(args.home)[0])
+    home = home_for(args.home, args.room)
     facts = read_facts(home)
     print(line(gauge(facts, args.days, spent=_spent(home, facts))))
     return 0
