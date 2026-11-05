@@ -221,7 +221,7 @@ def test_a_delivered_wish_takes_one_line_in_the_wake(body):
     home, seat = body
     done = heard(home, seat, "Ship the switch")
     command(home, seat, "wish", done, "--left", "wait for CI")
-    command(home, seat, "wish", done, "--result", "pr:https://example.com/9", "--line", "Shipped", "--deliver")
+    command(home, seat, "wish", done, "--result", "url:https://example.com/9", "--line", "Shipped", "--deliver")
     live = heard(home, seat, "Paint the board")
     command(home, seat, "wish", live, "--left", "pick a palette")
     shown = wake(seat)

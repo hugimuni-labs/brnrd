@@ -123,7 +123,7 @@ def test_a_cite_on_a_delivered_wish_leaves_its_thread_settled_and_says_so(inbox)
                   "--thread", "work"])
     assert placed.returncode == 0 and "reopened work (was settled)" in placed.stderr
     ident = placed.stdout.strip()
-    run("wish", ident, "--room", str(seat), "--result", "pr:https://example.com/1", "--line", "Done", "--deliver")
+    run("wish", ident, "--room", str(seat), "--result", "url:https://example.com/1", "--line", "Done", "--deliver")
     settle(home.root)
     cite = inject_letter(home.root, to="thread:inbox", body="nice, as I said in the switch letter")
     said = cli(["wish", ident, "--room", str(seat), "--say", cite])

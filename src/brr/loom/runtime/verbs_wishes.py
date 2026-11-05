@@ -158,6 +158,10 @@ def cmd_wish(args):
                 data.update(kind=result_kind, ref=ref, line=args.line, delivered=args.deliver)
                 if result_kind == "host":
                     data.update(store_host_file(home, ref))
+                if args.deliver:
+                    held = _verified(home, facts, data)
+                    if held is not None:
+                        left = _held_left(args, facts, by, held, left)
             else:
                 kind = "wish.verdict"
                 data.update({"as": "accepted" if args.accept else "dropped",
@@ -189,6 +193,12 @@ def cmd_wish(args):
         if left is not None:
             append(home, left)
         # A park is a reading that says what it waits on, the one the board shows.
+        if actions and kind == "wish.result" and data.get("unverified"):
+            # Held: the body hears the fact at this boundary, and its left says it.
+            print(f"wish: held, not delivered: {data['unverified']}", file=sys.stderr)
+            if by.startswith("strand:"):
+                _declare(args, "left")
+            return 1
         if actions and kind == "wish.result" and by.startswith("strand:"):
             if args.deliver:
                 _tell_delivered(home, args, wishes(facts)[args.id], data)
@@ -272,6 +282,37 @@ def _size(n: int) -> str:
         n /= 1024
 
 
+def _verified(home, facts, data) -> str | None:
+    """Done is true (``verify``): the forge's word on the result goes into ``data``.
+    A result the forge does not bear out is not delivered; its fact is returned."""
+    from .verify import check
+    checked = check(home, facts, data["kind"], data["ref"], data["line"])
+    if checked is None:
+        return None
+    if not checked.ok:
+        data.update(delivered=False, unverified=checked.line)
+        return checked.line
+    data["verified"] = checked.line
+    if checked.weakened:
+        data["weakened"] = checked.weakened
+    return None
+
+
+def _held_left(args, facts, by, held: str, left):
+    """A held delivery's left: its fact first, then the steps the body wrote beside it."""
+    if not by.startswith("strand:"):
+        return left
+    steps = [held, *(left.data["steps"] if left is not None else ())]
+    strand = by.removeprefix("strand:")
+    return Fact(kind="wish.left", by=by, id="wish.left:" + mint(12),
+                data={"wish": args.id, "steps": steps, "gen": _gen(facts, strand)})
+
+
+def _gen(facts, strand: str) -> int:
+    return max((int(f.data["gen"]) for f in facts if f.kind == "lease" and f.data.get("strand") == strand),
+               default=0)
+
+
 def _tell_delivered(home, args, wish, result) -> None:
     """A delivered person wish is a letter to that person on the chat they said it in:
     the receipt, and how to give the verdict. Their reply ``ok`` to it accepts it."""
@@ -286,6 +327,9 @@ def _tell_delivered(home, args, wish, result) -> None:
         return
     room = _room(args.room)
     body = f"delivered &{wish.id}: {wish.line}\n{result['line']}: {result['ref']}\n"
+    for said in (result.get("verified"), result.get("weakened")):
+        if said:
+            body += said + "\n"
     attach = None
     if result.get("kind") == "host":
         body += f"file: {result['name']} · {_size(result['size'])} · sha256 {result['sha256']}\n"
@@ -399,10 +443,8 @@ def _left_fact(args, facts, by):
         raise ValueError("--left: a step is empty")
     if steps == ["none"]:
         raise ValueError("--left none: nothing left is a delivery: --result <kind>:<ref> --line … --deliver")
-    strand = by.removeprefix("strand:")
-    gen = max((int(f.data["gen"]) for f in facts if f.kind == "lease" and f.data.get("strand") == strand),
-              default=0)
-    data = {"wish": args.id, "steps": [] if steps == ["same"] else steps, "gen": gen}
+    data = {"wish": args.id, "steps": [] if steps == ["same"] else steps,
+            "gen": _gen(facts, by.removeprefix("strand:"))}
     if steps == ["same"]:
         if current.left is None:
             raise ValueError(f"--left same: {args.id} has no left yet; write its steps")

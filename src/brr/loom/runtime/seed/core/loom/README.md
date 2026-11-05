@@ -99,7 +99,10 @@ letter itself, which makes it derived. The README records the ids once as
 `opened-for: [w-…]`: why the thread was opened, while each wish's thread
 says where its work is now. When a result exists,
 record it with `wish <w-id> --result <kind>:<ref> --line "…"`, adding
-`--deliver` on the one you hand over. A file on the host is `host:<path>`:
+`--deliver` on the one you hand over. The loom delivers it only as the forge
+bears it out: a `pr:` merged, a `ci:` green at its commit, a `file:` on the
+self's main; a result that is not is held, its fact the wish's left, so an
+open pull request is parked on (`--wait pr:…`) and delivered once it merges. A file on the host is `host:<path>`:
 the loom keeps its bytes as delivered and sends it where the channel takes
 files, and names its path elsewhere. What is left on a wish is the wish's
 own: `wish <w-id> --left "<step>" --left "<step>"` restates the whole list,

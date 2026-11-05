@@ -69,7 +69,7 @@ REGISTRY = (
     _kind("body.exited",       "body",    "strand gen code why? failure_origin? failure_letters?",                             "loom",        "global",  once=True),
     _kind("wish",              "wish",    "wish says from line thread parent? rec?",           "strand person loom", "global"),
     _kind("wish.read",         "wish",    "wish reading by wait?",                             "strand person", "global"),
-    _kind("wish.result",       "wish",    "wish kind ref line delivered cmd? sha256? size? name? mime?", "strand loom", "global"),
+    _kind("wish.result",       "wish",    "wish kind ref line delivered cmd? sha256? size? name? mime? verified? unverified? weakened?", "strand loom", "global"),
     _kind("wish.verdict",      "wish",    "wish as evidence ref",                              "strand person loom", "global"),
     _kind("wish.left",         "wish",    "wish steps gen same?",                              "strand",        "global"),
     _kind("wish.top",          "wish",    "wish ref",                                          "strand person", "global"),
