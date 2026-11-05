@@ -342,6 +342,7 @@ def first_letter(home, person, *, timeout=600, out=print, running=None, sleep=ti
     Returns the strand that was shown it. Pairing proves the bot can talk;
     only a body reading the next letter proves the loom hears that chat.
     """
+    from .firstword import first_word
     from .ledger import read_facts
     from .service import _lock_held
     sender = f'person:{person}'
@@ -356,6 +357,14 @@ def first_letter(home, person, *, timeout=600, out=print, running=None, sleep=ti
         if new and not landed:
             out(f"  {style.check()} brnrd got your message")
             landed = True
+            first = next(str(f.data.get('id', f.id)) for f in facts
+                         if f.kind == 'letter' and f.id not in before and f.data.get('from') == sender)
+            try:
+                if first_word(home, person, first):
+                    out(f"  {style.check()} your house rules are on, citing that message: "
+                        f"people/{person}/agreement.md is yours to edit")
+            except (SelfError, subprocess.SubprocessError, OSError) as exc:
+                out(f"  {style.dot()} your house rules were not written ({exc}); brnrd setup writes them next time")
         for fact in facts:
             if fact.kind == 'shown' and new & set(fact.data.get('ids') or ()):
                 strand = fact.data.get('strand')

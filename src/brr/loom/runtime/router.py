@@ -721,6 +721,7 @@ class Router:
                     tell("stale-speech", "was not sent: it was drafted under router "
                          f"gen {grant} and a new router (gen {self.lease.gen}) took over", fresh)
                 continue
+            interview = person = None
             try:
                 body = str(fact.data.get("body") or "")
                 context = {k: str(fact.data[k]) for k in ("from", "clean", "edit", "attach") if k in fact.data}
@@ -735,6 +736,11 @@ class Router:
                              "was refused: that is not a known person's direct chat", fresh)
                         continue
                     body = f"{_header(state, fact, facts)}\n\n{body}"
+                    from .firstword import pending
+                    person = person_dm(self.home, str(to)).removeprefix("person:")
+                    interview = pending(facts, person)
+                    if interview:  # once, on the first message after setup saw the person's first word
+                        body = f"{body}\n\n{interview}"
                     event_id = _answers_event(state, fact)
                     from .project import reply_channels
                     if event_id and reply_channels(facts).get(fact.data.get("re")) == to:
@@ -747,6 +753,9 @@ class Router:
                 tell("speech-refused", why, fresh)
                 _log(self.home, f"speech {key} {why}")
                 continue
+            if status == "sent" and interview:
+                from .firstword import offered
+                facts.append(offered(self.home, person, key))
             if status == "not-sent":
                 tell("speech-refused", f"was not sent: {speech.data['reason']}", fresh)
             if unsure:

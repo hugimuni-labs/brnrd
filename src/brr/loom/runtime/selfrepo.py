@@ -429,7 +429,6 @@ def heal_home_thread(home: Path) -> str:
     a no-op. Raises ``SelfError`` when there is no self or the push is refused.
     """
     from .home import HOME_THREAD
-    from .merge import _push_lock
 
     self_dir = Path(home).resolve() / "self"
     if not (self_dir / ".git").exists():
@@ -437,19 +436,34 @@ def heal_home_thread(home: Path) -> str:
     path = f"threads/{HOME_THREAD}/README.md"
     if git(self_dir, "cat-file", "-e", f"main:{path}", check=False).returncode == 0:
         return git(self_dir, "rev-parse", "--short", "main").stdout.strip()
-    seed = seed_root() / path
-    scratch = Path(tempfile.mkdtemp(prefix="heal-", dir=self_dir.parent))
+    return land_files(home, {path: (seed_root() / path).read_text(encoding="utf-8")},
+                      f"Put {HOME_THREAD} back on main.\n\n"
+                      "Letters with no thread had nowhere to land; the loom restores the seed's.\n\n")
+
+
+def land_files(home: Path, files: dict[str, str], message: str) -> str:
+    """Write ``files`` (path to text) on the self's ``main`` in one loom commit; return the sha.
+
+    It lands through the self's pre-receive like any push, from a scratch
+    clone, so a dirty ``home/self`` worktree is never touched. ``message``
+    gets the loom's strand and clean label. Raises ``SelfError`` when there
+    is no self or the push is refused.
+    """
+    from .merge import _push_lock
+
+    self_dir = Path(home).resolve() / "self"
+    if not (self_dir / ".git").exists():
+        raise SelfError(f"no self at {self_dir}")
+    scratch = Path(tempfile.mkdtemp(prefix="land-", dir=self_dir.parent))
     try:
         clone = scratch / "self"
         git(scratch, "clone", "-q", "--branch", "main", str(self_dir), str(clone))
-        target = clone / path
-        target.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(seed, target)
-        git(clone, "add", "--", path)
-        _commit(clone, f"Put {HOME_THREAD} back on main.\n\n"
-                "Letters with no thread had nowhere to land; the loom restores the seed's.\n\n"
-                "Loom-Strand: loom\n"
-                "Loom-Label: taint=0; audience=self\n")
+        for path, text in files.items():
+            target = clone / path
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(text, encoding="utf-8")
+        git(clone, "add", "--", *files)
+        _commit(clone, message + "Loom-Strand: loom\nLoom-Label: taint=0; audience=self\n")
         changed = refresh_index(clone)
         if changed:
             git(clone, "add", "--", *changed)

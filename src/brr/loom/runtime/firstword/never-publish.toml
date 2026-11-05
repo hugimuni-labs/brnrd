@@ -1,0 +1,14 @@
+says = "A package upload is public and cannot be taken back. It goes only on the owner's letter naming the release, stamped on this thread's wish. gh release create is gated at the gh shim."
+set-by = "{letter}"
+
+[[match]]
+tool = "Bash"
+input = '''\b(?:twine\s+upload|uv\s+publish|npm\s+publish|pnpm\s+publish|yarn\s+publish)\b[^;|&\n]*?(?P<target>[^\s;|&]+)\s*(?:[;|&\n]|$)'''
+refuse = true
+grant = "publish"
+
+[[match]]
+tool = "Bash"
+input = '''\b(?:twine|uv|npm|pnpm|yarn)\s+(?P<target>upload|publish)\s*(?:[;|&\n]|$)'''
+refuse = true
+grant = "publish"
