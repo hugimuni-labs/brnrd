@@ -1,5 +1,6 @@
 """A fuel collector's error reaches the person as an ask, through the tick."""
 import json
+import time
 
 import pytest
 
@@ -23,14 +24,20 @@ def home(ledger):
     collectors._SEEN.clear()
 
 
-_AT = iter(range(1000, 10**6, 600))
+_LAST = [0.0]
+
+
+def _now():
+    """A refresh's ``at`` is the wall clock, as usage._refresh writes it, and never repeats."""
+    _LAST[0] = max(time.time(), _LAST[0] + 0.001)
+    return _LAST[0]
 
 
 def reads(home, shell, error=None, windows=()):
     """What a usage refresh writes, then one tick reads it."""
     path = home.root / "loom/usage" / f"{shell}.json"
     path.parent.mkdir(parents=True, exist_ok=True)
-    payload = {"at": next(_AT), "windows": [{"name": n, "left_pct": 50, "resets_at": None} for n in windows]}
+    payload = {"at": _now(), "windows": [{"name": n, "left_pct": 50, "resets_at": None} for n in windows]}
     if error:
         payload["error"] = error
     path.write_text(json.dumps(payload) + "\n")
@@ -71,6 +78,22 @@ def test_an_error_held_two_readings_is_one_ask_mailed_with_its_fix(home):
     ingest(home, "mine", dict(id="r1", kind="letter", to="channel:mine/42", **{"from": "mine:42"},
                               re="42:9", body="logged in again"), [])
     assert asks(home)[0].state == "answered"
+    # It waits on him, not on the loom: the inbox relays to the person.
+    from brr.loom.runtime.asks import asks as board
+    from brr.loom.runtime.lifecycle import main_snapshot
+    from brr.loom.runtime.wishes import waits_on
+    assert waits_on(wishes(read_facts(home)), main_snapshot(home)).get(ask.id) is None  # answered: no wait
+    # Weeks later, after a clean reading, the same error is a new fault: a second ask, a second mail.
+    reads(home, "grok", windows=["week"])
+    for _ in range(2):
+        reads(home, "grok", "grok billing HTTP 401; no authentication refresh attempted")
+    first, second = asks(home)
+    assert first.id == ask.id and second.open and second.line == ask.line
+    assert len(mails(home, second.id)) == 1
+    facts = read_facts(home)
+    assert waits_on(wishes(facts), main_snapshot(home))[second.id] == "operator"
+    yours = board(facts, main_snapshot(home), install="aaaa").split("yours\n")[1].split("\nunanswered")[0]
+    assert any(second.id in row and row.endswith("waits on operator") for row in yours.splitlines())
 
 
 def test_a_clean_reading_ends_the_ask_and_the_error_back_asks_again(home):
@@ -118,3 +141,9 @@ def test_an_ask_the_person_dropped_is_not_filed_again_while_the_error_holds(home
     for _ in range(3):
         reads(home, "grok", "invalid grok credential or billing response")
     assert [a.id for a in asks(home)] == [ask.id]
+    # A clean reading in between makes it a new fault.
+    reads(home, "grok", windows=["week"])
+    for _ in range(2):
+        reads(home, "grok", "invalid grok credential or billing response")
+    old, new = asks(home)
+    assert old.id == ask.id and new.open and new.line == ask.line

@@ -8,13 +8,16 @@ setup's onboarding asks are), mailed to the person's direct chat with the ask
 linked so a reply answers it. The same error read again files nothing, even
 after the person dropped or answered the ask; a different error on the same
 collector ends the old ask and files a fresh one; a reading with windows and
-no error ends the open ask as moot. One reading is no error: a network blip
-heals by the next refresh, so an error asks only once two readings carry it.
+no error ends the open ask as moot, and is kept (``<shell>.clean``) so the
+same error coming back after it is a new fault that asks again, whatever the
+person did with the last ask. One reading is no error: a network blip heals by
+the next refresh, so an error asks only once two readings carry it.
 """
 
 from __future__ import annotations
 
 import json
+from datetime import datetime
 from pathlib import Path
 
 from brr.daemon2.facts import Fact
@@ -33,7 +36,7 @@ FIXES = {
 READINGS = 2
 #: The drop ref that marks an ask the loom ended; the same error may ask again after it.
 MOOT = "loom: the collector "
-_SEEN: dict[tuple[Path, str], tuple[str, set[float]]] = {}
+_SEEN: dict[tuple[Path, str], tuple[str, tuple[float, ...]]] = {}
 
 
 def line(shell: str, error: str) -> str:
@@ -62,12 +65,23 @@ def _held(home, shell: str, payload: dict) -> str | None:
     if not isinstance(error, str) or not error.strip():
         _SEEN.pop(key, None)
         return None
-    seen, ats = _SEEN.get(key, (error, set()))
-    if seen != error:
-        ats = set()
-    ats.add(float(payload["at"]))
-    _SEEN[key] = (error, ats)
+    seen, ats = _SEEN.get(key, (error, ()))
+    at = float(payload["at"])
+    ats = (ats if seen == error else ()) + (() if at in ats else (at,))
+    _SEEN[key] = (error, ats[-READINGS:])
     return error if len(ats) >= READINGS else None
+
+
+def _clean_path(home, shell: str) -> Path:
+    return home.root / "loom/usage" / f"{shell}.clean"
+
+
+def _last_clean(home, shell: str) -> float:
+    """When this shell's collector last read clean, durably: 0 if never seen."""
+    try:
+        return float(_clean_path(home, shell).read_text().strip())
+    except (OSError, ValueError):
+        return 0.0
 
 
 def observe_collectors(home, facts, armed: bool):
@@ -77,14 +91,15 @@ def observe_collectors(home, facts, armed: bool):
     from . import usage
     from .wishes import told
     by, thread = f"loom:{home.install_id()}", home.main_thread()
-    if not home.routable(thread):
-        return facts
     for shell in usage.shells(home):
         payload = _reading(home.root / "loom/usage" / f"{shell}.json")
         if payload is None:
             continue
         error = _held(home, shell, payload)
         clean = not payload.get("error") and bool(payload.get("windows"))
+        if clean and float(payload["at"]) > _last_clean(home, shell):
+            from .home import atomic_write
+            atomic_write(_clean_path(home, shell), f"{payload['at']}\n")
         if error is None and not clean:
             continue
         found = told(facts)
@@ -100,8 +115,12 @@ def observe_collectors(home, facts, armed: bool):
         if want is None:
             continue
         last = mine[-1] if mine else None
-        if last is not None and last.line == want and not (
-                last.state == "dropped" and str((last.verdict or {}).get("ref", "")).startswith(MOOT)):
+        # The same error asks once; a clean reading since the last ask makes it a new fault.
+        if (last is not None and last.line == want
+                and datetime.fromisoformat(last.born).timestamp() > _last_clean(home, shell)):
+            continue
+        # Read from main, so only when there is an ask to file: an idle tick starts no git.
+        if not home.routable(thread):
             continue
         if parent is None:
             # The loom's own wish, the one these asks unblock: nobody said it.
