@@ -1,0 +1,63 @@
+{
+  "fps": 30,
+  "width": 1920,
+  "height": 1080,
+  "url": "https://brnrd.dev",
+  "install": ["curl -fsSL https://brnrd.dev/install | sh", "brnrd setup"],
+  "stamps": [["09:41", "noted"], ["09:49", "PR open"], ["09:55", "merged"]],
+  "timeline": [
+    {"kind": "shot", "raw": "01-phone-ask", "phone": true, "sec": 2.5, "caption": "Write from your phone.", "stamps": 1,
+     "capture": "Thumb typing a real one-line ask in Telegram, sent"},
+    {"kind": "shot", "raw": "03-desk-picks-up", "optional": true, "sec": 1, "caption": "Write from your phone.", "stamps": 1,
+     "capture": "The board as a thread takes the message"},
+    {"kind": "shot", "raw": "02-phone-reply", "phone": true, "sec": 2.5, "caption": "Get a PR back.", "stamps": 3,
+     "capture": "The reply landing with the PR link"},
+    {"kind": "title", "sec": 1.5, "caption": "Local agents go brr. From anywhere."},
+
+    {"kind": "pain", "text": "Session ended.", "sec": 1},
+    {"kind": "shot", "raw": "04-memory-git", "sec": 3, "caption": "Memory in git. Yours.",
+     "capture": "ls in the self, git log --oneline scrolling"},
+
+    {"kind": "pain", "text": "Context left until auto-compact: 4%", "sec": 1},
+    {"kind": "shot", "raw": "05-handover", "sec": 3, "caption": "It writes down what matters and hands over.",
+     "capture": "A thread handing over to its next session, same thread"},
+
+    {"kind": "pain", "text": "Don't touch it, it's thinking", "sec": 1},
+    {"kind": "shot", "raw": "06-midflight", "sec": 3, "caption": "Correct it mid-flight. Nothing dies.",
+     "capture": "A message landing mid-run, taken at the next step"},
+
+    {"kind": "pain", "text": "5 repos. 5 terminals. 1 notes file.", "sec": 1},
+    {"kind": "shot", "raw": "07-threads", "sec": 3, "caption": "Every piece of work is a thread.",
+     "capture": "The board strip: threads in colour, idle and working"},
+
+    {"kind": "pain", "text": "You've hit your limit. Resets Thursday.", "sec": 1},
+    {"kind": "shot", "raw": "08-fuel", "sec": 3, "caption": "Out of fuel? Another model. Same memory.",
+     "capture": "The fuel bar, a thread on codex"},
+
+    {"kind": "pain", "text": "Did it actually do it?", "sec": 1},
+    {"kind": "shot", "raw": "09-receipt", "sec": 2, "caption": "Receipts, not autonomy.",
+     "capture": "PR #2620 merged at 3015fe70, green checks, delivered"},
+    {"kind": "shot", "raw": "10-guard", "sec": 1, "caption": "Receipts, not autonomy.", "fallback": "guard",
+     "capture": "An rm -r under the home, refused"},
+
+    {"kind": "pain", "text": "Wait, did I ask for this?", "sec": 1},
+    {"kind": "shot", "raw": "11-verdict", "sec": 3, "caption": "Nothing lands without your verdict.",
+     "capture": "spend-notify's README: the ask, the plan, the PR, the verdict"},
+
+    {"kind": "prompt", "sec": 2, "caption": "Not only code.",
+     "ask": "cut the booth trailer from these clips", "out": ["booth.mp4", "1920×1080 · 50 s · muted · looping"]},
+    {"kind": "prompt", "sec": 2, "caption": "Anything your shell can do.",
+     "ask": "turn the plan into a shot list", "out": ["shots.md", "11 shots · captions · file names"]},
+
+    {"kind": "numbers", "sec": 5, "caption": "This repo is built by brnrd. The git log is the demo."},
+    {"kind": "install", "sec": 4, "caption": "MIT. Runs the subscriptions you already have. Alpha, built in the open."},
+    {"kind": "end", "sec": 1.5}
+  ],
+  "guard": [
+    "$ rm -r ~/…/loom-home/rooms/booth-guard-probe-nonexistent",
+    "refused: delete under a home root (~/…/loom-home/rooms/booth-guard-probe-nonexistent);",
+    "no letter from arseni on this thread's open wishes names ~/…/loom-home/rooms/booth-guard-probe-nonexistent.",
+    "override: a letter from arseni naming ~/…/loom-home/rooms/booth-guard-probe-nonexistent and the act,",
+    "stamped on the wish it serves."
+  ]
+}

@@ -1,0 +1,16 @@
+{
+  "name": "brnrd-booth",
+  "private": true,
+  "description": "The Web Summit booth trailer: remotion cards and captions over real recordings, assembled by cut.py",
+  "scripts": {
+    "studio": "remotion studio src/index.jsx"
+  },
+  "dependencies": {
+    "@remotion/cli": "^4.0.540",
+    "@remotion/gif": "^4.0.540",
+    "qrcode": "^1.5.4",
+    "react": "^19.3.1",
+    "react-dom": "^19.3.1",
+    "remotion": "^4.0.540"
+  }
+}
