@@ -184,10 +184,15 @@ def settle(room: Path, thread: str, why: str, retire: bool = False,
         raise PortError(f"settle: no thread {thread} on main")
     own = own_thread(room)
     opener = data.get("opened-by", "")
-    if opener != f"thread:{own}" and not (
+    # The opener settles; when the opener is a thread no body runs here (its `for:` names another
+    # loom or a person's conversation), the home thread hears for it, as it hears its breaches.
+    from .spend import door
+    hears = door(home, opener) if str(opener).startswith("thread:") else None
+    if hears != own and not (
         own == thread and (not opener or str(opener).startswith("person:"))
     ):
-        raise PortError(f"settle: only {opener or 'its own body on a person’s word'} may settle {thread}")
+        may = f"thread:{hears}" if hears else (opener or "its own body on a person’s word")
+        raise PortError(f"settle: only {may} may settle {thread}")
     from .ledger import append
     from .project import _destination, fold
     from .verbs_wishes import wish_fact
