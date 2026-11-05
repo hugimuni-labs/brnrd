@@ -311,6 +311,47 @@ test('parts: only a moved hash is fetched again; a letter in two parts is held o
 	deepEqual(moved(index({ 'thread/inbox': 'h1' }), store.held).drop, ['thread/web']);
 });
 
+test('parts: a short index row joins its part; unthreaded wishes load from theirs', async () => {
+	const loose = W('w-loose', {
+		line: 'loose',
+		thread: null,
+		says: [{ id: 'l', quote: 'a long quote', cites: 'whole' }]
+	});
+	const idx = index({ 'thread/web': 'h', unthreaded: 'u' }, [
+		T('web', { title: 'Web', status: 'open', last_at: 't', board: { state: 'quiet' }, counts: { heard: 1 } })
+	]);
+	const asked: string[] = [];
+	const store = new Store(async (p) => {
+		asked.push(p);
+		if (p === '/v1/loom/index') return idx;
+		if (p === '/v1/loom/unthreaded') return [loose];
+		return {
+			...part('web', []),
+			steps: [{ text: 'fat step', wishes: [], receipt: null }],
+			strands: [{ id: 's-ae66-webbod', state: 'idle' }],
+			board: {
+				state: 'quiet',
+				why: 'parked on ci',
+				calls: [{ kind: 'ask', wish: 'w', line: 'x', at: 't' }]
+			},
+			opened_at: 'opened'
+		};
+	});
+	ok(await store.sync());
+	deepEqual(asked.filter((p) => p.includes('unthreaded')), ['/v1/loom/unthreaded']);
+	const t = store.model()!.threads.find((row) => row.id === 'web')!;
+	equal(t.title, 'Web');
+	equal(t.board?.state, 'quiet');
+	equal(t.board?.why, 'parked on ci');
+	equal(t.steps?.[0].text, 'fat step');
+	equal(t.strands?.[0].id, 's-ae66-webbod');
+	equal(t.opened_at, 'opened');
+	equal(store.model()!.wishes[0].says?.[0].quote, 'a long quote');
+	asked.length = 0;
+	equal(await store.sync(), false);
+	deepEqual(asked, ['/v1/loom/index']);
+});
+
 test('parts: older letters load by before=, or back to until=', async () => {
 	const asked: string[] = [];
 	const store = new Store(async (p) => {

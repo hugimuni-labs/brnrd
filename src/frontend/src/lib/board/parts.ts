@@ -2,7 +2,7 @@
 // is fetched again only when its hash in the index moves. Beads then patch from the index's beads_delta or
 // GET /v1/loom/beads?since=<hash>, so a letter does not refetch the whole part. /v1/loom/events sends the index hash
 // whenever it moves.
-import type { BeadsDelta, Index, Letter, Model, ThreadPart, Topic } from './types.ts';
+import type { BeadsDelta, Index, Letter, Model, Thread, ThreadPart, Topic, Wish } from './types.ts';
 import { byAt } from './text.ts';
 
 export const BASE = '/v1/loom';
@@ -36,12 +36,23 @@ export async function getJSON(path: string): Promise<unknown> {
 	return r.json();
 }
 
+// The index row is short. Steps, strands and calls ride on the thread part; join puts them back on the column.
+const PART_ONLY = new Set(['letters', 'wishes', 'tools', 'live', 'chain', 'more', 'count', 'id']);
+
+export function join(row: Thread, part?: ThreadPart): Thread {
+	if (!part) return row;
+	const head: Partial<Thread> = {};
+	for (const [k, v] of Object.entries(part)) if (!PART_ONLY.has(k)) (head as Record<string, unknown>)[k] = v;
+	return { ...head, ...row, board: { ...(head.board || {}), ...(row.board || {}) } };
+}
+
 // One letter may sit in several thread parts (its `threads`); the board holds it once.
-export function assemble(index: Index, threads: Map<string, ThreadPart>): Model {
+// `loose` is the unthreaded part. When the caller omits it, a fixture's index.unthreaded still counts.
+export function assemble(index: Index, threads: Map<string, ThreadPart>, loose?: Wish[]): Model {
 	const byId = new Map<string, Letter>(),
 		tools: Model['tools'] = {},
 		live: Model['live'] = {},
-		wishes = [...index.unthreaded];
+		wishes = [...(loose ?? index.unthreaded ?? [])];
 	for (const p of threads.values()) {
 		for (const l of p.letters) if (!byId.has(l.id)) byId.set(l.id, l);
 		wishes.push(...p.wishes);
@@ -49,7 +60,7 @@ export function assemble(index: Index, threads: Map<string, ThreadPart>): Model 
 		Object.assign(live, p.live);
 	}
 	return {
-		threads: index.threads,
+		threads: index.threads.map((t) => join(t, threads.get(t.id))),
 		letters: [...byId.values()].sort(byAt),
 		byId,
 		wishes,
@@ -92,6 +103,7 @@ export class Store {
 	threads = new Map<string, ThreadPart>();
 	beads: Beads | null = null;
 	topics: Topic[] = [];
+	unthreaded: Wish[] = [];
 	held = new Map<string, string>();
 	private get: Get;
 	private loading: Promise<Beads> | null = null;
@@ -123,6 +135,14 @@ export class Store {
 		if (!index.parts.topics) {
 			this.topics = [];
 			this.held.delete('topics');
+		}
+		if (index.parts.unthreaded && this.held.get('unthreaded') !== index.parts.unthreaded) {
+			this.unthreaded = (await this.get(`${BASE}/unthreaded`)) as Wish[];
+			this.held.set('unthreaded', index.parts.unthreaded);
+		}
+		if (!index.parts.unthreaded) {
+			this.unthreaded = [];
+			this.held.delete('unthreaded');
 		}
 		this.index = index;
 		return true;
@@ -187,7 +207,9 @@ export class Store {
 
 	model(): Model | null {
 		if (!this.index) return null;
-		const m = assemble(this.index, this.threads);
+		const loose =
+			this.held.has('unthreaded') || this.index.parts.unthreaded ? this.unthreaded : undefined;
+		const m = assemble(this.index, this.threads, loose);
 		m.topics = this.topics;
 		return m;
 	}

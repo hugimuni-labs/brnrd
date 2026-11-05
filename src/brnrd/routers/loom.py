@@ -1,7 +1,7 @@
 """The board's data in the cloud: the loom's parts, read by a signed-in person.
 
 The same contract the loom's loopback serves (``brr.loom.runtime.board.handler``),
-so one SPA reads either: GET ``/v1/loom/{index,beads,thread/<id>}`` with ETag,
+so one SPA reads either: GET ``/v1/loom/{index,beads,topics,unthreaded,thread/<id>}`` with ETag,
 GET ``/v1/loom/events`` (SSE of the index hash), POST ``/v1/loom/letters``. GET/POST ``/v1/loom/consent``
 is the board prompt: whether the account's loom may send its board here, asked once on brnrd.dev.
 The parts come from ``PUT /v1/daemons/loom/parts``; every read is scoped to the
@@ -131,6 +131,11 @@ def loom_beads(request: Request, since: str | None = None, db: Session = Depends
 @router.get("/topics")
 def loom_topics(request: Request, db: Session = Depends(get_db)) -> Response:
     return _read(request, db, "topics")
+
+
+@router.get("/unthreaded")
+def loom_unthreaded(request: Request, db: Session = Depends(get_db)) -> Response:
+    return _read(request, db, "unthreaded")
 
 
 @router.get("/thread/{thread_id}")
