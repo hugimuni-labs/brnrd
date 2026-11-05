@@ -21,8 +21,40 @@ export function cut(part, q, most = 200) {
 export function partsServer(dir, port = 0, consent = null) {
 	const sent = [],
 		answers = [],
-		streams = new Set();
+		streams = new Set(),
+		beadDeltas = {};
 	let mem = typeof dir === 'string' ? null : dir;
+	const noteDelta = (parts) => {
+		const d = parts?.index?.beads_delta;
+		if (d?.since) beadDeltas[d.since] = d;
+		for (const [k, v] of Object.entries(parts?.index?.beads_deltas || {})) beadDeltas[k] = v;
+	};
+	if (mem) noteDelta(mem);
+	const compose = (since, current) => {
+		if (!current) return null;
+		if (since === current) return { since, hash: current, set: {}, drop: [] };
+		const set = {},
+			drop = new Set();
+		let cur = since;
+		const seen = new Set();
+		while (cur !== current) {
+			if (seen.has(cur)) return null;
+			seen.add(cur);
+			const d = beadDeltas[cur];
+			if (!d) return null;
+			for (const [k, v] of Object.entries(d.set || {})) {
+				set[k] = v;
+				drop.delete(k);
+			}
+			for (const k of d.drop || []) {
+				drop.add(k);
+				delete set[k];
+			}
+			cur = d.hash;
+			if (!cur) return null;
+		}
+		return { since, hash: current, set, drop: [...drop] };
+	};
 	const read = (name) => {
 		if (mem) return name in mem ? JSON.stringify(mem[name]) : null;
 		const f = join(dir, name.replaceAll('/', '__') + '.json');
@@ -34,6 +66,7 @@ export function partsServer(dir, port = 0, consent = null) {
 		);
 	const set = (parts) => {
 		mem = parts;
+		noteDelta(parts);
 		for (const res of streams) ping(res);
 	};
 	const server = createServer((req, res) => {
@@ -85,15 +118,11 @@ export function partsServer(dir, port = 0, consent = null) {
 			const since = url.searchParams.get('since');
 			if (since) {
 				const index = JSON.parse(read('index') || '{}');
-				if (index.parts?.beads === since) {
+				noteDelta({ index });
+				const composed = compose(since, index.parts?.beads);
+				if (composed) {
 					res.writeHead(200, { 'content-type': 'application/json' });
-					res.end(JSON.stringify({ since, hash: since, set: {}, drop: [] }));
-					return;
-				}
-				const delta = index.beads_delta;
-				if (delta && delta.since === since) {
-					res.writeHead(200, { 'content-type': 'application/json' });
-					res.end(JSON.stringify(delta));
+					res.end(JSON.stringify(composed));
 					return;
 				}
 			}

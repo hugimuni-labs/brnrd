@@ -111,20 +111,20 @@ def loom_beads(request: Request, since: str | None = None, db: Session = Depends
         if row is not None:
             index = json.loads(gzip.decompress(row.body))
             current = (index.get("parts") or {}).get("beads")
-            if current == since:
-                headers = {"Cache-Control": "no-cache", "ETag": f'"{since}"'}
-                if (held := _not_modified(request, since)) is not None:
-                    return held
-                return JSONResponse({"since": since, "hash": since, "set": {}, "drop": []}, headers=headers)
-            delta = index.get("beads_delta")
-            if isinstance(delta, dict) and delta.get("since") == since:
-                etag = str(delta.get("hash") or current or "")
+            deltas = dict(index.get("beads_deltas") or {})
+            last = index.get("beads_delta")
+            if isinstance(last, dict) and last.get("since"):
+                deltas[last["since"]] = last
+            from brr.loom.runtime.board import compose_deltas
+            composed = compose_deltas(deltas, since, current)
+            if composed is not None:
+                etag = composed["hash"]
                 headers = {"Cache-Control": "no-cache"}
                 if etag:
                     if (held := _not_modified(request, etag)) is not None:
                         return held
                     headers["ETag"] = f'"{etag}"'
-                return JSONResponse(delta, headers=headers)
+                return JSONResponse(composed, headers=headers)
     return _read(request, db, "beads")
 
 

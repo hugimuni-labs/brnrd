@@ -458,6 +458,48 @@ def beads_delta(since: str, was: dict, now: dict, new_hash: str) -> dict:
     }
 
 
+def compose_deltas(deltas: dict, since: str, current: str | None) -> dict | None:
+    """Walk ``deltas[cur] → hash`` from ``since`` to ``current``, merging set/drop. None if the walk breaks.
+
+    A later set undoes an earlier drop, and the reverse. The inbox sends letters in bursts, so a client
+    that held b1 while the index moved b1→b2→b3 asks ``?since=b1`` and must get both rows at hash=current.
+    """
+    if not current:
+        return None
+    if since == current:
+        return {"since": since, "hash": current, "set": {}, "drop": []}
+    set_, drop, cur, seen = {}, set(), since, set()
+    while cur != current:
+        if cur in seen:
+            return None
+        seen.add(cur)
+        step = deltas.get(cur)
+        if step is None:
+            return None
+        for ident, row in (step.get("set") or {}).items():
+            set_[ident] = row
+            drop.discard(ident)
+        for ident in step.get("drop") or ():
+            drop.add(ident)
+            set_.pop(ident, None)
+        cur = step.get("hash")
+        if not cur:
+            return None
+    return {"since": since, "hash": current, "set": set_, "drop": list(drop)}
+
+
+def chain_starts(walker, thread: dict, mine: list, wished_here: list) -> list[str]:
+    """Wish roots, opened-for, and letters whose parent is a letter outside this part — not every letter."""
+    mine_ids = {row["id"] for row in mine}
+    starts = [w["wish"] for w in wished_here]
+    starts += [o["wish"] for o in thread.get("opened_for") or []]
+    for row in mine:
+        up, _edge = walker.parent(row["id"])
+        if up and up not in mine_ids and up in walker.letters:
+            starts.append(row["id"])
+    return starts
+
+
 def digest(part) -> str:
     """A part's hash: sha256 of its canonical JSON, cut to 16 (design §D1)."""
     return hashlib.sha256(json.dumps(part, sort_keys=True, separators=(",", ":")).encode()).hexdigest()[:16]
@@ -486,16 +528,16 @@ def compute(home: Home, facts, config, tools: dict, live: dict, person: str | No
     counts = {name: dict(Counter(row["state"] for row in rows)) for name, rows in wished.items() if name in known}
     main = main_snapshot(home)
     walker = Beads(facts, main)
+    inbox = home.main_thread()
     for t in threads:
         mine = by_thread.get(t["id"], [])
         wished_here = wished.get(t["id"], [])
-        starts = [w["wish"] for w in wished_here]
-        starts += [o["wish"] for o in t.get("opened_for") or []]
-        starts += [row["id"] for row in mine]
-        parts[f"thread/{t['id']}"] = {
+        part = {
             "id": t["id"], "count": len(mine), "letters": mine, "wishes": wished_here,
-            "chain": chain_of(walker, starts),
             **taped(t, tools, live)}
+        if t["id"] != inbox:
+            part["chain"] = chain_of(walker, chain_starts(walker, t, mine, wished_here))
+        parts[f"thread/{t['id']}"] = part
     parts["beads"] = beads_of(facts, main, walker)
     hashes = {name: digest(part) for name, part in parts.items()}
     index = {"v": 1, **{k: v for k, v in snap.items() if k not in {"at", "log"}}, "wishes": counts,
@@ -638,7 +680,7 @@ class Parts:
                 self.bead_deltas[old_hash] = delta
                 while len(self.bead_deltas) > BEAD_DELTAS:
                     self.bead_deltas.pop(next(iter(self.bead_deltas)))
-                parts["index"] = dict(parts["index"], beads_delta=delta)
+                parts["index"] = dict(parts["index"], beads_delta=delta, beads_deltas=dict(self.bead_deltas))
                 hashes["index"] = digest(parts["index"])
         elif self.taped and (self.tape_at is None or now - self.tape_at >= TAPE):
             self.taped, self.tape_at = False, now
@@ -907,15 +949,14 @@ def handler(parts: Parts, port: int, spa=spa_root):
                 return self._events()
             if path == "beads" and query.get("since"):
                 since = query["since"]
-                if since == hashes.get("beads") and held.get("beads") is not None:
-                    return self._json({"since": since, "hash": since, "set": {}, "drop": []}, since)
-                delta = deltas.get(since)
-                if delta is not None:
-                    return self._json(delta, delta["hash"])
+                current = hashes.get("beads")
+                composed = compose_deltas(deltas, since, current)
+                if composed is not None:
+                    return self._json(composed, composed["hash"])
                 part = held.get("beads")
                 if part is None:
                     return self._json({"error": "no part beads"})
-                return self._json(part, hashes.get("beads"))
+                return self._json(part, current)
             if path in {"index", "beads"} or path.startswith("thread/"):
                 part = held.get(path)
                 if part is None:

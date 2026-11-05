@@ -146,17 +146,15 @@ export class Store {
 		if (this.loading) return this.loading;
 		if (!this.index) return {};
 		const index = this.index;
-		this.loading = this.get(`${BASE}/beads`).then(
-			(got) => {
+		this.loading = this.get(`${BASE}/beads`)
+			.then((got) => {
 				this.beads = got as Beads;
 				this.held.set('beads', index.parts.beads);
 				return this.beads;
-			},
-			(err) => {
-				throw err;
-			}
-		);
-		this.loading.finally(() => (this.loading = null));
+			})
+			.finally(() => {
+				this.loading = null;
+			});
 		return this.loading;
 	}
 

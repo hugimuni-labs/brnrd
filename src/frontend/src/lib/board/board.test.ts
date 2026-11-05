@@ -385,7 +385,7 @@ test('beads: a delta patches the held map; drop removes', () => {
 
 test('parts: beads patch from the index delta, a letter does not refetch the part', async () => {
 	const row: Beads[string] = [null, 'person', 'person:ada', '1', 'ask'];
-	let beads: Beads = { a: row };
+	const beads: Beads = { a: row };
 	let idx = index({ 'thread/web': 'h1', beads: 'b1' });
 	const asked: string[] = [];
 	const store = new Store(async (p) => {
@@ -404,6 +404,31 @@ test('parts: beads patch from the index delta, a letter does not refetch the par
 	deepEqual(asked, ['/v1/loom/index']);
 	deepEqual(store.beads, { a: row, b: added });
 	equal(store.held.get('beads'), 'b2');
+});
+
+test('parts: two letters between steps, one sync from the first hash holds the current', async () => {
+	const a: Beads[string] = [null, 'person', 'person:ada', '1', 'ask'];
+	const b: Beads[string] = ['a', 're', 's', '2', 'two'];
+	const c: Beads[string] = ['a', 're', 's', '3', 'three'];
+	let idx = index({ 'thread/web': 'h1', beads: 'b1' });
+	const asked: string[] = [];
+	const store = new Store(async (p) => {
+		asked.push(p);
+		if (p === '/v1/loom/index') return idx;
+		if (p === '/v1/loom/thread/web') return part('web', []);
+		if (p === '/v1/loom/beads?since=b1')
+			return { since: 'b1', hash: 'b3', set: { b, c }, drop: [] };
+		return { a };
+	});
+	await store.sync();
+	await store.loadBeads();
+	asked.length = 0;
+	idx = index({ 'thread/web': 'h1', beads: 'b3' });
+	idx.beads_delta = { since: 'b2', hash: 'b3', set: { c }, drop: [] };
+	ok(await store.sync());
+	deepEqual(asked, ['/v1/loom/index', '/v1/loom/beads?since=b1']);
+	equal(store.held.get('beads'), 'b3');
+	deepEqual(store.beads, { a, b, c });
 });
 
 test('from the inbox: person letters in the chain, oldest first; another thread is marked', () => {

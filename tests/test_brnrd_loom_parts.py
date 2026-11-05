@@ -76,6 +76,24 @@ def test_beads_since_reads_the_index_delta(client):
     }
 
 
+def test_beads_since_composes_two_index_deltas(client):
+    headers, session = _account(client)
+    relay = _relay_token(client, headers, _repo(client, headers))
+    a = [None, "person", "p-ada", "t", "one"]
+    b = [None, "person", "p-ada", "t", "two"]
+    d0 = {"since": "b0", "hash": "b1", "set": {"letter:a": a}, "drop": []}
+    d1 = {"since": "b1", "hash": "b2", "set": {"letter:b": b}, "drop": []}
+    parts = {
+        "index": {"v": 1, "threads": [], "parts": {"beads": "b2"},
+                  "beads_delta": d1, "beads_deltas": {"b0": d0, "b1": d1}},
+        "beads": {"letter:a": a, "letter:b": b},
+    }
+    assert _push(client, relay, parts=parts, hashes={"index": "h-index", "beads": "b2"}).status_code == 200
+    _signed_in(client, session)
+    got = client.get("/v1/loom/beads", params={"since": "b0"}).json()
+    assert got["hash"] == "b2" and got["set"] == {"letter:a": a, "letter:b": b}
+
+
 def test_a_second_account_sees_none_of_the_parts(client):
     headers, _ = _account(client)
     relay = _relay_token(client, headers, _repo(client, headers))

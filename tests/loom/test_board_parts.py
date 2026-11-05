@@ -126,7 +126,7 @@ def test_a_wish_ships_in_its_thread_part_and_the_index_keeps_counts(parts):
     assert [w["wish"] for w in parts.parts["thread/web"]["wishes"]] == ["w-fast"]
     assert sum(index["wishes"]["web"].values()) == 1 and "docs" not in index["wishes"]
     # the index carries no wish rows (beads_delta may name the id as a bead patch)
-    assert "w-fast" not in json.dumps({k: v for k, v in index.items() if k != "beads_delta"})
+    assert "w-fast" not in json.dumps({k: v for k, v in index.items() if k not in {"beads_delta", "beads_deltas"}})
     assert index["faces"]["running"][0] == index["faces"]["idle"][0] == "brnrd"  # the rail's faces, at rest on the name
     assert len(index["faces"]["running"]) > 1
 
@@ -364,6 +364,7 @@ def test_a_thread_part_ships_the_wish_chain_and_its_person_letter(parts):
     assert elsewhere in chain and chain[elsewhere][1] == "person"
     assert len(json.dumps(chain)) < 8_000  # a few KB, not the whole beads part
     assert ask not in {r["id"] for r in parts.parts["thread/web"]["letters"]}
+    assert "chain" not in parts.parts["thread/inbox"]
 
 
 def test_beads_since_returns_a_delta_and_a_new_letter_does_not_resend_the_part(parts):
@@ -390,6 +391,49 @@ def test_beads_since_returns_a_delta_and_a_new_letter_does_not_resend_the_part(p
         assert len(body) < len(full)
         empty = json.loads(get(port, f"/v1/loom/beads?since={parts.hashes['beads']}")[2])
         assert empty == {"since": parts.hashes["beads"], "hash": parts.hashes["beads"], "set": {}, "drop": []}
+    finally:
+        parts.stop.set()
+        server.shutdown()
+        server.server_close()
+
+
+def test_inbox_has_no_chain_and_setup_flow_stays_small(parts):
+    """The strip needs wish roots and crossing letters, not every letter of a 200-letter part; inbox has no strip."""
+    root = parts.home.root
+    write_thread(root, "inbox", readme("inbox"), "answer-fast", wait="0")
+    write_thread(root, "setup-flow", readme("setup-flow"), "answer-fast", wait="0")
+    ask = inject_letter(root, to="thread:inbox", body="please set it up")
+    append(parts.home, Fact(kind="wish", by="person:ada", id="w-setup", data={
+        "wish": "w-setup", "says": [[ask, 0, None]], "from": "person",
+        "line": "set it up", "thread": "setup-flow"}))
+    prev = ask
+    for i in range(80):
+        prev = inject_letter(root, to="thread:setup-flow", body=f"step {i} of the setup", re=prev)
+    assert parts.step()
+    assert "chain" not in parts.parts["thread/inbox"]
+    chain = parts.parts["thread/setup-flow"]["chain"]
+    assert ask in chain and "w-setup" in chain
+    assert len(json.dumps(chain)) < 8_000
+
+
+def test_beads_since_composes_two_letters_to_the_current_hash(parts):
+    """Two letters between two steps: ?since=<first hash> returns both rows with hash=current."""
+    root = parts.home.root
+    inject_letter(root, to="thread:web", body="first")
+    assert parts.step()
+    h1 = parts.hashes["beads"]
+    second = inject_letter(root, to="thread:web", body="second")
+    assert parts.step()
+    third = inject_letter(root, to="thread:web", body="third")
+    assert parts.step()
+    current = parts.hashes["beads"]
+    server = serve(parts, 0)
+    port = server.server_address[1]
+    try:
+        status, _, body = get(port, f"/v1/loom/beads?since={h1}")
+        got = json.loads(body)
+        assert status == 200 and got["hash"] == current and got["since"] == h1
+        assert second in got["set"] and third in got["set"]
     finally:
         parts.stop.set()
         server.shutdown()
