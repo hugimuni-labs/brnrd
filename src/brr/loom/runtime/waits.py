@@ -18,6 +18,9 @@ Conditions, one row each in ``KINDS``, resolve on any terminal outcome:
   a person's letter cites it. A body's own &ref is progress, never an outcome.
 - ``letter:<id>``: a letter replies to it.
 - ``at:<instant>``: the clock passes it.
+- ``cond:<name>[,<name>…]`` or ``cond:all``: stands; ``outcome`` never resolves it.
+  Each firing of a named condition (``conditions``) is its own notice to the
+  parker's thread, so one park keeps receiving them until it is re-read.
 - ``file:<path>``: the path holds something. A body that starts a long command
   itself runs ``(cmd; echo $? > <path>) &``, parks on the path and stops; the
   jack holds it and the notice says what the file says. The shell creates the
@@ -63,7 +66,8 @@ _WISH = re.compile(r"^wish:(w-[a-z0-9]+)$")
 _LETTER = re.compile(r"^letter:(\S+)$")
 #: Conditions that wait on someone, so a park on them carries a turn; a prose park does too.
 TURNED = ("letter:", "wish:", "pr:")
-GRAMMAR = "pr:[owner/repo]#N, ci:[owner/repo]@sha, wish:<w-id>, letter:<id>, at:<when>, file:<path>"
+#: ``cond:`` names its conditions, ``conditions.NAMES``; its parse error lists them.
+GRAMMAR = "pr:[owner/repo]#N, ci:[owner/repo]@sha, wish:<w-id>, letter:<id>, at:<when>, file:<path>, cond:<names>|all"
 
 
 def _iso(moment: datetime) -> str:
@@ -107,6 +111,9 @@ def canonical(text: str, now: datetime, repo=None) -> str:
         return text
     if text.startswith("at:"):
         return "at:" + when(text[3:], now, "--wait at:")
+    if text.startswith("cond:"):
+        from .conditions import parse
+        return "cond:" + ",".join(parse(text[5:]))
     if text.startswith("file:") and text[5:].strip():
         # Relative to the parker's cwd, which the loom does not share.
         return "file:" + os.path.abspath(os.path.expanduser(text[5:].strip()))
@@ -131,7 +138,11 @@ def park(wish, condition: str | None, until: str | None, now: datetime, *, found
             prose += 1
         span = PROSE[min(prose, len(PROSE) - 1)]
         wait["step"] = min(prose, len(PROSE) - 1) + 1
-    wait["until"] = when(until, now, "--until") if until is not None else _iso(now + span)
+    if until is not None:
+        wait["until"] = when(until, now, "--until")
+    elif not str(condition or "").startswith("cond:"):
+        # A cond: park stands: it is a subscription, not a question with a deadline.
+        wait["until"] = _iso(now + span)
     if default is not None:
         wait["default"] = default
     if turn > 0 and (condition is None or condition.startswith(TURNED)):
