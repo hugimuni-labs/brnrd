@@ -164,6 +164,10 @@ def _letter_attachments(root, facts, selected=None):
     return result
 
 
+#: A triage branch's flag on ``send``.
+_TRIAGE_FLAG = {"correction": "correction", "silent": "silent", "held": "hold"}
+
+
 def letter_replies(facts: list[Fact]) -> dict[str, str]:
     """Reply context for inbound sources; an unknown native id is not a letter id."""
     if isinstance(facts, LedgerView):
@@ -603,7 +607,8 @@ def write_send(room: Path, *, to: str, sender: str, body: str = "",
                wish: str | tuple | list | None = None,
                budget: int | None = None, chatter: list[str] | None = None,
                echo: list[str] | None = None, reopen: bool = False,
-               ask_for: str | None = None, attach: str | None = None) -> str:
+               ask_for: str | None = None, attach: str | None = None,
+               triage: tuple[str, str] | None = None) -> str:
     """Write one letter (or note) into port/out, with the wish stamps it carries.
 
     ``attach`` is ``<sha256> <name>``: a file from the home's blob store that a
@@ -615,7 +620,9 @@ def write_send(room: Path, *, to: str, sender: str, body: str = "",
     reply to a person letter that has no disposition yet must carry one.
     ``echo`` gathers the graph this send wrote, one line per wish.
     A question in a letter to a channel files an ask under ``ask_for``
-    (raises.py); a bare ``chatter`` there opts out.
+    (raises.py); a bare ``chatter`` there opts out. ``triage`` is the
+    ``--re`` letter's other branches (dispositions.py): ``(branch, detail)``
+    for a correction, a silent letter or a held one.
     """
     home = home_of_room(Path(room))
     opening = None
@@ -680,6 +687,21 @@ def write_send(room: Path, *, to: str, sender: str, body: str = "",
     letter_id = f"{sender}/{stem}"
     wish_stamps, results, cited = [], [], set()
     letters: dict = {}
+    if triage is not None:
+        from .dispositions import triage as triage_field
+        branch, detail = triage
+        try:
+            triage = triage_field(branch, detail)
+        except ValueError as exc:
+            raise PortError(f"send: {exc}") from exc
+        if not re:
+            raise PortError(f"send --{_TRIAGE_FLAG[branch]} disposes the --re letter: name it")
+        if asked or chatter is not None:
+            raise PortError(f"send --{_TRIAGE_FLAG[branch]} is a branch of its own: drop --wish and --chatter")
+        if branch == "silent" and note is None and len(body.split()) > 1:
+            raise PortError("send --silent says one word or nothing: --note \"<what it was>\" or a single word")
+        if branch == "held" and (note is not None or not body.strip()):
+            raise PortError("send --hold is the check through a second path: a letter with words, never a --note")
     if asked or chatter is not None or re:
         from .dispositions import letter_index, resolve, result_of, say_of
         from .ledger import read_facts
@@ -697,6 +719,8 @@ def write_send(room: Path, *, to: str, sender: str, body: str = "",
         # A bare --chatter cites the --re letter; a notice it answers is no letter and cites nothing.
         chatter = list(dict.fromkeys(named or ([re] if re in letters else [])))
         cited.update(chatter)
+    if triage is not None:
+        cited.add(re)
     if asked:
         from .lifecycle import own_thread
         from .registry import admit
@@ -778,7 +802,11 @@ def write_send(room: Path, *, to: str, sender: str, body: str = "",
             raise PortError(
                 f"send: {re} is a person letter with no disposition yet; "
                 + (steer + '--wish new:"<line>"' if steer else 'carry one: --wish <w-id>|new:"<line>"')
-                + ' [--says "quote"] [--ref kind:ref] [--answered], or --chatter if it wants nothing')
+                + ' [--says "quote"] [--ref kind:ref] [--answered]; --chatter if it wants nothing;'
+                ' --correction <path> if it changes a page, scar or README;'
+                ' --silent joke|test|mistake with one word or a --note;'
+                ' --hold out-of-pattern|not-him with the check, when it is irreversible and unlike them'
+                ' or not them (out of pattern but reversible: --wish, and say it loudly)')
     if echo is not None and re in letters and not asked and reincarnate is None:
         from .dispositions import is_person
         from .wishes import untouched_line, wishes
@@ -848,6 +876,8 @@ def write_send(room: Path, *, to: str, sender: str, body: str = "",
         fields["re"] = re
     if chatter:
         fields["chatter"] = " ".join(chatter)
+    if triage is not None:
+        fields["triage"] = triage
     if links:
         fields["links"] = " ".join(links)
     if reincarnate:
@@ -1117,6 +1147,8 @@ def fact_from_port(fm: dict[str, str], strand: str, gen: int | None,
             data["re"] = fm["re"]
         if fm.get("chatter"):
             data["chatter"] = fm["chatter"].split()
+        if fm.get("triage"):
+            data["triage"] = fm["triage"]
         if fm.get("links"):
             data["links"] = fm["links"].split()
         if fm.get("edit"):
@@ -1151,7 +1183,8 @@ def fact_from_port(fm: dict[str, str], strand: str, gen: int | None,
         return Fact(
             kind="note", by=f"strand:{strand}", id=fact_id,
             data={"re": fm["re"], "why": fm["note"], "gen": gen,
-                  **({"chatter": fm["chatter"].split()} if fm.get("chatter") else {})},
+                  **({"chatter": fm["chatter"].split()} if fm.get("chatter") else {}),
+                  **({"triage": fm["triage"]} if fm.get("triage") else {})},
         )
     if kind == "shown":
         owner = fm.get("strand") or strand

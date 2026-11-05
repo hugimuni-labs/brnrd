@@ -136,6 +136,9 @@ def _send(argv: list[str]) -> int:
     parser.add_argument("--says", action=_Wish, help='"quote" or <letter id>:"quote"; never refused')
     parser.add_argument("--answered", action=_Wish, nargs=0, help="this send's words are the receipt")
     parser.add_argument("--chatter", action="store_true", help="cites the --re letter as no wish")
+    parser.add_argument("--correction", metavar="PATH", help="the --re letter changes this page, scar or README")
+    parser.add_argument("--silent", metavar="KIND", help="joke, test or mistake: one word or a --note")
+    parser.add_argument("--hold", metavar="WHY", help="out-of-pattern or not-him: this send is the check")
     parser.add_argument("--for", dest="ask_for", metavar="W-ID",
                         help="a question to a person files an ask under this wish")
     parser.add_argument("--chatter-of", dest="chatter_of", default=None, help=argparse.SUPPRESS)
@@ -154,9 +157,13 @@ def _send(argv: list[str]) -> int:
         ["--chatter-of", arg.partition("=")[2]] if arg.startswith("--chatter=") else [arg])])
     chatter = (None if args.chatter_of is None and not args.chatter
                else [i for i in (args.chatter_of or "").split(",") if i.strip()])
+    branches = [(b, v) for b, v in (("correction", args.correction), ("silent", args.silent),
+                                     ("held", args.hold)) if v is not None]
     echo: list[str] = []
     room = _room(args.room)
     try:
+        if len(branches) > 1:
+            raise PortError("send: one branch per letter: --correction, --silent or --hold")
         if args.at is not None and args.reopen is not None:
             raise PortError("send: --at cannot be used with --reopen")
         if args.reopen is not None:
@@ -170,7 +177,7 @@ def _send(argv: list[str]) -> int:
             re=args.re, note=args.note, clean=args.clean, kind=args.kind,
             refs=tuple(args.ref or ()), body_choice=args.body_choice, repo_sources=args.repo, at=args.at,
             wish=args.wish, budget=None if args.budget is None else parse_tokens(args.budget),
-            chatter=chatter, ask_for=args.ask_for,
+            chatter=chatter, ask_for=args.ask_for, triage=branches[0] if branches else None,
             echo=echo, reopen=args.reopen is not None,
         )
     except (PortError, SelfError, ValueError, OSError) as exc:
