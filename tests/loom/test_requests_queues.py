@@ -138,7 +138,7 @@ def test_a_merged_result_the_loom_runs_leaves_the_queue(monkeypatch):
     monkeypatch.setattr(receipts, "held_merge",
                         lambda result, start, **kw: "abc123" if (start or {}).get("commit") else None)
     result = Fact(kind="wish.result", by="strand:s-aaaa-work", at=at(9),
-                  data={"wish": "w-new", "kind": "pr", "ref": "7", "line": "PR #7"})
+                  data={"wish": "w-new", "kind": "pr", "ref": "7", "line": "PR #7", "delivered": False})
     started = Fact(kind="loom.started", by="loom:aaaa", at=at(8), data={"commit": "abc123", "install": "aaaa"})
     found = told([*base(), result, started])
     assert found["w-new"].state == "delivered"
