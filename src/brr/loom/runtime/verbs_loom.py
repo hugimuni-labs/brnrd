@@ -60,12 +60,15 @@ def _loom(argv: list[str]) -> int:
 def _attention(argv: list[str]) -> int:
     parser = Parser(verb="attention", prog="python -m brr.loom.runtime attention")
     parser.add_argument("--home")
+    parser.add_argument("--room")
     parser.add_argument("--install", default=None)
     parser.add_argument("--note", metavar="LETTER_ID")
     parser.add_argument("--why")
     args = parser.parse_args(argv)
-    args.home, _ = resolve_home(args.home)
-    home = Home(args.home, install=args.install)
+    from .home import home_for
+    home = home_for(args.home, args.room)
+    if args.install is not None:
+        home = Home(home.root, install=args.install)
     if args.note:
         if not args.why or not args.why.strip():
             parser.error("--note requires --why")
@@ -84,7 +87,7 @@ def _attention(argv: list[str]) -> int:
         if line:
             print(line)
     # No state of its own: the loom's notices that no body has settled yet.
-    state = fold(read_facts(Home(args.home, install=args.install)))
+    state = fold(read_facts(home))
     from datetime import datetime, timezone
     for strand, fact in pending_bodies(state.accepted).items():
         if fact.kind == "body.parked" and strand in {s for s, _g in state.holder.values()}:

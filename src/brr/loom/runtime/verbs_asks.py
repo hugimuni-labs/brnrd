@@ -8,11 +8,8 @@ from .refusals import Parser
 
 
 def _home(args):
-    from .home import Home, home_of_room, resolve_home
-    from .verbs_loom import _room
-    if args.home is None and (args.room or os.environ.get("BRNRD_ROOM")):
-        return home_of_room(_room(args.room))
-    return Home(resolve_home(args.home)[0])
+    from .home import home_for
+    return home_for(args.home, args.room)
 
 
 def _arguments(parser) -> None:

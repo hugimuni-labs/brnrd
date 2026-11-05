@@ -34,6 +34,22 @@ def resolve_home(flag: str | Path | None = None) -> tuple[Path, str]:
     )
 
 
+def home_for(flag: str | Path | None = None, room: str | Path | None = None) -> "Home":
+    """The home a runtime verb works on, resolved the way a body expects.
+
+    An explicit ``--home`` wins; else the room (``--room`` or ``BRNRD_ROOM``,
+    set in every body) names it as ``<home>/rooms/<strand>``; else the
+    environment or default home. Every verb a body may run from its room
+    resolves through here, so none refuses with "no loom home" where ``send``
+    and ``threads`` succeed.
+    """
+    if flag is None:
+        raw = room or os.environ.get("BRNRD_ROOM")
+        if raw:
+            return home_of_room(Path(raw))
+    return Home(resolve_home(flag)[0])
+
+
 _MARKERS = ("loom/config.toml", "loom/install-id", "self/core/loom/wake")
 
 

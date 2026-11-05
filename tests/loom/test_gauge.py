@@ -116,3 +116,31 @@ def test_the_line_says_boots_spend_wake_and_reads_and_names_its_unknowns() -> No
     bare = gauge.line(gauge.gauge(facts[2:3], 7, now=now, spent=lambda s: None))
     assert bare == ("7d: 1 boots · spent unknown · wake size unknown (no wake.sizes yet) · "
                     "1 boots, 0 delivered · 30% of read bytes before a first line (1 bodies traced)")
+
+
+def test_gauge_and_attention_find_the_home_from_the_room_like_every_body_verb(tmp_path: Path) -> None:
+    """Inside a body only BRNRD_ROOM is set: a verb that needs --home there refuses where send succeeds."""
+    home = tmp_path / "home"
+    init = subprocess.run([sys.executable, "-m", "brr.loom.runtime", "init", "--home", str(home)],
+                          cwd=ROOT, env=_env(), capture_output=True, text=True)
+    assert init.returncode == 0, init.stderr
+    room = home / "rooms" / "s-test"
+    room.mkdir(parents=True)
+    env = {k: v for k, v in _env().items() if k != "BRNRD_HOME"}
+    env["BRNRD_ROOM"] = str(room)
+    env["HOME"] = str(tmp_path)  # no default ~/brnrd to fall back on
+    for verb in ("gauge", "attention"):
+        done = subprocess.run([sys.executable, "-m", "brr.loom.runtime", verb], cwd=room, env=env,
+                              capture_output=True, text=True)
+        assert done.returncode == 0, (verb, done.stderr)
+        assert "no loom home" not in done.stderr
+    done = subprocess.run([sys.executable, "-m", "brr.loom.runtime", "gauge", "--days", "7"], cwd=room,
+                          env=env, capture_output=True, text=True)
+    assert done.stdout.startswith("7d: 0 boots"), done.stdout
+    # an explicit --home still wins over the room
+    other = tmp_path / "other"
+    assert subprocess.run([sys.executable, "-m", "brr.loom.runtime", "init", "--home", str(other)],
+                          cwd=ROOT, env=_env(), capture_output=True, text=True).returncode == 0
+    done = subprocess.run([sys.executable, "-m", "brr.loom.runtime", "gauge", "--home", str(other)],
+                          cwd=room, env=env, capture_output=True, text=True)
+    assert done.returncode == 0, done.stderr
