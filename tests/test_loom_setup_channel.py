@@ -866,3 +866,78 @@ def test_with_the_page_switched_off_a_dead_end_brings_the_list_back_once(tmp_pat
         walk(['relay'])
     assert capsys.readouterr().out.count('No door connected yet; pick again') == 1
     assert tried == ['relay', 'relay']
+
+
+def test_the_first_word_lands_the_house_rules_and_the_first_reply_offers_the_interview_once(tmp_path):
+    import threading
+    from brr.daemon2.facts import Fact
+    from brr.loom.runtime import grants, guards, labels
+    from brr.loom.runtime.firstword import INTERVIEW
+    from brr.loom.runtime.ledger import append, read_facts
+    from brr.loom.runtime.router import Router
+    from brr.loom.runtime.selfrepo import init_self
+    home = home_at(tmp_path)
+    init_self(tmp_path, person='ada')
+    self_dir = tmp_path / 'self'
+    (self_dir / 'people/ada/channels.toml').write_text('channels = ["desk:42"]\n')
+    set_value(tmp_path, 'connectors', ['desk=fake'])
+    assert guards.load(self_dir) == ([], [])  # a fresh self: nothing to refuse with
+    said, result = [], {}
+
+    def wait():
+        try:
+            result['strand'] = setup_channel.first_letter(home, 'ada', timeout=30, out=said.append,
+                                                          running=lambda: True, sleep=lambda s: time.sleep(.02))
+        except Exception as exc:
+            result['error'] = exc
+    inputs = connector.Inputs(home)
+    waiter = threading.Thread(target=wait)
+    waiter.start()
+    try:
+        inputs.step()
+        state = Path(connector.environment(home, 'desk')['BRNRD_STATE'])
+        (state / 'in/hello.md').write_text(_front(dict(kind='letter', id='hello', to='42', **{'from': '42'}), 'hi'))
+        inputs.step()
+        letter, = [f for f in read_facts(home) if f.kind == 'letter']
+        deadline = time.monotonic() + 30
+        while not any('house rules' in line for line in said) and time.monotonic() < deadline:
+            time.sleep(.05)
+        append(home, Fact(kind='shown', by='strand:s-1', id='shown:s-1:1',
+                          data={'strand': 's-1', 'gen': 1, 'ids': [letter.data['id']]}))
+        waiter.join(30)
+    finally:
+        inputs.close()
+    assert result == {'strand': 's-1'}, said
+    cited = f"letter:{letter.data['id']}"
+    # The owner can grant, is no stranger, and the three never guards cite the first word.
+    assert grants.owners(self_dir) == {'person:ada'}
+    assert labels.is_stranger('person:ada', self_dir) is False
+    found, errors = guards.load(self_dir)
+    assert errors == []
+    assert sorted(g.id for g in found) == ['never-delete-home', 'never-force-push', 'never-publish']
+    assert {g.set_by for g in found} == {cited}
+    main = lambda path: subprocess.run(['git', '-C', str(self_dir), 'show', f'main:{path}'],
+                                       capture_output=True, text=True, check=True).stdout
+    assert f"[{letter.data['id']}]" in main('people/ada/agreement.md')
+    assert '## between us' in main('people/ada/page.md')
+    # A second sight of a first word changes nothing on main.
+    tip = subprocess.run(['git', '-C', str(self_dir), 'rev-parse', 'main'], capture_output=True, text=True).stdout
+    from brr.loom.runtime.firstword import first_word
+    assert first_word(home, 'ada', 'other') == []
+    assert subprocess.run(['git', '-C', str(self_dir), 'rev-parse', 'main'],
+                          capture_output=True, text=True).stdout == tip
+    # The first reply carries the interview line; the next one does not.
+    append(home, Fact(kind='router', by='loom:aaaa', id='router:1', data={'gen': 1}))
+    router = Router(home)
+    for n in (1, 2):
+        key = f's-aaaa-inbox/answer-{n}'
+        append(home, Fact(kind='lease', by='loom:aaaa', id=f'lease:inbox:{n}', data={
+            'strand': 's-aaaa-inbox', 'thread': 'inbox', 'gen': n, 'router_gen': 1}))
+        append(home, Fact(kind='letter', by='strand:s-aaaa-inbox', id=key, data={
+            'id': key, 'from': 's-aaaa-inbox', 'to': 'channel:desk/42', 'gen': n, 'router_gen': 1,
+            'body': f'answer {n}'}))
+        facts = router.begin_tick(read_facts(home))
+        router.speak_out(facts)
+    sent = [json.loads(row)['text'] for row in (tmp_path / 'loom/channel-fake.jsonl').read_text().splitlines()]
+    assert len(sent) == 2, sent
+    assert sent[0].count(INTERVIEW) == 1 and INTERVIEW not in sent[1]

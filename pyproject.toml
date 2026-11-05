@@ -62,7 +62,7 @@ brr = ["AGENTS.md", "LICENSE", "Dockerfile", "prompts/*.md", "templates/*.md", "
 # Step 4a adds files under the same tree and does not edit this line.
 # The recipes have no suffix, so they need the glob; `**` is setuptools 77.
 # `frontend/**` is the SvelteKit build release.yml copies in; a checkout serves src/frontend/build instead.
-"brr.loom.runtime" = ["seed/**", "bodies/**", "connectors/**", "connectors/fake/in/.keep", "connectors/web/in/.keep",
+"brr.loom.runtime" = ["seed/**", "firstword/*.toml", "bodies/**", "connectors/**", "connectors/fake/in/.keep", "connectors/web/in/.keep",
                       "frontend/**"]
 # `legal/*.txt` is not documentation: it is the byte-exact text a
 # `terms_acceptances.sha256` resolves back to (#735). Ship it or an installed
