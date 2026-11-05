@@ -50,6 +50,11 @@ def cut_home(home: Path, work: Path, at: datetime) -> Path:
     for part in ("self", "loom", "blobs"):
         if (home / part).exists():
             subprocess.run(["cp", "-cR", str(home / part), str(out / part)], check=True)
+    if (out / "self" / ".git").exists():  # the self as it was: threads settled since are still open then
+        head = subprocess.run(["git", "-C", str(out / "self"), "rev-list", "-1", f"--before={at.isoformat()}", "HEAD"],
+                              capture_output=True, text=True, check=True).stdout.strip()
+        if head:
+            subprocess.run(["git", "-C", str(out / "self"), "checkout", "-q", "--force", "--detach", head], check=True)
     if (home / "repos").exists():
         (out / "repos").symlink_to(home / "repos")
     for name in ("loop.lock", "board"):  # the live loom's lock and the board's own notes are not the moment's
