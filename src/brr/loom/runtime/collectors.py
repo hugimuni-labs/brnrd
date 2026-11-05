@@ -10,7 +10,9 @@ after the person dropped or answered the ask; a different error on the same
 collector ends the old ask and files a fresh one; a reading with windows and
 no error ends the open ask as moot, and is kept (``<shell>.clean``) so the
 same error coming back after it is a new fault that asks again, whatever the
-person did with the last ask. One reading is no error: a network blip heals by
+person did with the last ask. The marker is this home's: a router that moves
+to another install has none there and stays quiet, the side that never asks
+twice. One reading is no error: a network blip heals by
 the next refresh, so an error asks only once two readings carry it.
 """
 
