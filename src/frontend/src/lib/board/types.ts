@@ -77,6 +77,8 @@ export type Thread = {
 	strands?: Strand[];
 	steps?: Step[];
 	plan?: { done: number; total: number; bytes?: number; cap?: number };
+	// wish counts by state, on the index row; the rows themselves ride in the thread part
+	counts?: Record<string, number>;
 	board?: {
 		state?: BoardState;
 		since?: string;
@@ -121,7 +123,8 @@ export type Index = {
 	// the rail's face frames by 'running' / 'idle' (brr.emotes.for_telemetry)
 	faces?: Record<string, string[]>;
 	wishes: Record<string, Record<string, number>>;
-	unthreaded: Wish[];
+	// absent once those wishes ride in the unthreaded part; kept for an index that still sends them
+	unthreaded?: Wish[];
 	person: string | null;
 	// the channel a letter typed on the board goes out through
 	via?: string | null;
@@ -137,7 +140,7 @@ export type BeadsDelta = {
 	drop: string[];
 };
 
-export type ThreadPart = {
+export type ThreadPart = Partial<Thread> & {
 	id: string;
 	count: number;
 	letters: Letter[];

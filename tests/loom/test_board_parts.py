@@ -462,6 +462,61 @@ def test_topic_newest_matches_the_seed_wake():
     assert board_newest("# no entries\n") == mod.topic_newest("# no entries\n") == ("", "")
 
 
+def test_the_index_is_hashes_counts_and_short_rows(parts, monkeypatch):
+    """Steps, strands and wish stamps stay off the index. Growing them grows the part, not the index."""
+    from brr.loom.runtime import board
+    root = parts.home.root
+    fat = "step " * 20_000
+    monkeypatch.setattr(board, "steps_of", lambda _root, _name: [{"text": fat, "wishes": [], "receipt": None}])
+    body = "quote " * 20_000
+    letter = inject_letter(root, to="thread:web", body=body)
+    append(parts.home, Fact(kind="wish", by="person:ada", id="w-web", data={
+        "wish": "w-web", "says": [[letter, 0, None]], "from": "person", "line": "on the thread", "thread": "web"}))
+    append(parts.home, Fact(kind="wish", by="person:ada", id="w-loose", data={
+        "wish": "w-loose", "says": [[letter, 0, None]], "from": "person", "line": "no thread", "thread": "nowhere"}))
+    assert parts.step()
+    index = parts.parts["index"]
+    raw = json.dumps(index, separators=(",", ":")).encode()
+    assert len(raw) < 30_000
+    assert "unthreaded" not in index
+    assert b"step step" not in raw and b"quote quote" not in raw
+    assert b"w-loose" not in raw and b"w-web" not in raw
+    for row in index["threads"]:
+        assert set(row) <= {"id", "title", "status", "last_at", "board", "counts"}
+        assert set(row.get("board") or {}) <= {"state"}
+    web = next(row for row in index["threads"] if row["id"] == "web")
+    assert web["board"]["state"] and web["counts"]
+    assert parts.parts["thread/web"]["steps"][0]["text"] == fat
+    assert [w["wish"] for w in parts.parts["thread/web"]["wishes"]] == ["w-web"]
+    assert parts.parts["unthreaded"][0]["wish"] == "w-loose"
+    assert parts.parts["unthreaded"][0]["says"][0]["quote"] == body
+    held = parts.hashes["unthreaded"]
+    inject_letter(root, to="thread:docs", body="unrelated")
+    assert parts.step()
+    assert parts.hashes["unthreaded"] == held
+
+    monkeypatch.setattr(board, "steps_of", lambda _root, _name: [{"text": fat + fat, "wishes": [], "receipt": None}])
+    before = len(raw)
+    parts.revision = None
+    assert parts.step()
+    grown = json.dumps(parts.parts["index"], separators=(",", ":")).encode()
+    assert len(grown) < 30_000 and abs(len(grown) - before) < 1000
+    assert parts.parts["thread/web"]["steps"][0]["text"] == fat + fat
+    assert b"step step" not in grown
+
+    server = serve(parts, 0)
+    port = server.server_address[1]
+    try:
+        status, _, got = get(port, "/v1/loom/unthreaded")
+        assert status == 200 and json.loads(got)[0]["wish"] == "w-loose"
+        idx = json.loads(get(port, "/v1/loom/index")[2])
+        assert "unthreaded" not in idx and idx["parts"]["unthreaded"] == parts.hashes["unthreaded"]
+    finally:
+        parts.stop.set()
+        server.shutdown()
+        server.server_close()
+
+
 def test_topics_is_its_own_part_not_on_the_index(parts):
     root = parts.home.root
     page = root / "self/topics/board.md"

@@ -584,13 +584,38 @@ def digest(part) -> str:
     return hashlib.sha256(json.dumps(part, sort_keys=True, separators=(",", ":")).encode()).hexdigest()[:16]
 
 
+# What a column header and the rail read off the index. The index is fetched whole on every letter.
+_INDEX_THREAD = ("id", "title", "status", "last_at")
+
+
+def index_thread(thread: dict, counts: dict | None) -> dict:
+    """A thread row on the index: id, title, status, board state, wish counts, last_at."""
+    row = {k: thread.get(k) for k in _INDEX_THREAD}
+    state = (thread.get("board") or {}).get("state")
+    if state:
+        row["board"] = {"state": state}
+    if counts:
+        row["counts"] = counts
+    return {k: v for k, v in row.items() if v not in (None, "", [], {})}
+
+
+def thread_body(thread: dict) -> dict:
+    """Steps, strands, calls and the rest, on the thread part the client already holds."""
+    return {k: v for k, v in thread.items() if k != "id"}
+
+
 # The rail's face per strand state, the frames a working or resting strand plays (board.html read these off board.py).
 FACES = {s: list(emotes.for_telemetry(s).frames) for s in ("idle", "running")}
 
 
 def compute(home: Home, facts, config, tools: dict, live: dict, person: str | None = None,
             typed: dict | None = None) -> dict[str, dict]:
-    """Every part by name: ``index``, ``thread/<id>`` per thread, ``beads``. The index carries the others' hashes."""
+    """Every part by name. The index is hashes, counts and short rows; fat rows ride in their own part.
+
+    ``thread/<id>`` carries that thread's letters, wishes, steps, strands and calls. Wishes with no
+    thread on the board ride in ``unthreaded``, not on the index: the client fetches the index whole
+    on every letter.
+    """
     from .asks import Beads
     snap, raw, letters, told = board_threads(home, facts, config, person, typed)
     threads = snap.get("threads") or []
@@ -611,7 +636,9 @@ def compute(home: Home, facts, config, tools: dict, live: dict, person: str | No
     for t in threads:
         mine = by_thread.get(t["id"], [])
         wished_here = wished.get(t["id"], [])
+        # thread_body first: a snapshot key named id, count, letters or wishes must not overwrite the part.
         part = {
+            **thread_body(t),
             "id": t["id"], "count": len(mine), "letters": mine, "wishes": wished_here,
             **taped(t, tools, live)}
         if t["id"] != inbox:
@@ -619,10 +646,13 @@ def compute(home: Home, facts, config, tools: dict, live: dict, person: str | No
         parts[f"thread/{t['id']}"] = part
     parts["beads"] = beads_of(facts, main, walker)
     parts["topics"] = topics_of(home.root / "self", letters)
+    loose = [row for name, rows in wished.items() if name not in known for row in rows]
+    if loose:
+        parts["unthreaded"] = loose
     hashes = {name: digest(part) for name, part in parts.items()}
-    index = {"v": 1, **{k: v for k, v in snap.items() if k not in {"at", "log"}}, "wishes": counts,
-             "unthreaded": [row for name, rows in wished.items() if name not in known for row in rows],
-             **_as(home, person), "parts": hashes, "faces": FACES}
+    index = {"v": 1, **{k: v for k, v in snap.items() if k not in {"at", "log"}},
+             "threads": [index_thread(t, counts.get(t["id"])) for t in threads],
+             "wishes": counts, **_as(home, person), "parts": hashes, "faces": FACES}
     parts["index"] = index
     return parts
 
@@ -783,7 +813,7 @@ class Parts:
             part = parts.get(name)
             if part is None:
                 continue
-            tape = taped(t, self.tape.tools, self.tape.live)
+            tape = taped(part, self.tape.tools, self.tape.live)
             if tape["tools"] != part["tools"] or tape["live"] != part["live"]:
                 parts[name] = dict(part, **tape)
                 hashes[name] = digest(parts[name])
@@ -1037,7 +1067,7 @@ def handler(parts: Parts, port: int, spa=spa_root):
                 if part is None:
                     return self._json({"error": "no part beads"})
                 return self._json(part, current)
-            if path in {"index", "beads", "topics"} or path.startswith("thread/"):
+            if path in {"index", "beads", "topics", "unthreaded"} or path.startswith("thread/"):
                 part = held.get(path)
                 if part is None:
                     return self._json({"error": f"no part {path}"})
@@ -1126,7 +1156,7 @@ def handler(parts: Parts, port: int, spa=spa_root):
 
 
 def serve(parts: Parts, port: int, spa=spa_root) -> ThreadingHTTPServer:
-    """The loopback shell: GET ``/v1/loom/{index,thread/<id>,beads,events}`` (beads takes ``?since=<hash>``),
+    """The loopback shell: GET ``/v1/loom/{index,thread/<id>,beads,topics,unthreaded,events}`` (beads takes ``?since=<hash>``),
     POST ``/v1/loom/letters``, and every other GET outside ``/v1/`` from the SPA build ``spa()`` names
     (its ``/`` is the board), on 127.0.0.1."""
     server = ThreadingHTTPServer(("127.0.0.1", port), handler(parts, port, spa))

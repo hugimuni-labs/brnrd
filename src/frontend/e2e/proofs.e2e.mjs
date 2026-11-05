@@ -102,8 +102,10 @@ test('the order holds for 10 s, then moves once; the same data moves nothing (pr
 	assert.deepEqual(await order(), first, 'a render with the same data moves no column');
 	const parts = fixture();
 	const fox = parts.index.threads.find((t) => t.id === 'foxtrot');
-	fox.board = { state: 'seated', strand: 'working' };
-	fox.strands[0].state = 'working';
+	fox.board = { state: 'seated' };
+	const part = parts['thread/foxtrot'];
+	part.board = { state: 'seated', strand: 'working' };
+	part.strands[0].state = 'working';
 	B.loom.set(reindex(parts));
 	await B.page.waitForTimeout(600);
 	const held = await order();

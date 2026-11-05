@@ -158,6 +158,16 @@ def test_consent_off_withholds_and_drops_the_parts(client):
     assert client.get("/v1/loom/index").status_code == 404
 
 
+def test_unthreaded_is_a_part_the_cloud_serves(client):
+    headers, session = _account(client)
+    relay = _relay_token(client, headers, _repo(client, headers))
+    rows = [{"wish": "w-x", "line": "loose", "state": "heard", "thread": None}]
+    index = {**PARTS["index"], "parts": {"unthreaded": "u"}}
+    assert _push(client, relay, parts={"index": index, "unthreaded": rows}).status_code == 200
+    _signed_in(client, session)
+    assert client.get("/v1/loom/unthreaded").json() == rows
+
+
 def test_bad_pushes_are_refused(client):
     headers, _ = _account(client)
     relay = _relay_token(client, headers, _repo(client, headers))
