@@ -99,7 +99,9 @@ letter itself, which makes it derived. The README records the ids once as
 `opened-for: [w-…]`: why the thread was opened, while each wish's thread
 says where its work is now. When a result exists,
 record it with `wish <w-id> --result <kind>:<ref> --line "…"`, adding
-`--deliver` on the one you hand over. What is left on a wish is the wish's
+`--deliver` on the one you hand over. A file on the host is `host:<path>`:
+the loom keeps its bytes as delivered and sends it where the channel takes
+files, and names its path elsewhere. What is left on a wish is the wish's
 own: `wish <w-id> --left "<step>" --left "<step>"` restates the whole list,
 and the latest one wins (`--left same` when nothing moved). The loom asks for
 it at a stop and refuses a reincarnation while a wish moved since its last left: a

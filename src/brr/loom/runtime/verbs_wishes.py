@@ -156,6 +156,8 @@ def cmd_wish(args):
                     raise ValueError("--result requires kind:ref and --line")
                 kind = "wish.result"
                 data.update(kind=result_kind, ref=ref, line=args.line, delivered=args.deliver)
+                if result_kind == "host":
+                    data.update(store_host_file(home, ref))
             else:
                 kind = "wish.verdict"
                 data.update({"as": "accepted" if args.accept else "dropped",
@@ -229,6 +231,47 @@ def _rank_fact(args, facts, by):
     return Fact(kind="wish.top", by=by, id="wish.top:" + mint(12), data={"wish": args.id, "ref": ident})
 
 
+HOST_FILE_MAX = 1 << 30
+
+
+def store_host_file(home, raw: str) -> dict:
+    """A ``host:<path>`` result: the file's bytes go into the home's blob store
+    as they are now, and the result records where it was and what it is."""
+    import hashlib
+    import mimetypes
+    path = Path(os.path.expanduser(raw)).resolve()
+    if not path.is_file():
+        raise ValueError(f"--result host:{raw}: no regular file at {path}")
+    size = path.stat().st_size
+    if size > HOST_FILE_MAX:
+        raise ValueError(f"--result host:{raw}: {size} bytes is past the 1 GiB a done may carry; "
+                         "put it where the person can fetch it and deliver that link")
+    folder = home.root / "blobs"
+    folder.mkdir(parents=True, exist_ok=True)
+    tmp = folder / f".host.{os.getpid()}.{mint(6)}.tmp"
+    digest = hashlib.sha256()
+    try:
+        with path.open("rb") as source, tmp.open("wb") as copy:
+            for chunk in iter(lambda: source.read(1 << 20), b""):
+                digest.update(chunk)
+                copy.write(chunk)
+            copy.flush()
+            os.fsync(copy.fileno())
+        sha = digest.hexdigest()
+        os.replace(tmp, folder / sha)
+    finally:
+        tmp.unlink(missing_ok=True)
+    return dict(ref=str(path), sha256=sha, size=size, name=path.name,
+                mime=mimetypes.guess_type(path.name)[0] or "application/octet-stream")
+
+
+def _size(n: int) -> str:
+    for unit in ("bytes", "KB", "MB", "GB"):
+        if n < 1024 or unit == "GB":
+            return f"{n} {unit}" if unit == "bytes" else f"{n:.1f} {unit}"
+        n /= 1024
+
+
 def _tell_delivered(home, args, wish, result) -> None:
     """A delivered person wish is a letter to that person on the chat they said it in:
     the receipt, and how to give the verdict. Their reply ``ok`` to it accepts it."""
@@ -242,9 +285,14 @@ def _tell_delivered(home, args, wish, result) -> None:
     if chat is None:
         return
     room = _room(args.room)
-    body = (f"delivered &{wish.id}: {wish.line}\n{result['line']}: {result['ref']}\n"
-            "Reply ok to accept, or say what is off.\n")
-    write_send(room, to=chat, sender=strand_of_room(room), body=body)
+    body = f"delivered &{wish.id}: {wish.line}\n{result['line']}: {result['ref']}\n"
+    attach = None
+    if result.get("kind") == "host":
+        body += f"file: {result['name']} · {_size(result['size'])} · sha256 {result['sha256']}\n"
+        attach = f"{result['sha256']} {result['name']}"
+    body += "Reply ok to accept, or say what is off.\n"
+    write_send(room, to=chat, sender=strand_of_room(room), body=body,
+               **({"attach": attach} if attach else {}))
 
 
 def _rest_line(args, data) -> None:

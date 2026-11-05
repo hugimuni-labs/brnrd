@@ -723,7 +723,7 @@ class Router:
                 continue
             try:
                 body = str(fact.data.get("body") or "")
-                context = {k: str(fact.data[k]) for k in ("from", "clean", "edit") if k in fact.data}
+                context = {k: str(fact.data[k]) for k in ("from", "clean", "edit", "attach") if k in fact.data}
                 if fact.data.get("refs"):
                     context["refs"] = " ".join(fact.data["refs"])
                 from .home import channel_parts

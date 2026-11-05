@@ -1,17 +1,22 @@
 #!/usr/bin/env python3
 """Send or edit a letter; an error after any send is always uncertain."""
 import json
+import os
 import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
-from common import Refused, call, message_id, reply_id
+from common import Refused, call, message_id, reply_id, send_document
 from brr.channels.telegram import split_message
 from brr.loom.runtime.port import parse_frontmatter
 
 
+# A bot's sendDocument limit: https://core.telegram.org/bots/api#senddocument
+DOCUMENT_MAX = 50 * 2**20
+
+
 def deliver(path):
-    ids = []
+    ids, first = [], None
     try:
         letter = parse_frontmatter(path.read_text())
         chat = letter['to']
@@ -29,6 +34,16 @@ def deliver(path):
             elif re is not None:
                 payload['reply_parameters'] = dict(message_id=re)
             result = call('editMessageText' if edit is not None else 'sendMessage', payload)
+            ids.append(message_id(chat, result['message_id']))
+            first = result['message_id'] if first is None else first
+        if letter.get('attach'):
+            blob, name = letter['attach'], letter.get('attach-name') or 'file'
+            if os.path.getsize(blob) > DOCUMENT_MAX:
+                note = (f'{name} is {os.path.getsize(blob) / 2**20:.0f} MB, past the 50 MB a Telegram bot '
+                        'may send; it stays on the host at the path above.')
+                result = call('sendMessage', dict(chat_id=chat, text=note))
+            else:
+                result = send_document(chat, blob, name, reply_to=first)
             ids.append(message_id(chat, result['message_id']))
     except Refused as exc:
         print(str(exc), file=sys.stderr)

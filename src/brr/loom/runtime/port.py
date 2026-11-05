@@ -603,8 +603,11 @@ def write_send(room: Path, *, to: str, sender: str, body: str = "",
                wish: str | tuple | list | None = None,
                budget: int | None = None, chatter: list[str] | None = None,
                echo: list[str] | None = None, reopen: bool = False,
-               ask_for: str | None = None) -> str:
+               ask_for: str | None = None, attach: str | None = None) -> str:
     """Write one letter (or note) into port/out, with the wish stamps it carries.
+
+    ``attach`` is ``<sha256> <name>``: a file from the home's blob store that a
+    channel which carries files sends beside the text (a ``host:`` delivery).
 
     ``wish`` items are a ``w-id`` or ``new:"line"``, or a dict with ``value``
     and the ``says``, ``refs`` and ``answered`` bound to it. ``chatter`` is
@@ -849,6 +852,11 @@ def write_send(room: Path, *, to: str, sender: str, body: str = "",
         fields["links"] = " ".join(links)
     if reincarnate:
         fields["reincarnate"] = reincarnate
+    if attach:
+        if not is_channel(to) or note is not None:
+            raise PortError("send: a file goes only on a letter to a channel")
+        _blob_of(home.root, attach)
+        fields["attach"] = attach
     if note is not None:
         fields["note"] = note
     elif clean:
@@ -1069,6 +1077,17 @@ def fact_from_taint(text: str, strand: str, fact_id: str) -> Fact:
     )
 
 
+def _blob_of(root: Path, attach: str) -> Path:
+    """``<sha256> <name>`` → the stored blob, or PortError."""
+    sha, _, name = attach.partition(" ")
+    if not re.fullmatch(r"[0-9a-f]{64}", sha) or not name.strip():
+        raise PortError(f"attach {attach!r}: expected <sha256> <name>")
+    blob = Path(root) / "blobs" / sha
+    if not blob.is_file():
+        raise PortError(f"attach: no blob {sha} in the home's store")
+    return blob
+
+
 def fact_from_port(fm: dict[str, str], strand: str, gen: int | None,
                    room: Path | None = None) -> Fact:
     """Turn one ingested port file into a fact. ``gen`` is the strand's live lease.
@@ -1102,6 +1121,12 @@ def fact_from_port(fm: dict[str, str], strand: str, gen: int | None,
             data["links"] = fm["links"].split()
         if fm.get("edit"):
             data["edit"] = fm["edit"]
+        if fm.get("attach"):
+            if not is_channel(data["to"]):
+                raise PortError(f"letter {fact_id}: a file goes only on a letter to a channel")
+            if room is not None:
+                _blob_of(home_of_room(Path(room)).root, fm["attach"])
+            data["attach"] = fm["attach"]
         if fm.get("reincarnate"):
             data["reincarnate"] = fm["reincarnate"]
         if fm.get("budget"):
