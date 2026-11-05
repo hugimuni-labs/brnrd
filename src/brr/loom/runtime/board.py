@@ -51,6 +51,9 @@ LETTERS = 200  # letters per thread part; older ones by ?before=
 LABEL = 80  # characters of a bead's label
 PLAN_CAP = 2048  # the inbox README's own rule for its Plan; the loom enforces no cap
 BEAD_DELTAS = 8  # previous beads hashes a ?since= GET can still patch from
+CITE_CAP = 20  # newest letter ids that name topics/<id>, any thread
+TOPIC_QUOTE = 200  # characters of the newest entry, for unfold
+TOPIC_CITE = re.compile(r"topics/([a-z0-9-]+)")
 
 
 def _person_side(sender: str) -> bool:
@@ -65,6 +68,7 @@ def _say(raw) -> tuple:
 
 
 _READMES: dict[Path, tuple[tuple, str]] = {}
+_TOPICS: dict[Path, tuple[tuple, str]] = {}
 
 
 def _readme(self_root: Path, thread: str) -> str:
@@ -76,6 +80,81 @@ def _readme(self_root: Path, thread: str) -> str:
     if held is None or held[0] != stamp:
         held = _READMES[path] = (stamp, path.read_text())
     return held[1]
+
+
+def _topic_text(path: Path) -> str:
+    """A topic page, re-read only when its stat moved."""
+    st = path.stat()
+    stamp = (st.st_mtime_ns, st.st_size, st.st_ino)
+    held = _TOPICS.get(path)
+    if held is None or held[0] != stamp:
+        held = _TOPICS[path] = (stamp, path.read_text())
+    return held[1]
+
+
+def topic_newest(text: str) -> tuple[str, str]:
+    """A topic page's newest ``### YYYY-MM-DD · title`` entry as (date, title), its
+    links dropped; the first listed wins a tie. ``("", "")`` without a dated entry.
+
+    Copied from the seed wake (``core/loom/wake``); ``test_topic_newest_matches_the_seed_wake``
+    parses one page through both and asserts equal.
+    """
+    best = ("", "")
+    for line in text.splitlines():
+        if not line.startswith("### "):
+            continue
+        date, sep, rest = line[4:].partition(" · ")
+        if not (sep and len(date) == 10 and date[4] == date[7] == "-"
+                and date.replace("-", "").isdigit()):
+            continue
+        title = rest.split(" · [", 1)[0].strip()
+        if title and date > best[0]:
+            best = (date, title)
+    return best
+
+
+def topics_of(self_root: Path, letters: list) -> list[dict]:
+    """The topics part: one row per page, newest-entry first. Cites are the newest ``CITE_CAP`` letters
+    whose body names ``topics/<id>``, any thread.
+    """
+    folder = self_root / "topics"
+    if not folder.is_dir():
+        return []
+    cites: dict[str, list[str]] = {}
+    for row in letters:
+        for slug in dict.fromkeys(TOPIC_CITE.findall(str(row.get("body") or ""))):
+            cites.setdefault(slug, []).append(row["id"])
+    out = []
+    for page in sorted(folder.glob("*.md")):
+        if page.name == "README.md":
+            continue
+        try:
+            text = _topic_text(page)
+        except OSError:
+            continue
+        slug = page.stem
+        title = next((ln[2:].strip() for ln in text.splitlines() if ln.startswith("# ")), slug)
+        at, line = topic_newest(text)
+        entries = sum(1 for ln in text.splitlines() if ln.startswith("### "))
+        quote = ""
+        if at:
+            lines = text.splitlines()
+            for i, ln in enumerate(lines):
+                if ln.startswith("### ") and ln[4:].startswith(at):
+                    block = []
+                    for rest in lines[i + 1:]:
+                        if rest.startswith("### "):
+                            break
+                        block.append(rest)
+                    quote = " ".join(" ".join(block).split())[:TOPIC_QUOTE]
+                    break
+        ids = cites.get(slug, [])[-CITE_CAP:]
+        ids.reverse()
+        row = {"id": slug, "title": title, "at": at, "line": line[:LABEL], "entries": entries,
+               "cites": ids, "quote": quote}
+        out.append({k: v for k, v in row.items() if v not in (None, "", [], 0)})
+    out.sort(key=lambda r: (-int((r.get("at") or "0").replace("-", "") or 0), r["id"]))
+    return out
 
 
 def plan_bytes(self_root: Path, thread: str) -> int | None:
@@ -539,6 +618,7 @@ def compute(home: Home, facts, config, tools: dict, live: dict, person: str | No
             part["chain"] = chain_of(walker, chain_starts(walker, t, mine, wished_here))
         parts[f"thread/{t['id']}"] = part
     parts["beads"] = beads_of(facts, main, walker)
+    parts["topics"] = topics_of(home.root / "self", letters)
     hashes = {name: digest(part) for name, part in parts.items()}
     index = {"v": 1, **{k: v for k, v in snap.items() if k not in {"at", "log"}}, "wishes": counts,
              "unthreaded": [row for name, rows in wished.items() if name not in known for row in rows],
@@ -957,7 +1037,7 @@ def handler(parts: Parts, port: int, spa=spa_root):
                 if part is None:
                     return self._json({"error": "no part beads"})
                 return self._json(part, current)
-            if path in {"index", "beads"} or path.startswith("thread/"):
+            if path in {"index", "beads", "topics"} or path.startswith("thread/"):
                 part = held.get(path)
                 if part is None:
                     return self._json({"error": f"no part {path}"})

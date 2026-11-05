@@ -3,7 +3,7 @@ import { test } from 'node:test';
 import type { Call, Index, Letter, Thread, ThreadPart, Wish } from './types.ts';
 import { chips, dur, refTokens, splitQuote } from './text.ts';
 import { inSide, internal, letterMark, linked, sender } from './sides.ts';
-import { arrange, REORDER, SETTLED, sortThreads, wanted } from './order.ts';
+import { arrange, REORDER, SETTLED, TOPICS, sortThreads, wanted } from './order.ts';
 import { pipOn, stages, stageWord } from './stages.ts';
 import { answered, stack, verdictLetter } from './calls.ts';
 import { inboxCards, ledger, threadWishes, unechoed } from './ledger.ts';
@@ -94,6 +94,7 @@ test('order: seated by freshest letter, your-call by since, quiet by opened newe
 		sorted.map((t) => t.id),
 		['seat-2', 'seat-1', 'call-a', 'call-b', 'wait', 'stall', 'q-new', 'q-old', 'done']
 	);
+	deepEqual(wanted(sorted, new Set(['done'])).slice(0, 2), ['inbox', TOPICS]);
 	deepEqual(wanted(sorted, new Set(['done'])).slice(-3), ['q-old', SETTLED, 'done']);
 });
 

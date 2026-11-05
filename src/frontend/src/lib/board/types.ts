@@ -161,4 +161,15 @@ export type Model = {
 	faces?: Record<string, string[]>;
 	person: string | null;
 	via?: string | null;
+	topics?: Topic[];
+};
+
+export type Topic = {
+	id: string;
+	title?: string;
+	at?: string;
+	line?: string;
+	entries?: number;
+	cites?: string[];
+	quote?: string;
 };

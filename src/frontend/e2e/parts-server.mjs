@@ -130,7 +130,8 @@ export function partsServer(dir, port = 0, consent = null) {
 			res.end(rawBeads);
 			return;
 		}
-		const raw = path === 'index' || path.startsWith('thread/') ? read(path) : null;
+		const raw =
+			path === 'index' || path === 'topics' || path.startsWith('thread/') ? read(path) : null;
 		if (!raw) {
 			res.writeHead(404, { 'content-type': 'application/json' });
 			res.end(JSON.stringify({ error: `no part ${path}` }));

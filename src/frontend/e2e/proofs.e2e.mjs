@@ -28,7 +28,8 @@ let B;
 before(async () => (B = await open({ parts: home() })));
 after(() => B?.close());
 
-const order = () => B.page.$$eval('#board > .column', (cs) => cs.map((c) => c.dataset.column));
+const order = () =>
+	B.page.$$eval('#board > .column:not(.topics)', (cs) => cs.map((c) => c.dataset.column));
 
 test('a bare id or an &ref is a chip; a word that only looks like one stays text (proof-chips)', async () => {
 	const l = B.page.locator('[data-letter="s-test-char2/chips"]');
@@ -109,7 +110,7 @@ test('the order holds for 10 s, then moves once; the same data moves nothing (pr
 	assert.equal(held.indexOf('foxtrot'), first.indexOf('foxtrot'), 'inside the hold it stays put');
 	await B.page.waitForFunction(
 		() =>
-			[...document.querySelectorAll('#board > .column')]
+			[...document.querySelectorAll('#board > .column:not(.topics)')]
 				.slice(1, 3)
 				.some((c) => c.dataset.column === 'foxtrot'),
 		null,

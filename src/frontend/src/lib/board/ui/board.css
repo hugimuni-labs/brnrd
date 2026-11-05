@@ -7,7 +7,8 @@
 .brd .stp-h,
 .brd .pips,
 .brd .unsettle,
-.brd .from-line {
+.brd .from-line,
+.brd .topic-row {
 	font: inherit;
 	background: none;
 	border: 0;
@@ -1957,6 +1958,30 @@
 	margin-top: 4px;
 	white-space: pre-wrap;
 	color: #171717;
+}
+.brd .topic-row {
+	display: block;
+	width: 100%;
+	padding: 6px 10px;
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	font-size: 11px;
+	line-height: 16px;
+	border-bottom: 1px solid #eee;
+}
+.brd .topic-row.open {
+	white-space: pre-wrap;
+	overflow: visible;
+}
+.brd .topic-row.linked {
+	background: color-mix(in srgb, var(--h) 12%, transparent);
+}
+.brd .topic-cites {
+	margin-top: 4px;
+}
+.brd .topic-cites .ref {
+	margin-right: 6px;
 }
 .brd .column.threadcol .band {
 	display: block;
