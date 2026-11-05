@@ -3,10 +3,16 @@
 A ``--deliver`` is the body's word; this module turns it into the forge's. A
 pull request result is delivered only when GitHub says it merged, at the sha
 GitHub names; a ``ci:`` result only when every check at its commit is green; a
-``file:`` result only when the path is in the self's ``main`` as landed. When
+``file:`` result only when the path is in the self's ``main`` as landed; a
+``host:`` file only when its stored copy still hashes to the sha256 taken at
+delivery. When
 the body's line says how many tests passed and the pull request's CI reported
 a count, the two must agree. A result that fails is held: the wish stays
 undelivered and the fact, one line, is its left (``verbs_wishes.cmd_wish``).
+
+What the loom cannot read is delivered, never held, and says so (``WORD``):
+a letter, a commit, a link off GitHub. A ``url:`` is fetched, and its line says
+whether it answered; it still reached the person on the body's word.
 
 Beside it, a fact for the reviewer, never a refusal: a pull request whose diff
 changes tests and code together carries one line naming the assertions it
@@ -38,6 +44,8 @@ _PASSED = re.compile(r"(\d[\d,]*)\s+(?:tests?\s+)?passed\b")
 #: The line ``weakened`` writes, so a later pass replaces it in the body.
 WEAKENED = "Tests weakened beside code"
 _WEAKENED_LINE = re.compile(rf"^{WEAKENED}\b.*\n?", re.M)
+#: How a result the loom could not bear out is labelled, in the letter and the fact.
+WORD = "on the body's word, unverified"
 
 
 @dataclass
@@ -46,6 +54,8 @@ class Checked:
     ok: bool
     line: str
     weakened: str = ""
+    #: True when the loom could not bear the result out: delivered, labelled ``WORD``.
+    word: bool = False
 
 
 def forge_for(home):
@@ -124,9 +134,9 @@ def pull_of(ref: str, kind: str, facts) -> tuple[str, int] | None:
     return (repo, number) if repo else None
 
 
-def check(home, facts, kind: str, ref: str, line: str, forge=None) -> Checked | None:
-    """The forge's word on a result about to be delivered, or ``None`` when the ref
-    names nothing the loom reads (a letter, a commit, a link off GitHub)."""
+def check(home, facts, kind: str, ref: str, line: str, forge=None, sha256: str = "") -> Checked:
+    """The loom's word on a result about to be delivered. A ref it cannot read
+    (a letter, a commit, a link off GitHub) is ok and labelled ``WORD``."""
     pull = pull_of(ref, kind, facts)
     if pull is None and kind == "pr":
         return Checked(False, f"pr:{ref} names no pull request on GitHub: give owner/repo#N or its URL")
@@ -134,9 +144,53 @@ def check(home, facts, kind: str, ref: str, line: str, forge=None) -> Checked | 
         return _ci(ref, forge or forge_for(home))
     if pull is None and kind in FILES:
         return _file(home, ref)
+    if pull is None and kind == "host":
+        return _host(home, ref, sha256)
+    if pull is None and re.match(r"https?://", ref.strip()):
+        return _url(ref.strip())
     if pull is None:
-        return None
+        return Checked(True, f"{kind}:{ref} {WORD}", word=True)
     return _pull(home, *pull, line, forge or forge_for(home))
+
+
+def _url(ref: str) -> Checked:
+    """A link off GitHub's pulls: fetched once, its answer said, never held on."""
+    try:
+        status = reach(ref)
+    except Exception as exc:  # noqa: BLE001 - an unreachable link is labelled, not held
+        said = f"HTTP {exc.code}" if isinstance(exc, urllib.error.HTTPError) else str(exc) or type(exc).__name__
+        return Checked(True, f"{ref} did not answer ({said}): {WORD}", word=True)
+    return Checked(True, f"{ref} answered HTTP {status}: what it holds is {WORD}", word=True)
+
+
+def reach(url: str) -> int:
+    """The status a HEAD on ``url`` gets, or a GET when HEAD is refused."""
+    for method in ("HEAD", "GET"):
+        req = urllib.request.Request(url, method=method, headers={"User-Agent": "brnrd-loom"})
+        try:
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                return resp.status
+        except urllib.error.HTTPError as exc:
+            if method == "GET" or exc.code not in (403, 405, 501):
+                raise
+    raise AssertionError("unreachable")  # pragma: no cover
+
+
+def _host(home, ref: str, sha256: str) -> Checked:
+    """A host file: the copy stored at delivery hashes to the sha256 taken then."""
+    if not sha256:
+        return Checked(True, f"host:{ref} has no recorded sha256: {WORD}", word=True)
+    import hashlib
+    blob = home.root / "blobs" / sha256
+    if not blob.is_file():
+        return Checked(False, f"host:{ref}'s stored copy {sha256[:12]} is missing: deliver it again")
+    digest = hashlib.sha256()
+    with blob.open("rb") as source:
+        for chunk in iter(lambda: source.read(1 << 20), b""):
+            digest.update(chunk)
+    if digest.hexdigest() != sha256:
+        return Checked(False, f"host:{ref}'s stored copy does not hash to {sha256[:12]}: deliver it again")
+    return Checked(True, f"host:{ref} stored, sha256 {sha256[:12]} as taken")
 
 
 def _unread(what: str, exc: Exception) -> Checked:

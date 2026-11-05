@@ -19,6 +19,14 @@ def subprocess_tree(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def no_link_fetch(monkeypatch):
+    """A url: delivery fetches its link (verify.reach); in-process, no test
+    reaches the network. A test that wants an answer sets its own."""
+    from brr.loom.runtime import verify
+    monkeypatch.setattr(verify, "reach", lambda url: 200)
+
+
+@pytest.fixture(autouse=True)
 def isolate_gh_login(monkeypatch, tmp_path_factory):
     """No test loom sees this machine's gh login: a loom start sets an unset
     forge_token to ``gh auth token`` when gh answers (gates.converge). An
