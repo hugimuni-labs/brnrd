@@ -12,9 +12,11 @@
 //
 // All money *state* lives server-side (Stripe webhook → db); this module
 // only reads it and mints Checkout/Portal redirect URLs. The current pricing
-// decision (2026-08-27) is one subscriber offer: $7/mo · $70/yr. Historical
-// supporter cohorts remain server-side only so existing subscriptions can be
-// classified without changing their Stripe Price.
+// decision (2026-11-05, brnrd-self threads/pricing/design.md) is one offer:
+// premium at €12/mo, VAT included, monthly only, a founding price locked for
+// a live subscription. Earlier Prices ($7/mo, $70/yr, the supporter cohort)
+// stay server-side only so existing subscriptions keep their Stripe Price and
+// still classify.
 
 export interface SubscriptionState {
 	tier: string;
@@ -102,14 +104,14 @@ export async function startBillingPortal(fetchImpl: typeof fetch = fetch): Promi
 // --- pricing (display only — Stripe is authoritative at checkout) ----------
 
 export const PRICING = {
-	monthly: 7,
-	annual: 70
+	monthly: 12
 } as const;
 
-/** The single price shown next to the subscribe CTA. */
-export function subscribeOffer(cadence: Cadence): { usd: number; label: string } {
-	const usd = PRICING[cadence];
-	return { usd, label: cadence === 'monthly' ? `$${usd}/mo` : `$${usd}/yr` };
+/** The single price shown next to the subscribe CTA. Monthly only: the
+ * annual cadence stays in the API for subscriptions that already have it,
+ * not in the offer. */
+export function subscribeOffer(): { eur: number; cadence: Cadence; label: string } {
+	return { eur: PRICING.monthly, cadence: 'monthly', label: `€${PRICING.monthly}/mo` };
 }
 
 // --- return-param notices ---------------------------------------------------
