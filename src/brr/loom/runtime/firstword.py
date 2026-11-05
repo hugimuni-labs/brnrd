@@ -115,12 +115,12 @@ def first_word(home, person: str, letter: str) -> list[str]:
     restored self or a second setup changes nothing. Records the interview
     offer for the router, once per person.
     """
-    from .ledger import append
+    from .config import read_array
+    from .ledger import append, kind_facts, read_facts
     self_dir = Path(home.root) / "self"
     stub = _agreement(person)
     citing = f"letter:{letter}"
     channels_toml = self_dir / "people" / person / "channels.toml"
-    from .config import read_array
     keys = read_array(channels_toml, "channels") if channels_toml.is_file() else []
     wanted = {
         f"people/{person}/agreement.md": agreement(person, letter),
@@ -137,8 +137,9 @@ def first_word(home, person: str, letter: str) -> list[str]:
     if files:
         land_files(home.root, files, f"Land {person}'s house rules on their first word.\n\n"
                    f"The agreement, the page and the never guards cite {letter}.\n\n")
-    append(home, Fact(kind="interview.offer", by=f"loom:{home.install_id()}", id=f"interview.offer:{person}",
-                      data=dict(person=person, letter=letter, line=INTERVIEW)))
+    if not any(f.id == f"interview.offer:{person}" for f in kind_facts(read_facts(home), "interview.offer")):
+        append(home, Fact(kind="interview.offer", by=f"loom:{home.install_id()}", id=f"interview.offer:{person}",
+                          data=dict(person=person, letter=letter, line=INTERVIEW)))
     return sorted(files)
 
 
