@@ -5,7 +5,9 @@ under the home, a release) unless the owner said it. The owner says it in a
 letter stamped on an open wish of the thread the act serves, and the letter
 names the act's target literally (the PR, the path, the tag) and one of
 the class's verbs, so "merge to main when green" grants no force-push to
-main. Only the owner grants: Sasha's or Nastya's letter does not, by design
+main. A letter a body held (``send --hold``: out of the person's pattern, or
+not them) grants nothing: the café's ask waits for the second path, and the
+owner's answer there is the grant. Only the owner grants: Sasha's or Nastya's letter does not, by design
 (Part D's provenance answers who else may say what). The body's own
 word never grants: a strand's letter carries ``from: <strand>``, written by
 the port, never ``person:``.
@@ -78,7 +80,9 @@ def names(text: str, target: str) -> bool:
 def find(facts: Iterable[Fact], thread: str, cls: str, target: str, owner: set[str]) -> Grant | None:
     """The newest owner letter on an open wish of ``thread`` that names ``target`` and a ``cls`` verb."""
     facts = list(facts)
+    from .dispositions import held
     letters = {str(f.data.get("id", f.id)): f for f in facts if f.kind == "letter"}
+    waiting = held(facts)
     best: tuple[str, Grant] | None = None
     for wish in wishes(facts).values():
         if wish.thread != thread or not wish.open:
@@ -87,7 +91,7 @@ def find(facts: Iterable[Fact], thread: str, cls: str, target: str, owner: set[s
         cited |= {ident for ident, f in letters.items() if f.data.get("wish") == wish.id}
         for ident in cited:
             letter = letters.get(ident)
-            if letter is None:
+            if letter is None or ident in waiting:
                 continue
             person = str(letter.data.get("from") or "")
             body = str(letter.data.get("body") or "")
