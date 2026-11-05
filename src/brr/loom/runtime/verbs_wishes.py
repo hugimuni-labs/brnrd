@@ -286,13 +286,11 @@ def _verified(home, facts, data) -> str | None:
     """Done is true (``verify``): the forge's word on the result goes into ``data``.
     A result the forge does not bear out is not delivered; its fact is returned."""
     from .verify import check
-    checked = check(home, facts, data["kind"], data["ref"], data["line"])
-    if checked is None:
-        return None
+    checked = check(home, facts, data["kind"], data["ref"], data["line"], sha256=data.get("sha256", ""))
     if not checked.ok:
         data.update(delivered=False, unverified=checked.line)
         return checked.line
-    data["verified"] = checked.line
+    data["word" if checked.word else "verified"] = checked.line
     if checked.weakened:
         data["weakened"] = checked.weakened
     return None
@@ -327,7 +325,7 @@ def _tell_delivered(home, args, wish, result) -> None:
         return
     room = _room(args.room)
     body = f"delivered &{wish.id}: {wish.line}\n{result['line']}: {result['ref']}\n"
-    for said in (result.get("verified"), result.get("weakened")):
+    for said in (result.get("verified"), result.get("word"), result.get("weakened")):
         if said:
             body += said + "\n"
     attach = None

@@ -196,3 +196,40 @@ def test_a_rerun_shard_is_counted_once(monkeypatch):
     monkeypatch.setattr(forge, "_call", lambda path: [
         {"title": "tests", "message": notes[int(path.split("/")[-2])]}])
     assert forge.passed(REPO, HEAD) == 2001
+
+
+def test_a_result_the_loom_cannot_read_is_delivered_labelled(seat, monkeypatch):
+    """A letter or a commit names nothing the loom reads: delivered, never held,
+    with the label in the result fact and in the person's letter."""
+    home, room, ident, sent = seat
+    assert deliver(room, ident, FakeForge(), monkeypatch, ref="letter:s-x/abcde") == 0
+    result = wishes(read_facts(home))[ident].results[-1]
+    assert result["delivered"] and result["word"] == f"letter:s-x/abcde {verify.WORD}"
+    assert "verified" not in result
+    assert verify.WORD in sent[0]["body"]
+
+
+def test_a_link_is_fetched_and_still_labelled(seat, monkeypatch):
+    home, room, ident, sent = seat
+    assert deliver(room, ident, FakeForge(), monkeypatch, ref="url:https://example.com/doc") == 0
+    assert wishes(read_facts(home))[ident].results[-1]["word"] == \
+        f"https://example.com/doc answered HTTP 200: what it holds is {verify.WORD}"
+
+    def gone(url):
+        raise verify.urllib.error.HTTPError(url, 404, "Not Found", {}, None)
+    monkeypatch.setattr(verify, "reach", gone)
+    assert deliver(room, ident, FakeForge(), monkeypatch, ref="url:https://example.com/gone") == 0
+    result = wishes(read_facts(home))[ident].results[-1]
+    assert result["delivered"] and result["word"] == f"https://example.com/gone did not answer (HTTP 404): {verify.WORD}"
+
+
+def test_a_host_file_is_checked_by_its_recorded_sha256(seat, monkeypatch, tmp_path):
+    home, room, ident, sent = seat
+    made = tmp_path / "cut.mp4"
+    made.write_bytes(b"frames")
+    assert deliver(room, ident, FakeForge(), monkeypatch, ref=f"host:{made}") == 0
+    result = wishes(read_facts(home))[ident].results[-1]
+    assert result["verified"] == f"host:{made} stored, sha256 {result['sha256'][:12]} as taken"
+    (home.root / "blobs" / result["sha256"]).write_bytes(b"other")
+    assert verify.check(home, [], "host", str(made), "x", sha256=result["sha256"]).ok is False
+    assert verify.check(home, [], "host", str(made), "x").word
