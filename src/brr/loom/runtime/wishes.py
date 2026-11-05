@@ -264,6 +264,9 @@ def _answer(asked: list[Wish], letters: dict, ordered: list[Fact]) -> None:
 
 
 WISH_KINDS = ("wish", "wish.read", "wish.result", "wish.verdict", "wish.left", "wish.top", "wish.pick",
+              # A merged result reads delivered only by the commit the loom runs: without
+              # loom.started here, told() keeps a finished wish granting and Next build.
+              "loom.started",
               "letter", "lease")
 
 

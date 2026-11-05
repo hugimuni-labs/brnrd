@@ -126,3 +126,21 @@ def test_render_names_next_build_and_both_queues():
     out = render(queues(wishes(facts), {"w-ask": "person:arseni"}))
     assert out.startswith("## Queues\nNext build: none")
     assert "- ask w-ask" in out and "- delivered w-new" in out and "1. w-old" in out
+
+
+def test_a_merged_result_the_loom_runs_leaves_the_queue(monkeypatch):
+    """The wake reads wishes through told(), which keeps only the wish kinds of the ledger; the
+    loom.started fact that turns a merged pull request into delivered has to be one of them, or a
+    finished wish wakes the centre as Next build (trust-guards, gen 256)."""
+    from brr.loom.runtime import receipts
+    from brr.loom.runtime.wishes import told
+
+    monkeypatch.setattr(receipts, "held_merge",
+                        lambda result, start, **kw: "abc123" if (start or {}).get("commit") else None)
+    result = Fact(kind="wish.result", by="strand:s-aaaa-work", at=at(9),
+                  data={"wish": "w-new", "kind": "pr", "ref": "7", "line": "PR #7", "delivered": False})
+    started = Fact(kind="loom.started", by="loom:aaaa", at=at(8), data={"commit": "abc123", "install": "aaaa"})
+    found = told([*base(), result, started])
+    assert found["w-new"].state == "delivered"
+    q = queues(found, {})
+    assert q.next.id == "w-old" and "w-new" not in ids(q.mine)
