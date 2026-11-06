@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import re
+import time
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -35,7 +36,14 @@ class PortError(RuntimeError):
     """A port file or an address the loom will not guess its way past."""
 
 
-_HEADER = re.compile(r"<!-- port (\S+) gen (\d+) · owed([^>]*)-->")
+CLOCK = r"\d{4}-\d\d-\d\d \d\d:\d\dZ"
+
+
+def clock(now=None) -> str:
+    return time.strftime("%Y-%m-%d %H:%MZ", time.gmtime(now))
+
+
+_HEADER = re.compile(rf"<!-- port (\S+) gen (\d+)(?: · {CLOCK})? · owed([^>]*)-->")
 _ITEM = re.compile(
     r"^- (?P<id>\S+) · from (?P<sender>\S+) · reply (?P<reply>\S+)"
     r"(?P<mark> · compact)? — (?P<first>.*)$"
@@ -290,7 +298,7 @@ def render_boundary(strand: str, gen: int, thread: str, letters: list[Fact],
     and spend that moves on every call is not news.
     """
     lines = [
-        f"<!-- port {strand} gen {gen} · owed "
+        f"<!-- port {strand} gen {gen} · {clock()} · owed "
         + " ".join(str(letter.data['id']) for letter in letters) + " -->",
         f"status: strand {strand} · gen {gen} · thread {thread}"
         + (f" · {fuel}" if fuel else "") + (f" · {budget}" if budget else "")

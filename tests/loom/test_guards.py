@@ -263,6 +263,8 @@ def test_a_post_warning_and_the_budget_line_both_reach_a_quiet_boundary(tmp_path
     payload = json.loads(_call("Bash", command="curl x"))
     payload["tool_response"] = {"stdout": "error code: 1010", "stderr": ""}
     said = _context(execute("post", room, json.dumps(payload))).splitlines()
+    assert said[0].startswith("now: ")
+    said = said[1:]
     assert said == ["guard stash-pop (scar:git.md#stash-pop): Worktrees share one stash list: pop by name.", over]
 
 

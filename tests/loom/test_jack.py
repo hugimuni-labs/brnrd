@@ -297,7 +297,7 @@ def test_stop_holds_for_the_shells_cache_or_the_hook_ceiling(
     monkeypatch.setattr(jack.time, 'sleep', lambda seconds: now.__setitem__(0, now[0] + seconds))
     result = json.loads(jack.execute('stop', room, json.dumps({'transcript_path': str(transcript)})))
     assert result['decision'] == 'block'
-    assert result['reason'].startswith('cache keepalive, nothing new arrived')
+    assert result['reason'].split('\n', 1)[1].startswith('cache keepalive, nothing new arrived')
     assert now[0] == pytest.approx(expected)
 
 
@@ -478,7 +478,7 @@ def test_a_reply_waiting_in_port_out_counts_as_answered_at_the_stop(tmp_path, mo
     _write(room, [_letter()])
     _reply(room, "p-test/abcde")
     held = json.loads(execute("stop", room, "{}"))
-    assert held["reason"].startswith("cache keepalive, nothing new arrived")
+    assert held["reason"].split("\n", 1)[1].startswith("cache keepalive, nothing new arrived")
     assert "send --re p-test/abcde" not in held["reason"]
 
 
@@ -499,7 +499,7 @@ def test_a_reply_the_loom_drained_still_counts_while_the_boundary_lags(tmp_path,
         append(Home(tmp_path), fact_from_port(parse_frontmatter(path.read_text()), STRAND, 1, room=room))
         path.unlink()
     held = json.loads(execute("stop", room, "{}"))
-    assert held["reason"].startswith("cache keepalive, nothing new arrived")
+    assert held["reason"].split("\n", 1)[1].startswith("cache keepalive, nothing new arrived")
     assert "send --re p-test/abcde" not in held["reason"]
 
 
@@ -508,7 +508,7 @@ def test_the_stop_repeats_its_whole_list_after_work_and_lets_an_idle_repeat_thro
     room = _room(tmp_path)
     _write(room, [_letter()])
     first = json.loads(execute("stop", room, "{}"))["reason"]
-    assert first.startswith("the stop holds on 1 thing")
+    assert first.split("\n", 1)[1].startswith("the stop holds on 1 thing")
     execute("post", room, "{}")
     again = json.loads(execute("stop", room, "{}"))["reason"]
     assert "send --re p-test/abcde --to thread:tb" in again
@@ -525,3 +525,41 @@ def test_a_patched_jack_clock_stays_out_of_the_shared_time_module(monkeypatch):
     real = shared.sleep
     monkeypatch.setattr(jack.time, "sleep", lambda s: None)
     assert shared.sleep is real
+
+
+def test_boundary_without_clock_still_parses():
+    text = "<!-- port s-old gen 7 · owed p-test/abcde -->\n" \
+        "owed:\n- p-test/abcde · from sender · reply thread:ta — ping\n"
+    parsed = parse_boundary(text)
+    assert (parsed.strand, parsed.gen, parsed.ids) == ("s-old", 7, ["p-test/abcde"])
+    from brr.loom.runtime.jack import _news
+    news, _, _ = _news(text, {}, True)
+    assert parse_boundary(news).ids == parsed.ids
+
+
+def test_stop_and_post_open_with_current_clock(tmp_path, monkeypatch):
+    from brr.loom.runtime import port
+    # Write the boundary before the jack runs: its timestamp must not go stale.
+    monkeypatch.setattr(port.time, "gmtime", lambda now=None: time.struct_time(
+        (2026, 11, 6, 19, 58 if now is None else 0, 0, 4, 310, 0)))
+    room = _room(tmp_path)
+    _write(room, [_letter()])
+    monkeypatch.setattr(port.time, "gmtime", lambda now=None: time.struct_time(
+        (2026, 11, 6, 20, 1, 0, 4, 310, 0)))
+    stopped = json.loads(execute("stop", room, "{}"))["reason"]
+    assert stopped.startswith(("now: 2026-11-06 20:01Z\n",
+                               f"<!-- port {STRAND} gen 1 · 2026-11-06 20:01Z ·"))
+    post_room = _room(tmp_path / "post")
+    _write(post_room, [_letter()])
+    context = json.loads(execute("post", post_room, "{}"))["hookSpecificOutput"]["additionalContext"]
+    assert context.startswith(f"<!-- port {STRAND} gen 1 · 2026-11-06 20:01Z ·")
+
+
+def test_jack_clocks_messages_without_headers(monkeypatch):
+    from brr.loom.runtime import jack
+    monkeypatch.setattr(jack, "clock", lambda: "2026-11-06 20:01Z")
+    for payload in ({"reason": "the stop holds on work"},
+                    {"hookSpecificOutput": {"additionalContext": "left in room: work"}}):
+        result = json.loads(jack._json(payload))
+        text = result.get("reason") or result["hookSpecificOutput"]["additionalContext"]
+        assert text.startswith("now: 2026-11-06 20:01Z\n")
