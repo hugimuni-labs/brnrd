@@ -359,7 +359,10 @@ class Router:
             self.lease = None
             self.granting = False
             self.caught_up = False
-            return self._acquire(facts)
+            # The git lease owns the generation, including recovery from a
+            # local expiry. Bumping locally makes every later git-gen acquire
+            # fail until the remote generation catches up.
+            return self._acquire(facts, gen=self.gate_lease.gen if self.gate_lease else None)
         self.lease = renewed
         facts = self._mark_renewed(facts)
         self.granting = self.caught_up and self._window()
