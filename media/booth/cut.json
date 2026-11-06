@@ -1,0 +1,338 @@
+{
+ "fps": 30,
+ "width": 1920,
+ "height": 1080,
+ "url": "https://brnrd.dev",
+ "install": [
+  "curl -fsSL https://brnrd.dev/install | sh",
+  "brnrd setup"
+ ],
+ "stamps": [
+  [
+   "09:41",
+   "noted"
+  ],
+  [
+   "09:49",
+   "PR open"
+  ],
+  [
+   "09:55",
+   "merged"
+  ]
+ ],
+ "backdrop": "a4-strip",
+ "timeline": [
+  {
+   "act": 1,
+   "kind": "rec",
+   "raw": "p1-ask",
+   "phone": true,
+   "sec": 2.5,
+   "push": [
+    1,
+    1.15
+   ],
+   "capture": "Telegram: a real one-line ask typed and sent (manual, p1-ask)"
+  },
+  {
+   "act": 1,
+   "kind": "still",
+   "still": "a1-taken",
+   "sec": 3.5,
+   "out": "crash",
+   "lower": [
+    [
+     0,
+     "Write from your phone."
+    ],
+    [
+     1.5,
+     ""
+    ]
+   ],
+   "camera": [
+    [
+     0,
+     "c",
+     300,
+     1.0
+    ],
+    [
+     1.35,
+     "c",
+     300,
+     1.0
+    ],
+    [
+     1.6,
+     985,
+     760,
+     1.7
+    ],
+    [
+     3.5,
+     985,
+     800,
+     1.9
+    ]
+   ],
+   "focus": [
+    985,
+    800
+   ]
+  },
+  {
+   "act": 1,
+   "kind": "still",
+   "still": "g1-pr",
+   "sec": 2,
+   "flash": 1.6,
+   "lower": "Get a PR back.",
+   "camera": [
+    [
+     0,
+     "f",
+     700,
+     1.0
+    ],
+    [
+     1.6,
+     "f",
+     "f",
+     1.6
+    ]
+   ]
+  },
+  {
+   "act": 1,
+   "kind": "still",
+   "still": "a1-delivered",
+   "sec": 1.5,
+   "stamps": true,
+   "camera": [
+    [
+     0,
+     "f",
+     "f",
+     1.5
+    ],
+    [
+     1.5,
+     "f",
+     "f",
+     1.3
+    ]
+   ]
+  },
+  {
+   "act": 1,
+   "kind": "title",
+   "sec": 1.5,
+   "text": [
+    "Local agents go brr.",
+    "From anywhere."
+   ]
+  },
+  {
+   "kind": "rec",
+   "raw": "t1-memdir",
+   "sec": 1,
+   "in": "dip",
+   "out": "crash",
+   "origin": "35% 45%",
+   "capture": "ls of brnrd's folder under ~/.claude/projects/: 65 UUID-named JSONL (manual, t1-memdir)"
+  },
+  {
+   "kind": "gitlog",
+   "log": "self",
+   "sec": 2.5,
+   "lower": "Memory you can read. In git."
+  },
+  {
+   "kind": "rec",
+   "raw": "t2-compact",
+   "sec": 1,
+   "capture": "/compact and the compacted line (manual, t2-compact)"
+  },
+  {
+   "kind": "still",
+   "still": "a2-handover",
+   "sec": 2.5,
+   "echo": 0.67,
+   "lower": "A handover you can read.",
+   "camera": [
+    [
+     0,
+     "f",
+     300,
+     1.6
+    ],
+    [
+     0.67,
+     "f",
+     "f",
+     1.6
+    ],
+    [
+     2.5,
+     "f",
+     "f",
+     1.75
+    ]
+   ]
+  },
+  {
+   "kind": "rec",
+   "raw": "p4-signoff",
+   "phone": true,
+   "sec": 1,
+   "capture": "his sign-off line, 2026-11-06 00:15Z, letter 10324 (screenshot, p4-signoff)"
+  },
+  {
+   "kind": "still",
+   "still": "a3-night",
+   "sec": 2.5,
+   "in": "dip",
+   "clock": [
+    "00:15",
+    "06:00"
+   ],
+   "lower": "Keeps working after you sign off.",
+   "camera": [
+    [
+     0,
+     "f",
+     "f",
+     1.5
+    ],
+    [
+     2.5,
+     "f",
+     800,
+     1.6
+    ]
+   ]
+  },
+  {
+   "kind": "rec",
+   "raw": "t4-repos",
+   "sec": 1,
+   "capture": "five Terminal windows, one per repo (manual, t4-repos)"
+  },
+  {
+   "kind": "still",
+   "still": "a4-strip",
+   "sec": 2.5,
+   "lower": "It knows what each one owes you.",
+   "camera": [
+    [
+     0,
+     1150,
+     60,
+     1.6
+    ],
+    [
+     0.9,
+     1150,
+     60,
+     1.6
+    ],
+    [
+     2.5,
+     1600,
+     "c",
+     1.0
+    ]
+   ]
+  },
+  {
+   "kind": "rec",
+   "raw": "p3-fuel",
+   "phone": true,
+   "sec": 1,
+   "capture": "the loom's 'Out of claude session fuel (1% left)', in his chat (screenshot, p3-fuel)"
+  },
+  {
+   "kind": "still",
+   "still": "a5-gauges",
+   "sec": 1,
+   "in": "glitch",
+   "lower": "Three subscriptions. One worker.",
+   "camera": [
+    [
+     0,
+     330,
+     "f",
+     3.0
+    ],
+    [
+     1,
+     690,
+     "f",
+     3.0
+    ]
+   ]
+  },
+  {
+   "kind": "still",
+   "still": "a5-seat",
+   "sec": 1.5,
+   "lower": "Three subscriptions. One worker.",
+   "camera": [
+    [
+     0,
+     "c",
+     200,
+     1.5
+    ],
+    [
+     1.5,
+     "c",
+     320,
+     1.6
+    ]
+   ]
+  },
+  {
+   "kind": "rec",
+   "raw": "p2-agree",
+   "phone": true,
+   "sec": 1,
+   "capture": "agree on act 1's delivered wish (manual, p2-agree)"
+  },
+  {
+   "kind": "rec",
+   "raw": "g6-readme",
+   "sec": 3.5,
+   "lower": "You judge. It keeps the receipt.",
+   "capture": "act 1's thread README on GitHub: the wish line and the PR link, then a freeze; 1 s of air",
+   "held": "rendered once act 1's run exists (his shot 1)"
+  },
+  {
+   "kind": "studio",
+   "sec": 4,
+   "in": "dip",
+   "lower": [
+    [
+     0,
+     "Not only code."
+    ],
+    [
+     2.5,
+     "Cut by the resident."
+    ]
+   ]
+  },
+  {
+   "kind": "numbers",
+   "sec": 5
+  },
+  {
+   "kind": "install",
+   "sec": 6,
+   "readme": {"sec": 3},
+   "line": "MIT. Alpha. Built in the open."
+  }
+ ]
+}
