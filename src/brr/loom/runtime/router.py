@@ -26,8 +26,10 @@ from .lifecycle import main_snapshot
 from .speak import speak
 
 REST_FACE = "b·_·d"
-#: The shortest git inbox lease, whatever ``router_ttl`` says (design §3.1: renew every 30 s).
-GATE_MIN_TTL = 90.0
+#: design §3.1 Times: ttl 180 s, renew every 60 s (ttl / 3), margin 10 s, poll every 40 s.
+GATE_MIN_TTL = 180.0
+GATE_MARGIN = 10.0
+GATE_POLL = 40.0
 
 
 def install_of(strand: str) -> str | None:
@@ -104,7 +106,7 @@ def gate_for(home: Home, config: LoomConfig):
         except subprocess.TimeoutExpired:
             return subprocess.CompletedProcess(tail, 128, "", "git timed out")
 
-    return GitLeaseAuthority(repo, remote, git, margin=max(config.margin, 1.0),
+    return GitLeaseAuthority(repo, remote, git, margin=GATE_MARGIN,
                              strict=config.lease_mode == "strict")
 
 
@@ -164,7 +166,7 @@ class Router:
         self.gate_lease: Lease | None = None
         self._gate_at: float | None = None
         # A git renew is a network round trip that may stall for tens of
-        # seconds; 30 s, the local default, would fence on one slow push.
+        # seconds; the local 30 s default would fence on one slow push.
         self.gate_ttl = max(float(self.config.router_ttl), GATE_MIN_TTL)
 
     def _window(self) -> bool:
@@ -247,15 +249,18 @@ class Router:
         return all(g in held for g in range(gen, self.lease.gen + 1))
 
     def _gate_tick(self, facts: list[Fact]) -> list[Fact]:
-        """Renew or take the git inbox lease, at most every ``gate_ttl / 3``.
+        """Renew or take the git inbox lease.
 
-        Losing it releases the local lease at once, so ``speak`` steps down
-        before the next send, and records ``lease.fenced`` and a
-        ``loom.degraded`` streak at step ``lease`` that taking it back closes.
+        A holder renews at most every ``gate_ttl / 3`` (60 s at the floor).
+        A follower polls at most every ``GATE_POLL``. Losing the lease
+        releases the local one at once, so ``speak`` steps down before the
+        next send, and records ``lease.fenced`` and a ``loom.degraded``
+        streak at step ``lease`` that taking it back closes.
         """
         ttl = self.gate_ttl
         now = self.gate.clock()
-        if self._gate_at is not None and now - self._gate_at < ttl / 3:
+        interval = ttl / 3 if self.gate_lease is not None else GATE_POLL
+        if self._gate_at is not None and now - self._gate_at < interval:
             if self.gate_lease is not None and not self.gate.authorize(self.gate_lease):
                 return self._fence(facts, "expired")
             return facts
