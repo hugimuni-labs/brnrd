@@ -16,9 +16,9 @@ from brr.pause import read_paused_record
 from .home import atomic_write, home_of_room, mint
 from .pausing import describe
 from .waits import GRAMMAR
-from .port import Boundary, answered, parse_boundary
+from .port import CLOCK, Boundary, answered, clock, parse_boundary
 
-_HEADER_LINE = re.compile(r"<!-- port (\S+) gen (\d+) · owed[^>]*-->")
+_HEADER_LINE = re.compile(rf"<!-- port (\S+) gen (\d+)(?: · {CLOCK})? · owed[^>]*-->")
 _ITEM_LINE = re.compile(r"^- (\S+) · from \S+ · reply \S+")
 from . import tooltrace
 
@@ -174,7 +174,7 @@ def _news(text: str, state: dict, plan_changed: bool) -> tuple[str, list[str], l
     shown = [item.group(1) for line in letters if (item := _ITEM_LINE.match(line))]
     owed = (["owed: " + " ".join(skipped) + " (shown before)"] if skipped else []) \
         + (["owed:"] if letters else [])
-    head = f"<!-- port {header.group(1)} gen {header.group(2)} · owed {' '.join(shown)} -->"
+    head = f"<!-- port {header.group(1)} gen {header.group(2)} · {clock()} · owed {' '.join(shown)} -->"
     return "\n".join([head, *body, *owed, *letters, ""]), said, told
 
 
@@ -196,7 +196,7 @@ def _stop_news(room: Path, text: str, parsed: Boundary) -> str:
     _set_state(room, said=said, told=told, plan=plan)
     header = _HEADER_LINE.search(text)
     if not news and parsed.ids and header:
-        news = (f"<!-- port {header.group(1)} gen {header.group(2)} · owed  -->\n"
+        news = (f"<!-- port {header.group(1)} gen {header.group(2)} · {clock()} · owed  -->\n"
                 f"owed: {' '.join(parsed.ids)} (shown before)\n")
     return news
 
@@ -247,7 +247,20 @@ def _left(room: Path, fresh: bool) -> str:
                     *(f"- {line}\n" for line in lines)]) if lines else ""
 
 
+def _clocked(text: str) -> str:
+    header = _HEADER_LINE.match(text)
+    if header:
+        fresh = re.sub(rf"(?: · {CLOCK})? · owed", f" · {clock()} · owed", header.group())
+        return fresh + text[header.end():]
+    return f"now: {clock()}\n" + text
+
+
 def _json(payload: dict) -> str:
+    if isinstance(payload.get("reason"), str):
+        payload["reason"] = _clocked(payload["reason"])
+    hook = payload.get("hookSpecificOutput", {})
+    if isinstance(hook.get("additionalContext"), str):
+        hook["additionalContext"] = _clocked(hook["additionalContext"])
     return json.dumps(payload, separators=(",", ":")) + "\n"
 
 
@@ -713,7 +726,7 @@ def execute(event: str, room: Path, stdin_text: str) -> str:
         _over(room, next((line for line in text.splitlines() if line.startswith("budget: ")), ""))
         _set_state(room, plan=plan,
                    **dict(zip(("said", "told"), _news(text, {}, True)[1:])))
-        return text if text.endswith("\n") else text + "\n"
+        return _clocked(text if text.endswith("\n") else text + "\n")
     if event == "post":
         state = _state(room)
         plan_changed = plan != state.get("plan", "")

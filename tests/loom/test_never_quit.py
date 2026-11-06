@@ -41,7 +41,7 @@ def test_a_thread_opened_body_owing_nothing_is_held_past_its_wait(worker, monkey
     monkeypatch.setattr(usage, "dry_until", lambda *args: None)
     result = json.loads(jack.execute("stop", room, "{}"))
     assert result["decision"] == "block"
-    assert result["reason"].startswith("cache keepalive, nothing new arrived")
+    assert result["reason"].partition(chr(10))[2].startswith("cache keepalive, nothing new arrived")
     assert now[0] == pytest.approx(3300)
 
 
@@ -52,7 +52,7 @@ def test_a_thread_opened_body_that_runs_dry_within_the_hook_sleeps_then_holds(wo
     monkeypatch.setattr(jack, "_refilling", lambda *args: False)
     result = json.loads(jack.execute("stop", room, "{}"))
     assert result["decision"] == "block"
-    assert result["reason"].startswith("cache keepalive, nothing new arrived")
+    assert result["reason"].partition(chr(10))[2].startswith("cache keepalive, nothing new arrived")
     # Parked past the cache: the next keepalive waits for the ceiling.
     assert now[0] == pytest.approx(6 * 3600 + 60 - jack.MARGIN)
 
@@ -84,7 +84,7 @@ def test_the_first_stop_with_wishes_open_is_refused_until_the_body_asks(ledger, 
     (seat / "port/jack-state.json").unlink()
     command(home, seat, "ask", "Which colour?", "--for", wish, "--rec", "grey")
     held = json.loads(jack.execute("stop", seat, "{}"))
-    assert held["reason"].startswith("cache keepalive, nothing new arrived")
+    assert held["reason"].partition(chr(10))[2].startswith("cache keepalive, nothing new arrived")
     assert now[0] > 0
 
 
@@ -94,7 +94,7 @@ def test_a_body_with_no_open_wish_is_not_asked_how_it_ends(worker, monkeypatch):
     (room / "port/in/boundary.md").write_text(
         render_boundary(STRAND, 1, "work", [], set(), {}, plan="plan 2/2"))
     result = json.loads(jack.execute("stop", room, "{}"))
-    assert result["reason"].startswith("cache keepalive, nothing new arrived")
+    assert result["reason"].partition(chr(10))[2].startswith("cache keepalive, nothing new arrived")
 
 
 def test_a_body_that_settles_with_wishes_open_is_not_asked_how_it_ends(ledger, monkeypatch):

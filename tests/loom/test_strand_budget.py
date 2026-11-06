@@ -122,7 +122,7 @@ def test_past_its_allocation_the_strand_is_warned_at_the_crossing_and_every_5pct
         line = over.replace(", +16%)", f", +{pct}%)")
         boundary.write_text(render_boundary(CHILD, 1, "work", [], set(), {}, budget="spent 3.5M/3M", over=line))
         said = execute("post", home.room(CHILD), "{}")
-        assert (json.loads(said)["hookSpecificOutput"]["additionalContext"] == line) if again else said == ""
+        assert (json.loads(said)["hookSpecificOutput"]["additionalContext"].partition(chr(10))[2] == line) if again else said == ""
 
     # The child cannot raise its own: refused at send, and ignored in the fold.
     refused = cli(["send", "--room", str(home.room(CHILD)), "--to", "thread:parent", "--budget", "5m", "more"])

@@ -92,7 +92,9 @@ def test_a_matching_call_hears_the_guard_before_it_runs(tmp_path, monkeypatch):
     room = _home(tmp_path, {"stash-pop": STASH})
     out = execute("pre", room, _call("Bash", command="cd x && git stash pop"))
     assert json.loads(out)["hookSpecificOutput"]["hookEventName"] == "PreToolUse"
-    assert _context(out) == "guard stash-pop (scar:git.md#stash-pop): Worktrees share one stash list: pop by name."
+    said = _context(out).splitlines()
+    assert said[0].startswith("now: ")
+    assert said[1:] == ["guard stash-pop (scar:git.md#stash-pop): Worktrees share one stash list: pop by name."]
     assert execute("pre", room, _call("Bash", command="git stash pop stash@{2}")) == ""
     assert execute("pre", room, _call("Bash", command="git status")) == ""
     # A pre call is no boundary: it leaves the jack's state alone.
@@ -263,6 +265,8 @@ def test_a_post_warning_and_the_budget_line_both_reach_a_quiet_boundary(tmp_path
     payload = json.loads(_call("Bash", command="curl x"))
     payload["tool_response"] = {"stdout": "error code: 1010", "stderr": ""}
     said = _context(execute("post", room, json.dumps(payload))).splitlines()
+    assert said[0].startswith("now: ")
+    said = said[1:]
     assert said == ["guard stash-pop (scar:git.md#stash-pop): Worktrees share one stash list: pop by name.", over]
 
 
