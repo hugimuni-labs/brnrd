@@ -6,6 +6,7 @@
 	import { updated } from '$app/state';
 	import './board.css';
 	import { arrange, bst, byThread, SETTLED, TOPICS, sortThreads, wanted } from '../order.ts';
+	import { headerFuel } from '../parts.ts';
 	import { INBOX } from '../sides.ts';
 	import { dur, hue, secs } from '../text.ts';
 	import { liveOf, what } from '../tape.ts';
@@ -100,13 +101,7 @@
 
 <div class="brd" class:sheet={!!b.beadId}>
 	<header>
-		<b>fuel</b><span id="fuel"
-			>{(b.model?.fuel || [])
-				.map(
-					(f) => `${f.shell} ${f.gauges.map((g) => g.window + ' ' + g.left_pct + '%').join(' ')}`
-				)
-				.join('   ')}</span
-		>
+		<b>fuel</b><span id="fuel">{headerFuel(b.model?.fuel)}</span>
 		<span id="open" style="color:#d33">{b.letters.filter((l) => l.open).length} open</span>
 		<span class="dim" id="at"
 			>loom {b.heard.slice(11, 19)}Z · {b.letters.length} letters · as {b.model?.person ||

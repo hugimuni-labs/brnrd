@@ -114,7 +114,7 @@ export type Live = {
 };
 
 export type Gauge = { window: string; left_pct: number };
-export type Fuel = { shell: string; gauges: Gauge[] };
+export type Fuel = { shell: string; gauges: Gauge[]; error?: string };
 
 export type Index = {
 	v: number;
