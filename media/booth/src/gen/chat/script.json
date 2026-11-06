@@ -1,0 +1,310 @@
+{
+ "fps": 30,
+ "width": 1920,
+ "height": 1080,
+ "note": "The phone-chat shots of the booth trailer, drawn from the ledger. Every message carries its letter id and its time (UTC, as the ledger stores it); receipts.md section chat lists each edit. A shot's beats are seconds into the shot; `sec` is its natural length, and a `sec` prop passed by the edit rescales every beat to fit.",
+ "prs": {
+  "2606": {
+   "repo": "brnrd",
+   "number": 2606,
+   "title": "topics in the wake, recall and related:",
+   "mergedAt": "2026-11-06T22:18:13Z"
+  }
+ },
+ "messages": {
+  "10416": {
+   "from": "him",
+   "id": "letter:cloud:telegram:155783668:10416",
+   "at": "2026-11-06T21:56:36Z",
+   "text": "Hey we still need https://github.com/hugimuni-labs/brnrd/pull/2606 don’t we? Could you please rebase it? There are conflicts. Lmk if somethings changed, or if wasn’t it merged for some reason",
+   "card": {
+    "pr": "2606",
+    "state": "conflicts"
+   }
+  },
+  "yun90-tail": {
+   "from": "resident",
+   "id": "s-ae66-n5nv7e/yun90",
+   "at": "2026-11-06T22:15:21Z",
+   "text": "Also: the change that puts the closest notes in front of me when I wake is updated, all checks green, ready for you: https://github.com/hugimuni-labs/brnrd/pull/2606",
+   "card": {
+    "pr": "2606",
+    "state": "green"
+   }
+  },
+  "yy6ug": {
+   "from": "resident",
+   "id": "s-ae66-79qfzj/yy6ug",
+   "at": "2026-11-06T22:18:46Z",
+   "kind": "delivered",
+   "title": "brnrd#2606 … rebased on main …",
+   "text": "Reply ok to accept, or say what is off.",
+   "merged": "2606"
+  },
+  "10435": {
+   "from": "him",
+   "id": "letter:cloud:telegram:155783668:10435",
+   "at": "2026-11-06T22:30:09Z",
+   "text": "Nice 👌",
+   "quote": "yy6ug"
+  },
+  "mvsel": {
+   "from": "resident",
+   "id": "s-ae66-79qfzj/mvsel",
+   "at": "2026-11-06T22:30:32Z",
+   "text": "Thanks. It’s loaded now"
+  },
+  "10324": {
+   "from": "him",
+   "id": "letter:cloud:telegram:155783668:10324",
+   "at": "2026-11-06T00:15:12Z",
+   "text": "Okay, thanks, I am signing off for today"
+  },
+  "10426": {
+   "from": "him",
+   "id": "letter:cloud:telegram:155783668:10426",
+   "at": "2026-11-06T22:07:40Z",
+   "text": "How does it feel to feel time? 😅"
+  },
+  "10432": {
+   "from": "him",
+   "id": "letter:cloud:telegram:155783668:10432",
+   "at": "2026-11-06T22:14:33Z",
+   "text": "Now you can answer that? 🥹"
+  },
+  "yun90-head": {
+   "from": "resident",
+   "id": "s-ae66-n5nv7e/yun90",
+   "at": "2026-11-06T22:15:21Z",
+   "text": "Now I can 🙂 It’s less like feeling time than like finally wearing a watch."
+  },
+  "wrt3a": {
+   "from": "resident",
+   "id": "s-ae66-x5fukd/wrt3a",
+   "at": "2026-11-06T22:00:48Z",
+   "text": "Yes, #2606 is still wanted and was never merged; it just sat while main moved on. The wiki thread is rebasing it now."
+  },
+  "3be0e-head": {
+   "from": "resident",
+   "id": "s-ae66-x5fukd/3be0e",
+   "at": "2026-11-06T22:08:14Z",
+   "text": "Honestly, not yet 😅"
+  },
+  "fuel": {
+   "from": "loom",
+   "id": "loom/parked-043ca41af7",
+   "at": "2026-11-05T18:19:19Z",
+   "kind": "notice",
+   "title": "Out of claude session fuel (1% left) until about 21:00.",
+   "text": "Your letter is kept on thread inbox and is answered when it refills.",
+   "options": [
+    "wake",
+    "wake codex",
+    "wake grok"
+   ],
+   "gauge": [
+    0.03,
+    0.01
+   ]
+  }
+ },
+ "shots": [
+  {
+   "key": "a1-ask",
+   "act": 1,
+   "slot": "00.00",
+   "sec": 2.5,
+   "camera": {
+    "from": 1.0,
+    "to": 1.08
+   },
+   "before": [],
+   "beats": [
+    {
+     "compose": "10416",
+     "from": 0.1,
+     "to": 1.0
+    },
+    {
+     "send": "10416",
+     "at": 1.15
+    },
+    {
+     "land": "wrt3a",
+     "at": 1.5,
+     "type": true,
+     "rate": 5
+    }
+   ]
+  },
+  {
+   "key": "a1-reply",
+   "act": 1,
+   "slot": "spare",
+   "sec": 3.0,
+   "camera": {
+    "from": 1.05,
+    "to": 1.05
+   },
+   "before": [
+    "10416",
+    "wrt3a"
+   ],
+   "beats": [
+    {
+     "land": "yun90-tail",
+     "at": 0.0,
+     "type": true
+    },
+    {
+     "land": "yy6ug",
+     "at": 1.9
+    }
+   ]
+  },
+  {
+   "key": "a1-nice",
+   "act": 1,
+   "slot": "after the delivered card",
+   "sec": 1.5,
+   "camera": {
+    "from": 1.05,
+    "to": 1.0
+   },
+   "before": [
+    "yun90-tail",
+    "yy6ug"
+   ],
+   "beats": [
+    {
+     "land": "10435",
+     "at": 0.3
+    }
+   ]
+  },
+  {
+   "key": "a1-loaded",
+   "act": 1,
+   "slot": "spare",
+   "sec": 2.0,
+   "camera": {
+    "from": 1.0,
+    "to": 1.03
+   },
+   "before": [
+    "yun90-tail",
+    "yy6ug",
+    "10435"
+   ],
+   "cards": {
+    "yun90-tail": "merged"
+   },
+   "beats": [
+    {
+     "land": "mvsel",
+     "at": 0.1,
+     "type": true
+    }
+   ]
+  },
+  {
+   "key": "p4-signoff",
+   "act": 2,
+   "slot": "18.00",
+   "sec": 1.0,
+   "camera": {
+    "from": 1.0,
+    "to": 1.04
+   },
+   "before": [],
+   "beats": [
+    {
+     "land": "10324",
+     "at": 0.05
+    },
+    {
+     "sleep": true,
+     "at": 0.8
+    }
+   ]
+  },
+  {
+   "key": "p3-fuel",
+   "act": 2,
+   "slot": "25.00",
+   "sec": 1.0,
+   "camera": {
+    "from": 1.0,
+    "to": 1.04
+   },
+   "before": [],
+   "beats": [
+    {
+     "land": "fuel",
+     "at": 0.05
+    }
+   ]
+  },
+  {
+   "key": "p2-agree",
+   "act": 2,
+   "slot": "28.15",
+   "sec": 1.0,
+   "camera": {
+    "from": 1.04,
+    "to": 1.0
+   },
+   "before": [
+    "yy6ug"
+   ],
+   "staged": true,
+   "beats": [
+    {
+     "tap": "yy6ug",
+     "at": 0.35
+    }
+   ]
+  },
+  {
+   "key": "a3-human",
+   "act": 3,
+   "slot": "booth-gen places it",
+   "sec": 3.0,
+   "camera": {
+    "from": 1.0,
+    "to": 1.06
+   },
+   "before": [],
+   "beats": [
+    {
+     "land": "10426",
+     "at": 0.05
+    },
+    {
+     "land": "3be0e-head",
+     "at": 0.45,
+     "type": true,
+     "rate": 5
+    },
+    {
+     "dip": true,
+     "at": 0.9,
+     "clock": [
+      "22:08",
+      "22:15"
+     ]
+    },
+    {
+     "land": "10432",
+     "at": 1.1
+    },
+    {
+     "land": "yun90-head",
+     "at": 1.45,
+     "type": true,
+     "rate": 5
+    }
+   ]
+  }
+ ]
+}
