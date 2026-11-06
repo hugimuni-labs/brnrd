@@ -7,6 +7,8 @@
 	import './board.css';
 	import { arrange, bst, byThread, SETTLED, TOPICS, sortThreads, wanted } from '../order.ts';
 	import { headerFuel } from '../parts.ts';
+	import { bindingGauge } from '../../loomSnapshot.ts';
+	import FuelMarks from '../../FuelMarks.svelte';
 	import { INBOX } from '../sides.ts';
 	import { dur, hue, secs } from '../text.ts';
 	import { liveOf, what } from '../tape.ts';
@@ -63,6 +65,11 @@
 	let flash = $state(new Set<string>()),
 		railLog = $state<string[]>([]),
 		tick = $state(0);
+	// The face tick also moves the reset wedges. Reading `tick` is what subscribes.
+	const fuelNow = $derived.by(() => {
+		void tick;
+		return Date.now();
+	});
 	$effect(() => {
 		const threads = b.model?.threads;
 		if (!threads) return;
@@ -101,7 +108,20 @@
 
 <div class="brd" class:sheet={!!b.beadId}>
 	<header>
-		<b>fuel</b><span id="fuel">{headerFuel(b.model?.fuel)}</span>
+		<b>fuel</b>
+		<span id="fuel" title={headerFuel(b.model?.fuel)}>
+			{#each b.model?.fuel ?? [] as shell (shell.shell)}
+				{@const binding = bindingGauge(shell.gauges)}
+				<span class="shell" data-shell={shell.shell} data-bar={binding?.window ?? ''}>
+					<span class="name">{shell.shell}</span>
+					{#if shell.gauges?.length}
+						<FuelMarks gauges={shell.gauges} now={fuelNow} />
+					{:else if shell.error}
+						<span class="fail">{shell.error}</span>
+					{/if}
+				</span>
+			{/each}
+		</span>
 		<span id="open" style="color:#d33">{b.letters.filter((l) => l.open).length} open</span>
 		<span class="dim" id="at"
 			>loom {b.heard.slice(11, 19)}Z · {b.letters.length} letters · as {b.model?.person ||

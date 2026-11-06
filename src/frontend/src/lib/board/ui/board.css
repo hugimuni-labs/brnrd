@@ -55,10 +55,31 @@
 	height: 40px;
 	padding: 10px 16px;
 	display: flex;
+	align-items: center;
 	gap: 22px;
 	border-bottom: 1px solid #222;
 	white-space: nowrap;
 	overflow: hidden;
+}
+.brd #fuel {
+	display: inline-flex;
+	align-items: center;
+	gap: 18px;
+	min-width: 0;
+	height: 20px;
+	--fuel-track: #e6e6e6;
+	--fuel-ink: #171717;
+	--fuel-dim: #666;
+	--fuel-ring: #ccc;
+}
+.brd #fuel .shell {
+	display: inline-flex;
+	align-items: center;
+	gap: 6px;
+	height: 20px;
+}
+.brd #fuel .name {
+	font-weight: 600;
 }
 .brd .dim {
 	color: #777;

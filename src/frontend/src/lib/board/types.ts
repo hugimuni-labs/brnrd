@@ -113,7 +113,7 @@ export type Live = {
 	paused_at?: string;
 };
 
-export type Gauge = { window: string; left_pct: number };
+export type Gauge = { window: string; left_pct: number; resets_at?: string };
 export type Fuel = { shell: string; gauges: Gauge[]; error?: string };
 
 export type Index = {

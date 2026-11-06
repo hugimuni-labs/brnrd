@@ -8,6 +8,7 @@ import {
 	defaultBody,
 	fetchLoom,
 	filterCounts,
+	bindingGauge,
 	fuelPromoted,
 	isUnread,
 	latestReceipt,
@@ -19,6 +20,7 @@ import {
 	planFraction,
 	postLetter,
 	refHref,
+	resetFraction,
 	resetsIn,
 	shellLow,
 	snapshotAge,
@@ -124,6 +126,42 @@ test('fuel: low at ≤15% left or dry, never from a stale reading; promoted when
 	assert.equal(fuelPromoted([healthy]), false);
 	assert.equal(fuelPromoted([healthy, low]), true);
 	assert.equal(fuelPromoted(undefined), false);
+});
+
+test('the binding window is the bar: least left, a tie to the later reset', () => {
+	const now = Date.parse('2026-11-06T12:00:00Z');
+	const session = { window: 'session', left_pct: 15, resets_at: '2026-11-06T14:00:00Z' };
+	const week = { window: 'week', left_pct: 48, resets_at: '2026-11-10T12:00:00Z' };
+	// The header and the strip mark this gauge with data-bar and draw it as the bar.
+	assert.equal(bindingGauge([session, week])?.window, 'session');
+	assert.equal(
+		bindingGauge([
+			{ window: 'session', left_pct: 20, resets_at: '2026-11-06T15:00:00Z' },
+			{ window: 'week', left_pct: 20, resets_at: '2026-11-09T12:00:00Z' }
+		])?.window,
+		'week'
+	);
+	// a missing reset loses the tie
+	assert.equal(
+		bindingGauge([
+			{ window: 'session', left_pct: 20 },
+			{ window: 'week', left_pct: 20, resets_at: '2026-11-09T12:00:00Z' }
+		])?.window,
+		'week'
+	);
+	assert.equal(bindingGauge([{ window: 'week' }, { window: 'session' }])?.window, 'week');
+	assert.equal(bindingGauge([]), null);
+	assert.equal(bindingGauge(undefined), null);
+	const halfWeek = resetFraction('week', new Date(now + 3.5 * 86400 * 1000).toISOString(), now);
+	assert.ok(halfWeek !== null && Math.abs(halfWeek - 0.5) < 1e-9);
+	const halfSession = resetFraction(
+		'session',
+		new Date(now + 2.5 * 3600 * 1000).toISOString(),
+		now
+	);
+	assert.ok(halfSession !== null && Math.abs(halfSession - 0.5) < 1e-9);
+	assert.equal(resetFraction('month', new Date(now + 86400 * 1000).toISOString(), now), null);
+	assert.equal(resetFraction('week', 'not-a-stamp', now), null);
 });
 
 test('bodies: declared choices win; else shell/core; default falls back to presence', () => {
