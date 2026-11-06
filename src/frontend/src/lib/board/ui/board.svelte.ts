@@ -17,7 +17,9 @@ const local = (k: string, d: string) =>
 
 export class Board {
 	store: Store;
-	model = $state<Model | null>(null);
+	// raw: a sync replaces the model whole and nothing writes into it; a deep proxy put a trap under every read of
+	// every card, and each tick re-ran them all (the live-path bench)
+	model = $state.raw<Model | null>(null);
 	live = $state<'connecting' | 'live' | 'polled' | 'offline'>('connecting');
 	error = $state('');
 	// letters sent from here that the ledger has not shown yet

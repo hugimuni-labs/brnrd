@@ -283,14 +283,39 @@ def shell_fuels(home) -> dict[str, str]:
 def fuels(home, shell: str) -> str:
     """Every shell with a reading in ``loom/usage``, for the boundary line.
 
-    The seated shell is first, then the rest by name. Hold and park do not
-    call this.
+    The seated shell is first, then the rest by name. With a non-empty
+    ``spend.burn`` and two or more installed harnesses, the other burn shells
+    follow the seat in list order and the words ``burn`` and ``keep`` appear.
+    One harness, or no burn list, stays the unmarked line. Hold and park do
+    not call this.
     """
     found = shell_fuels(home)
     if not found:
         return ""
-    order = ([shell] if shell in found else []) + sorted(n for n in found if n != shell)
-    return "fuel " + " · ".join(f"{name} {found[name]}" for name in order)
+    from .adapters import burn_marks
+    marks = burn_marks(home)
+    if marks is None:
+        order = ([shell] if shell in found else []) + sorted(n for n in found if n != shell)
+        return "fuel " + " · ".join(f"{name} {found[name]}" for name in order)
+    burn, keep = marks
+    order = [shell] if shell in found else []
+    for name in burn:
+        if name in found and name not in order:
+            order.append(name)
+    if keep and keep in found and keep not in order:
+        order.append(keep)
+    order.extend(name for name in sorted(found) if name not in order)
+
+    def shown(name: str) -> str:
+        if name in burn:
+            role = " burn"
+        elif name == keep:
+            role = " keep"
+        else:
+            role = ""
+        return f"{name} {found[name]}{role}"
+
+    return "fuel " + " · ".join(shown(name) for name in order)
 
 
 def below_floor(home, shell: str, after: float = 0) -> bool:
