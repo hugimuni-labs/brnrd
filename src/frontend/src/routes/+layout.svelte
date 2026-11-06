@@ -3,6 +3,7 @@
 	import { page } from '$app/state';
 	import './layout.css';
 	import { markBooted } from '$lib/boot';
+	import { cached } from '$lib/board/cache';
 	import { outbound } from '$lib/outbound';
 	import favicon from '$lib/assets/favicon.svg';
 	import { canonicalUrl, hasCanonicalMeta, isIndexablePath, normalizePathname } from '$lib/seo';
@@ -32,8 +33,9 @@
 
 	onMount(() => {
 		const reduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-		// No curtain under reduced motion, so nothing is waiting on one.
-		if (reduced) {
+		// No curtain under reduced motion, so nothing is waiting on one. None either on a page that holds a board in its
+		// cache (lib/board/cache.ts): that is a restart, and the 1.2 s would stand between him and where he was.
+		if (reduced || cached()) {
 			markBooted();
 			return;
 		}

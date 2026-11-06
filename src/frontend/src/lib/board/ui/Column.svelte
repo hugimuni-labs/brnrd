@@ -14,6 +14,7 @@
 	import { inboxCards } from '../ledger.ts';
 	import { fromInbox } from '../bead.ts';
 	import { board } from './board.svelte.ts';
+	import { landAt } from '../place.ts';
 	let { t, inbox = false, letters }: { t: Thread; inbox?: boolean; letters: Letter[] } = $props();
 	const b = board();
 	const B = $derived(t.board || {});
@@ -42,15 +43,20 @@
 	});
 
 	let pane: HTMLElement | undefined = $state();
-	let first = true;
-	// Stick to the bottom when the reader is there (or on first paint); a reader scrolled up keeps the place.
+	let first = true,
+		landing = true;
+	// Stick to the bottom when the reader is there (or on first paint); a reader scrolled up keeps the place. The very
+	// first paint lands where the last page's reader stood in this column (place.ts), when that was not the bottom.
 	$effect.pre(() => {
 		void rows.length;
 		void W?.cards.length;
 		if (!pane) return;
+		const at = landing ? landAt(b.place.y[t.id]) : null;
+		landing = false;
 		const bottom = first || pane.scrollHeight - pane.clientHeight - pane.scrollTop < 40;
 		first = false;
-		if (bottom) tick().then(() => pane && (pane.scrollTop = pane.scrollHeight));
+		if (at != null) tick().then(() => pane && (pane.scrollTop = at));
+		else if (bottom) tick().then(() => pane && (pane.scrollTop = pane.scrollHeight));
 	});
 	// A pane that shrinks (the plan grows over the column, the composer grows) keeps a reader at the bottom there, rather
 	// than cutting the last letter mid-sentence (wvut8 4).

@@ -2,7 +2,7 @@
 	// The board (design §C): every thread as a column, the inbox pinned left, the bead sheet on the right, the composer
 	// below. Data is the loom's parts (design §D1), live over SSE; the order moves at most once per 10 s and holds while
 	// the sheet is open or the pointer is on a thread column (order.ts arrange).
-	import { onMount, untrack } from 'svelte';
+	import { onMount, tick as flushed, untrack } from 'svelte';
 	import { updated } from '$app/state';
 	import './board.css';
 	import { arrange, bst, byThread, SETTLED, TOPICS, sortThreads, wanted } from '../order.ts';
@@ -20,8 +20,11 @@
 	import Links from './Links.svelte';
 	import Composer from './Composer.svelte';
 	import { Board, provide } from './board.svelte.ts';
-	let { get }: { get?: (path: string) => Promise<unknown> } = $props();
-	const b = provide(untrack(() => new Board(get)));
+	import type { Held } from '../cache.ts';
+	// `held`: the last page's parts from the browser's cache (cache.ts), so the board paints before the network answers
+	let { get, held = null }: { get?: (path: string) => Promise<unknown>; held?: Held | null } =
+		$props();
+	const b = provide(untrack(() => new Board(get, held)));
 
 	const by = $derived(byThread(b.letters));
 	const sorted = $derived(sortThreads(b.model?.threads || [], by));
@@ -96,13 +99,43 @@
 		location.reload();
 	};
 
+	// Where he was (w-kkghfg2vo6do, his 10361): the place is written as the page hides and a second after a scroll or a
+	// press; the board's horizontal scroll comes back once the columns stand.
+	let main: HTMLElement | undefined = $state();
+	let saver: ReturnType<typeof setTimeout> | null = null;
+	const save = () => {
+		if (saver) clearTimeout(saver);
+		saver = setTimeout(() => ((saver = null), b.savePlace()), 1000);
+	};
+	$effect(() => {
+		void b.beadId;
+		void b.sel;
+		void b.grown.size;
+		void b.open.size;
+		if (b.model) untrack(save);
+	});
+	let landedX = false;
+	$effect(() => {
+		if (landedX || !main || !order.length) return;
+		landedX = true;
+		const x = b.place.x;
+		if (x) flushed().then(() => main && (main.scrollLeft = x));
+	});
 	onMount(() => {
 		// e2e reads the board's state here (src/frontend/e2e), as the board.html proofs read its globals
 		(window as unknown as { __board?: Board }).__board = b;
 		b.load();
 		const faces = setInterval(() => tick++, 400);
 		const off = b.connect();
-		return () => (clearInterval(faces), off());
+		const hide = () => document.hidden && b.savePlace();
+		document.addEventListener('visibilitychange', hide);
+		window.addEventListener('pagehide', b.savePlace);
+		return () => {
+			clearInterval(faces);
+			off();
+			document.removeEventListener('visibilitychange', hide);
+			window.removeEventListener('pagehide', b.savePlace);
+		};
 	});
 </script>
 
@@ -167,7 +200,7 @@
 				)}>{id === SETTLED ? 'settled' : id}</a
 			>{/each}
 	</nav>
-	<main id="board">
+	<main id="board" bind:this={main} onscrollcapture={save}>
 		{#if !b.model}<div class="empty">{b.error || 'loading the board'}</div>{/if}
 		{#each order as id (id)}
 			{#if id === INBOX}<Column t={inbox} inbox letters={b.letters} />

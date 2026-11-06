@@ -17,6 +17,7 @@
 	import Landing from '$lib/Landing.svelte';
 	import BoardConsent from '$lib/BoardConsent.svelte';
 	import { BASE, getJSON } from '$lib/board/parts';
+	import { cached, forget, restore, type Held } from '$lib/board/cache';
 
 	// 2026-10-27 (web-main): `/` becomes the board. 2026-10-28: on brnrd.dev too, for a signed-in person whose loom
 	// pushes its parts (/v1/loom/* in the cloud). It is shown only when /v1/loom/index answers a board: signed out
@@ -30,8 +31,15 @@
 	// 2026-10-29 (w-g98svlo7bhrb): signed in with no board, /v1/loom/consent decides. A loom never asked shows the
 	// prompt, a no shows a plain page, a yes waits for the first push; none of them is the old app. Only an account
 	// with no loom (state `none`), or a server without the route (a loopback loom, a dev server), keeps the page below.
+	// 2026-11-06 (w-kkghfg2vo6do, his 10361): the phone drops the tab on every switch to Telegram. The last page's parts
+	// are in the browser's cache (lib/board/cache.ts): when it holds a board, the board paints from it before the probe
+	// answers, and the board's first read of the index is the probe itself. The probe still decides: a 401 or no board
+	// forgets the cache and the page goes where it always went. `holding` keeps the landing off that first frame.
 	type Step = 'ask' | 'declined' | 'waiting';
 	let mode = $state<'?' | 'anon' | 'board' | 'home' | Step>('?');
+	let holding = $state(cached());
+	let held = $state<Held | null>(null);
+	let pending: Promise<unknown> | null = null;
 	let lastSeen = $state<string | null>(null);
 	let slow = $state(false);
 	let busy = $state(false);
@@ -84,11 +92,19 @@
 		else mode = 'declined';
 	};
 	let index: unknown = null;
-	// the board's first read of the index is the answer the probe already holds
+	// the board's first read of the index is the answer the probe already holds, or the probe still in flight
 	const get = (path: string) => {
-		const held = path === `${BASE}/index` ? index : null;
+		if (path !== `${BASE}/index`) return getJSON(path);
+		const had = index;
 		index = null;
-		return held ? Promise.resolve(held) : getJSON(path);
+		if (had) return Promise.resolve(had);
+		const p = pending;
+		pending = null;
+		if (!p) return getJSON(path);
+		return p.then((j) => {
+			if (isBoard(j)) return j;
+			throw new Error(`${path}: ${j === 'anon' ? 'HTTP 401' : 'no board'}`);
+		});
 	};
 	onMount(() => {
 		const flag = localStorage.getItem('board');
@@ -99,9 +115,33 @@
 				: fetch(`${BASE}/index`, { cache: 'no-store' })
 						.then((r) => (r.status === 401 ? 'anon' : r.ok ? r.json() : null))
 						.catch(() => null);
+		// The last page's parts, when the browser holds them (a few ms to read). Whichever answers first paints the
+		// board: the cache alone (the probe becomes the board's first index read), or the probe with the cache primed
+		// behind it, so the thread parts are fetched only where their hash moved. The parts, not the index, are the
+		// seconds on a phone.
+		const fromCache: Promise<Held | null> =
+			flag !== '0' && cached() ? restore().catch(() => null) : Promise.resolve(null);
+		fromCache.then((h) => {
+			if (gone || mode !== '?') return;
+			if (!h) return void (holding = false);
+			held = h;
+			pending = probe;
+			mode = 'board';
+			document.documentElement.classList.add('board');
+		});
 		probe.then(async (j) => {
 			if (gone) return;
-			if (isBoard(j)) return show(j);
+			if (isBoard(j)) {
+				const h = await fromCache;
+				if (gone || mode === 'board') return;
+				held = h;
+				return show(j);
+			}
+			// not his board: whatever the cache held is not to be shown again on this browser
+			held = null;
+			holding = false;
+			if (mode === 'board') mode = '?';
+			void forget();
 			if (j === 'anon') return void (mode = 'anon');
 			const c = flag === '0' ? null : await consent();
 			if (gone) return;
@@ -129,10 +169,10 @@
 	<meta name="twitter:image" content={SOCIAL_IMAGE} />
 </svelte:head>
 
-{#if mode === '?' || mode === 'anon'}
+{#if mode === 'anon' || (mode === '?' && !holding)}
 	<div data-landing class="contents"><Landing live={mode === 'anon'} /></div>
 {:else if mode === 'board'}
-	<Board {get} />
+	<Board {get} {held} />
 {:else if mode === 'ask' || mode === 'declined' || mode === 'waiting'}
 	<BoardConsent step={mode} {lastSeen} {slow} {busy} {failed} {answer} />
 {:else if mode === 'home'}
