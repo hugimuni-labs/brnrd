@@ -603,6 +603,7 @@ def write_send(room: Path, *, to: str, sender: str, body: str = "",
                clean: bool = False, kind: str | None = None,
                refs: tuple[str, ...] | list[str] = (),
                reincarnate: str | None = None, body_choice: str | None = None,
+               spend: bool = False,
                at: str | None = None, repo_sources: tuple[str, ...] | list[str] = (),
                wish: str | tuple | list | None = None,
                budget: int | None = None, chatter: list[str] | None = None,
@@ -625,6 +626,8 @@ def write_send(room: Path, *, to: str, sender: str, body: str = "",
     for a correction, a silent letter or a held one.
     """
     home = home_of_room(Path(room))
+    if spend and body_choice is not None:
+        raise PortError("send: --spend and --body are exclusive")
     if is_channel(to):
         from .loom import _fenced
         from .ledger import read_facts
@@ -643,9 +646,12 @@ def write_send(room: Path, *, to: str, sender: str, body: str = "",
         raise PortError("send: --note requires --re")
     if note is not None and body:
         raise PortError("send: --note is the whole no-answer; drop the body")
+    opening_only = ("send: --body is only for opening a new thread; "
+                    "--spend is only for opening a new thread; "
+                    "--repo is only for opening a new thread")
     if is_channel(to):
-        if body_choice is not None or repo_sources:
-            raise PortError("send: --body is only for opening a new thread; --repo is only for opening a new thread")
+        if body_choice is not None or repo_sources or spend:
+            raise PortError(opening_only)
         try:
             channel_parts(to, home)
         except ValueError as exc:
@@ -661,12 +667,21 @@ def write_send(room: Path, *, to: str, sender: str, body: str = "",
     else:
         thread = thread_of(to)
         if home.routable(thread):
-            if body_choice is not None or repo_sources:
-                raise PortError("send: --body is only for opening a new thread; --repo is only for opening a new thread")
+            if body_choice is not None or repo_sources or spend:
+                raise PortError(opening_only)
         else:
             if note is not None or reincarnate is not None:
                 raise PortError(f"send: no thread {thread} on main")
             opening = thread
+    # Resolve before any stamp. A refusal writes no letter and opens no thread.
+    if opening is not None and spend:
+        from .adapters import spend_choice
+        try:
+            chosen = spend_choice(home)
+        except ValueError as exc:
+            raise PortError(str(exc)) from exc
+        if chosen:
+            body_choice = chosen
     if note is None and reincarnate is None and not is_channel(to):
         _refuse_other_loom(home, thread_of(to))
     if note is None and reincarnate is None and at is None and not is_channel(to):

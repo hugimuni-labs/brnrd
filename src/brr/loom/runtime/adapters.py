@@ -152,19 +152,33 @@ _ROLE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*")
 
 
 def _preferences(home):
-    """``loom/preferences.toml`` read and checked: ``model.<role>`` keys, and ``bodies.order``."""
+    """``loom/preferences.toml``: model keys, ``bodies.order``, ``spend.burn``, ``spend.keep``.
+
+    ``spend.keep`` inside ``spend.burn`` is a ``ConfigError``: the keep shell is
+    not a handoff target, so the file cannot name it as both.
+    """
     from .config import ConfigError, read_values
     path = home.root / "loom" / "preferences.toml"
     found = read_values(path)
-    for key in found:
+    known = "model.default, model.inbox, model.<thread>, bodies.order, spend.burn, spend.keep"
+    for key, value in found.items():
         if key == "bodies.order":
-            value = found[key]
             if not (isinstance(value, list) and all(isinstance(v, str) and _ROLE.fullmatch(v) for v in value)):
                 raise ConfigError(f"{path}: bodies.order is a list of shells, e.g. [\"claude\", \"codex\"]")
             continue
+        if key == "spend.burn":
+            if not (isinstance(value, list) and all(isinstance(v, str) and _ROLE.fullmatch(v) for v in value)):
+                raise ConfigError(f"{path}: spend.burn is a list of shells, e.g. [\"grok\", \"codex\"]")
+            continue
+        if key == "spend.keep":
+            if not (isinstance(value, str) and _ROLE.fullmatch(value)):
+                raise ConfigError(f"{path}: spend.keep is one shell, e.g. \"claude\"")
+            continue
         if not key.startswith("model.") or not _ROLE.fullmatch(key[6:]):
-            raise ConfigError(f"{path}: unknown key {key!r} "
-                              "(known: model.default, model.inbox, model.<thread>, bodies.order)")
+            raise ConfigError(f"{path}: unknown key {key!r} (known: {known})")
+    burn, keep = found.get("spend.burn"), found.get("spend.keep")
+    if isinstance(burn, list) and isinstance(keep, str) and keep in burn:
+        raise ConfigError(f"{path}: spend.keep {keep!r} is also in spend.burn")
     return path, found
 
 
@@ -232,6 +246,125 @@ def default_body(home) -> str:
     from .config import load_config
     choice = _preferences(home)[1].get("model.default") or load_config(home.root).body
     return str(choice).strip() if choice else ""
+
+
+def installed_shells(home) -> list[str]:
+    """Harnesses this machine has: ``body_order()`` shells whose binary is on PATH.
+
+    A collector that fails still counts. A shell switched off in ``bodies.order`` does not.
+    """
+    import shutil
+    return [shell for shell in body_order(home) if shutil.which(shell)]
+
+
+def keep_shell(home, found: dict | None = None) -> str | None:
+    """``spend.keep``, or the default body's shell when a burn list leaves it out."""
+    if found is None:
+        found = _preferences(home)[1]
+    named = found.get("spend.keep")
+    if isinstance(named, str) and named:
+        return named
+    burn = found.get("spend.burn")
+    if not isinstance(burn, list) or not burn:
+        return None
+    body = default_body(home)
+    if not body:
+        return None
+    shell = parse_body(body)[0]
+    if shell in burn:
+        return None
+    return shell
+
+
+def burn_marks(home) -> tuple[list[str], str | None] | None:
+    """``(burn shells, keep shell)`` when the fuel line should say so, else None.
+
+    None when one harness is installed, or ``spend.burn`` is missing or empty.
+    The count is what is installed here, not what the file names.
+    """
+    if len(installed_shells(home)) < 2:
+        return None
+    found = _preferences(home)[1]
+    burn = found.get("spend.burn")
+    if not isinstance(burn, list) or not burn:
+        return None
+    return list(burn), keep_shell(home, found)
+
+
+def spend_mode(home) -> str:
+    """``burn``, ``headroom``, or ``""`` for the briefing sentence.
+
+    One harness, or ``spend.burn = []``: nothing. A non-empty list: burn.
+    The key absent, with two or more harnesses: headroom.
+    """
+    if len(installed_shells(home)) < 2:
+        return ""
+    found = _preferences(home)[1]
+    if "spend.burn" not in found:
+        return "headroom"
+    burn = found["spend.burn"]
+    if isinstance(burn, list) and burn:
+        return "burn"
+    return ""
+
+
+def spend_usable(home, shell: str) -> bool:
+    """A handoff target: windows, no error, every window above the floor.
+
+    ``_can_run`` treats unknown fuel as runnable so a seat can still start.
+    A handoff skips a missing file, an empty gauge, and ``fails``.
+    """
+    import json
+    from .config import load_config
+    from .usage import collector_failed, gauge_windows
+    path = home.root / "loom" / "usage" / f"{shell}.json"
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return False
+    if collector_failed(payload):
+        return False
+    windows = gauge_windows(payload)
+    if not windows:
+        return False
+    floor = load_config(home.root).hold_floor_pct
+    return all(window["left_pct"] > floor for window in windows)
+
+
+def spend_choice(home, usable=None) -> str | None:
+    """The shell ``send --spend`` pins, or None when one harness is installed.
+
+    ``usable(shell)`` defaults to :func:`spend_usable`. Missing or empty
+    ``spend.burn``, or no shell above the floor, raises ``ValueError``. The
+    refusal names the fuel line, and the thread is not opened. The core is
+    empty: the harness's own model.
+    """
+    installed = installed_shells(home)
+    if len(installed) < 2:
+        return None
+    found = _preferences(home)[1]
+    if "spend.burn" not in found:
+        raise ValueError("send: --spend needs spend.burn in loom/preferences.toml")
+    burn = found["spend.burn"]
+    if not isinstance(burn, list) or not burn:
+        raise ValueError("send: spend.burn is empty, so --spend does not route")
+    keep = keep_shell(home, found)
+    have = set(installed)
+
+    def can(shell: str) -> bool:
+        if usable is None:
+            return spend_usable(home, shell)
+        return bool(usable(shell))
+
+    for shell in burn:
+        if shell == keep or shell not in have:
+            continue
+        if can(shell):
+            return shell
+    from .usage import fuels
+    line = fuels(home, burn[0])
+    where = f" ({line})" if line else ""
+    raise ValueError(f"send: --spend found no burn shell installed and above the floor{where}")
 
 
 def prefer(home, role: str, body: str | None) -> None:
