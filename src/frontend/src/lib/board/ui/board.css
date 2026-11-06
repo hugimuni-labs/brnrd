@@ -61,11 +61,14 @@
 	white-space: nowrap;
 	overflow: hidden;
 }
+/* each item keeps its own width: a gauge row that shrank drew over the open count on a phone */
+.brd header > * {
+	flex-shrink: 0;
+}
 .brd #fuel {
 	display: inline-flex;
 	align-items: center;
 	gap: 18px;
-	min-width: 0;
 	height: 20px;
 	--fuel-track: #e6e6e6;
 	--fuel-ink: #171717;
