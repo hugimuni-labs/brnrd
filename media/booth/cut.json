@@ -313,18 +313,18 @@
   {
    "kind": "gen",
    "gen": {
-    "comp": "p2-agree"
+    "comp": "a1-nice"
    },
    "phone": true,
-   "sec": 1,
-   "capture": "agree on act 1's delivered wish (manual, p2-agree) (booth-chat)"
+   "sec": 1.5,
+   "capture": "his 'Nice 👌' 22:30:09Z, 10435 re yy6ug: his verdict, in words (booth-chat)"
   },
   {
    "kind": "gen",
    "gen": {
     "comp": "g6-readme"
    },
-   "sec": 2.5,
+   "sec": 2.0,
    "lower": "You judge. It keeps the receipt."
   },
   {
