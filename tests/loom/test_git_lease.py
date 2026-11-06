@@ -202,3 +202,57 @@ def test_strict_fences_even_uncontested(tmp_path):
 def test_boot_clock_moves():
     first = boot_clock()
     assert boot_clock() >= first
+
+
+def _flaky_push(auth: GitLeaseAuthority, answer):
+    """The next push runs, then ``answer(proc)`` says what the caller hears."""
+    real = auth.git
+    state = {"armed": True}
+
+    def git(tail):
+        proc = real(tail)
+        if state["armed"] and tail and tail[0] == "push":
+            state["armed"] = False
+            return answer(proc)
+        return proc
+
+    auth.git = git
+
+
+def test_a_renew_whose_answer_was_lost_does_not_fence_the_next_one(pair):
+    # 11-06, 13:57Z: a renew landed but its answer did not arrive; the next
+    # renew named the older sha, lost the swap to its own commit and fenced
+    # the only machine there was.
+    a, _b, clock_a, _clock_b, remote = pair
+    lease = a.acquire("inbox", "aaaa", 90)
+    _flaky_push(a, lambda proc: subprocess.CompletedProcess(proc.args, 128, "",
+                                                            "fatal: the remote hung up"))
+    clock_a.now += 30
+    lease = a.renew(lease, 90)  # landed; heard as no network, so graced
+    assert lease is not None
+    clock_a.now += 30
+    renewed = a.renew(lease, 90)
+    assert renewed is not None and renewed.gen == 1
+    assert a.authorize(renewed)
+    assert _remote_sha(remote, "refs/leases/inbox") == a.held["inbox"][1]
+
+
+def test_a_renew_refused_once_by_the_remote_retries_on_the_ref_it_reads(pair):
+    a, _b, clock_a, _clock_b, remote = pair
+    lease = a.acquire("inbox", "aaaa", 90)
+    before = _remote_sha(remote, "refs/leases/inbox")
+    _flaky_push(a, lambda proc: subprocess.CompletedProcess(
+        proc.args, 1, "!\trefs/leases/inbox\t[remote rejected] (failed to update ref)\n", ""))
+    clock_a.now += 30
+    renewed = a.renew(lease, 90)
+    assert renewed is not None and a.authorize(renewed)
+    assert _remote_sha(remote, "refs/leases/inbox") not in ("", before)
+
+
+def test_a_renew_still_loses_to_a_takeover(pair):
+    a, b, clock_a, clock_b, _remote = pair
+    lease = a.acquire("inbox", "aaaa", 90)
+    b.poll()
+    clock_b.now += 96
+    assert b.acquire("inbox", "bbbb", 90) is not None
+    assert a.renew(lease, 90) is None
