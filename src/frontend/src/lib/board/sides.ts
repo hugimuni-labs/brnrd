@@ -61,11 +61,21 @@ export function letterMark(
 	threads: Thread[]
 ): { thread: string | null; line?: 'solid' | 'dashed' } {
 	if (l.person) return { thread: null };
-	const who = sender(l);
+	return marks(threads).get(sender(l)) || { thread: l.threads?.[0] || col, line: 'solid' };
+}
+
+// strand → its mark, once per threads array: a scan of every thread's strands per card ran on every sync
+const marked = new WeakMap<Thread[], Map<string, { thread: string; line: 'solid' | 'dashed' }>>();
+function marks(threads: Thread[]) {
+	let m = marked.get(threads);
+	if (m) return m;
+	marked.set(threads, (m = new Map()));
 	for (const t of threads) {
 		const s = t.strands || [];
-		const i = s.findIndex((x) => x.id === who);
-		if (i >= 0) return { thread: t.id, line: i === s.length - 1 ? 'solid' : 'dashed' };
+		s.forEach((x, i) => {
+			if (!m!.has(x.id))
+				m!.set(x.id, { thread: t.id, line: i === s.length - 1 ? 'solid' : 'dashed' });
+		});
 	}
-	return { thread: l.threads?.[0] || col, line: 'solid' };
+	return m;
 }

@@ -11,9 +11,23 @@ export function answered(c: Call, pending: Letter[]): Answer | null {
 	return p ? { verdict: p.verdict!, pending: true } : null;
 }
 
-export const allCalls = (threads: Thread[]): Call[] => threads.flatMap((t) => t.board?.calls || []);
-export const openAsks = (calls: Call[]): Set<string> =>
-	new Set(calls.filter((c) => c.kind === 'ask' && !c.closed).map((c) => c.wish));
+// once per threads array and per calls array: every wish's pips ask both, on every sync
+const all = new WeakMap<Thread[], Call[]>(),
+	asks = new WeakMap<Call[], Set<string>>();
+export const allCalls = (threads: Thread[]): Call[] => {
+	let c = all.get(threads);
+	if (!c) all.set(threads, (c = threads.flatMap((t) => t.board?.calls || [])));
+	return c;
+};
+export const openAsks = (calls: Call[]): Set<string> => {
+	let s = asks.get(calls);
+	if (!s)
+		asks.set(
+			calls,
+			(s = new Set(calls.filter((c) => c.kind === 'ask' && !c.closed).map((c) => c.wish)))
+		);
+	return s;
+};
 
 // The inbox's stack is one counted line ("7 ask you · 19 verdicts wait on you") that unfolds the whole stack on a tap;
 // only a card he opened stands while folded (ug2om 1: 12 cards in a 34% box hid the pane; wvut8 1: 7 open asks still
