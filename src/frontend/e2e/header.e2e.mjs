@@ -32,7 +32,13 @@ test('on a phone, no header item overlaps the next', async () => {
 			.filter((e) => e.offsetParent)
 			.map((e) => {
 				const r = e.getBoundingClientRect();
-				return { id: e.id || e.tagName, left: r.left, right: r.right, width: r.width, inner: e.scrollWidth };
+				return {
+					id: e.id || e.tagName,
+					left: r.left,
+					right: r.right,
+					width: r.width,
+					inner: e.scrollWidth
+				};
 			})
 	);
 	ok(boxes.length > 1);
