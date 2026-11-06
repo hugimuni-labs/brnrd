@@ -1506,6 +1506,10 @@ def pending_bodies(facts: list[Fact]) -> dict[str, Fact]:
 
 
 _FENCED = ("fenced: this install lost the inbox lease and another may lead; "
+           "outward acts (publish, a letter to a person) are refused; "
+           "finish, land locally, the thread wakes again where the lease is")
+
+_HANDED = ("fenced: inbox was handed to another install; "
            "land what you have and stop, the thread wakes again where the lease is")
 
 
@@ -1513,16 +1517,16 @@ _AWAY = ("this thread is pinned to install {}: land what you have and stop, "
          "it wakes again on that machine")
 
 
-def _fenced(home, facts) -> bool:
-    """A lease streak is open on this install: the router fenced and has not
-    taken the inbox lease back (``Router._fence``, ``Router._recovered``).
-    Or it handed inbox to another install (``Router._handover``) and holds
-    no router gen above the one it handed."""
+def _lease_lost(home, facts) -> bool:
+    """A lease streak is open: the router fenced and has not taken inbox back."""
     from .health import open_streaks
+    return any(f.data.get("step") == "lease" for f in open_streaks(facts, home.install_id()))
+
+
+def _handed_away(home, facts) -> bool:
+    """Inbox was released to another install and this one has not taken it back."""
     from .ledger import kind_facts
     install = home.install_id()
-    if any(f.data.get("step") == "lease" for f in open_streaks(facts, install)):
-        return True
     handed = [int(f.data["gen"]) for f in kind_facts(facts, "lease.handed")
               if f.data.get("install") == install]
     if not handed:
@@ -1530,6 +1534,11 @@ def _fenced(home, facts) -> bool:
     held = [int(f.data.get("gen", 0)) for f in kind_facts(facts, "router")
             if f.data.get("install") == install]
     return max(held, default=0) <= max(handed)
+
+
+def _fenced(home, facts) -> bool:
+    """This install should not speak or publish: it lost inbox, or handed it."""
+    return _lease_lost(home, facts) or _handed_away(home, facts)
 
 
 def _observe_body(home, facts, strand, thread, gen, bodies, *, choice=None, force=False):
@@ -1548,7 +1557,10 @@ def _observe_body(home, facts, strand, thread, gen, bodies, *, choice=None, forc
     pin = pinned_to(facts, thread)
     away = pin not in (None, home.install_id())
     # A thread pinned here runs whoever leads, so losing inbox does not fence it.
-    fenced = _fenced(home, facts) and pin is None
+    # A real loss refuses outward acts and lets a running body finish; a
+    # requested handover (prefer) still sends seated bodies away.
+    handed = _handed_away(home, facts) and pin is None
+    fenced = (_lease_lost(home, facts) or handed) and pin is None
     default = choice or ("fake", "haiku")
     shell, core = lease.get("shell", default[0]), lease.get("core", default[1])
     if isinstance(facts, LedgerView):
@@ -1602,13 +1614,13 @@ def _observe_body(home, facts, strand, thread, gen, bodies, *, choice=None, forc
         squeeze = None
     context = SimpleNamespace(thread=thread, shell=shell, core=core, pid=pid, empty=empty, fuel=fuel,
                               why=(closing_commit(home, thread)[1] or f"thread {thread} settled") if closed
-                              else _FENCED if fenced else _AWAY.format(pin) if away else "",
+                              else _HANDED if handed else _FENCED if fenced else _AWAY.format(pin) if away else "",
                               failure="", repos=lease.get("repos"), pressure=str(squeeze or ""))
     o = Observation(strand, gen, alive, closed, "refreshing" if gauge is None else "empty" if empty
                     else "ok" if gauge["windows"] else "unknown",
                     now, proven, until=until, force=force, stop_grace=config.stop_grace,
                     woken="/".join(woken) if woken else "", fenced=fenced, held=held, away=away,
-                    pressed=squeeze is not None)
+                    handed=handed, pressed=squeeze is not None)
     row = TABLE[row_for(facts, o)]
     if row.next == "parked" and not fenced:
         park = fact_for(facts, "body.parked", strand, gen)

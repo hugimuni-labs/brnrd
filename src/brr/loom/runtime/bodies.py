@@ -123,6 +123,7 @@ class Observation:
     fenced: bool = False
     held: bool = False
     away: bool = False
+    handed: bool = False
     pressed: bool = False
 
 
@@ -187,8 +188,8 @@ def _state_of(facts, strand, gen, *, alive):
 # state and this tick's observation.
 OBSERVED = {
     "closed": lambda s, o: o.closed,
-    # This install lost the inbox lease: another may lead, so nothing starts
-    # and a seated body leaves as if its thread had closed.
+    # This install lost the inbox lease: another may lead, so nothing new
+    # starts. A running body is not killed; outward acts are refused instead.
     "fenced": lambda s, o: o.fenced,
     # The thread is pinned to another install: it runs there, so a seat here
     # ends, and a running body leaves as if its thread had closed.
@@ -205,9 +206,9 @@ OBSERVED = {
     "not alive": lambda s, o: not o.alive,
     "alive, proven": lambda s, o: o.alive and o.proven is True,
     "alive, not proven": lambda s, o: o.alive and o.proven is not True,
-    "alive, open": lambda s, o: o.alive and not (o.closed or o.fenced or o.away),
-    "alive, closed": lambda s, o: o.alive and (o.closed or o.fenced or o.away),
-    "alive, reopened": lambda s, o: o.alive and not (o.closed or o.fenced or o.away),
+    "alive, open": lambda s, o: o.alive and not (o.closed or o.away or o.handed),
+    "alive, closed": lambda s, o: o.alive and (o.closed or o.away or o.handed),
+    "alive, reopened": lambda s, o: o.alive and not (o.closed or o.away or o.handed),
     "alive, before deadline": lambda s, o: o.alive and o.now < s.deadline,
     "alive, due, proven": lambda s, o: o.alive and o.now >= s.deadline and o.proven is True,
     "alive, due, unproven": lambda s, o: o.alive and o.now >= s.deadline and o.proven is False,

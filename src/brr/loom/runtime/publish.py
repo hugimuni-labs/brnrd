@@ -400,6 +400,12 @@ def publish(room: Path | str, name: str, *, worker: str | None = None,
     from .loom import _commit_identity
 
     who = _caller(room, name)
+    from .loom import _fenced
+    if _fenced(who.home, who.facts):
+        raise PublishError(
+            "publish: this machine lost the inbox lease; a push would go out "
+            "from here. Land locally."
+        )
     checkout, strand = who.checkout, who.strand
     if worker is not None:
         branch, source = _for_worker(who, worker)

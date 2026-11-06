@@ -61,6 +61,15 @@ def test_a_thread_never_names_itself_as_the_reply_address():
     assert parse_boundary(other).letters[0].reply == "thread:t"
 
 
+def test_send_to_a_person_is_refused_when_this_machine_lost_the_inbox_lease(tmp_path, monkeypatch):
+    home = _home(tmp_path)
+    room = home.room(STRAND)
+    monkeypatch.setattr("brr.loom.runtime.loom._fenced", lambda *a, **k: True)
+    with pytest.raises(PortError, match="lost the inbox lease"):
+        write_send(room, to="channel:relay/telegram:1", sender=STRAND, body="hi")
+    assert not list((room / "port" / "out").glob("*.md"))
+
+
 def test_send_refuses_a_letter_to_the_senders_own_thread(tmp_path):
     home = _home(tmp_path)
     room = home.room(STRAND)
