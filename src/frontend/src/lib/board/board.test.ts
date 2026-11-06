@@ -245,6 +245,30 @@ test('ledger: sections by who owes the move; an assumed wish nests under the sai
 	equal(g.active?.text, 'do it');
 	deepEqual(g.balance, { said: 3, derived: 1, delivered: 1, owe: 1 });
 	equal(g.sections[2].rows[0].status, 'agree');
+	// a top-level assumed wish names the first said wish elsewhere that holds a letter it cites, never one shown here
+	const far = W('w-far', { thread: 'other', letters: ['l7'] }),
+		near = W('w-near', { thread: 'other', says: [{ id: 'l8', quote: 'y', cites: 'whole' }] }),
+		lone = W('w-lone', {
+			thread: 'web',
+			origin: 'derived',
+			state: 'delivered',
+			says: [
+				{ id: 'l8', quote: 'y', cites: 'whole' },
+				{ id: 'l7', quote: 'z', cites: 'whole' },
+				{ id: 'l1', quote: 'x', cites: 'whole' }
+			]
+		});
+	const wide = [said, far, near, lone];
+	const row = ledger(t, threadWishes(t, [L('l1', '1')], wide), wide, [])
+		.sections.flatMap((s) => s.rows)
+		.find((r) => r.w.wish === 'w-lone');
+	equal(row?.from, 'w-far');
+	equal(
+		ledger(t, threadWishes(t, [L('l1', '1')], [said, lone]), [said, lone], [])
+			.sections.flatMap((s) => s.rows)
+			.find((r) => r.w.wish === 'w-lone')?.from,
+		undefined
+	);
 });
 
 test('tape: finished calls fold per strand between letters; the live line ticks from the open call', () => {

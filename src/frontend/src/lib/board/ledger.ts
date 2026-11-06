@@ -58,6 +58,24 @@ export type Ledger = {
 	loose: string[];
 };
 
+// letter id → the said wishes whose letters or says hold it, by index in `wishes`, ascending; once per wishes array
+// (every column's ledger asks it, and a scan per derived wish ran on every sync)
+const reached = new WeakMap<Wish[], Map<string, number[]>>();
+function reaching(wishes: Wish[]) {
+	let m = reached.get(wishes);
+	if (m) return m;
+	reached.set(wishes, (m = new Map()));
+	wishes.forEach((w, i) => {
+		if (w.origin === 'derived') return;
+		for (const id of new Set([...(w.letters || []), ...(w.says || []).map((x) => x.id)])) {
+			const l = m!.get(id);
+			if (l) l.push(i);
+			else m!.set(id, [i]);
+		}
+	});
+	return m;
+}
+
 export function ledger(t: Thread, tw: ThreadWishes, wishes: Wish[], pending: Letter[]): Ledger {
 	const calls = t.board?.calls || [],
 		asks = new Set(calls.filter((c) => c.kind === 'ask' && !c.closed).map((c) => c.wish));
@@ -87,11 +105,16 @@ export function ledger(t: Thread, tw: ThreadWishes, wishes: Wish[], pending: Let
 	const reachOf = (w: Wish) => new Set([...(w.letters || []), ...(w.says || []).map((x) => x.id)]);
 	const reach = new Map(said.map((w) => [w.wish, reachOf(w)]));
 	const away = (w: Wish) => {
-		const ids = (w.says || []).map((s) => s.id);
 		if (w.origin !== 'derived') return undefined;
-		return wishes.find(
-			(s) => s.origin !== 'derived' && !kids.has(s.wish) && ids.some((id) => reachOf(s).has(id))
-		)?.wish;
+		const by = reaching(wishes);
+		let at = Infinity;
+		for (const s of w.says || [])
+			for (const i of by.get(s.id) || [])
+				if (i < at && !kids.has(wishes[i].wish)) {
+					at = i;
+					break;
+				}
+		return wishes[at]?.wish;
 	};
 	for (const w of W) {
 		if (w.origin !== 'derived') {
