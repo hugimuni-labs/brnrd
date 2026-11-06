@@ -145,6 +145,8 @@ def _send(argv: list[str]) -> int:
     parser.add_argument("--reopen", metavar="TEXT")
     parser.add_argument("--at", help="YYYY-MM-DDTHH:MM:SSZ, +<n>m, +<n>h, or +<n>d")
     parser.add_argument("--body", dest="body_choice", metavar="SHELL[/CORE]")
+    parser.add_argument("--spend", action="store_true",
+                        help="open the thread on the first spend.burn shell above the floor")
     parser.add_argument("--repo", action="append", default=[])
     parser.add_argument("--budget", metavar="TOKENS",
                         help="weighted tokens, e.g. 2m: a new thread's allocation, or the opener's raise")
@@ -166,16 +168,20 @@ def _send(argv: list[str]) -> int:
             raise PortError("send: one branch per letter: --correction, --silent or --hold")
         if args.at is not None and args.reopen is not None:
             raise PortError("send: --at cannot be used with --reopen")
+        if args.spend and args.body_choice is not None:
+            raise PortError("send: --spend and --body are exclusive")
         if args.reopen is not None:
             from .home import thread_of
             from .lifecycle import land_status
-            if args.body is not None or args.note is not None or args.body_choice is not None or args.repo:
-                raise PortError("send: --reopen supplies the letter text; drop the body and --note")
+            if (args.body is not None or args.note is not None or args.body_choice is not None
+                    or args.repo or args.spend):
+                raise PortError("send: --reopen supplies the letter text; drop the body, --note and --spend")
             land_status(room, thread_of(args.to), "open", f"reopen {thread_of(args.to)}")
         letter_id = write_send(
             room, to=args.to, sender=strand_of_room(room), body=args.reopen if args.reopen is not None else args.body or "",
             re=args.re, note=args.note, clean=args.clean, kind=args.kind,
-            refs=tuple(args.ref or ()), body_choice=args.body_choice, repo_sources=args.repo, at=args.at,
+            refs=tuple(args.ref or ()), body_choice=args.body_choice, spend=args.spend,
+            repo_sources=args.repo, at=args.at,
             wish=args.wish, budget=None if args.budget is None else parse_tokens(args.budget),
             chatter=chatter, ask_for=args.ask_for, triage=branches[0] if branches else None,
             echo=echo, reopen=args.reopen is not None,

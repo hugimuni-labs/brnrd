@@ -912,7 +912,7 @@ def run_wake(room_dir: Path, thread: str, owed: Path | None = None, *,
             found = told(facts)
             section += render(queues(found, waits_on(found, main_snapshot(home))))
     from .briefing import section as briefing_section
-    briefing = briefing_section()
+    briefing = briefing_section(home)
     # Reserve what the loom adds before the recipe fits its tree/README to the budget.
     limit = int(env.get("LOOM_BUDGET_BYTES") or 24000)
     env["LOOM_BUDGET_BYTES"] = str(max(0, limit - len((section + briefing).encode("utf-8"))))

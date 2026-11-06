@@ -28,6 +28,25 @@ BRIEFING = f"""How a body holds the seat. The installed loom writes this section
 - Idle, with nothing owed, in order: a live chase, an open item, an own unmerged PR, a question worth asking. Declining one says why.
 """
 
+# One sentence, and only when this machine has two or more harnesses.
+# An empty burn list and a single harness append nothing: the block stays BRIEFING.
+HEADROOM = (
+    "- A bounded assignment goes to the shell with the most left on the fuel line, "
+    "with `send --body`. This seat keeps judgement and the voice to the person.\n"
+)
+BURN = (
+    "- A bounded assignment goes to the engine the fuel line marks to burn, "
+    "with `send --spend`. This seat keeps judgement and the voice to the person. "
+    "The shell marked keep is not the handoff.\n"
+)
 
-def section() -> str:
-    return f"## {TITLE}\n{BRIEFING}"
+
+def section(home=None) -> str:
+    """The briefing block. ``home`` adds one sentence when two harnesses are installed."""
+    text = BRIEFING
+    if home is not None:
+        from .adapters import spend_mode
+        extra = {"burn": BURN, "headroom": HEADROOM}.get(spend_mode(home), "")
+        if extra:
+            text = BRIEFING.rstrip("\n") + "\n" + extra
+    return f"## {TITLE}\n{text}"
