@@ -19,6 +19,10 @@ const clamp = {extrapolateLeft: 'clamp', extrapolateRight: 'clamp'};
 
 export const frames = (p) => p.timeline.reduce((n, e) => n + Math.round(e.sec * p.fps), 0);
 
+// An entry's `booth` or `readme` object overrides its keys in that render: the install card holds 6 s at the
+// loop seam, where a visitor scans the QR, and 3 s at the README's end.
+export const cast = (p, variant) => ({...p, variant, timeline: p.timeline.map((e) => ({...e, ...e[variant]}))});
+
 const lerp = (frame, a, b, from, to, easing = EASE) => interpolate(frame, [a, b], [from, to], {...clamp, easing});
 
 // ---- type -------------------------------------------------------------------------------------------------

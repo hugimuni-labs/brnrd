@@ -1,5 +1,5 @@
 import {Composition, registerRoot} from 'remotion';
-import {Trailer, frames} from './Trailer';
+import {Trailer, cast, frames} from './Trailer';
 
 // cut.py writes the props (the timeline with the shots it found, the numbers
 // from git, the PR) and passes them with --props; the defaults only let the
@@ -14,13 +14,10 @@ const Root = () => (
         id={variant}
         component={Trailer}
         defaultProps={{...fallback, variant}}
-        calculateMetadata={({props}) => ({
-          fps: props.fps,
-          width: props.width,
-          height: props.height,
-          durationInFrames: frames(props),
-          props: {...props, variant},
-        })}
+        calculateMetadata={({props}) => {
+          const p = cast(props, variant);
+          return {fps: p.fps, width: p.width, height: p.height, durationInFrames: frames(p), props: p};
+        }}
       />
     ))}
   </>

@@ -331,6 +331,7 @@
   {
    "kind": "install",
    "sec": 6,
+   "readme": {"sec": 3},
    "line": "MIT. Alpha. Built in the open."
   }
  ]

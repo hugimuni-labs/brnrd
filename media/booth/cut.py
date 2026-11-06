@@ -171,7 +171,8 @@ def main() -> None:
              "logs": {"repo": log(REPO, 160), "self": log(a.self, 160)}, "checks": {"pr": a.act1_pr, "rows": checks(a.act1_pr)}}
     missing += [f"{e['still']} (still)" for e in tl if e["kind"] == "still" and e["still"] not in shots]
     (HERE / "props.json").write_text(json.dumps(props, indent=1, ensure_ascii=False))
-    sec = sum(round(e["sec"] * cut["fps"]) for e in tl) / cut["fps"]
+    # an entry's `booth` or `readme` object overrides its keys in that render (src/Trailer.jsx `cast`)
+    sec = {v: sum(round({**e, **e.get(v, {})}["sec"] * cut["fps"]) for e in tl) / cut["fps"] for v in ("booth", "readme")}
 
     a.out.mkdir(parents=True, exist_ok=True)
     build = HERE / "out"
@@ -179,10 +180,10 @@ def main() -> None:
     music = find(a.raw, "music", AUDIO)
     for variant in ("booth", "readme"):
         render(variant, HERE / "props.json", build / f"{variant}.mp4")
-        finish(build / f"{variant}.mp4", a.out / f"{variant}.mp4", music if variant == "readme" else None, sec)
+        finish(build / f"{variant}.mp4", a.out / f"{variant}.mp4", music if variant == "readme" else None, sec[variant])
 
     n = props["numbers"]
-    print(f"{sec:.1f} s · numbers: {n['commits']} commits, {n['resident']} of {n['authored']} authored by the resident, {n['prs']} merged PRs")
+    print(f"{sec['booth']:.1f} s booth, {sec['readme']:.1f} s readme · numbers: {n['commits']} commits, {n['resident']} of {n['authored']} authored by the resident, {n['prs']} merged PRs")
     print("placeholders: " + (", ".join(missing) if missing else "none"))
     print("music: " + (str(music) if music else "none, readme is silent"))
     for variant in ("booth", "readme"):
