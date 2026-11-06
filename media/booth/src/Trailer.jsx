@@ -268,7 +268,8 @@ const Odometer = ({value, size}) => {
         </div>
       </div>,
     );
-    if (k % 3 === 0 && k > 0) cols.push(<div key={`s${k}`} style={{width: size * 0.25, lineHeight: `${size * 1.1}px`}}>,</div>);
+    // the separator gets its own centred box: a mono comma is a full cell wide and would lean into its neighbour
+    if (k % 3 === 0 && k > 0) cols.push(<div key={`s${k}`} style={{width: size * 0.34, display: 'flex', justifyContent: 'center', lineHeight: `${size * 1.1}px`}}>,</div>);
   }
   return <div style={{display: 'flex', fontSize: size, fontFamily: MONO, color: FG}}>{cols}</div>;
 };
@@ -285,6 +286,8 @@ const Numbers = ({props}) => {
   return (
     <AbsoluteFill>
       <GitLog lines={props.logs.repo} dim={0.2} speed={14} start={0} />
+      {/* a scrim under the figures so the log reads as texture, not as text competing with the labels */}
+      <AbsoluteFill style={{background: 'radial-gradient(ellipse 62% 48% at 50% 46%, rgba(16,13,10,0.94) 40%, rgba(16,13,10,0.55) 75%, rgba(16,13,10,0) 100%)'}} />
       <AbsoluteFill style={{alignItems: 'center', justifyContent: 'center'}}>
         <div style={{display: 'flex', flexDirection: 'column', gap: 18, marginTop: -60}}>
           {rows.map(([v, label], i) => {
