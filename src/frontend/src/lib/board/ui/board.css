@@ -2149,6 +2149,29 @@
 	color: var(--quiet);
 	font-style: normal;
 }
+.brd #bead .rail .bd.stage button[data-act] {
+	font: inherit;
+	font-size: 10px;
+	margin-left: 6px;
+	padding: 0 7px;
+	line-height: 16px;
+	background: none;
+	color: var(--parch);
+	border: 1px solid #5a4a30;
+	cursor: pointer;
+}
+.brd #bead .rail .bd.stage button[data-act]:hover {
+	border-color: var(--parch);
+}
+.brd #bead .rail .bd.stage button[data-act='agree'] {
+	border-color: var(--amber);
+	color: var(--amber);
+}
+.brd #bead .rail .bd.stage button[data-act='done'] {
+	background: var(--ember);
+	border-color: var(--ember);
+	color: var(--void);
+}
 .brd #bead .trace .x a {
 	color: var(--ice);
 }
