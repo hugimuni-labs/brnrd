@@ -38,7 +38,8 @@ export class Board {
 	// the bead sheet
 	beadId = $state<string | null>(null);
 	beadHist = $state<string[]>([]);
-	beads = $state<Beads | null>(null);
+	// raw: a deep proxy over 7k beads made every walk a signal read, and each reassignment a new proxy
+	beads = $state.raw<Beads | null>(null);
 	// the composer
 	draft = $state('');
 	armed = $state<string | null>(null);
@@ -209,8 +210,10 @@ export class Board {
 		if (how !== 'back' && this.beadId && this.beadId !== id)
 			this.beadHist = [...this.beadHist, this.beadId];
 		this.beadId = id;
-		if (!this.store.beads) this.beads = await this.store.loadBeads();
-		else this.beads = this.store.beads;
+		if (this.store.beads) return void (this.beads = this.store.beads);
+		const got = await this.store.loadBeads();
+		// closed (or moved on) while the part was in flight: the beads are kept, the sheet stays as he left it
+		this.beads ??= got;
 	}
 	back() {
 		const h = [...this.beadHist],
@@ -236,7 +239,15 @@ export class Board {
 		return { ...chain, ...(this.beads || {}) };
 	});
 	// What the sheet (or, with it closed, the selection) links to; the item alone until the beads are in.
-	linked = $derived<ReadonlySet<string>>(panelIds(this.merged || {}, this.beadId || this.sel));
+	// The same set again keeps its identity, so a sync that moves nothing near the item re-runs no card.
+	// eslint-disable-next-line svelte/prefer-svelte-reactivity -- the last answer, not state
+	#linked: ReadonlySet<string> = new Set();
+	linked = $derived.by<ReadonlySet<string>>(() => {
+		const n = panelIds(this.merged || {}, this.beadId || this.sel),
+			o = this.#linked;
+		if (n.size === o.size && [...n].every((x) => o.has(x))) return o;
+		return (this.#linked = n);
+	});
 	isSel(id: string, col: string) {
 		return this.sel === id && this.selCol === col;
 	}
