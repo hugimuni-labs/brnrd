@@ -1641,8 +1641,9 @@
 	position: relative;
 	padding: 5px 6px 5px 26px;
 	cursor: pointer;
-	animation: beadin 0.36s var(--wipe) both;
-	animation-delay: calc(var(--j, 0) * 55ms);
+	/* the stagger is capped: 55 ms a row held a 25-row wish's last row back for 1.7 s (w-h7ik3bznilu5) */
+	animation: beadin 0.22s var(--wipe) both;
+	animation-delay: calc(min(var(--j, 0), 6) * 25ms);
 }
 @keyframes beadin {
 	from {

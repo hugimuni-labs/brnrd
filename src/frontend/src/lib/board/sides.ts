@@ -11,8 +11,16 @@ export const internal = (l: Letter): boolean =>
 export const sender = (l: Letter): string =>
 	l.notice ? 'loom' : l.person ? l.from.replace('person:', '') : l.from.split('/')[0];
 
-export const ownStrands = (threads: Thread[], col: string): Set<string> =>
-	new Set((threads.find((t) => t.id === col)?.strands || []).map((s) => s.id));
+// once per threads array (a model is new on every sync): every card on the board asks it
+const own = new WeakMap<Thread[], Map<string, Set<string>>>();
+export const ownStrands = (threads: Thread[], col: string): Set<string> => {
+	let m = own.get(threads);
+	if (!m) own.set(threads, (m = new Map()));
+	let s = m.get(col);
+	if (!s)
+		m.set(col, (s = new Set((threads.find((t) => t.id === col)?.strands || []).map((x) => x.id))));
+	return s;
+};
 
 // On the right what came into the column: his letters on the inbox and, on a thread, every letter its own
 // strands did not write; on the left what the column's strands wrote.

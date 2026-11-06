@@ -12,6 +12,7 @@
 	const b = board();
 	const key = $derived('c:' + w.wish);
 	const on = $derived(b.open.has(key));
+	const isLinked = $derived(b.linked.has(w.wish));
 	const says = $derived(w.says || []);
 	const ls = $derived(
 		(w.letters || [])
@@ -26,7 +27,7 @@
 	class:done={DONE.includes(w.state)}
 	class:open={on}
 	data-wish={w.wish}
-	class:linked={b.linked.has(w.wish)}
+	class:linked={isLinked}
 	style:--t={hue(w.thread || 'inbox')}
 >
 	<!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->

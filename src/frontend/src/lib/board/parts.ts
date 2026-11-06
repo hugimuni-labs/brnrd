@@ -274,10 +274,22 @@ export function ancestors(beads: Beads, id: string): { id: string; edge: string 
 	return out;
 }
 
-// What hangs directly below an item, oldest first.
+// What hangs directly below an item, oldest first. The parent map is inverted once per beads object (a patch makes a
+// new one): a scan of every bead on each press and each selection was most of the sheet's walk.
+const below = new WeakMap<Beads, Map<string, string[]>>();
 export function children(beads: Beads, id: string): string[] {
-	return Object.entries(beads)
-		.filter(([, b]) => b[0] === id)
-		.sort((a, b) => String(a[1][3] || '').localeCompare(String(b[1][3] || '')))
-		.map(([k]) => k);
+	let m = below.get(beads);
+	if (!m) {
+		m = new Map();
+		for (const [k, b] of Object.entries(beads)) {
+			if (!b[0]) continue;
+			const l = m.get(b[0]);
+			if (l) l.push(k);
+			else m.set(b[0], [k]);
+		}
+		for (const l of m.values())
+			l.sort((a, c) => String(beads[a][3] || '').localeCompare(String(beads[c][3] || '')));
+		below.set(beads, m);
+	}
+	return m.get(id) || [];
 }

@@ -440,6 +440,23 @@ test('beads: the chain walks up to the source; children hang below oldest first'
 	deepEqual(ancestors(b, 'loop'), []);
 });
 
+test('beads: children are indexed once per part, and a patched part answers with what it brought', () => {
+	const b: Beads = {
+		w: [null, null, null, '1', 'wish'],
+		l1: ['w', 're', 's', '3', 'a']
+	};
+	deepEqual(children(b, 'w'), ['l1']);
+	const next = patchBeads(b, {
+		since: 'h1',
+		hash: 'h2',
+		set: { l0: ['w', 're', 's', '2', 'z'] },
+		drop: ['l1']
+	});
+	deepEqual(children(next, 'w'), ['l0']);
+	deepEqual(children(b, 'w'), ['l1']);
+	deepEqual(children(next, 'nobody'), []);
+});
+
 test('beads: a delta patches the held map; drop removes', () => {
 	const held: Beads = {
 		a: [null, 'person', 'person:ada', '1', 'ask'],
