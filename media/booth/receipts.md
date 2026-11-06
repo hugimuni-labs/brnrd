@@ -12,7 +12,7 @@ The phone shots (`src/gen/chat/`, data in `script.json`) are drawn, not recorded
 | a1-ask | "Yes, #2606 is still wanted and was never merged; it just sat while main moved on. The wiki thread is rebasing it now." | resident | `s-ae66-x5fukd/wrt3a` | 2026-11-06 22:00:48 |
 | a1-reply (spare) | "Also: the change that puts the closest notes in front of me when I wake is updated, all checks green, ready for you: brnrd#2606" + PR card | resident | `s-ae66-n5nv7e/yun90`, last paragraph | 2026-11-06 22:15:21 |
 | a1-reply, a1-nice, p2-agree | delivered card: "brnrd#2606 … rebased on main …" / "Reply ok to accept, or say what is off." | resident | `s-ae66-79qfzj/yy6ug` | 2026-11-06 22:18:46 |
-| a1-nice | the PR card's pill turns Merged, "22:18" | GitHub | `gh pr view 2606 --json mergedAt`: 2026-11-06T22:18:13Z | 2026-11-06 22:18:13 |
+| a1-reply, a1-nice, p2-agree | the delivered card's Merged pill, "22:18" (yy6ug's second line: "brnrd#2606 merged") | GitHub | `gh pr view 2606 --json mergedAt`: 2026-11-06T22:18:13Z | 2026-11-06 22:18:13 |
 | a1-nice | "Nice 👌", quoting the delivered card | him | letter 10435, `re: s-ae66-79qfzj/yy6ug` | 2026-11-06 22:30:09 |
 | a1-loaded (spare) | "Thanks. It's loaded now" | resident | `s-ae66-79qfzj/mvsel`, first sentence cut at its parenthesis | 2026-11-06 22:30:32 |
 | p4-signoff | "Okay, thanks, I am signing off for today" | him | letter 10324, first line | 2026-11-06 00:15:12 |
@@ -27,7 +27,7 @@ The phone shots (`src/gen/chat/`, data in `script.json`) are drawn, not recorded
 Edits:
 
 - 10416: "Hew" → "Hey" (typo); the PR URL `https://github.com/hugimuni-labs/brnrd/pull/2606` is drawn as the token `brnrd#2606` plus a card. Straight apostrophes in the ledger are drawn as typographic ones throughout.
-- The PR card's title is the delivered card's name for the PR, "topics in the wake, recall and related:" (yy6ug); GitHub's title is "topics: the wake shows the closest heads; recall, related: and INDEX name topics first; the trace keeps the self path". The card's state is the PR's at that message: "Open · conflicts" at 21:56 (his own words in 10416), "Open · checks green" at 22:15 (yun90's words), Merged at 22:18:13.
+- The PR card's title is the delivered card's name for the PR, "topics in the wake, recall and related:" (yy6ug); GitHub's title is "topics: the wake shows the closest heads; recall, related: and INDEX name topics first; the trace keeps the self path". The card's state is the PR's at that message: "Open · conflicts" at 21:56 (his own words in 10416), "Open · checks green" at 22:15 (yun90's words), Merged at 22:18:13 (on the delivered card, which arrived 33 s after the merge).
 - yy6ug is four lines; the card keeps its PR, "rebased on main", and its last line. Its first line in full: "delivered &w-hxx3euxqdo1k: brnrd#2606 (topics in the wake, recall and related:) lands: rebased on main, checked against threads/wiki/design.md F4+F5, with what main already carries named".
 - wrt3a and 3be0e are cut to their first sentences; yun90 is shown as its first two sentences (a3-human) and its last paragraph (a1-reply), never whole.
 - Order: in the ledger 10421 (21:57:47, the same ask restated) follows 10416; it is not drawn. In a3-human, x5fukd's 22:10 reply about reloading and 10426's neighbours are cut by the dip.
