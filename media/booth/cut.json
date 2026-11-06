@@ -41,7 +41,16 @@
    "still": "a1-taken",
    "sec": 3.5,
    "out": "crash",
-   "lower": "Write from your phone.",
+   "lower": [
+    [
+     0,
+     "Write from your phone."
+    ],
+    [
+     1.5,
+     ""
+    ]
+   ],
    "camera": [
     [
      0,
@@ -50,17 +59,27 @@
      1.0
     ],
     [
-     1.4,
+     1.35,
      "c",
      300,
      1.0
     ],
     [
+     1.6,
+     985,
+     760,
+     1.7
+    ],
+    [
      3.5,
-     "f",
-     900,
-     1.35
+     985,
+     800,
+     1.9
     ]
+   ],
+   "focus": [
+    985,
+    800
    ]
   },
   {
@@ -193,7 +212,8 @@
      900,
      1.4
     ]
-   ]
+   ],
+   "capture": "the board at 06:00Z, the morning after his sign-off: what the night's threads landed while he slept (capture.py)"
   },
   {
    "kind": "rec",

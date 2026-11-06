@@ -76,16 +76,18 @@ const QR = ({url, size}) => {
   );
 };
 
-// The corner QR's place; the install shot's QR grows from here, and the booth loop returns to it.
-const CORNER = {x: W - 40 - 150, y: 40, size: 150};
+// The corner QR's place, bottom right where no board or GitHub header sits; the install shot's QR grows from
+// here, and the booth loop returns to it.
+const CORNER = {x: W - 40 - 150, y: H - 40 - 150 - 34, size: 150};
 
 const Corner = ({url, fade}) => {
   const frame = useCurrentFrame();
   return (
-    <div style={{position: 'absolute', left: CORNER.x, top: CORNER.y, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 8,
-      opacity: fade ? lerp(frame, 15, 27, 0, 1) : 1}}>
+    // on a dark plate: the board's footer under it is near white
+    <div style={{position: 'absolute', left: CORNER.x - 10, top: CORNER.y - 10, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 6,
+      padding: '10px 10px 6px', borderRadius: 14, background: 'rgba(12,10,8,0.9)', opacity: fade ? lerp(frame, 15, 27, 0, 1) : 1}}>
       <QR url={url} size={CORNER.size} />
-      <div style={{fontFamily: MONO, fontSize: 24, color: FG, textShadow: '0 0 8px #000'}}>brnrd.dev</div>
+      <div style={{fontFamily: MONO, fontSize: 24, color: FG}}>brnrd.dev</div>
     </div>
   );
 };
@@ -129,7 +131,9 @@ const Still = ({e, props}) => {
   const sh = props.shots[e.still];
   if (!sh) return <Missing e={e} what={`shots/${e.still}.png`} note="still not captured" />;
   const fb = sh.focus ? sh.focus.map((v) => v / 2) : null;
-  const img = {w: sh.size[0] / 2, h: sh.size[1] / 2, focus: fb ? [fb[0] + fb[2] / 2, fb[1] + fb[3] / 2] : [sh.size[0] / 4, sh.size[1] / 4]};
+  // e.focus (css px) overrides the capture's subject: where the camera's 'f' and the crash zoom go
+  const img = {w: sh.size[0] / 2, h: sh.size[1] / 2,
+    focus: e.focus || (fb ? [fb[0] + fb[2] / 2, fb[1] + fb[3] / 2] : [sh.size[0] / 4, sh.size[1] / 4])};
   const at = (f) => {
     const c = camera(e.camera || [[0, 'c', 'c', 1]], f, fps, img);
     // crash zoom: the last 5 frames dive 2.4x into the subject
@@ -258,8 +262,9 @@ const Odometer = ({value, size}) => {
   const cols = [];
   for (let k = digits - 1; k >= 0; k--) {
     const place = 10 ** k;
-    // a place turns only while the places below it carry, as on a real odometer
-    const roll = (Math.floor(v / place) % 10) + Math.max(0, (v % place) - (place - 1));
+    // a place turns only while the places below it carry, as on a real odometer; the ones step whole, or the
+    // eased tail leaves the last digit half a cell low for a second
+    const roll = (Math.floor(v / place) % 10) + (k === 0 ? 0 : Math.max(0, (v % place) - (place - 1)));
     const shown = v < place && k > 0 ? null : roll;
     cols.push(
       <div key={k} style={{height: size * 1.1, overflow: 'hidden', width: size * 0.62, opacity: shown === null ? 0.15 : 1}}>
@@ -285,7 +290,7 @@ const Numbers = ({props}) => {
   ];
   return (
     <AbsoluteFill>
-      <GitLog lines={props.logs.repo} dim={0.2} speed={14} start={0} />
+      <GitLog lines={props.logs.repo} dim={0.13} speed={14} start={0} />
       {/* a scrim under the figures so the log reads as texture, not as text competing with the labels */}
       <AbsoluteFill style={{background: 'radial-gradient(ellipse 62% 48% at 50% 46%, rgba(16,13,10,0.94) 40%, rgba(16,13,10,0.55) 75%, rgba(16,13,10,0) 100%)'}} />
       <AbsoluteFill style={{alignItems: 'center', justifyContent: 'center'}}>
@@ -315,7 +320,7 @@ const Checks = ({checks, at}) => {
   const frame = useCurrentFrame();
   if (!checks || !checks.rows.length) return null;
   return (
-    <div style={{position: 'absolute', left: 90, right: 90, bottom: 70, display: 'flex', flexWrap: 'wrap', gap: '10px 26px', fontFamily: MONO, fontSize: 26,
+    <div style={{position: 'absolute', left: 90, right: 300, bottom: 70, display: 'flex', flexWrap: 'wrap', gap: '10px 26px', fontFamily: MONO, fontSize: 26,
       opacity: lerp(frame, at, at + 6, 0, 1), transform: `translateY(${lerp(frame, at, at + 8, 20, 0)}px)`}}>
       <span style={{color: FG}}>#{checks.pr}</span>
       {checks.rows.map(([name, state], i) => (
@@ -388,7 +393,8 @@ const Install = ({props, e}) => {
   const grow = spring({frame: frame - 4, fps, config: {damping: 14, mass: 0.8}, durationInFrames: 2 * fps});
   // booth: the last 12 frames take the QR back to the corner over the board at 12 %, frame 0's picture
   const back = props.variant === 'booth' ? lerp(frame, len - 12, len - 1, 0, 1) : 0;
-  const big = {x: 1180, y: 250, size: 600};
+  // the QR stays right of the longest install line (46 px Menlo, about 1310 px), so the line a visitor copies is whole
+  const big = {x: 1420, y: 290, size: 420};
   const k = grow * (1 - back);
   const qx = CORNER.x + (big.x - CORNER.x) * k;
   const qy = CORNER.y + (big.y - CORNER.y) * k;
