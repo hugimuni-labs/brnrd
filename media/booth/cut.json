@@ -202,18 +202,17 @@
    "camera": [
     [
      0,
-     "c",
-     300,
-     1.4
+     "f",
+     "f",
+     1.5
     ],
     [
      2.5,
-     "c",
-     900,
-     1.4
+     "f",
+     800,
+     1.6
     ]
-   ],
-   "capture": "the board at 06:00Z, the morning after his sign-off: what the night's threads landed while he slept (capture.py)"
+   ]
   },
   {
    "kind": "rec",

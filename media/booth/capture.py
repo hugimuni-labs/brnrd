@@ -42,6 +42,8 @@ RECIPES = {
                    why="act 3: remotion studio with this cut open (props.json from the last cut.py run); the preview box is where the cut plays act 1"),
     "g1-pr": dict(url="https://github.com/hugimuni-labs/brnrd/pull/2618", zoom=1.5, text="Merged",
                   at="2026-11-04T09:55:05Z", why="act 1 (provisional): brnrd#2618 on GitHub, merged at 52361e4f"),
+    "a3-night": dict(at="2026-11-06T06:00:00Z", column="inbox", letter="s-ae66-sp1alj/jv2ea",
+                     why="answer 3 (night): the board at 06:00Z after his 00:1xZ sign-off; the subject is this cut's own overnight receipt (s-ae66-sp1alj/jv2ea)"),
     "a2-handover": dict(at="2026-11-05T22:26:20Z", column="inbox", letter="s-ae66-q5mdqs/0fqjc",
                         why="answer 2: the old body's letter to the new on the same thread (s-ae66-q5mdqs/0fqjc)"),
     "a4-strip": dict(at="2026-11-05T22:26:20Z", wide=5760,
