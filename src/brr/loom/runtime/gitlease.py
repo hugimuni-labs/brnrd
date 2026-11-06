@@ -226,9 +226,17 @@ class GitLeaseAuthority:
         if held is None or held[0].gen != lease.gen or held[0].holder != lease.holder:
             return None
         _old, sha, _until = held
+        body = {"holder": lease.holder, "gen": lease.gen, "ttl": ttl, "released": False}
         try:
-            new, t_send = self._push(lease.what, {"holder": lease.holder, "gen": lease.gen,
-                                                  "ttl": ttl, "released": False}, sha)
+            new, t_send = self._push(lease.what, body, sha)
+            if not new:
+                # A refusal is not yet a loss: an earlier renew may have landed
+                # with its answer lost, or the remote refused once. A ref still
+                # naming this holder at this gen is our own write (a takeover
+                # bumps gen), so swap against what it reads once more.
+                ours = self._ours(lease)
+                if ours:
+                    new, t_send = self._push(lease.what, body, ours)
         except Unreachable:
             if self.strict or self.contested(lease.holder):
                 return None if not self.authorize(lease) else lease
@@ -278,6 +286,16 @@ class GitLeaseAuthority:
             sha = ""
         self._drop(lease.what)
         return bool(sha)
+
+    def _ours(self, lease: Lease) -> str:
+        """The remote's sha for ``lease`` when it still names this holder at
+        this gen, unreleased; "" otherwise. Raises ``Unreachable``."""
+        self.poll()
+        current = self.view(lease.what)
+        if (current is None or current.get("released") or current.get("holder") != lease.holder
+                or int(current.get("gen", 0)) != lease.gen):
+            return ""
+        return current["sha"]
 
     def _drop(self, what: str) -> None:
         self.held.pop(what, None)
