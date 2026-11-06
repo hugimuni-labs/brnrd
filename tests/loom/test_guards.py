@@ -92,7 +92,9 @@ def test_a_matching_call_hears_the_guard_before_it_runs(tmp_path, monkeypatch):
     room = _home(tmp_path, {"stash-pop": STASH})
     out = execute("pre", room, _call("Bash", command="cd x && git stash pop"))
     assert json.loads(out)["hookSpecificOutput"]["hookEventName"] == "PreToolUse"
-    assert _context(out) == "guard stash-pop (scar:git.md#stash-pop): Worktrees share one stash list: pop by name."
+    said = _context(out).splitlines()
+    assert said[0].startswith("now: ")
+    assert said[1:] == ["guard stash-pop (scar:git.md#stash-pop): Worktrees share one stash list: pop by name."]
     assert execute("pre", room, _call("Bash", command="git stash pop stash@{2}")) == ""
     assert execute("pre", room, _call("Bash", command="git status")) == ""
     # A pre call is no boundary: it leaves the jack's state alone.
