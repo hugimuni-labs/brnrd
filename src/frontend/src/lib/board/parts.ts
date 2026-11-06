@@ -14,6 +14,7 @@ import type {
 	Wish
 } from './types.ts';
 import { byAt } from './text.ts';
+import type { Held } from './cache.ts';
 
 export const BASE = '/v1/loom';
 export type Beads = Record<
@@ -133,6 +134,27 @@ export class Store {
 	private loading: Promise<Beads> | null = null;
 	constructor(get: Get) {
 		this.get = get;
+	}
+
+	// Primed from the last page's cache (cache.ts): model() answers at once, and the first sync fetches only the parts
+	// whose hash moved since. A part the index names but the cache lacks is left unheld, so sync fetches it.
+	prime(held: Held) {
+		this.index = held.index;
+		this.threads = new Map(held.threads);
+		for (const [n, h] of Object.entries(held.index.parts))
+			if (n.startsWith('thread/') && held.threads.has(n.slice(7))) this.held.set(n, h);
+		if (held.topics && held.index.parts.topics) {
+			this.topics = held.topics;
+			this.held.set('topics', held.index.parts.topics);
+		}
+		if (held.unthreaded && held.index.parts.unthreaded) {
+			this.unthreaded = held.unthreaded;
+			this.held.set('unthreaded', held.index.parts.unthreaded);
+		}
+		if (held.beads && held.index.parts.beads) {
+			this.beads = held.beads;
+			this.held.set('beads', held.index.parts.beads);
+		}
 	}
 
 	// Bring every part to the index's hashes; true when anything changed. Thread parts load in parallel.

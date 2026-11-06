@@ -8,6 +8,8 @@ import { normalize, panelIds, resolveRef, timeline, type Timeline } from '../bea
 import { armedVerdict, correctDraft, verdictLetter } from '../calls.ts';
 import { refTokens } from '../text.ts';
 import { unechoed } from '../ledger.ts';
+import { remembering, type Held } from '../cache.ts';
+import { EMPTY, PLACE, paneScroll, readPlace, type Place } from '../place.ts';
 
 const KEY = Symbol('board');
 const local = (k: string, d: string) =>
@@ -51,9 +53,20 @@ export class Board {
 	// `at` so its hash moves only with the board)
 	heard = $state('');
 
-	constructor(get: (path: string) => Promise<unknown> = getJSON) {
-		this.store = new Store(get);
+	// Where the last page stood (place.ts), read once; the columns take their scroll from it on their first paint.
+	place: Place = EMPTY;
+
+	constructor(get: (path: string) => Promise<unknown> = getJSON, held: Held | null = null) {
+		this.store = new Store(remembering(get));
 		if (typeof window !== 'undefined') {
+			this.place = readPlace(localStorage.getItem(PLACE));
+			// the last page's parts: the board paints now, and load() syncs it against the index
+			if (held) {
+				this.store.prime(held);
+				this.model = this.store.model();
+				this.beads = this.store.beads;
+				this.land();
+			}
 			// eslint-disable-next-line svelte/prefer-svelte-reactivity -- a local, not state
 			const q = new URLSearchParams(location.search).get('typed_by');
 			if (q) sessionStorage.setItem('board.typedBy', q);
@@ -86,6 +99,7 @@ export class Board {
 				if (this.store.beads) this.beads = this.store.beads;
 				else if (this.beads && !this.store.beads) this.beads = await this.store.loadBeads();
 			}
+			this.land();
 			// eslint-disable-next-line svelte/prefer-svelte-reactivity -- a temporary, not state
 			this.heard = new Date().toISOString();
 			this.error = '';
@@ -131,6 +145,50 @@ export class Board {
 			clearInterval(poll);
 			clearInterval(tick);
 		};
+	}
+
+	// Land where the last page stood, once the model is in: the sheet, the selection, the grown columns and opened
+	// rows. The columns' scrolls are theirs (Column's first paint); the board's is Board.svelte's.
+	landed = false;
+	land() {
+		if (this.landed || !this.model) return;
+		this.landed = true;
+		const p = this.place;
+		for (const id of p.grown) this.grown.add(id);
+		for (const k of p.open) this.open.add(k);
+		if (p.sel) this.select(p.sel, p.selCol);
+		if (p.bead) {
+			this.beadId = normalize(p.bead, this.model);
+			this.beadHist = p.hist;
+			if (!this.store.beads) this.store.loadBeads().then((x) => (this.beads ??= x));
+			else this.beads = this.store.beads;
+		}
+	}
+	// Written as the page hides and after a scroll or a press, so the next page (this phone drops the tab on every
+	// app switch) lands here. Column scrolls are read off the DOM.
+	savePlace() {
+		if (typeof document === 'undefined' || !this.model) return;
+		const y: Place['y'] = {};
+		for (const c of document.querySelectorAll<HTMLElement>('.brd .column[data-column]')) {
+			const pane = c.querySelector<HTMLElement>('.messages');
+			if (pane)
+				y[c.dataset.column!] = paneScroll(pane.scrollTop, pane.scrollHeight, pane.clientHeight);
+		}
+		const place: Place = {
+			bead: this.beadId,
+			hist: this.beadHist,
+			sel: this.sel,
+			selCol: this.selCol,
+			grown: [...this.grown],
+			open: [...this.open],
+			x: Math.round(document.getElementById('board')?.scrollLeft ?? 0),
+			y
+		};
+		try {
+			localStorage.setItem(PLACE, JSON.stringify(place));
+		} catch {
+			/* a full storage keeps the last place */
+		}
 	}
 
 	toggle(set: SvelteSet<string>, k: string) {
