@@ -79,6 +79,19 @@ def test_the_verb_pushes_the_thread_branch_and_records_it(tmp_path: Path) -> Non
         _kill(read_facts(Home(root)))
 
 
+def test_publish_is_refused_when_this_machine_lost_the_inbox_lease(tmp_path, monkeypatch):
+    root, room, checkout, bare = _open(tmp_path)
+    try:
+        _note(checkout, room, "fix.txt", "fixed\n")
+        monkeypatch.setattr("brr.loom.runtime.loom._fenced", lambda *a, **k: True)
+        with pytest.raises(PublishError, match="lost the inbox lease"):
+            publish(room, "widget")
+        assert _tip(bare, "refs/heads/loom/work") is None
+        assert _published(root) == []
+    finally:
+        _kill(read_facts(Home(root)))
+
+
 def test_a_tainted_strand_is_refused_and_told_what_to_send(tmp_path: Path) -> None:
     root, room, checkout, bare = _open(tmp_path)
     try:

@@ -137,9 +137,12 @@ def test_a_fence_opens_a_lease_streak_and_taking_the_lease_back_closes_it(tmp_pa
     assert open_streaks(read_facts(a_home), "aaaa") == []
 
 
-def test_a_fenced_install_s_seated_body_leaves_and_stays_once_the_lease_is_back(tmp_path, monkeypatch):
-    """The fence reaches the body table through ``_observe_body``: a running
-    body on the fenced install leaves, and taking inbox back keeps it."""
+def test_a_fenced_install_s_seated_body_keeps_running(tmp_path, monkeypatch):
+    """On a real loss the running body is not killed; it finishes and lands.
+
+    11-06: lease.fenced:ae66:1690:lost and :1691:lost each ended every
+    running body. The fence now refuses publish and a letter to a person.
+    """
     from brr.loom.runtime import lifecycle, loom
     from brr.loom.runtime.bodies import decide
     remote = tmp_path / "self.git"
@@ -170,17 +173,16 @@ def test_a_fenced_install_s_seated_body_leaves_and_stays_once_the_lease_is_back(
     b.begin_tick(read_facts(b_home))
     a.begin_tick(read_facts(a_home))
     o, c = observe()
-    # The thread is open: only the fence can make the body leave.
-    assert [x.name for x in decide(read_facts(a_home), [o])] == ["leaving"]
-    assert not o.closed and "inbox lease" in c.why
-    append(a_home, Fact(kind="body.leaving", by="loom:aaaa", id=f"body.leaving:{strand}:1",
-                        data={"strand": strand, "gen": 1, "deadline": o.now + 60}))
+    assert decide(read_facts(a_home), [o]) == []
+    assert o.fenced and not o.handed and not o.closed
+    assert "lost the inbox lease" in c.why
 
     b.gate.clock.now += 200
     a.gate.clock.now += 200
     a.begin_tick(read_facts(a_home))
     o, c = observe()
-    assert [x.name for x in decide(read_facts(a_home), [o])] == ["stayed"]
+    assert decide(read_facts(a_home), [o]) == []
+    assert not o.fenced
 
 
 def test_a_prefer_hands_inbox_to_that_install_and_the_old_holder_s_bodies_leave(tmp_path, monkeypatch):

@@ -625,6 +625,14 @@ def write_send(room: Path, *, to: str, sender: str, body: str = "",
     for a correction, a silent letter or a held one.
     """
     home = home_of_room(Path(room))
+    if is_channel(to):
+        from .loom import _fenced
+        from .ledger import read_facts
+        if _fenced(home, read_facts(home)):
+            raise PortError(
+                "send: this machine lost the inbox lease; a letter to a person "
+                "would go out from here. Send to a thread or land with send-self."
+            )
     opening = None
     if at is not None:
         from .timers import stored_when
