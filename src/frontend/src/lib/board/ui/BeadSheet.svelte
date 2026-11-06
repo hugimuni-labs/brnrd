@@ -1,6 +1,7 @@
 <script lang="ts">
 	// The bead sheet (4920): the pressed item, the chain up to its source and what came out of it, all walked in the
-	// client from the beads part (design §D3). Any bead in it re-centres it; ‹ walks back; esc closes.
+	// client from the beads part (design §D3). Any bead in it re-centres it; ‹ walks back; esc closes. The stage that
+	// waits on him carries the same agree/done and correct buttons as the ledger row (10349: the sheet had none).
 	import { hm, short } from '../text.ts';
 	import { refOf, trace, type Bead, type Root } from '../bead.ts';
 	import { stages, stageText } from '../stages.ts';
@@ -182,6 +183,22 @@
 													: 'verdict'
 												: '·'}</em
 								>
+								{#if s.wait}
+									{@const act = asks.has(wish.wish) ? 'done' : 'agree'}
+									<button
+										type="button"
+										data-act={act}
+										disabled={b.sending.has(wish.wish)}
+										onclick={(e) => (e.stopPropagation(), b.answer(wish.wish, act))}
+										>{b.sending.has(wish.wish) ? 'sending…' : act}</button
+									>
+									<button
+										type="button"
+										data-act="correct"
+										onclick={(e) => (e.stopPropagation(), b.answer(wish.wish, 'correct'))}
+										>correct</button
+									>
+								{/if}
 							</div>{/each}
 					</div>{/if}
 			</div>
