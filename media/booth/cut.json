@@ -9,15 +9,15 @@
  ],
  "stamps": [
   [
-   "09:41",
-   "noted"
+   "21:56",
+   "asked"
   ],
   [
-   "09:49",
-   "PR open"
+   "22:15",
+   "green"
   ],
   [
-   "09:55",
+   "22:18",
    "merged"
   ]
  ],
@@ -25,15 +25,17 @@
  "timeline": [
   {
    "act": 1,
-   "kind": "rec",
-   "raw": "p1-ask",
+   "kind": "gen",
+   "gen": {
+    "comp": "a1-ask"
+   },
    "phone": true,
    "sec": 2.5,
    "push": [
     1,
-    1.15
+    1.1
    ],
-   "capture": "Telegram: a real one-line ask typed and sent (manual, p1-ask)"
+   "capture": "his 10416 typed and sent, 21:56:36Z: rebase brnrd#2606 (booth-chat)"
   },
   {
    "act": 1,
@@ -79,7 +81,7 @@
    ],
    "focus": [
     985,
-    800
+    860
    ]
   },
   {
@@ -135,25 +137,27 @@
    ]
   },
   {
-   "kind": "rec",
-   "raw": "t1-memdir",
+   "kind": "gen",
+   "gen": {
+    "comp": "t1-memdir"
+   },
    "sec": 1,
-   "in": "dip",
-   "out": "crash",
-   "origin": "35% 45%",
-   "capture": "ls of brnrd's folder under ~/.claude/projects/: 65 UUID-named JSONL (manual, t1-memdir)"
+   "in": "dip"
   },
   {
-   "kind": "gitlog",
-   "log": "self",
+   "kind": "gen",
+   "gen": {
+    "comp": "self-log"
+   },
    "sec": 2.5,
    "lower": "Memory you can read. In git."
   },
   {
-   "kind": "rec",
-   "raw": "t2-compact",
-   "sec": 1,
-   "capture": "/compact and the compacted line (manual, t2-compact)"
+   "kind": "gen",
+   "gen": {
+    "comp": "t2-compact"
+   },
+   "sec": 1
   },
   {
    "kind": "still",
@@ -183,11 +187,13 @@
    ]
   },
   {
-   "kind": "rec",
-   "raw": "p4-signoff",
+   "kind": "gen",
+   "gen": {
+    "comp": "p4-signoff"
+   },
    "phone": true,
    "sec": 1,
-   "capture": "his sign-off line, 2026-11-06 00:15Z, letter 10324 (screenshot, p4-signoff)"
+   "capture": "his sign-off line, 2026-11-06 00:15Z, letter 10324 (screenshot, p4-signoff) (booth-chat)"
   },
   {
    "kind": "still",
@@ -215,10 +221,18 @@
    ]
   },
   {
-   "kind": "rec",
-   "raw": "t4-repos",
-   "sec": 1,
-   "capture": "five Terminal windows, one per repo (manual, t4-repos)"
+   "kind": "gen",
+   "gen": {
+    "comp": "t4-repos",
+    "repos": [
+     "brnrd",
+     "hugimuni",
+     "animations",
+     "BeCenter",
+     "remotion"
+    ]
+   },
+   "sec": 1
   },
   {
    "kind": "still",
@@ -247,11 +261,13 @@
    ]
   },
   {
-   "kind": "rec",
-   "raw": "p3-fuel",
+   "kind": "gen",
+   "gen": {
+    "comp": "p3-fuel"
+   },
    "phone": true,
    "sec": 1,
-   "capture": "the loom's 'Out of claude session fuel (1% left)', in his chat (screenshot, p3-fuel)"
+   "capture": "the loom's 'Out of claude session fuel (1% left)', in his chat (screenshot, p3-fuel) (booth-chat)"
   },
   {
    "kind": "still",
@@ -295,44 +311,70 @@
    ]
   },
   {
-   "kind": "rec",
-   "raw": "p2-agree",
+   "kind": "gen",
+   "gen": {
+    "comp": "p2-agree"
+   },
    "phone": true,
    "sec": 1,
-   "capture": "agree on act 1's delivered wish (manual, p2-agree)"
+   "capture": "agree on act 1's delivered wish (manual, p2-agree) (booth-chat)"
   },
   {
-   "kind": "rec",
-   "raw": "g6-readme",
-   "sec": 3.5,
-   "lower": "You judge. It keeps the receipt.",
-   "capture": "act 1's thread README on GitHub: the wish line and the PR link, then a freeze; 1 s of air",
-   "held": "rendered once act 1's run exists (his shot 1)"
+   "kind": "gen",
+   "gen": {
+    "comp": "g6-readme"
+   },
+   "sec": 2.5,
+   "lower": "You judge. It keeps the receipt."
+  },
+  {
+   "act": 3,
+   "kind": "gen",
+   "gen": {
+    "comp": "a3-human"
+   },
+   "phone": true,
+   "sec": 3,
+   "in": "dip",
+   "capture": "10432 'How does it feel to feel time?' and yun90's first sentence (booth-chat)"
   },
   {
    "kind": "studio",
-   "sec": 4,
-   "in": "dip",
+   "sec": 3,
    "lower": [
     [
      0,
      "Not only code."
     ],
     [
-     2.5,
+     1.5,
      "Cut by the resident."
     ]
    ]
   },
   {
    "kind": "numbers",
-   "sec": 5
+   "sec": 4
   },
   {
    "kind": "install",
    "sec": 6,
-   "readme": {"sec": 3},
+   "readme": {
+    "sec": 3
+   },
    "line": "MIT. Alpha. Built in the open."
   }
- ]
+ ],
+ "repos": [
+  "brnrd",
+  "hugimuni",
+  "animations",
+  "BeCenter",
+  "remotion"
+ ],
+ "act1": {
+  "pr": 2606,
+  "asked": "letter:cloud:telegram:155783668:10416",
+  "green": "s-ae66-n5nv7e/yun90"
+ }
 }

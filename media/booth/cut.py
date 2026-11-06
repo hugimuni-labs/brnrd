@@ -26,6 +26,8 @@ import shutil
 import subprocess
 from pathlib import Path
 
+import gen_term
+
 HERE = Path(__file__).resolve().parent
 REPO = HERE.parent.parent
 SINCE = "2026-03-28"
@@ -110,13 +112,59 @@ def normalize(src: Path, dst: Path, start: float, sec: float, fps: int, phone: b
                     str(dst)], check=True)
 
 
-def timeline(cut: dict, raw: Path, public: Path) -> tuple[list, list]:
+def gen_props(gen: dict, ctx: dict) -> dict | None:
+    """A generated shot's props: the terminal ones from gen_term, the phone ones from booth-chat's gen_phone."""
+    if gen["comp"] in gen_term.GEN:
+        return gen_term.props(gen, ctx)
+    try:
+        import gen_phone
+    except ImportError:
+        return None
+    return gen_phone.props(gen["comp"])
+
+
+LEDGER = Path.home() / ".local/state/brnrd/accounts/acc_bdda426da378d4f0c3cad2eb/loom-home/ledger/facts/ae66/loom.jsonl"
+
+
+def stamps(cut: dict) -> list:
+    """Act 1's strip, the real minutes: his ask and the green reply from the ledger, the merge from GitHub."""
+    a = cut.get("act1")
+    if not a:
+        return cut["stamps"]
+    want, at = {a["asked"], a["green"]}, {}
+    for path in [LEDGER, *LEDGER.parent.glob("s-*.jsonl")]:
+        with open(path, errors="replace") as f:
+            for line in f:
+                if any(w in line for w in want - set(at)):
+                    d = json.loads(line)
+                    if d.get("id") in want and d.get("kind") == "letter":
+                        at[d["id"]] = d["at"]
+        if len(at) == len(want):
+            break
+    try:
+        merged = subprocess.run(["gh", "pr", "view", str(a["pr"]), "-R", "hugimuni-labs/brnrd", "--json", "mergedAt", "--jq", ".mergedAt"],
+                                check=True, capture_output=True, text=True, timeout=30).stdout.strip()
+    except (subprocess.SubprocessError, FileNotFoundError):
+        merged = ""
+    if len(at) < 2 or not merged:
+        print(f"stamps: fell back to cut.json (ledger found {sorted(at)}, merged {merged!r})")
+        return cut["stamps"]
+    hm = lambda t: t[11:16]
+    return [[hm(at[a["asked"]]), "asked"], [hm(at[a["green"]]), "green"], [hm(merged), "merged"]]
+
+
+def timeline(cut: dict, raw: Path, public: Path, ctx: dict) -> tuple[list, list]:
     out, missing = [], []
     shutil.rmtree(public / "raw", ignore_errors=True)
     (public / "raw").mkdir(parents=True)
     for e in cut["timeline"]:
         e = dict(e)
-        if e["kind"] == "rec" and not e.get("held"):
+        if e.get("gen"):
+            p = gen_props(e["gen"], ctx)
+            if p is None:
+                missing.append(f"{e['gen']['comp']} (generated, not built)")
+            e["gen"] = {**e["gen"], "props": p or {}}
+        elif e["kind"] == "rec" and not e.get("held"):
             src = find(raw, e["raw"], VIDEO + IMAGE)
             if src is None:
                 missing.append(e["raw"])
@@ -159,14 +207,15 @@ def main() -> None:
     ap.add_argument("--pr", type=int, help="this project's PR, for the end card")
     ap.add_argument("--shots", type=Path, default=Path.home() / "Desktop/brnrd/booth/shots", help="capture.py's stills")
     ap.add_argument("--self", type=Path, default=REPO.parent / "self", help="the self's clone, whose log answers pain 1")
-    ap.add_argument("--act1-pr", type=int, default=2618, help="act 1's PR, whose checks sit under the numbers")
+    ap.add_argument("--act1-pr", type=int, default=2606, help="act 1's PR, whose checks sit under the numbers")
+    ap.add_argument("--props-only", action="store_true", help="write props.json for stills and stop")
     a = ap.parse_args()
 
     cut = json.loads((HERE / "cut.json").read_text())
     public = HERE / "public"
-    tl, missing = timeline(cut, a.raw, public)
+    tl, missing = timeline(cut, a.raw, public, {"self": a.self})
     shots = stills(a.shots, public)
-    props = {**{k: v for k, v in cut.items() if k not in ("timeline", "backdrop")}, "timeline": tl, "numbers": numbers(), "pr": a.pr,
+    props = {**{k: v for k, v in cut.items() if k not in ("timeline", "backdrop")}, "stamps": stamps(cut), "timeline": tl, "numbers": numbers(), "pr": a.pr,
              "shots": shots, "backdrop": shots.get(cut.get("backdrop")), "studio": shots.get("studio"),
              "logs": {"repo": log(REPO, 160), "self": log(a.self, 160)}, "checks": {"pr": a.act1_pr, "rows": checks(a.act1_pr)}}
     missing += [f"{e['still']} (still)" for e in tl if e["kind"] == "still" and e["still"] not in shots]
@@ -174,6 +223,9 @@ def main() -> None:
     # an entry's `booth` or `readme` object overrides its keys in that render (src/Trailer.jsx `cast`)
     sec = {v: sum(round({**e, **e.get(v, {})}["sec"] * cut["fps"]) for e in tl) / cut["fps"] for v in ("booth", "readme")}
 
+    if a.props_only:
+        print(f"props.json written; stamps {props['stamps']}; placeholders: {', '.join(missing) or 'none'}")
+        return
     a.out.mkdir(parents=True, exist_ok=True)
     build = HERE / "out"
     build.mkdir(exist_ok=True)

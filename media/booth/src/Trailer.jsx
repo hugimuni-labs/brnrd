@@ -1,5 +1,10 @@
 import {AbsoluteFill, Easing, Img, OffthreadVideo, Sequence, interpolate, spring, staticFile, useCurrentFrame, useVideoConfig} from 'remotion';
 import QRCode from 'qrcode';
+import {term} from './gen/term';
+import {phone} from './gen/phone';
+
+// generated shots by key (w-glie6g1xti8p): the terminal ones here, the phone ones from booth-chat
+const GEN = {...term, ...phone};
 
 // The footage is the stage, the graphics live inside it (script.md, draft 2): no full-frame card between
 // shots, the camera is the narrator, every effect is a per-frame transform here. ffmpeg only normalizes the
@@ -352,7 +357,7 @@ const Studio = ({e, props}) => {
   const full = Math.min(W / pw, H / ph);
   const cx = px + pw / 2;
   const cy = py + ph / 2;
-  const turn = Math.round(2.5 * fps);
+  const turn = Math.round(e.sec * fps * 0.55);
   const s = frame < turn ? lerp(frame, 6, turn, 1, full) : lerp(frame, turn, Math.round(e.sec * fps) - 4, full, 1);
   const x = interpolate(s, [1, full], [img.w / 2, cx]);
   const y = interpolate(s, [1, full], [img.h / 2, cy]);
@@ -466,7 +471,20 @@ const RGB = () => (
 
 // ---- the cut ----------------------------------------------------------------------------------------------
 
+// A generated shot in a slot that once wanted a recording: its composition, or a dark placeholder with its key.
+const Gen = ({e, props}) => {
+  const C = GEN[e.gen.comp];
+  if (!C) return <Missing e={e} what={e.gen.comp} note="generated shot not built yet" />;
+  return (
+    <AbsoluteFill style={{background: BG}}>
+      {e.phone ? <Backdrop props={props} /> : null}
+      <C {...e.gen.props} sec={e.sec} fps={props.fps} />
+    </AbsoluteFill>
+  );
+};
+
 const Entry = ({e, props}) => {
+  if (e.gen) return <Gen e={e} props={props} />;
   switch (e.kind) {
     case 'rec': return <Rec e={e} props={props} />;
     case 'still': return <Still e={e} props={props} />;
