@@ -422,3 +422,24 @@ def test_a_tick_over_quiet_threads_takes_the_lease_lock_only_before_a_write(tmp_
     a.route(read_facts(home), {}, ("fake", "echo"))
     assert started == [("aaaa", "work")]
     assert len(asked) <= 4  # route's own ask, the grant's two, the closing one: never one per quiet thread
+
+
+def test_expired_local_lease_keeps_the_git_generation(tmp_path):
+    remote = tmp_path / "self.git"
+    subprocess.run(["git", "init", "--bare", "-q", str(remote)], check=True)
+    home = _home(tmp_path, "aaaa", remote)
+    router = _router(home, 100)
+    local_clock = Clock(1000)
+    router.clock = local_clock
+    router.authority.clock = local_clock
+    facts = router.begin_tick(read_facts(home))
+    gen = router.gate_lease.gen
+    # Local expiry during a slow tick, while the 180 s git lease is live.
+    local_clock.now += router.config.router_ttl + 1
+    facts = router.begin_tick(facts)
+    assert router.lease.gen == gen
+    assert router.armed()
+    # Re-enter the branch that compares the local and remote generations.
+    router.begin_tick(facts)
+    assert router.lease is not None and router.lease.gen == gen
+    assert router.armed()
