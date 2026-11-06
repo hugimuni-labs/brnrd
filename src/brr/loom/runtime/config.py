@@ -340,8 +340,11 @@ def read_array(path: Path, key: str) -> list[str]:
 RETIRED = frozenset({"shed_excess", "shed_hold"})
 
 
-def load_config_report(root: Path | str) -> tuple[LoomConfig, frozenset[str]]:
-    """The effective config and the keys the file set (the rest are defaults)."""
+def load_config_report(root: Path | str, *, unknown=None) -> tuple[LoomConfig, frozenset[str]]:
+    """Effective config and explicit keys. ``unknown`` warns and skips unknown keys.
+
+    Only diagnostic readers should opt in; runtime and editing remain strict.
+    """
     path = config_path(root)
     found = read_values(path)
     values: dict[str, object] = {}
@@ -352,7 +355,11 @@ def load_config_report(root: Path | str) -> tuple[LoomConfig, frozenset[str]]:
         if key is None:
             near = difflib.get_close_matches(name, list(BY_NAME), n=1)
             hint = f" (did you mean {near[0]}?)" if near else f" (known: {', '.join(BY_NAME)})"
-            raise ConfigError(f"{path}: unknown key {name!r}{hint}")
+            message = f"{path}: unknown key {name!r}{hint}"
+            if unknown is not None:
+                unknown(message)
+                continue
+            raise ConfigError(message)
         values[name] = _coerce(key, value, path)
     return LoomConfig(**values), frozenset(found)
 
