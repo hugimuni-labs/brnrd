@@ -33,7 +33,7 @@
     1,
     1.15
    ],
-   "capture": "Telegram: a real one-line ask typed and sent (manual, shot 1)"
+   "capture": "Telegram: a real one-line ask typed and sent (manual, p1-ask)"
   },
   {
    "act": 1,
@@ -141,7 +141,7 @@
    "in": "dip",
    "out": "crash",
    "origin": "35% 45%",
-   "capture": "ls ~/.claude/projects/: hashed folders and JSONL nobody reads (manual, t1-memdir)"
+   "capture": "ls of brnrd's folder under ~/.claude/projects/: 65 UUID-named JSONL (manual, t1-memdir)"
   },
   {
    "kind": "gitlog",
@@ -153,7 +153,7 @@
    "kind": "rec",
    "raw": "t2-compact",
    "sec": 1,
-   "capture": "/compact and the compacted line (manual, shot 3)"
+   "capture": "/compact and the compacted line (manual, t2-compact)"
   },
   {
    "kind": "still",
@@ -187,7 +187,7 @@
    "raw": "p4-signoff",
    "phone": true,
    "sec": 1,
-   "capture": "his sign-off line, 2026-11-06 00:1xZ (screenshot, p4-signoff)"
+   "capture": "his sign-off line, 2026-11-06 00:15Z, letter 10324 (screenshot, p4-signoff)"
   },
   {
    "kind": "still",
@@ -195,7 +195,7 @@
    "sec": 2.5,
    "in": "dip",
    "clock": [
-    "00:14",
+    "00:15",
     "06:00"
    ],
    "lower": "Keeps working after you sign off.",
@@ -218,7 +218,7 @@
    "kind": "rec",
    "raw": "t4-repos",
    "sec": 1,
-   "capture": "five Terminal windows, one per repo (manual, shot 5)"
+   "capture": "five Terminal windows, one per repo (manual, t4-repos)"
   },
   {
    "kind": "still",
@@ -251,7 +251,7 @@
    "raw": "p3-fuel",
    "phone": true,
    "sec": 1,
-   "capture": "the loom's 'Out of claude session fuel (1% left)', in his chat (screenshot, shot 7)"
+   "capture": "the loom's 'Out of claude session fuel (1% left)', in his chat (screenshot, p3-fuel)"
   },
   {
    "kind": "still",
@@ -299,7 +299,7 @@
    "raw": "p2-agree",
    "phone": true,
    "sec": 1,
-   "capture": "agree on act 1's delivered wish (manual, shot 6)"
+   "capture": "agree on act 1's delivered wish (manual, p2-agree)"
   },
   {
    "kind": "rec",
