@@ -10,7 +10,7 @@ from brr.daemon2.leases import LocalLeaseAuthority
 from brr.loom.runtime.config import loom_clock
 from brr.loom.runtime.home import Home
 from brr.loom.runtime.ledger import append, read_facts
-from brr.loom.runtime.router import Router
+from brr.loom.runtime.router import GATE_MARGIN, GATE_MIN_TTL, GATE_POLL, Router
 
 
 class Clock:
@@ -46,8 +46,9 @@ def test_one_router_is_armed_and_the_other_takes_over_after_expiry(tmp_path):
     assert a.gate_lease.gen == 1 and b.lease is None
 
     # a's machine stops renewing (asleep, unplugged); b counts on its own clock.
-    a.gate.clock.now += 100
-    b.gate.clock.now += 100
+    past = GATE_MIN_TTL + GATE_MARGIN + 1
+    a.gate.clock.now += past
+    b.gate.clock.now += past
     assert not a.armed()
     # The gen-1 router fact would reach b by the ledger transport (P2).
     append(b_home, Fact(kind="router", by="loom:aaaa", id="router:1",
@@ -87,7 +88,7 @@ def test_without_lease_remote_there_is_no_gate(tmp_path):
     assert Router(home).gate is None
 
 
-def test_the_git_lease_lasts_at_least_90_seconds_under_the_default_router_ttl(tmp_path):
+def test_the_git_lease_lasts_at_least_180_seconds_under_the_default_router_ttl(tmp_path):
     remote = tmp_path / "self.git"
     subprocess.run(["git", "init", "--bare", "-q", str(remote)], check=True)
     home = Home(tmp_path / "aaaa", install="aaaa")
@@ -95,10 +96,13 @@ def test_the_git_lease_lasts_at_least_90_seconds_under_the_default_router_ttl(tm
     (home.root / "loom/config.toml").write_text(f'lease_remote = "{remote}"\n')
     router = _router(home, 100)
     assert router.config.router_ttl == 30
+    assert router.gate_ttl == GATE_MIN_TTL == 180
+    assert router.gate.margin == GATE_MARGIN == 10
+    assert GATE_POLL == 40
     router.begin_tick(read_facts(home))
-    assert router.gate.view("inbox")["ttl"] == 90
-    # Past the local 30 s, inside the git 90 s: still armed, nothing fenced.
-    router.gate.clock.now += 60
+    assert router.gate.view("inbox")["ttl"] == 180
+    # Past the local 30 s and one 60 s renew, inside the git 180 s: still armed.
+    router.gate.clock.now += 120
     facts = router.begin_tick(read_facts(home))
     assert router.armed()
     assert not [f for f in facts if f.kind == "lease.fenced"]
@@ -113,8 +117,9 @@ def test_a_fence_opens_a_lease_streak_and_taking_the_lease_back_closes_it(tmp_pa
     a.begin_tick(read_facts(a_home))
     b.begin_tick(read_facts(b_home))
 
-    a.gate.clock.now += 100
-    b.gate.clock.now += 100
+    past = GATE_MIN_TTL + GATE_MARGIN + 1
+    a.gate.clock.now += past
+    b.gate.clock.now += past
     b.begin_tick(read_facts(b_home))
     a.begin_tick(read_facts(a_home))
     [streak] = open_streaks(read_facts(a_home), "aaaa")
@@ -159,8 +164,9 @@ def test_a_fenced_install_s_seated_body_leaves_and_stays_once_the_lease_is_back(
     o, c = observe()
     assert decide(read_facts(a_home), [o]) == []
 
-    a.gate.clock.now += 100
-    b.gate.clock.now += 100
+    past = GATE_MIN_TTL + GATE_MARGIN + 1
+    a.gate.clock.now += past
+    b.gate.clock.now += past
     b.begin_tick(read_facts(b_home))
     a.begin_tick(read_facts(a_home))
     o, c = observe()

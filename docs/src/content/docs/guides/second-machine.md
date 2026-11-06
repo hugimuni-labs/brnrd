@@ -23,7 +23,7 @@ Point the lease at the self's GitHub repository, in `<home>/loom/config.toml`:
 lease_remote = "https://github.com/<you>/<self-repo>.git"
 ```
 
-The lease lasts `router_ttl`, and at least 90 s. `lease_mode` decides what a
+The lease lasts `router_ttl`, and at least 180 s. `lease_mode` decides what a
 leader does when it cannot reach GitHub. With `contested`, the default, it
 keeps routing unless another machine's ledger moved in the last 10 minutes.
 With `strict` it stops when its lease runs out, even when it is the only

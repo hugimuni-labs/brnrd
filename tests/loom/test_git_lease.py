@@ -219,32 +219,34 @@ def _flaky_push(auth: GitLeaseAuthority, answer):
     auth.git = git
 
 
-def test_a_renew_whose_answer_was_lost_does_not_fence_the_next_one(pair):
+@pytest.mark.parametrize("ttl", [90, 180])
+def test_a_renew_whose_answer_was_lost_does_not_fence_the_next_one(pair, ttl):
     # 11-06, 13:57Z: a renew landed but its answer did not arrive; the next
     # renew named the older sha, lost the swap to its own commit and fenced
-    # the only machine there was.
+    # the only machine there was. 90 s was live that day; 180 s is the floor.
     a, _b, clock_a, _clock_b, remote = pair
-    lease = a.acquire("inbox", "aaaa", 90)
+    lease = a.acquire("inbox", "aaaa", ttl)
     _flaky_push(a, lambda proc: subprocess.CompletedProcess(proc.args, 128, "",
                                                             "fatal: the remote hung up"))
-    clock_a.now += 30
-    lease = a.renew(lease, 90)  # landed; heard as no network, so graced
+    clock_a.now += ttl / 3
+    lease = a.renew(lease, ttl)  # landed; heard as no network, so graced
     assert lease is not None
-    clock_a.now += 30
-    renewed = a.renew(lease, 90)
+    clock_a.now += ttl / 3
+    renewed = a.renew(lease, ttl)
     assert renewed is not None and renewed.gen == 1
     assert a.authorize(renewed)
     assert _remote_sha(remote, "refs/leases/inbox") == a.held["inbox"][1]
 
 
-def test_a_renew_refused_once_by_the_remote_retries_on_the_ref_it_reads(pair):
+@pytest.mark.parametrize("ttl", [90, 180])
+def test_a_renew_refused_once_by_the_remote_retries_on_the_ref_it_reads(pair, ttl):
     a, _b, clock_a, _clock_b, remote = pair
-    lease = a.acquire("inbox", "aaaa", 90)
+    lease = a.acquire("inbox", "aaaa", ttl)
     before = _remote_sha(remote, "refs/leases/inbox")
     _flaky_push(a, lambda proc: subprocess.CompletedProcess(
         proc.args, 1, "!\trefs/leases/inbox\t[remote rejected] (failed to update ref)\n", ""))
-    clock_a.now += 30
-    renewed = a.renew(lease, 90)
+    clock_a.now += ttl / 3
+    renewed = a.renew(lease, ttl)
     assert renewed is not None and a.authorize(renewed)
     assert _remote_sha(remote, "refs/leases/inbox") not in ("", before)
 

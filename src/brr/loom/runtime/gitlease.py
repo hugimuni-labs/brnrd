@@ -70,7 +70,7 @@ class GitLeaseAuthority:
     """
 
     def __init__(self, repo: Path, remote: str, git: Runner, *,
-                 clock: Callable[[], float] = boot_clock, margin: float = 5.0,
+                 clock: Callable[[], float] = boot_clock, margin: float = 10.0,
                  strict: bool = False, contest_window: float = 600.0,
                  riders: Callable[[], dict[str, str]] = dict):
         self.repo = Path(repo)
