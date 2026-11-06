@@ -258,20 +258,19 @@
    "still": "a5-gauges",
    "sec": 1,
    "in": "glitch",
-   "ring": 0.15,
    "lower": "Three subscriptions. One worker.",
    "camera": [
     [
      0,
+     311,
      "f",
-     "f",
-     1.9
+     3.66
     ],
     [
      1,
+     311,
      "f",
-     "f",
-     2.05
+     3.7
     ]
    ]
   },

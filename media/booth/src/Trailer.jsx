@@ -297,7 +297,8 @@ const Numbers = ({props}) => {
         <div style={{display: 'flex', flexDirection: 'column', gap: 18, marginTop: -60}}>
           {rows.map(([v, label], i) => {
             const at = 6 + i * (fps / 2);
-            const now = lerp(frame, at, at + 1.5 * fps, 0, v, Easing.out(Easing.cubic));
+            // staggered starts, one landing: all three settle on the same frame
+            const now = lerp(frame, at, 6 + fps + 1.5 * fps, 0, v, Easing.out(Easing.cubic));
             return (
               <div key={label} style={{display: 'flex', alignItems: 'center', gap: 40, opacity: lerp(frame, at - 4, at, 0, 1)}}>
                 <div style={{width: 560, display: 'flex', justifyContent: 'flex-end'}}><Odometer value={{now, target: v}} size={118} /></div>
