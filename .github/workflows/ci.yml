@@ -38,6 +38,14 @@ jobs:
       # same bounded number locally.
       - name: Run tests
         run: python -m pytest -q -n 4 --durations=30 --junitxml=pytest-times.xml
+      # The count a delivery's line is held to (loom/runtime/verify.py): one
+      # `tests` notice per shard, read back from the check run's annotations.
+      - name: Report the count
+        run: >-
+          python -c "import glob, xml.etree.ElementTree as E;
+          r=E.parse(glob.glob('*-times.xml')[0]).getroot(); s=r if r.tag=='testsuite' else r.find('testsuite');
+          n=int(s.get('tests'))-sum(int(s.get(k) or 0) for k in ('failures','errors','skipped'));
+          print(f'::notice title=tests::{n} passed')"
       - name: Upload test times
         if: always()
         uses: actions/upload-artifact@v4

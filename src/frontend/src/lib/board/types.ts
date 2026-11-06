@@ -77,6 +77,8 @@ export type Thread = {
 	strands?: Strand[];
 	steps?: Step[];
 	plan?: { done: number; total: number; bytes?: number; cap?: number };
+	// wish counts by state, on the index row; the rows themselves ride in the thread part
+	counts?: Record<string, number>;
 	board?: {
 		state?: BoardState;
 		since?: string;
@@ -111,8 +113,8 @@ export type Live = {
 	paused_at?: string;
 };
 
-export type Gauge = { window: string; left_pct: number };
-export type Fuel = { shell: string; gauges: Gauge[] };
+export type Gauge = { window: string; left_pct: number; resets_at?: string };
+export type Fuel = { shell: string; gauges: Gauge[]; error?: string };
 
 export type Index = {
 	v: number;
@@ -121,14 +123,24 @@ export type Index = {
 	// the rail's face frames by 'running' / 'idle' (brr.emotes.for_telemetry)
 	faces?: Record<string, string[]>;
 	wishes: Record<string, Record<string, number>>;
-	unthreaded: Wish[];
+	// absent once those wishes ride in the unthreaded part; kept for an index that still sends them
+	unthreaded?: Wish[];
 	person: string | null;
 	// the channel a letter typed on the board goes out through
 	via?: string | null;
 	parts: Record<string, string>;
+	// the patch from the previous beads hash; a client that holds `since` applies it and skips the 1 MB GET
+	beads_delta?: BeadsDelta;
 };
 
-export type ThreadPart = {
+export type BeadsDelta = {
+	since: string;
+	hash: string;
+	set: Record<string, [string | null, string | null, string | null, string | null, string]>;
+	drop: string[];
+};
+
+export type ThreadPart = Partial<Thread> & {
 	id: string;
 	count: number;
 	letters: Letter[];
@@ -136,6 +148,8 @@ export type ThreadPart = {
 	tools: Record<string, ToolCall[]>;
 	live: Record<string, Live>;
 	more?: boolean;
+	// each wish's ancestors up to its root, and the person letters among them (board-chain)
+	chain?: Record<string, [string | null, string | null, string | null, string | null, string]>;
 };
 
 // What the board reads at once, assembled from the parts (parts.ts).
@@ -150,4 +164,15 @@ export type Model = {
 	faces?: Record<string, string[]>;
 	person: string | null;
 	via?: string | null;
+	topics?: Topic[];
+};
+
+export type Topic = {
+	id: string;
+	title?: string;
+	at?: string;
+	line?: string;
+	entries?: number;
+	cites?: string[];
+	quote?: string;
 };

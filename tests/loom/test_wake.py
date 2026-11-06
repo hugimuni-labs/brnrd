@@ -548,3 +548,209 @@ def test_missing_loom_part_and_bad_owed_are_loud(tmp_path: Path) -> None:
     bad_room = cli(["wake", "--room", str(tmp_path), "--thread", "inbox"])
     assert bad_room.returncode == 1
     assert "no self clone" in bad_room.stderr
+
+
+PAGE = """# arseni
+
+Who he is.
+
+## who
+
+- Owner [1]
+
+## just do
+
+- Merge on green [9903]
+
+## ask first
+
+- Act as him [p6o5]
+
+## never
+
+- Delete loom-home [inbox]
+
+## between us
+
+- 11-03: newest-line-77 [10176]
+- 11-02: older-line-55 [10158]
+"""
+
+
+def test_the_people_in_hand_wake_with_their_lists_and_latest_line(tmp_path: Path) -> None:
+    home = tmp_path / "home"
+    assert cli(["init", "--home", str(home), "--person", "arseni"]).returncode == 0
+    self_dir = home / "self"
+    write_thread(self_dir, "w-1", "The w-1 headline")
+    (self_dir / "people" / "arseni" / "page.md").write_text(PAGE, encoding="utf-8")
+    commit(self_dir, "page")
+    clone = selfrepo.room(home, "s1")
+    owed = tmp_path / "owed.json"
+    owed.write_text(json.dumps([{"id": "p-arseni/ab12", "from": "person:arseni", "body": "hi\n"}]),
+                    encoding="utf-8")
+    out = wake(clone, "w-1", owed).stdout
+    people = out.split("## People\n", 1)[1].split("## Loom\n", 1)[0]
+    assert "### arseni\n" in people
+    assert "just do:\n- Merge on green [9903]\n" in people
+    assert "ask first:\n- Act as him [p6o5]\n" in people
+    assert "never:\n- Delete loom-home [inbox]\n" in people
+    assert "between us, latest: 11-03: newest-line-77 [10176]" in people
+    assert "older-line-55" not in people
+    assert "whole page: people/arseni/page.md" in people
+    assert out.index("## People\n") < out.index("## Loom\n") < out.index("## Occasion\n")
+
+    # A strand's letter: nobody in hand, so every page gives its latest line and nothing more.
+    owed.write_text(json.dumps([{"id": "s-1/x", "from": "s-1", "body": "go\n"}]), encoding="utf-8")
+    out = wake(clone, "w-1", owed).stdout
+    people = out.split("## People\n", 1)[1].split("## Loom\n", 1)[0]
+    assert people == "arseni: 11-03: newest-line-77 [10176]\n"
+
+
+def test_a_fat_page_is_capped_with_a_receipt_and_the_letter_still_wakes(tmp_path: Path) -> None:
+    home = tmp_path / "home"
+    assert cli(["init", "--home", str(home), "--person", "arseni"]).returncode == 0
+    self_dir = home / "self"
+    write_thread(self_dir, "w-1", "The w-1 headline")
+    fat = PAGE.replace("## never\n", "## never\n" + "".join(f"- never-{i:03} " + "x" * 60 + "\n" for i in range(80)))
+    (self_dir / "people" / "arseni" / "page.md").write_text(fat, encoding="utf-8")
+    commit(self_dir, "fat page")
+    clone = selfrepo.room(home, "s1")
+    owed = tmp_path / "owed.json"
+    owed.write_text(json.dumps([{"id": "p-arseni/ab12", "from": "p-arseni", "body": "letter-body-42\n"}]),
+                    encoding="utf-8")
+    result = wake(clone, "w-1", owed)
+    assert result.returncode == 0, result.stderr
+    people = result.stdout.split("## People\n", 1)[1].split("## Loom\n", 1)[0]
+    assert len(people.encode("utf-8")) <= 2400
+    assert people.endswith("people/arseni/page.md is whole on disk]\n")
+    assert "letter-body-42" in result.stdout
+
+
+def test_no_page_no_people_section(tmp_path: Path) -> None:
+    home = tmp_path / "home"
+    assert cli(["init", "--home", str(home), "--person", "arseni"]).returncode == 0
+    write_thread(home / "self", "w-1", "The w-1 headline")
+    commit(home / "self", "w-1")
+    clone = selfrepo.room(home, "s1")
+    owed = tmp_path / "owed.json"
+    owed.write_text(json.dumps([{"id": "p-arseni/ab12", "from": "person:arseni", "body": "hi\n"}]),
+                    encoding="utf-8")
+    result = wake(clone, "w-1", owed)
+    assert result.returncode == 0, result.stderr
+    assert "## People\n" not in result.stdout
+
+
+def _topics_wake(tmp_path: Path, pages: dict[str, str]) -> str:
+    home = tmp_path / "home"
+    assert cli(["init", "--home", str(home), "--person", "arseni"]).returncode == 0
+    self_dir = home / "self"
+    write_thread(self_dir, "w-1", "The w-1 headline")
+    folder = self_dir / "topics"
+    folder.mkdir(exist_ok=True)
+    for name, text in pages.items():
+        (folder / name).write_text(text, encoding="utf-8")
+    commit(self_dir, "topics")
+    clone = selfrepo.room(home, "s1")
+    owed = tmp_path / "owed.json"
+    owed.write_text(json.dumps([{"id": "s-1/x", "from": "s-1", "body": "go\n"}]), encoding="utf-8")
+    result = wake(clone, "w-1", owed)
+    assert result.returncode == 0, result.stderr
+    return result.stdout
+
+
+def _topics(out: str) -> str:
+    return out.split("## Topics\n", 1)[1].split("## Loom\n", 1)[0]
+
+
+def test_the_wake_shows_each_topic_pages_newest_entry_newest_first(tmp_path: Path) -> None:
+    out = _topics_wake(tmp_path, {
+        "README.md": "# Topics\n\n### 2026-12-01 · not-a-topic-31\n",
+        "alpha.md": ("# alpha\n\n### 2026-10-28 · older-alpha-12 · [t](../threads/t/README.md)\n\n"
+                     "### 2026-11-02 · newest-alpha-34 · [t](../threads/t/README.md) · [u](../threads/u/README.md)\n"),
+        "beta.md": "# beta\n\n### 2026-11-02 · beta-tie-56\n",
+        "gamma.md": "# gamma\n\n### 2026-11-03 · gamma-" + "y" * 120 + "\n",
+        "empty.md": "# empty\n\nNo dated entry, only prose.\n### not a date · undated-78\n",
+    })
+    topics = _topics(out)
+    assert topics.splitlines() == [
+        "topics/gamma.md · 2026-11-03 · gamma-" + "y" * 73 + "…",
+        "topics/alpha.md · 2026-11-02 · newest-alpha-34",
+        "topics/beta.md · 2026-11-02 · beta-tie-56",
+    ]
+    assert "older-alpha-12" not in out and "not-a-topic-31" not in out and "undated-78" not in out
+    assert out.index("## Topics\n") < out.index("## Loom\n") < out.index("## Occasion\n")
+
+
+def test_eleven_topic_pages_show_ten(tmp_path: Path) -> None:
+    pages = {f"t{i:02}.md": f"# t{i:02}\n\n### 2026-10-{i + 1:02} · entry-{i:02}\n" for i in range(11)}
+    topics = _topics(_topics_wake(tmp_path, pages)).splitlines()
+    assert topics == [f"topics/t{i:02}.md · 2026-10-{i + 1:02} · entry-{i:02}" for i in range(10, 0, -1)]
+
+
+def test_fat_topics_are_capped_with_a_receipt(tmp_path: Path) -> None:
+    pages = {f"a-long-topic-page-name-{i:02}.md": f"# t\n\n### 2026-10-{i + 1:02} · entry-{i:02}-" + "z" * 90 + "\n"
+             for i in range(10)}
+    topics = _topics(_topics_wake(tmp_path, pages))
+    assert len(topics.encode("utf-8")) <= 1200
+    assert topics.startswith("topics/a-long-topic-page-name-09.md · 2026-10-10 · entry-09-")
+    assert topics.endswith("bytes; topics/ is whole on disk]\n")
+
+
+def test_no_dated_topic_no_topics_section(tmp_path: Path) -> None:
+    out = _topics_wake(tmp_path, {"plain.md": "# plain\n\nNothing dated.\n"})
+    assert "## Topics\n" not in out
+
+
+def _fixture_home_wake(tmp_path: Path) -> str:
+    """A fixture home with a wished thread, a person's page, a topic and a person's letter."""
+    home = tmp_path / "home"
+    assert cli(["init", "--home", str(home), "--person", "arseni"]).returncode == 0
+    self_dir = home / "self"
+    write_thread(self_dir, "w-1", "The w-1 headline")
+    folder = self_dir / "threads" / "w-2"
+    folder.mkdir(parents=True)
+    (folder / "README.md").write_text(
+        "---\nid: w-2\nstatus: open\ntense: plan\nopened-for: [w-abc123]\n"
+        'wish-w-abc123: "A new home wakes like a live one"\n---\n# The w-2 spec head\n\nThe page.\n',
+        encoding="utf-8",
+    )
+    (self_dir / "people" / "arseni" / "page.md").write_text(PAGE, encoding="utf-8")
+    (self_dir / "topics").mkdir(exist_ok=True)
+    (self_dir / "topics" / "wake.md").write_text("# wake\n\n### 2026-11-02 · the-wake-entry-61\n", encoding="utf-8")
+    commit(self_dir, "fixture home")
+    clone = selfrepo.room(home, "s1")
+    owed = tmp_path / "owed.json"
+    owed.write_text(json.dumps([{"id": "p-arseni/ab12", "from": "person:arseni", "body": "letter-body-42\n"}]),
+                    encoding="utf-8")
+    result = wake(clone, "w-1", owed)
+    assert result.returncode == 0, result.stderr
+    return result.stdout
+
+
+def test_the_seed_wakes_a_fixture_home_with_the_live_selfs_tail(tmp_path: Path) -> None:
+    # A live self's core/loom/wake renders this tail for this home; the seed follows it.
+    out = _fixture_home_wake(tmp_path)
+    tail = out[out.index("## People\n"):]
+    assert tail == (
+        "## People\n"
+        "### arseni\n"
+        "just do:\n- Merge on green [9903]\n"
+        "ask first:\n- Act as him [p6o5]\n"
+        "never:\n- Delete loom-home [inbox]\n"
+        "between us, latest: 11-03: newest-line-77 [10176]\n"
+        "whole page: people/arseni/page.md\n"
+        "## Topics\n"
+        "topics/wake.md · 2026-11-02 · the-wake-entry-61\n"
+        "## Loom\n"
+        "loom part goes here verbatim\n"
+        "## Occasion\n"
+        "### p-arseni/ab12 from person:arseni · reply -\n"
+        "letter-body-42\n"
+    )
+
+
+def test_the_tree_names_a_thread_by_its_wish(tmp_path: Path) -> None:
+    tree = _fixture_home_wake(tmp_path).split("## Tree\n", 1)[1]
+    assert "threads/w-2/README.md · w-abc123 A new home wakes like a live one · " in tree
+    # A README without a wish still shows its first line.
+    assert "threads/inbox/README.md · # Letters with no thread yet · " in tree

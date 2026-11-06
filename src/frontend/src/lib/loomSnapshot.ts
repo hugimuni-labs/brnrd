@@ -331,6 +331,58 @@ export function fuelPromoted(fuel: LoomShell[] | undefined): boolean {
 	return (fuel ?? []).some(shellLow);
 }
 
+/** Window length behind a dial fraction. `session` is the status line's name
+ * for the five-hour window the dashboard calls `5h`; `weekly` is that
+ * dashboard's label for `week`. A name with no length here keeps its
+ * countdown text and draws no wedge. */
+const WINDOW_S: Record<string, number> = {
+	week: 7 * 86400,
+	weekly: 7 * 86400,
+	'5h': 5 * 3600,
+	session: 5 * 3600
+};
+
+/** Fraction of the window still to run, 0 to 1, or null when the window has
+ * no known length or the reset stamp does not parse. */
+export function resetFraction(
+	window: string,
+	resetsAt: string | undefined,
+	now: number
+): number | null {
+	const duration = WINDOW_S[window];
+	if (!duration || !resetsAt) return null;
+	const at = Date.parse(resetsAt);
+	if (!Number.isFinite(at)) return null;
+	return Math.max(0, Math.min(1, (at - now) / 1000 / duration));
+}
+
+function resetAt(iso: string | undefined): number {
+	if (!iso) return 0;
+	const t = Date.parse(iso);
+	return Number.isFinite(t) ? t : 0;
+}
+
+/** The one bar for a shell: the window with the least fuel left. A tie goes
+ * to the later reset. A missing or unreadable reset compares as none, so it
+ * loses the tie the way a dial with no time remaining does. When no gauge
+ * has a readable percent, the first gauge still names the bar. */
+export function bindingGauge(gauges: readonly LoomGauge[] | undefined): LoomGauge | null {
+	const list = gauges ?? [];
+	let chosen: LoomGauge | null = null;
+	for (const gauge of list) {
+		const left = gauge.left_pct;
+		if (typeof left !== 'number' || !Number.isFinite(left)) continue;
+		if (
+			!chosen ||
+			chosen.left_pct === undefined ||
+			left < chosen.left_pct ||
+			(left === chosen.left_pct && resetAt(gauge.resets_at) > resetAt(chosen.resets_at))
+		)
+			chosen = gauge;
+	}
+	return chosen ?? list[0] ?? null;
+}
+
 /** Every body a picker can offer: the declared choices, else shell/core. */
 export function bodyChoices(snapshot: LoomSnapshot): string[] {
 	const declared = snapshot.bodies?.choices ?? [];

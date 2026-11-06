@@ -28,7 +28,8 @@ let B;
 before(async () => (B = await open({ parts: home() })));
 after(() => B?.close());
 
-const order = () => B.page.$$eval('#board > .column', (cs) => cs.map((c) => c.dataset.column));
+const order = () =>
+	B.page.$$eval('#board > .column:not(.topics)', (cs) => cs.map((c) => c.dataset.column));
 
 test('a bare id or an &ref is a chip; a word that only looks like one stays text (proof-chips)', async () => {
 	const l = B.page.locator('[data-letter="s-test-char2/chips"]');
@@ -101,15 +102,17 @@ test('the order holds for 10 s, then moves once; the same data moves nothing (pr
 	assert.deepEqual(await order(), first, 'a render with the same data moves no column');
 	const parts = fixture();
 	const fox = parts.index.threads.find((t) => t.id === 'foxtrot');
-	fox.board = { state: 'seated', strand: 'working' };
-	fox.strands[0].state = 'working';
+	fox.board = { state: 'seated' };
+	const part = parts['thread/foxtrot'];
+	part.board = { state: 'seated', strand: 'working' };
+	part.strands[0].state = 'working';
 	B.loom.set(reindex(parts));
 	await B.page.waitForTimeout(600);
 	const held = await order();
 	assert.equal(held.indexOf('foxtrot'), first.indexOf('foxtrot'), 'inside the hold it stays put');
 	await B.page.waitForFunction(
 		() =>
-			[...document.querySelectorAll('#board > .column')]
+			[...document.querySelectorAll('#board > .column:not(.topics)')]
 				.slice(1, 3)
 				.some((c) => c.dataset.column === 'foxtrot'),
 		null,

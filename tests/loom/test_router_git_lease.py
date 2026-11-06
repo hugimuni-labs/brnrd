@@ -10,7 +10,7 @@ from brr.daemon2.leases import LocalLeaseAuthority
 from brr.loom.runtime.config import loom_clock
 from brr.loom.runtime.home import Home
 from brr.loom.runtime.ledger import append, read_facts
-from brr.loom.runtime.router import Router
+from brr.loom.runtime.router import GATE_MARGIN, GATE_MIN_TTL, GATE_POLL, Router
 
 
 class Clock:
@@ -46,8 +46,9 @@ def test_one_router_is_armed_and_the_other_takes_over_after_expiry(tmp_path):
     assert a.gate_lease.gen == 1 and b.lease is None
 
     # a's machine stops renewing (asleep, unplugged); b counts on its own clock.
-    a.gate.clock.now += 100
-    b.gate.clock.now += 100
+    past = GATE_MIN_TTL + GATE_MARGIN + 1
+    a.gate.clock.now += past
+    b.gate.clock.now += past
     assert not a.armed()
     # The gen-1 router fact would reach b by the ledger transport (P2).
     append(b_home, Fact(kind="router", by="loom:aaaa", id="router:1",
@@ -87,7 +88,7 @@ def test_without_lease_remote_there_is_no_gate(tmp_path):
     assert Router(home).gate is None
 
 
-def test_the_git_lease_lasts_at_least_90_seconds_under_the_default_router_ttl(tmp_path):
+def test_the_git_lease_lasts_at_least_180_seconds_under_the_default_router_ttl(tmp_path):
     remote = tmp_path / "self.git"
     subprocess.run(["git", "init", "--bare", "-q", str(remote)], check=True)
     home = Home(tmp_path / "aaaa", install="aaaa")
@@ -95,10 +96,13 @@ def test_the_git_lease_lasts_at_least_90_seconds_under_the_default_router_ttl(tm
     (home.root / "loom/config.toml").write_text(f'lease_remote = "{remote}"\n')
     router = _router(home, 100)
     assert router.config.router_ttl == 30
+    assert router.gate_ttl == GATE_MIN_TTL == 180
+    assert router.gate.margin == GATE_MARGIN == 10
+    assert GATE_POLL == 40
     router.begin_tick(read_facts(home))
-    assert router.gate.view("inbox")["ttl"] == 90
-    # Past the local 30 s, inside the git 90 s: still armed, nothing fenced.
-    router.gate.clock.now += 60
+    assert router.gate.view("inbox")["ttl"] == 180
+    # Past the local 30 s and one 60 s renew, inside the git 180 s: still armed.
+    router.gate.clock.now += 120
     facts = router.begin_tick(read_facts(home))
     assert router.armed()
     assert not [f for f in facts if f.kind == "lease.fenced"]
@@ -113,8 +117,9 @@ def test_a_fence_opens_a_lease_streak_and_taking_the_lease_back_closes_it(tmp_pa
     a.begin_tick(read_facts(a_home))
     b.begin_tick(read_facts(b_home))
 
-    a.gate.clock.now += 100
-    b.gate.clock.now += 100
+    past = GATE_MIN_TTL + GATE_MARGIN + 1
+    a.gate.clock.now += past
+    b.gate.clock.now += past
     b.begin_tick(read_facts(b_home))
     a.begin_tick(read_facts(a_home))
     [streak] = open_streaks(read_facts(a_home), "aaaa")
@@ -132,9 +137,12 @@ def test_a_fence_opens_a_lease_streak_and_taking_the_lease_back_closes_it(tmp_pa
     assert open_streaks(read_facts(a_home), "aaaa") == []
 
 
-def test_a_fenced_install_s_seated_body_leaves_and_stays_once_the_lease_is_back(tmp_path, monkeypatch):
-    """The fence reaches the body table through ``_observe_body``: a running
-    body on the fenced install leaves, and taking inbox back keeps it."""
+def test_a_fenced_install_s_seated_body_keeps_running(tmp_path, monkeypatch):
+    """On a real loss the running body is not killed; it finishes and lands.
+
+    11-06: lease.fenced:ae66:1690:lost and :1691:lost each ended every
+    running body. The fence now refuses publish and a letter to a person.
+    """
     from brr.loom.runtime import lifecycle, loom
     from brr.loom.runtime.bodies import decide
     remote = tmp_path / "self.git"
@@ -159,22 +167,22 @@ def test_a_fenced_install_s_seated_body_leaves_and_stays_once_the_lease_is_back(
     o, c = observe()
     assert decide(read_facts(a_home), [o]) == []
 
-    a.gate.clock.now += 100
-    b.gate.clock.now += 100
+    past = GATE_MIN_TTL + GATE_MARGIN + 1
+    a.gate.clock.now += past
+    b.gate.clock.now += past
     b.begin_tick(read_facts(b_home))
     a.begin_tick(read_facts(a_home))
     o, c = observe()
-    # The thread is open: only the fence can make the body leave.
-    assert [x.name for x in decide(read_facts(a_home), [o])] == ["leaving"]
-    assert not o.closed and "inbox lease" in c.why
-    append(a_home, Fact(kind="body.leaving", by="loom:aaaa", id=f"body.leaving:{strand}:1",
-                        data={"strand": strand, "gen": 1, "deadline": o.now + 60}))
+    assert decide(read_facts(a_home), [o]) == []
+    assert o.fenced and not o.handed and not o.closed
+    assert "lost the inbox lease" in c.why
 
     b.gate.clock.now += 200
     a.gate.clock.now += 200
     a.begin_tick(read_facts(a_home))
     o, c = observe()
-    assert [x.name for x in decide(read_facts(a_home), [o])] == ["stayed"]
+    assert decide(read_facts(a_home), [o]) == []
+    assert not o.fenced
 
 
 def test_a_prefer_hands_inbox_to_that_install_and_the_old_holder_s_bodies_leave(tmp_path, monkeypatch):
@@ -414,3 +422,24 @@ def test_a_tick_over_quiet_threads_takes_the_lease_lock_only_before_a_write(tmp_
     a.route(read_facts(home), {}, ("fake", "echo"))
     assert started == [("aaaa", "work")]
     assert len(asked) <= 4  # route's own ask, the grant's two, the closing one: never one per quiet thread
+
+
+def test_expired_local_lease_keeps_the_git_generation(tmp_path):
+    remote = tmp_path / "self.git"
+    subprocess.run(["git", "init", "--bare", "-q", str(remote)], check=True)
+    home = _home(tmp_path, "aaaa", remote)
+    router = _router(home, 100)
+    local_clock = Clock(1000)
+    router.clock = local_clock
+    router.authority.clock = local_clock
+    facts = router.begin_tick(read_facts(home))
+    gen = router.gate_lease.gen
+    # Local expiry during a slow tick, while the 180 s git lease is live.
+    local_clock.now += router.config.router_ttl + 1
+    facts = router.begin_tick(facts)
+    assert router.lease.gen == gen
+    assert router.armed()
+    # Re-enter the branch that compares the local and remote generations.
+    router.begin_tick(facts)
+    assert router.lease is not None and router.lease.gen == gen
+    assert router.armed()

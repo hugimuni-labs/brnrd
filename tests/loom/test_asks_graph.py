@@ -123,3 +123,34 @@ def test_a_person_thread_with_work_in_hand_settles_only_on_their_word(loom):
     said = inject_letter(home.root, to="thread:work", body="looks good, done")
     run("settle", "work", "--room", str(seat), "--why", "Shipped", "--word", said)
     assert read_thread(home, "work")["status"] == "settled"
+
+
+def test_the_home_thread_settles_a_thread_whose_opener_runs_on_no_loom(loom):
+    """co-maintainer-tick was opened by thread:arseni, whose `for:` is the maintainer's conversation: no body
+    runs there, so its settle had no taker (2026-11-05). The home thread hears for such an opener."""
+    home, seat = loom
+    root = home.root / "self"
+    write_thread(root, "maintainer", "Maintainer")
+    path = root / "threads/maintainer/README.md"
+    path.write_text(path.read_text().replace("tense: plan\n", "tense: plan\nfor: the conversation with the maintainer\n"))
+    write_thread(root, "tick", "Tick")
+    path = root / "threads/tick/README.md"
+    path.write_text(path.read_text().replace("tense: plan\n", "tense: plan\nopened-by: thread:maintainer\n"))
+    commit(root, "threads")
+    error = run("settle", "tick", "--room", str(seat), "--why", "Retired", ok=False)
+    assert "only thread:inbox may settle tick" in error
+    run("settle", "tick", "--room", str(home.room("s-aaaa-inbx")), "--why", "Retired")
+    assert read_thread(home, "tick")["status"] == "settled"
+
+
+def test_an_opener_that_runs_here_still_settles_its_own_child_alone(loom):
+    home, seat = loom
+    root = home.root / "self"
+    write_thread(root, "child", "Child")
+    path = root / "threads/child/README.md"
+    path.write_text(path.read_text().replace("tense: plan\n", "tense: plan\nopened-by: thread:work\n"))
+    commit(root, "threads")
+    error = run("settle", "child", "--room", str(home.room("s-aaaa-inbx")), "--why", "Done", ok=False)
+    assert "only thread:work may settle child" in error
+    run("settle", "child", "--room", str(seat), "--why", "Done")
+    assert read_thread(home, "child")["status"] == "settled"

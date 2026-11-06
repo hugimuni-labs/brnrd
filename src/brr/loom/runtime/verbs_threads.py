@@ -23,15 +23,10 @@ def _threads_arguments(parser) -> None:
 
 def cmd_threads(args) -> int:
     from .threads import thread_table, render_table, left_by_thread, render_left
-    from .home import Home, home_of_room, resolve_home
+    from .home import home_for
     from .ledger import read_facts
     from .verbs_loom import _room
-    if args.home is not None:
-        home = Home(resolve_home(args.home)[0])
-    elif args.room or os.environ.get('BRNRD_ROOM'):
-        home = home_of_room(_room(args.room))
-    else:
-        home = Home(resolve_home()[0])
+    home = home_for(args.home, args.room)
     if args.due:
         from .threads import due_table
         sys.stdout.write(due_table(home, read_facts(home)))

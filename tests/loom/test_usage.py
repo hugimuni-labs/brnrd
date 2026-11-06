@@ -322,6 +322,64 @@ def test_boundary_lists_every_cached_shell_and_park_stays_seated(tmp_path, monke
     assert usage.dry_until(home, "grok") is not None
 
 
+def _today_line(home, shell):
+    """The fuel line as fuels() built it before spend marks: seat, then names."""
+    found = usage.shell_fuels(home)
+    order = ([shell] if shell in found else []) + sorted(name for name in found if name != shell)
+    return "fuel " + " · ".join(f"{name} {found[name]}" for name in order)
+
+
+def _write_reading(root, shell, windows, *, error=None):
+    import time
+    path = root / "loom" / "usage" / f"{shell}.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    payload = {"at": time.time(), "windows": windows}
+    if error is not None:
+        payload["error"] = error
+    path.write_text(json.dumps(payload))
+
+
+def test_one_installed_harness_keeps_todays_fuel_line_and_briefing(tmp_path, monkeypatch):
+    """A burn list copied onto a one-harness machine changes neither line."""
+    import time
+    from datetime import datetime, timezone
+
+    from brr.loom.runtime.briefing import BRIEFING, TITLE, section
+
+    future = datetime.fromtimestamp(time.time() + 7 * 86400, timezone.utc).isoformat()
+    _write_reading(tmp_path, "grok", [{"name": "week", "left_pct": 45, "resets_at": future}])
+    _write_reading(tmp_path, "claude", [
+        {"name": "session", "left_pct": 72, "resets_at": future},
+        {"name": "week", "left_pct": 11, "resets_at": future},
+    ])
+    _write_reading(tmp_path, "codex", [
+        {"name": "session", "left_pct": 92, "resets_at": future},
+        {"name": "week", "left_pct": 98, "resets_at": future},
+    ])
+    _write_reading(tmp_path, "vibe", [], error="absent")
+    (tmp_path / "loom/preferences.toml").write_text(
+        'spend.burn = ["grok", "codex"]\nspend.keep = "claude"\n'
+    )
+    home = Home(tmp_path)
+    monkeypatch.setattr("shutil.which", lambda name: "/bin/grok" if name == "grok" else None)
+    today = _today_line(home, "grok")
+    assert usage.fuels(home, "grok") == today
+    assert " burn" not in today and " keep" not in today
+    assert usage.fuel(home, "grok") == "fuel grok week 45%"
+    brief = f"## {TITLE}\n{BRIEFING}"
+    assert section(home) == brief and section() == brief
+    # Two harnesses is the control: the same files gain the role words, in burn order.
+    monkeypatch.setattr("shutil.which", lambda name: f"/bin/{name}" if name in {"grok", "codex", "claude"} else None)
+    marked = usage.fuels(home, "grok")
+    assert marked != today
+    assert marked == (
+        "fuel grok week 45% burn · codex session 92% week 98% burn · "
+        "claude session 72% week 11% keep · vibe fails"
+    )
+    assert " burn" not in usage.fuel(home, "grok")
+    assert "burn" not in " ".join(usage.shell_fuels(home).values())
+
+
 def test_vibe_collector_reports_absence_without_inventing_fuel(tmp_path):
     home = Home(tmp_path)
     path = tmp_path / "loom/usage/vibe.json"

@@ -113,16 +113,16 @@ def test_past_its_allocation_the_strand_is_warned_at_the_crossing_and_every_5pct
     parse_boundary(text)  # the warning line is not a letter
     # Said at the crossing, then not again at every call (his 10095).
     said = json.loads(execute("post", home.room(CHILD), "{}"))["hookSpecificOutput"]["additionalContext"]
-    assert any(line.startswith("budget: thread work has spent 3.5M of 3M tokens (+16%). Write to thread:parent")
-               for line in said.splitlines())
+    assert ("budget: thread work is over its allocation by 500k (3.5M of 3M, +16%); this body 3.5M, its boot 2.5M. "
+            "thread:parent has the notice and decides a raise; you go on.") in said.splitlines()
     assert "budget:" not in execute("post", home.room(CHILD), "{}")
     # Within the same +5% step: quiet; the next step says it again, once.
     over = next(line for line in text.splitlines() if line.startswith("budget: "))
     for pct, again in ((19, False), (20, True), (21, False)):
-        line = over.replace("(+16%)", f"(+{pct}%)")
+        line = over.replace(", +16%)", f", +{pct}%)")
         boundary.write_text(render_boundary(CHILD, 1, "work", [], set(), {}, budget="spent 3.5M/3M", over=line))
         said = execute("post", home.room(CHILD), "{}")
-        assert (json.loads(said)["hookSpecificOutput"]["additionalContext"] == line) if again else said == ""
+        assert (json.loads(said)["hookSpecificOutput"]["additionalContext"].partition(chr(10))[2] == line) if again else said == ""
 
     # The child cannot raise its own: refused at send, and ignored in the fold.
     refused = cli(["send", "--room", str(home.room(CHILD)), "--to", "thread:parent", "--budget", "5m", "more"])
@@ -139,6 +139,45 @@ def test_past_its_allocation_the_strand_is_warned_at_the_crossing_and_every_5pct
     text = boundary.read_text()
     assert "· spent 3.5M/5M" in text and "budget:" not in text
     assert "budget:" not in execute("post", home.room(CHILD), "{}")
+
+    # The crossing wrote one notice to the opener, sized in boots; the raise is a new allocation.
+    notices = [f for f in read_facts(home) if f.kind == "letter" and f.data.get("from") == "loom"]
+    assert [(f.data["to"], f.id) for f in notices] == [("thread:parent", notices[0].id)]
+    assert notices[0].data["body"].startswith(
+        "thread work is over its allocation by 500k (3.5M of 3M). A boot there costs about 2.5M. Read")
+
+
+def test_an_opener_that_never_runs_here_hands_the_breach_and_the_raise_to_the_inbox(home, tmp_path):
+    """brnrd#2619: thread:arseni's `for:` refuses sends, so the door is the home thread."""
+    write_thread(home.root / "self", "inbox", "The inbox")
+    readme = home.root / "self" / "threads" / "parent" / "README.md"
+    readme.write_text(readme.read_text().replace("---\n#", 'for: "the conversation with the maintainer"\n---\n#', 1))
+    commit(home.root / "self", "threads")
+    inbox = "s-aaaa-inb001"
+    room(home.root, inbox)
+    append(home, Fact(kind="lease", by="loom:aaaa", data={
+        "thread": "inbox", "strand": inbox, "gen": 1, "install": "aaaa",
+        "router_gen": 1, "shell": "claude", "core": "opus", "repos": []}))
+    folder = _transcripts(tmp_path / "claude" / "projects", home.room(CHILD))
+    (folder / "s1.jsonl").write_text(_turn("m1", output=40_000) + _turn("m2", output=400_000))
+    _letter(home, PARENT, "thread:work", "Build it.", budget=1_000_000)
+    context = SimpleNamespace(thread="work", fuel="", why="")
+    loom._boundary(home, read_facts(home), CHILD, 1, context)
+    loom._boundary(home, read_facts(home), CHILD, 1, context)
+    text = (home.room(CHILD) / "port" / "in" / "boundary.md").read_text()
+    assert ("budget: thread work is over its allocation by 1.2M (2.2M of 1M, +120%); this body 2.2M, its boot 200k. "
+            "thread:inbox has the notice") in text
+    notices = [f for f in read_facts(home) if f.kind == "letter" and f.data.get("from") == "loom"]
+    assert [f.data["to"] for f in notices] == ["thread:inbox"]
+    assert "A boot there costs about 200k: 1M more is about 5 boots." in notices[0].data["body"]
+    # The parent cannot raise it (it never runs here); the inbox can, and the fold counts it.
+    assert "only thread:inbox may" in cli(["send", "--room", str(home.room(PARENT)), "--to", "thread:work",
+                                            "--budget", "1m", "more"]).stderr
+    sent = cli(["send", "--room", str(home.room(inbox)), "--to", "thread:work", "--budget", "2m", "Go on."])
+    assert sent.returncode == 0, sent.stderr
+    out = home.room(inbox) / "port" / "out" / (sent.stdout.strip().split("/")[1] + ".md")
+    append(home, fact_from_port(parse_frontmatter(out.read_text()), inbox, 1, home.room(inbox)))
+    assert loom._budget(home, "work", read_facts(home), CHILD) == {"budget": "spent 2.2M/3M", "over": ""}
 
 
 def test_an_opening_without_budget_takes_the_homes_default_and_a_parentless_thread_has_none(home, tmp_path):

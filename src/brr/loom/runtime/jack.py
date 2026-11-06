@@ -16,9 +16,9 @@ from brr.pause import read_paused_record
 from .home import atomic_write, home_of_room, mint
 from .pausing import describe
 from .waits import GRAMMAR
-from .port import Boundary, answered, parse_boundary
+from .port import CLOCK, Boundary, answered, clock, parse_boundary
 
-_HEADER_LINE = re.compile(r"<!-- port (\S+) gen (\d+) · owed[^>]*-->")
+_HEADER_LINE = re.compile(rf"<!-- port (\S+) gen (\d+)(?: · {CLOCK})? · owed[^>]*-->")
 _ITEM_LINE = re.compile(r"^- (\S+) · from \S+ · reply \S+")
 from . import tooltrace
 
@@ -174,7 +174,7 @@ def _news(text: str, state: dict, plan_changed: bool) -> tuple[str, list[str], l
     shown = [item.group(1) for line in letters if (item := _ITEM_LINE.match(line))]
     owed = (["owed: " + " ".join(skipped) + " (shown before)"] if skipped else []) \
         + (["owed:"] if letters else [])
-    head = f"<!-- port {header.group(1)} gen {header.group(2)} · owed {' '.join(shown)} -->"
+    head = f"<!-- port {header.group(1)} gen {header.group(2)} · {clock()} · owed {' '.join(shown)} -->"
     return "\n".join([head, *body, *owed, *letters, ""]), said, told
 
 
@@ -196,7 +196,7 @@ def _stop_news(room: Path, text: str, parsed: Boundary) -> str:
     _set_state(room, said=said, told=told, plan=plan)
     header = _HEADER_LINE.search(text)
     if not news and parsed.ids and header:
-        news = (f"<!-- port {header.group(1)} gen {header.group(2)} · owed  -->\n"
+        news = (f"<!-- port {header.group(1)} gen {header.group(2)} · {clock()} · owed  -->\n"
                 f"owed: {' '.join(parsed.ids)} (shown before)\n")
     return news
 
@@ -247,7 +247,20 @@ def _left(room: Path, fresh: bool) -> str:
                     *(f"- {line}\n" for line in lines)]) if lines else ""
 
 
+def _clocked(text: str) -> str:
+    header = _HEADER_LINE.match(text)
+    if header:
+        fresh = re.sub(rf"(?: · {CLOCK})? · owed", f" · {clock()} · owed", header.group())
+        return fresh + text[header.end():]
+    return f"now: {clock()}\n" + text
+
+
 def _json(payload: dict) -> str:
+    if isinstance(payload.get("reason"), str):
+        payload["reason"] = _clocked(payload["reason"])
+    hook = payload.get("hookSpecificOutput", {})
+    if isinstance(hook.get("additionalContext"), str):
+        hook["additionalContext"] = _clocked(hook["additionalContext"])
     return json.dumps(payload, separators=(",", ":")) + "\n"
 
 
@@ -445,6 +458,20 @@ def _turn(room: Path, stdin_text: str) -> None:
                turn_open=False, readme_seen=readme, readme_acts=unread)
 
 
+def _people(room: Path, parsed: Boundary, at: str) -> str:
+    """The people lines (people.py): tallied at every boundary, said at a post only when a
+    person or their page date is new, and carried by a stop block that blocks anyway.
+    It never blocks a stop by itself: the body decides whether something happened."""
+    from . import people
+    state = _state(room)
+    lines, key, kept = people.tally(room / "self", parsed, state.get("people") or {})
+    news = key != state.get("people_said")
+    _set_state(room, people=kept, **({"people_said": key} if at == "post" else {}))
+    if at == "stop" or (at == "post" and news):
+        return "\n".join(lines)
+    return ""
+
+
 def _transcript_path(stdin_text: str) -> str:
     try:
         return str(json.loads(stdin_text).get("transcript_path") or "")
@@ -561,7 +588,8 @@ def _guards(room: Path):
 
 def _guard_warnings(room: Path, at: str, stdin_text: str) -> tuple[str, bool]:
     """A call that trips a guard hears the guard's own words, and whether a
-    ``refuse`` match among them denies it. Warn unless the guard says refuse."""
+    ``refuse`` match among them denies it. Warn unless the guard says refuse;
+    a refusal the owner's letter grants (grants.py) runs, and says so."""
     from .guards import trips
     try:
         payload = json.loads(stdin_text) if stdin_text and stdin_text.strip() else {}
@@ -571,7 +599,13 @@ def _guard_warnings(room: Path, at: str, stdin_text: str) -> tuple[str, bool]:
         return "", False
     guards, _errors = _guards(room)
     hits = trips(guards, room, at, payload)
-    return "\n".join(label for label, _ in hits), any(refuse for _, refuse in hits)
+    said = [label for label, _, _ in hits]
+    asks = [ask for _, refuse, ask in hits if refuse]
+    if not asks:
+        return "\n".join(said), False
+    from .grants import judge
+    granted, lines = judge(room, asks)
+    return "\n".join(said + lines), not granted
 
 
 def _guard_miss(room: Path) -> str:
@@ -595,6 +629,12 @@ def _kept_miss(room: Path) -> str:
         "uncommitted changes in a kept folder since this body began. Commit what you wrote, "
         "only those paths: `python -m brr.loom.runtime lib commit <name> -m \"<what and why>\" <path>...`. "
         "Leave what is the person's; the loom reports it after an hour:\n") + "\n".join(lines)) if lines else ""
+
+
+def _receipt_miss(room: Path) -> str:
+    """This gen's channel sends that cite nothing (cites.py)."""
+    from .cites import section
+    return section(room)
 
 
 def _known_miss(room: Path) -> str:
@@ -673,6 +713,7 @@ def execute(event: str, room: Path, stdin_text: str) -> str:
     plan = next((line.partition(" · plan ")[2] for line in text.splitlines()
                  if line.startswith("status:")), "")
     if event == "start":
+        _soft(room, _people, room, parsed, "start")
         broken = _guards(room)[1]
         if broken:
             text = "".join(f"guards: skipped {line}\n" for line in broken) + text
@@ -685,7 +726,7 @@ def execute(event: str, room: Path, stdin_text: str) -> str:
         _over(room, next((line for line in text.splitlines() if line.startswith("budget: ")), ""))
         _set_state(room, plan=plan,
                    **dict(zip(("said", "told"), _news(text, {}, True)[1:])))
-        return text if text.endswith("\n") else text + "\n"
+        return _clocked(text if text.endswith("\n") else text + "\n")
     if event == "post":
         state = _state(room)
         plan_changed = plan != state.get("plan", "")
@@ -694,6 +735,7 @@ def execute(event: str, room: Path, stdin_text: str) -> str:
         hook = _hook_event(stdin_text)
         over = _over(room, next((line for line in text.splitlines() if line.startswith("budget: ")), ""))
         left = _left(room, False).rstrip("\n")
+        people = _soft(room, _people, room, parsed, "post", default="")
         # A left in room is news when it changes; the stop still holds on it every time.
         if left == state.get("left_said", ""):
             left = ""
@@ -708,11 +750,13 @@ def execute(event: str, room: Path, stdin_text: str) -> str:
             _set_state(room, plan=plan)
             if parsed.settled is not None:
                 _set_state(room, settled=parsed.settled)
-            if not paused and not over and not guarded and not left:
+            if not paused and not over and not guarded and not left and not people:
                 return ""
             return _json({"hookSpecificOutput": {"hookEventName": hook, "additionalContext": "\n".join(
-                filter(None, (guarded, paused, over, left)))}})
+                filter(None, (guarded, paused, over, left, people)))}})
         text = news
+        if people:
+            text = text.rstrip("\n") + "\n" + people + "\n"
         if over:
             text = over + "\n" + text
         if left:
@@ -740,7 +784,7 @@ def execute(event: str, room: Path, stdin_text: str) -> str:
     return out
 
 
-_OVER = re.compile(r" of (\S+) tokens \(\+(\d+)%\)")
+_OVER = re.compile(r" of (\S+), \+(\d+)%\)")
 OVER_STEP = 5
 
 
@@ -779,7 +823,8 @@ def _stop_block(room: Path, text: str, plan: str) -> str:
 
     Each miss is a section with its exact command: owed letters, a left in
     room, wishes whose left moved, an end not yet said, a broken guard, a
-    kept folder's writes, a known folder touched. The block comes back whole at
+    kept folder's writes, an irreversible act with no receipt, a known
+    folder touched. The block comes back whole at
     every stop after a call until it is empty. A stop again with no call and
     the same misses passes: a body that has read the list and cannot clear it
     is never trapped; the wishes asked about become ``left.asked`` facts then,
@@ -799,6 +844,7 @@ def _stop_block(room: Path, text: str, plan: str) -> str:
         _end_miss(room, plan),
         _guard_miss(room),
         _kept_miss(room),
+        _receipt_miss(room),
     ]
     sections = [section for section in sections if section]
     state = _state(room)
@@ -819,7 +865,9 @@ def _stop_block(room: Path, text: str, plan: str) -> str:
     _working(room, stop_blocks=count + 1, stop_said=seen)
     head = STOP.format(n=f"{len(sections)} thing{'s' * (len(sections) > 1)}")
     news = _stop_news(room, text, parsed) if parsed.ids else ""
-    return _json({"decision": "block", "reason": "\n\n".join([head, *sections, *([news] if news else [])])})
+    people = _soft(room, _people, room, parsed, "stop", default="")
+    return _json({"decision": "block", "reason": "\n\n".join(
+        [head, *sections, *([news] if news else []), *([people] if people else [])])})
 
 
 END = """work is left on this thread (plan {plan}) and this body has not said how it ends. Do one:

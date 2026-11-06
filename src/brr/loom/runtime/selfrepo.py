@@ -6,6 +6,7 @@ The runtime adds the current thread's wish projection to the recipe's output.
 
 from __future__ import annotations
 
+import json
 import os
 import re
 import shutil
@@ -428,7 +429,6 @@ def heal_home_thread(home: Path) -> str:
     a no-op. Raises ``SelfError`` when there is no self or the push is refused.
     """
     from .home import HOME_THREAD
-    from .merge import _push_lock
 
     self_dir = Path(home).resolve() / "self"
     if not (self_dir / ".git").exists():
@@ -436,19 +436,34 @@ def heal_home_thread(home: Path) -> str:
     path = f"threads/{HOME_THREAD}/README.md"
     if git(self_dir, "cat-file", "-e", f"main:{path}", check=False).returncode == 0:
         return git(self_dir, "rev-parse", "--short", "main").stdout.strip()
-    seed = seed_root() / path
-    scratch = Path(tempfile.mkdtemp(prefix="heal-", dir=self_dir.parent))
+    return land_files(home, {path: (seed_root() / path).read_text(encoding="utf-8")},
+                      f"Put {HOME_THREAD} back on main.\n\n"
+                      "Letters with no thread had nowhere to land; the loom restores the seed's.\n\n")
+
+
+def land_files(home: Path, files: dict[str, str], message: str) -> str:
+    """Write ``files`` (path to text) on the self's ``main`` in one loom commit; return the sha.
+
+    It lands through the self's pre-receive like any push, from a scratch
+    clone, so a dirty ``home/self`` worktree is never touched. ``message``
+    gets the loom's strand and clean label. Raises ``SelfError`` when there
+    is no self or the push is refused.
+    """
+    from .merge import _push_lock
+
+    self_dir = Path(home).resolve() / "self"
+    if not (self_dir / ".git").exists():
+        raise SelfError(f"no self at {self_dir}")
+    scratch = Path(tempfile.mkdtemp(prefix="land-", dir=self_dir.parent))
     try:
         clone = scratch / "self"
         git(scratch, "clone", "-q", "--branch", "main", str(self_dir), str(clone))
-        target = clone / path
-        target.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(seed, target)
-        git(clone, "add", "--", path)
-        _commit(clone, f"Put {HOME_THREAD} back on main.\n\n"
-                "Letters with no thread had nowhere to land; the loom restores the seed's.\n\n"
-                "Loom-Strand: loom\n"
-                "Loom-Label: taint=0; audience=self\n")
+        for path, text in files.items():
+            target = clone / path
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(text, encoding="utf-8")
+        git(clone, "add", "--", *files)
+        _commit(clone, message + "Loom-Strand: loom\nLoom-Label: taint=0; audience=self\n")
         changed = refresh_index(clone)
         if changed:
             git(clone, "add", "--", *changed)
@@ -825,7 +840,7 @@ def insert_briefing(prompt: str, briefing: str) -> str:
 
 
 def _wake_topics(clone: Path, thread: str, owed: Path | None) -> str:
-    """The wake's ``## Topics`` heads, or ``""``; a broken page never costs the wake."""
+    """The wake's ``## Topics close to this wake`` heads, or ``""``; a broken page never costs the wake."""
     from .recall import wake_query, wake_topics
     try:
         readme = (clone / "threads" / thread / "README.md").read_text(encoding="utf-8")
@@ -843,15 +858,42 @@ def insert_topics(prompt: str, section: str) -> str:
     return prompt + "\n" + section
 
 
+def wake_sizes(recipe_sizes: Path, wake: str, *, briefing: str, generated: str) -> dict:
+    """Bytes per part of a delivered wake, and its ``total``, measured on ``wake``.
+
+    The recipe names its own parts in ``recipe_sizes`` (``LOOM_SIZES``); one
+    that does not, or names them wrong, leaves the rest as one ``recipe`` lump:
+    an unknown is not a zero, and a recipe cannot shrink the total it reports.
+    """
+    def size(text: str) -> int:
+        return len(text.encode("utf-8"))
+
+    total = size(wake)
+    parts = {"briefing": size(briefing), "generated": size(generated)}
+    try:
+        named = json.loads(recipe_sizes.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        named = None
+    rest = total - sum(parts.values())
+    if isinstance(named, dict) and all(isinstance(v, int) and v >= 0 for v in named.values()) \
+            and sum(named.values()) == rest:
+        parts.update({str(k): v for k, v in named.items()})
+    else:
+        parts["recipe"] = rest
+    return {"total": total, "parts": parts}
+
+
 def run_wake(room_dir: Path, thread: str, owed: Path | None = None, *,
              loom_part: Path | None = None, repos: Path | None = None,
              core: Path | None = None, stdout=None, stderr=None,
-             recipe: Path | None = None) -> int:
+             recipe: Path | None = None, sizes: Path | None = None) -> int:
     """Run the self recipe and add the loom briefing and thread wishes within the wake budget.
 
     With ``core``, a recipe that knows ``LOOM_CORE`` writes the core there and
     leaves it out of stdout; one that does not leaves the file unwritten.
     ``recipe`` runs another recipe (the packaged one) against the same clone.
+    With ``sizes``, a wake that ran writes there its bytes per part and its
+    ``total``, measured on what it delivered (``wake_sizes``).
     """
     _segment(thread, "thread")
     clone = resolve_clone(room_dir)
@@ -889,7 +931,7 @@ def run_wake(room_dir: Path, thread: str, owed: Path | None = None, *,
             found = told(facts)
             section += render(queues(found, waits_on(found, main_snapshot(home))))
     from .briefing import section as briefing_section
-    briefing = briefing_section()
+    briefing = briefing_section(home)
     topics = _wake_topics(clone, thread, owed)
     # Reserve what the loom adds before the recipe fits its tree/README to the budget:
     # the tree is what gives way to the topic heads.
@@ -898,6 +940,9 @@ def run_wake(room_dir: Path, thread: str, owed: Path | None = None, *,
     if core is not None:
         # Absent after the run means the recipe kept the core in stdout.
         Path(core).unlink(missing_ok=True)
+    if sizes is not None:
+        Path(sizes).unlink(missing_ok=True)
+        env["LOOM_SIZES"] = str(sizes)
     owed_file = None
     part_file = None
     try:
@@ -928,6 +973,10 @@ def run_wake(room_dir: Path, thread: str, owed: Path | None = None, *,
             output = insert_wishes(output, section)
         if proc.returncode == 0 and topics:
             output = insert_topics(output, topics)
+        if proc.returncode == 0 and sizes is not None:
+            kept = Path(core).read_text(encoding="utf-8") if core is not None and Path(core).is_file() else ""
+            Path(sizes).write_text(json.dumps(wake_sizes(
+                Path(sizes), kept + output, briefing=briefing, generated=section + topics)), encoding="utf-8")
         (stdout or sys.stdout).write(output)
         return proc.returncode
     finally:

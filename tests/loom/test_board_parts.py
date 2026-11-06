@@ -5,6 +5,7 @@ import gzip
 import http.client
 import json
 import time
+from pathlib import Path
 
 import pytest
 
@@ -125,7 +126,8 @@ def test_a_wish_ships_in_its_thread_part_and_the_index_keeps_counts(parts):
     assert parts.hashes["thread/docs"] == before["thread/docs"]
     assert [w["wish"] for w in parts.parts["thread/web"]["wishes"]] == ["w-fast"]
     assert sum(index["wishes"]["web"].values()) == 1 and "docs" not in index["wishes"]
-    assert "w-fast" not in json.dumps(index)  # the index carries no wish rows: a moved wish resends one thread
+    # the index carries no wish rows (beads_delta may name the id as a bead patch)
+    assert "w-fast" not in json.dumps({k: v for k, v in index.items() if k not in {"beads_delta", "beads_deltas"}})
     assert index["faces"]["running"][0] == index["faces"]["idle"][0] == "brnrd"  # the rail's faces, at rest on the name
     assert len(index["faces"]["running"]) > 1
 
@@ -343,3 +345,260 @@ def test_a_repeat_verdict_on_the_same_wish_is_the_same_letter(parts):
     assert parts.send("Not quite on &w-abc123", wish="w-abc123", verdict="correct") != first
     assert parts.send("agree &w-def456", wish="w-def456", verdict="agree") != first
     assert len(list(root.glob("loom/connectors/mine/state/in/*"))) == 3
+
+
+def test_a_thread_part_ships_the_wish_chain_and_its_person_letter(parts):
+    """Each thread part carries the ancestors of its wishes (and of its letters) up to the person root."""
+    root = parts.home.root
+    write_thread(root, "inbox", readme("inbox"), "answer-fast", wait="0")
+    ask = inject_letter(root, to="thread:inbox", body="please make web fast")
+    elsewhere = inject_letter(root, to="thread:docs", body="from docs, also about web")
+    append(parts.home, Fact(kind="wish", by="person:ada", id="w-fast", data={
+        "wish": "w-fast", "says": [[ask, 0, None]], "from": "person", "line": "make web fast",
+        "thread": "web"}))
+    inject_letter(root, to="thread:web", body="on it", re=elsewhere)
+    assert parts.step()
+    chain = parts.parts["thread/web"]["chain"]
+    assert ask in chain and chain[ask][1] == "person"
+    assert chain[ask][4].startswith("please make web fast")
+    assert "w-fast" in chain and chain["w-fast"][0] == ask
+    assert elsewhere in chain and chain[elsewhere][1] == "person"
+    assert len(json.dumps(chain)) < 8_000  # a few KB, not the whole beads part
+    assert ask not in {r["id"] for r in parts.parts["thread/web"]["letters"]}
+    assert "chain" not in parts.parts["thread/inbox"]
+
+
+def test_beads_since_returns_a_delta_and_a_new_letter_does_not_resend_the_part(parts):
+    """A letter moves beads; GET ?since=<old hash> is the patch, not the 1 MB part."""
+    root = parts.home.root
+    inject_letter(root, to="thread:web", body="first")
+    assert parts.step()
+    before = parts.hashes["beads"]
+    n = len(parts.parts["beads"])
+    inject_letter(root, to="thread:web", body="second")
+    assert parts.step()
+    delta = parts.bead_deltas[before]
+    assert delta["since"] == before and delta["hash"] == parts.hashes["beads"]
+    assert delta["drop"] == []
+    assert 1 <= len(delta["set"]) < n
+    assert parts.parts["index"]["beads_delta"]["since"] == before
+    server = serve(parts, 0)
+    port = server.server_address[1]
+    try:
+        status, _, body = get(port, f"/v1/loom/beads?since={before}")
+        got = json.loads(body)
+        assert status == 200 and got["set"] == delta["set"] and got["drop"] == []
+        _, _, full = get(port, "/v1/loom/beads")
+        assert len(body) < len(full)
+        empty = json.loads(get(port, f"/v1/loom/beads?since={parts.hashes['beads']}")[2])
+        assert empty == {"since": parts.hashes["beads"], "hash": parts.hashes["beads"], "set": {}, "drop": []}
+    finally:
+        parts.stop.set()
+        server.shutdown()
+        server.server_close()
+
+
+def test_inbox_has_no_chain_and_setup_flow_stays_small(parts):
+    """The strip needs wish roots and crossing letters, not every letter of a 200-letter part; inbox has no strip."""
+    root = parts.home.root
+    write_thread(root, "inbox", readme("inbox"), "answer-fast", wait="0")
+    write_thread(root, "setup-flow", readme("setup-flow"), "answer-fast", wait="0")
+    ask = inject_letter(root, to="thread:inbox", body="please set it up")
+    append(parts.home, Fact(kind="wish", by="person:ada", id="w-setup", data={
+        "wish": "w-setup", "says": [[ask, 0, None]], "from": "person",
+        "line": "set it up", "thread": "setup-flow"}))
+    prev = ask
+    for i in range(80):
+        prev = inject_letter(root, to="thread:setup-flow", body=f"step {i} of the setup", re=prev)
+    assert parts.step()
+    assert "chain" not in parts.parts["thread/inbox"]
+    chain = parts.parts["thread/setup-flow"]["chain"]
+    assert ask in chain and "w-setup" in chain
+    assert len(json.dumps(chain)) < 8_000
+
+
+def test_beads_since_composes_two_letters_to_the_current_hash(parts):
+    """Two letters between two steps: ?since=<first hash> returns both rows with hash=current."""
+    root = parts.home.root
+    inject_letter(root, to="thread:web", body="first")
+    assert parts.step()
+    h1 = parts.hashes["beads"]
+    second = inject_letter(root, to="thread:web", body="second")
+    assert parts.step()
+    third = inject_letter(root, to="thread:web", body="third")
+    assert parts.step()
+    current = parts.hashes["beads"]
+    server = serve(parts, 0)
+    port = server.server_address[1]
+    try:
+        status, _, body = get(port, f"/v1/loom/beads?since={h1}")
+        got = json.loads(body)
+        assert status == 200 and got["hash"] == current and got["since"] == h1
+        assert second in got["set"] and third in got["set"]
+    finally:
+        parts.stop.set()
+        server.shutdown()
+        server.server_close()
+
+
+def test_topic_newest_matches_the_seed_wake():
+    """board.topic_newest is a copy of the seed wake's; a drift in either fails."""
+    import importlib.machinery
+    import importlib.util
+    from brr.loom.runtime.board import topic_newest as board_newest
+    wake = Path(__file__).resolve().parents[2] / "src/brr/loom/runtime/seed/core/loom/wake"
+    loader = importlib.machinery.SourceFileLoader("seed_wake", str(wake))
+    spec = importlib.util.spec_from_loader("seed_wake", loader)
+    mod = importlib.util.module_from_spec(spec)
+    loader.exec_module(mod)
+    page = (
+        "# Board: how wishes and threads are drawn\n\n"
+        "### 2026-10-24 · Older entry · [x](y)\n\nbody\n\n"
+        "### 2026-10-25 · A thread shows the face its strand chose · [faces](x)\n\n"
+        "Chose four states.\n"
+    )
+    assert board_newest(page) == mod.topic_newest(page) == (
+        "2026-10-25", "A thread shows the face its strand chose")
+    assert board_newest("# no entries\n") == mod.topic_newest("# no entries\n") == ("", "")
+
+
+def test_the_index_is_hashes_counts_and_short_rows(parts, monkeypatch):
+    """Steps, strands and wish stamps stay off the index. Growing them grows the part, not the index."""
+    from brr.loom.runtime import board
+    root = parts.home.root
+    fat = "step " * 20_000
+    monkeypatch.setattr(board, "steps_of", lambda _root, _name: [{"text": fat, "wishes": [], "receipt": None}])
+    body = "quote " * 20_000
+    letter = inject_letter(root, to="thread:web", body=body)
+    append(parts.home, Fact(kind="wish", by="person:ada", id="w-web", data={
+        "wish": "w-web", "says": [[letter, 0, None]], "from": "person", "line": "on the thread", "thread": "web"}))
+    append(parts.home, Fact(kind="wish", by="person:ada", id="w-loose", data={
+        "wish": "w-loose", "says": [[letter, 0, None]], "from": "person", "line": "no thread", "thread": "nowhere"}))
+    assert parts.step()
+    index = parts.parts["index"]
+    raw = json.dumps(index, separators=(",", ":")).encode()
+    assert len(raw) < 30_000
+    assert "unthreaded" not in index
+    assert b"step step" not in raw and b"quote quote" not in raw
+    assert b"w-loose" not in raw and b"w-web" not in raw
+    for row in index["threads"]:
+        assert set(row) <= {"id", "title", "status", "last_at", "board", "counts"}
+        assert set(row.get("board") or {}) <= {"state"}
+    web = next(row for row in index["threads"] if row["id"] == "web")
+    assert web["board"]["state"] and web["counts"]
+    assert parts.parts["thread/web"]["steps"][0]["text"] == fat
+    assert [w["wish"] for w in parts.parts["thread/web"]["wishes"]] == ["w-web"]
+    assert parts.parts["unthreaded"][0]["wish"] == "w-loose"
+    assert parts.parts["unthreaded"][0]["says"][0]["quote"] == body
+    held = parts.hashes["unthreaded"]
+    inject_letter(root, to="thread:docs", body="unrelated")
+    assert parts.step()
+    assert parts.hashes["unthreaded"] == held
+
+    monkeypatch.setattr(board, "steps_of", lambda _root, _name: [{"text": fat + fat, "wishes": [], "receipt": None}])
+    before = len(raw)
+    parts.revision = None
+    assert parts.step()
+    grown = json.dumps(parts.parts["index"], separators=(",", ":")).encode()
+    assert len(grown) < 30_000 and abs(len(grown) - before) < 1000
+    assert parts.parts["thread/web"]["steps"][0]["text"] == fat + fat
+    assert b"step step" not in grown
+
+    server = serve(parts, 0)
+    port = server.server_address[1]
+    try:
+        status, _, got = get(port, "/v1/loom/unthreaded")
+        assert status == 200 and json.loads(got)[0]["wish"] == "w-loose"
+        idx = json.loads(get(port, "/v1/loom/index")[2])
+        assert "unthreaded" not in idx and idx["parts"]["unthreaded"] == parts.hashes["unthreaded"]
+    finally:
+        parts.stop.set()
+        server.shutdown()
+        server.server_close()
+
+
+def test_topics_is_its_own_part_not_on_the_index(parts):
+    root = parts.home.root
+    page = root / "self/topics/board.md"
+    page.parent.mkdir(parents=True, exist_ok=True)
+    page.write_text(
+        "# Board: how wishes and threads are drawn\n\n"
+        "### 2026-10-25 · A thread shows the face its strand chose · [faces](x)\n\n"
+        "Chose four states, in order.\n"
+    )
+    cited = inject_letter(root, to="thread:web", body="see topics/board for the column order")
+    assert parts.step()
+    index = parts.parts["index"]
+    assert "topics" in index["parts"]
+    assert "topics" not in {k for k in index if k != "parts"}
+    rows = parts.parts["topics"]
+    assert rows[0]["id"] == "board"
+    assert rows[0]["at"] == "2026-10-25"
+    assert rows[0]["line"].startswith("A thread shows the face")
+    assert cited in rows[0]["cites"]
+    assert "Chose four states" in rows[0]["quote"]
+    before = parts.hashes["topics"]
+    inject_letter(root, to="thread:web", body="unrelated")
+    assert parts.step()
+    assert parts.hashes["topics"] == before
+    server = serve(parts, 0)
+    port = server.server_address[1]
+    try:
+        status, _, body = get(port, "/v1/loom/topics")
+        assert status == 200 and json.loads(body)[0]["id"] == "board"
+        idx = json.loads(get(port, "/v1/loom/index")[2])
+        assert "topics" not in idx
+        assert idx["parts"]["topics"] == parts.hashes["topics"]
+    finally:
+        parts.stop.set()
+        server.shutdown()
+        server.server_close()
+
+
+def _reading(directory: Path, shell: str, windows: list, error: str | None = None) -> None:
+    directory.mkdir(parents=True, exist_ok=True)
+    body = {"at": time.time(), "windows": windows}
+    if error:
+        body["error"] = error
+    (directory / f"{shell}.json").write_text(json.dumps(body))
+
+
+def test_usage_moves_the_header_fuel_without_a_recompute(parts, monkeypatch):
+    """The header reads the files the status line reads. A usage write is not a ledger move, and a collector
+    error with no window is the word ``fails``, not an absent shell and not the error text."""
+    from brr.loom.runtime import board
+    from brr.loom.runtime.usage import shell_fuels
+    root = parts.home.root
+    inject_letter(root, to="thread:web", body="first")
+    assert parts.step()
+    assert "fuel" not in parts.parts["index"]
+    computed = []
+    real = board.compute
+    monkeypatch.setattr(board, "compute", lambda *a, **k: computed.append(1) or real(*a, **k))
+    usage = root / "loom/usage"
+    _reading(usage, "grok", [{"name": "week", "left_pct": 58}])
+    _reading(usage, "claude", [
+        {"name": "session", "left_pct": 15}, {"name": "week", "left_pct": 48}])
+    _reading(usage, "vibe", [], error="token totals only, secret-looking")
+    assert parts.step()
+    assert computed == []
+    fuel = parts.parts["index"]["fuel"]
+    assert [row["shell"] for row in fuel] == ["claude", "grok", "vibe"]
+    assert fuel[0]["gauges"] == [
+        {"window": "session", "left_pct": 15}, {"window": "week", "left_pct": 48}]
+    assert fuel[1]["gauges"] == [{"window": "week", "left_pct": 58}]
+    assert fuel[2]["state"] == "error" and fuel[2]["error"] == "fails" and fuel[2]["gauges"] == []
+    assert "secret-looking" not in json.dumps(fuel)
+    words = shell_fuels(parts.home)
+    assert words["claude"] == "session 15% week 48%"
+    assert words["grok"] == "week 58%"
+    assert words["vibe"] == "fails"
+    assert [row["shell"] for row in fuel] == sorted(words)
+    held = parts.hashes["thread/web"]
+    assert not parts.step()
+    _reading(usage, "grok", [])
+    assert parts.step()
+    assert computed == []
+    assert [row["shell"] for row in parts.parts["index"]["fuel"]] == ["claude", "vibe"]
+    assert "grok" not in shell_fuels(parts.home)
+    assert parts.hashes["thread/web"] == held

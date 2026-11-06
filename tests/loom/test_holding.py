@@ -65,7 +65,7 @@ while True:
         wait_until(lambda: len(replies) == 2 and not mail(root, loom.facts(), "work"), 10, loom.dump)
         assert replies == [{"body": "first", "pid": pid}, {"body": "follow-up", "pid": pid}]
         wait_until(lambda: any(f.kind == "body.exited" for f in loom.facts()), 8, loom.dump)
-        assert kept.read_text().startswith("cache keepalive, nothing new arrived")
+        assert kept.read_text().partition(chr(10))[2].startswith("cache keepalive, nothing new arrived")
         assert not any(f.id.startswith("loom/bounce-") for f in loom.facts())
         inject_letter(root, to="thread:work", body="later")
         wait_until(lambda: len(replies) == 3 and not mail(root, loom.facts(), "work"), 12, loom.dump)
@@ -114,7 +114,7 @@ while True:
     view = ctx.jack("stop")
     if view.raw == "":
         break
-    assert json.loads(view.raw)["reason"].startswith("cache keepalive, nothing new arrived: stop")
+    assert json.loads(view.raw)["reason"].partition(chr(10))[2].startswith("cache keepalive, nothing new arrived: stop")
     holds += 1
     # Replace, never truncate: the test polls this file and must not read ''.
     ctx.handoff({str(root / "holds.tmp")!r}, str(holds))

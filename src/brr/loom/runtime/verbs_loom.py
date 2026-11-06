@@ -60,12 +60,15 @@ def _loom(argv: list[str]) -> int:
 def _attention(argv: list[str]) -> int:
     parser = Parser(verb="attention", prog="python -m brr.loom.runtime attention")
     parser.add_argument("--home")
+    parser.add_argument("--room")
     parser.add_argument("--install", default=None)
     parser.add_argument("--note", metavar="LETTER_ID")
     parser.add_argument("--why")
     args = parser.parse_args(argv)
-    args.home, _ = resolve_home(args.home)
-    home = Home(args.home, install=args.install)
+    from .home import home_for
+    home = home_for(args.home, args.room)
+    if args.install is not None:
+        home = Home(home.root, install=args.install)
     if args.note:
         if not args.why or not args.why.strip():
             parser.error("--note requires --why")
@@ -84,7 +87,7 @@ def _attention(argv: list[str]) -> int:
         if line:
             print(line)
     # No state of its own: the loom's notices that no body has settled yet.
-    state = fold(read_facts(Home(args.home, install=args.install)))
+    state = fold(read_facts(home))
     from datetime import datetime, timezone
     for strand, fact in pending_bodies(state.accepted).items():
         if fact.kind == "body.parked" and strand in {s for s, _g in state.holder.values()}:
@@ -133,12 +136,17 @@ def _send(argv: list[str]) -> int:
     parser.add_argument("--says", action=_Wish, help='"quote" or <letter id>:"quote"; never refused')
     parser.add_argument("--answered", action=_Wish, nargs=0, help="this send's words are the receipt")
     parser.add_argument("--chatter", action="store_true", help="cites the --re letter as no wish")
+    parser.add_argument("--correction", metavar="PATH", help="the --re letter changes this page, scar or README")
+    parser.add_argument("--silent", metavar="KIND", help="joke, test or mistake: one word or a --note")
+    parser.add_argument("--hold", metavar="WHY", help="out-of-pattern or not-him: this send is the check")
     parser.add_argument("--for", dest="ask_for", metavar="W-ID",
                         help="a question to a person files an ask under this wish")
     parser.add_argument("--chatter-of", dest="chatter_of", default=None, help=argparse.SUPPRESS)
     parser.add_argument("--reopen", metavar="TEXT")
     parser.add_argument("--at", help="YYYY-MM-DDTHH:MM:SSZ, +<n>m, +<n>h, or +<n>d")
     parser.add_argument("--body", dest="body_choice", metavar="SHELL[/CORE]")
+    parser.add_argument("--spend", action="store_true",
+                        help="open the thread on the first spend.burn shell above the floor")
     parser.add_argument("--repo", action="append", default=[])
     parser.add_argument("--budget", metavar="TOKENS",
                         help="weighted tokens, e.g. 2m: a new thread's allocation, or the opener's raise")
@@ -151,23 +159,31 @@ def _send(argv: list[str]) -> int:
         ["--chatter-of", arg.partition("=")[2]] if arg.startswith("--chatter=") else [arg])])
     chatter = (None if args.chatter_of is None and not args.chatter
                else [i for i in (args.chatter_of or "").split(",") if i.strip()])
+    branches = [(b, v) for b, v in (("correction", args.correction), ("silent", args.silent),
+                                     ("held", args.hold)) if v is not None]
     echo: list[str] = []
     room = _room(args.room)
     try:
+        if len(branches) > 1:
+            raise PortError("send: one branch per letter: --correction, --silent or --hold")
         if args.at is not None and args.reopen is not None:
             raise PortError("send: --at cannot be used with --reopen")
+        if args.spend and args.body_choice is not None:
+            raise PortError("send: --spend and --body are exclusive")
         if args.reopen is not None:
             from .home import thread_of
             from .lifecycle import land_status
-            if args.body is not None or args.note is not None or args.body_choice is not None or args.repo:
-                raise PortError("send: --reopen supplies the letter text; drop the body and --note")
+            if (args.body is not None or args.note is not None or args.body_choice is not None
+                    or args.repo or args.spend):
+                raise PortError("send: --reopen supplies the letter text; drop the body, --note and --spend")
             land_status(room, thread_of(args.to), "open", f"reopen {thread_of(args.to)}")
         letter_id = write_send(
             room, to=args.to, sender=strand_of_room(room), body=args.reopen if args.reopen is not None else args.body or "",
             re=args.re, note=args.note, clean=args.clean, kind=args.kind,
-            refs=tuple(args.ref or ()), body_choice=args.body_choice, repo_sources=args.repo, at=args.at,
+            refs=tuple(args.ref or ()), body_choice=args.body_choice, spend=args.spend,
+            repo_sources=args.repo, at=args.at,
             wish=args.wish, budget=None if args.budget is None else parse_tokens(args.budget),
-            chatter=chatter, ask_for=args.ask_for,
+            chatter=chatter, ask_for=args.ask_for, triage=branches[0] if branches else None,
             echo=echo, reopen=args.reopen is not None,
         )
     except (PortError, SelfError, ValueError, OSError) as exc:
@@ -185,12 +201,13 @@ def _reincarnate(argv: list[str]) -> int:
     parser.add_argument("--room")
     parser.add_argument("--why", required=True)
     parser.add_argument("--fresh", action="store_true")
+    parser.add_argument("--cites", metavar="LETTER_ID", help="the letter on this thread it answers: its receipt")
     args = parser.parse_args(argv)
     room = _room(args.room)
     try:
         if not args.fresh:
             sys.stderr.write(_stakes(room))
-        fact_id = write_reincarnate(room, args.why, fresh=args.fresh)
+        fact_id = write_reincarnate(room, args.why, fresh=args.fresh, cites=args.cites)
     except (PortError, SelfError, ValueError, OSError) as exc:
         return refuse("reincarnate", exc)
     sys.stdout.write(fact_id + "\n")
@@ -270,10 +287,11 @@ def _settle(argv: list[str]) -> int:
     parser.add_argument("--retire", action="store_true")
     parser.add_argument("--hand-to")
     parser.add_argument("--word", metavar="LETTER_ID")
+    parser.add_argument("--cites", metavar="LETTER_ID", help="the letter on this thread it answers: its receipt")
     args = parser.parse_args(argv)
     try:
         room = _room(args.room)
-        settle(room, args.thread, args.why, args.retire, args.hand_to, args.word)
+        settle(room, args.thread, args.why, args.retire, args.hand_to, args.word, args.cites)
     except (PortError, SelfError, ValueError, OSError) as exc:
         return refuse("settle", exc)
     from .jack import declare

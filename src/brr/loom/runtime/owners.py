@@ -394,6 +394,8 @@ def unanswered_letters(facts) -> dict[str, Fact]:
 
     Handling debt and answering a person are separate projections: neither a
     resident's note nor a done disposition is evidence the person heard back.
+    A silent disposition is the one exception: a joke, a test or a mistake is
+    answered with nothing on purpose (dispositions.py).
     """
     if isinstance(facts, LedgerView):
         return facts.project('unanswered', None, _unanswered_letters)
@@ -417,6 +419,8 @@ def _unanswered_letters(facts) -> dict[str, Fact]:
     answered = {f.data.get('re') for f in facts if f.kind == 'note'
                 and f.by.startswith('person:') and f.data.get('re') in asks
                 and person(f.by) == author(asks[f.data['re']])}
+    answered |= {f.data['re'] for f in facts if f.kind in ('letter', 'note') and f.by.startswith('strand:')
+                 and str(f.data.get('triage') or '').startswith('silent ') and f.data.get('re') in asks}
     # Loom notices report transport/runtime state, not an answer to the ask.
     # They can be embedded in a done disposition and have real part receipts.
     replies = {f.id: f for f in accepted if f.kind == 'letter' and not is_notice(f)

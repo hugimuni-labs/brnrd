@@ -1,12 +1,14 @@
 // A wish's bead sheet (board.html's renderBead, live-board): its five stages as one rail in pip order, times that drop a
 // repeated day, the stage that waits on him ringed; then the trace by time, where a stamp's ref opens what it names (a
-// PR to the forge, a ledger id to its bead, a receipt to its Plan step), a result no stamp named, and the verdict.
+// PR to the forge, a ledger id to its bead, a receipt to its Plan step), a result no stamp named, and the verdict. The
+// ringed stage carries the agree (or done, on an ask) and correct buttons, so he answers from the sheet (10349).
 import { after, before, test } from 'node:test';
 import { deepEqual, equal, ok } from 'node:assert/strict';
 import { open } from './harness.mjs';
 import { at, fixture, reindex } from './fixture.mjs';
 
 const BRAVO = 'w-bravo0000000',
+	CHARLIE = 'w-charlie0000000',
 	FOX = 'w-foxtrot0000000',
 	NOTE = 's-test-brav1/note';
 
@@ -95,5 +97,44 @@ test('an agreed wish: every stage filled, nothing ringed, the verdict in its tra
 	const { rail, trace } = await sheet(FOX);
 	ok(rail.every((s) => !s.not && !s.wait));
 	equal(trace.at(-1).vb, 'verdict · accepted');
+	deepEqual(B.errors, []);
+});
+
+const buttons = () =>
+	B.page.evaluate(() =>
+		[...document.querySelectorAll('#bead .rail .bd.stage button[data-act]')].map((x) => ({
+			stage: x.closest('.bd.stage').dataset.stage,
+			act: x.dataset.act,
+			text: x.textContent.trim()
+		}))
+	);
+
+test('an open ask: the ringed stage offers done and correct; an agreed wish offers nothing', async () => {
+	await sheet(CHARLIE);
+	deepEqual(await buttons(), [
+		{ stage: 'delivered', act: 'done', text: 'done' },
+		{ stage: 'delivered', act: 'correct', text: 'correct' }
+	]);
+	await sheet(FOX);
+	deepEqual(await buttons(), []);
+});
+
+test('a waiting wish: one press on the sheet sends his agree and the ring goes', async () => {
+	const posts = [];
+	await B.page.route('**/v1/loom/letters', async (route) => {
+		posts.push(route.request().postDataJSON());
+		await route.continue();
+	});
+	await sheet(BRAVO);
+	deepEqual(await buttons(), [
+		{ stage: 'agreed', act: 'agree', text: 'agree' },
+		{ stage: 'agreed', act: 'correct', text: 'correct' }
+	]);
+	await B.page.locator('#bead .rail .bd.stage.waitv button[data-act="agree"]').click();
+	await B.page.waitForFunction(() => !document.querySelector('#bead .rail .bd.stage.waitv'));
+	equal(posts.length, 1);
+	equal(posts[0].wish, BRAVO);
+	equal(posts[0].verdict, 'agree');
+	deepEqual(await buttons(), [], 'answered, the sheet offers nothing more');
 	deepEqual(B.errors, []);
 });

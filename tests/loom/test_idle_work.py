@@ -35,7 +35,7 @@ def test_ahead_of_pace_the_keepalive_carries_the_acts_and_never_says_stop(worker
     result = _stop(room, monkeypatch, AHEAD)
     assert result["decision"] == "block"
     reason = result["reason"]
-    assert reason.startswith("cache keepalive, fuel ahead of pace (week 92% left, 79% of it to go)")
+    assert reason.partition(chr(10))[2].startswith("cache keepalive, fuel ahead of pace (week 92% left, 79% of it to go)")
     assert ": stop" not in reason
     assert "  - w-aaaa is heard, never read" in reason
     assert "or end with one line saying why not" in reason
@@ -44,13 +44,13 @@ def test_ahead_of_pace_the_keepalive_carries_the_acts_and_never_says_stop(worker
 def test_behind_pace_the_keepalive_says_what_it_said(worker, monkeypatch):
     room, _ = worker
     result = _stop(room, monkeypatch, BEHIND)
-    assert result["reason"].startswith("cache keepalive, nothing new arrived: stop, unless the boundary")
+    assert result["reason"].partition(chr(10))[2].startswith("cache keepalive, nothing new arrived: stop, unless the boundary")
     assert "w-aaaa" not in result["reason"]
 
 
 def test_an_unknown_gauge_is_not_ahead(worker, monkeypatch):
     room, _ = worker
-    assert _stop(room, monkeypatch, None)["reason"].startswith("cache keepalive, nothing new arrived: stop")
+    assert _stop(room, monkeypatch, None)["reason"].partition(chr(10))[2].startswith("cache keepalive, nothing new arrived: stop")
     assert not idle.ahead({"windows": []})
     assert not idle.ahead({"windows": [AHEAD["windows"][0]]})
 

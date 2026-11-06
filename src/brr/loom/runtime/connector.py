@@ -13,7 +13,7 @@ from pathlib import Path
 from brr.daemon2.facts import Fact, union
 from .adapters import resolve
 from .config import config_path, load_config, read_array
-from .home import atomic_write, channel_parts, mint
+from .home import HOME_THREAD, atomic_write, channel_parts, mint
 from .labels import guard_off, is_stranger
 from .ledger import append, read_facts
 from .port import clean_accepts, parse_frontmatter
@@ -32,9 +32,9 @@ def carries(home):
     for name, kind in instances(home).items():
         folder = resolve(home, kind, "connectors")
         flags = (folder / "carries").read_text().split()
-        if flags not in ([], ["edit"]):
-            raise ValueError(f"{folder}/carries: expected only an optional edit line")
-        found[name] = (name, folder, bool(flags))
+        if len(set(flags)) != len(flags) or not set(flags) <= {"edit", "attach"}:
+            raise ValueError(f"{folder}/carries: expected only optional edit and attach lines")
+        found[name] = (name, folder, frozenset(flags))
     return found
 
 
@@ -331,7 +331,11 @@ def person_dm(home, channel):
 
 
 def _speech(facts, channel, kind):
-    """Join trusted receipts to the strand which actually drafted the letter."""
+    """Join trusted receipts to the strand which actually drafted the letter.
+
+    A letter the loom wrote (a collector's ask) binds to the home thread,
+    where an unbound reply lands anyway: the reply keeps its ``re``, so it
+    answers what the letter links."""
     ordered = union(facts)
     letters = {str(f.data.get('id') or f.id): f for f in fold(ordered).accepted if f.kind == 'letter'}
     threads = sender_threads(ordered)
@@ -339,9 +343,12 @@ def _speech(facts, channel, kind):
         if fact.kind != kind or not fact.by.startswith('loom:'):
             continue
         letter = letters.get(str(fact.data.get('key')))
-        if letter is None or not letter.by.startswith('strand:') or letter.data.get('to') != channel:
+        if letter is None or letter.data.get('to') != channel:
             continue
-        thread = threads.get(letter.by.removeprefix('strand:'))
+        if letter.by.startswith('strand:'):
+            thread = threads.get(letter.by.removeprefix('strand:'))
+        else:
+            thread = HOME_THREAD if letter.by.startswith('loom:') else None
         if thread:
             yield fact.data, letter, thread
 

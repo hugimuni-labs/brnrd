@@ -11,6 +11,19 @@ export const at = (min) => new Date(T0 + min * 60_000).toISOString().replace('.0
 const hash = (v) => createHash('sha256').update(JSON.stringify(v)).digest('hex').slice(0, 14);
 const stamps = (...ks) => ks.map(([stamp, m]) => ({ stamp, at: at(m) }));
 
+// What compute ships: the index row is the header and the rail; steps, strands and calls ride on the part.
+function indexThread(t, counts) {
+	const row = { id: t.id, title: t.title, status: t.status };
+	if (t.last_at) row.last_at = t.last_at;
+	if (t.board?.state) row.board = { state: t.board.state };
+	if (counts && Object.keys(counts).length) row.counts = counts;
+	return row;
+}
+function partOf(t, extra) {
+	const { id, ...body } = t;
+	return { ...body, id, ...extra };
+}
+
 // id, board, strand state (null = no body), wish state, extra
 const THREADS = [
 	['alpha', { state: 'seated', strand: 'working' }, 'working', 'granting'],
@@ -191,26 +204,24 @@ export function fixture() {
 	for (const t of threads) {
 		const ls = letters.filter((l) => l.threads.includes(t.id));
 		const sid = t.strands[0]?.id;
-		parts[`thread/${t.id}`] = {
-			id: t.id,
+		parts[`thread/${t.id}`] = partOf(t, {
 			count: ls.length,
 			letters: ls,
 			wishes: wishes[t.id],
 			tools: sid && tools[sid] ? { [sid]: tools[sid] } : {},
 			live: sid && live[sid] ? { [sid]: live[sid] } : {}
-		};
+		});
 		counts[t.id] = {};
 		for (const w of wishes[t.id]) counts[t.id][w.state] = (counts[t.id][w.state] || 0) + 1;
 	}
 	const ib = letters.filter((l) => l.threads.includes('inbox'));
-	parts['thread/inbox'] = {
-		id: 'inbox',
+	parts['thread/inbox'] = partOf(inbox, {
 		count: ib.length,
 		letters: ib,
 		wishes: [],
 		tools: {},
 		live: {}
-	};
+	});
 	// asks.Beads.parent: a letter hangs from its re, else its first link, else (a strand's) from its strand; a strand
 	// from its thread, a thread from the wish it was opened for, a wish from the letter that said it.
 	const beads = {};
@@ -233,9 +244,49 @@ export function fixture() {
 	for (const [id, ws] of Object.entries(wishes))
 		for (const w of ws) beads[w.wish] = [w.letters?.[0] || null, 'wish', id, w.at, w.line];
 	parts.beads = beads;
+	parts.topics = [
+		{
+			id: 'board',
+			title: 'Board: how wishes and threads are drawn',
+			at: '2026-10-25',
+			line: 'A thread shows the face its strand chose',
+			entries: 2,
+			cites: ['letter:mine:100'],
+			quote: 'Chose four states, in order.'
+		}
+	];
+	const walk = (id, out) => {
+		const seen = new Set();
+		let cur = id;
+		while (cur && beads[cur] && !seen.has(cur)) {
+			out[cur] = beads[cur];
+			seen.add(cur);
+			cur = beads[cur][0];
+		}
+	};
+	for (const t of threads) {
+		const chain = {};
+		for (const w of wishes[t.id] || []) walk(w.wish, chain);
+		for (const l of parts[`thread/${t.id}`].letters) walk(l.id, chain);
+		parts[`thread/${t.id}`].chain = chain;
+	}
+	parts.unthreaded = [
+		{
+			wish: 'w-loose0000000',
+			line: 'a wish with no thread on the board',
+			state: 'heard',
+			origin: 'derived',
+			thread: 'nowhere',
+			at: at(1),
+			stamps: stamps(['heard', 1]),
+			says: [{ id: 'letter:mine:loose', quote: 'no column for this', cites: 'whole' }],
+			letters: [],
+			results: []
+		}
+	];
 	return reindex(parts, {
 		v: 1,
-		threads: [inbox, ...threads],
+		threads: [indexThread(inbox), ...threads.map((t) => indexThread(t, counts[t.id]))],
 		faces: {
 			running: ['brnrd', 'brvrd', 'br^rd', 'brvrd', 'brnrd'],
 			idle: ['brnrd', 'b-n-d', 'brnrd']
@@ -250,7 +301,6 @@ export function fixture() {
 			}
 		],
 		wishes: counts,
-		unthreaded: [],
 		person: 'ada',
 		via: 'channel:mine/42'
 	});

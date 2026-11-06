@@ -4,7 +4,7 @@
 	import { tick } from 'svelte';
 	import type { Letter, Thread } from '../types.ts';
 	import { bst } from '../order.ts';
-	import { dur, hue, secs, short, stepText } from '../text.ts';
+	import { dur, hue, hm, secs, short, stepText } from '../text.ts';
 	import { liveOf, what, withTools } from '../tape.ts';
 	import LetterCard from './LetterCard.svelte';
 	import Tape from './Tape.svelte';
@@ -12,7 +12,9 @@
 	import Calls from './Calls.svelte';
 	import WishCard from './WishCard.svelte';
 	import { inboxCards } from '../ledger.ts';
+	import { fromInbox } from '../bead.ts';
 	import { board } from './board.svelte.ts';
+	import { landAt } from '../place.ts';
 	let { t, inbox = false, letters }: { t: Thread; inbox?: boolean; letters: Letter[] } = $props();
 	const b = board();
 	const B = $derived(t.board || {});
@@ -35,17 +37,26 @@
 	const steps = $derived(t.steps || []);
 	const ai = $derived(steps.findIndex((s) => !s.receipt));
 	const grown = $derived(b.grown.has(t.id));
+	const from = $derived.by(() => {
+		void b.model;
+		return fromInbox(b.store.threads.get(t.id)?.chain || {}, b.model?.byId || new Map(), t.id);
+	});
 
 	let pane: HTMLElement | undefined = $state();
-	let first = true;
-	// Stick to the bottom when the reader is there (or on first paint); a reader scrolled up keeps the place.
+	let first = true,
+		landing = true;
+	// Stick to the bottom when the reader is there (or on first paint); a reader scrolled up keeps the place. The very
+	// first paint lands where the last page's reader stood in this column (place.ts), when that was not the bottom.
 	$effect.pre(() => {
 		void rows.length;
 		void W?.cards.length;
 		if (!pane) return;
+		const at = landing ? landAt(b.place.y[t.id]) : null;
+		landing = false;
 		const bottom = first || pane.scrollHeight - pane.clientHeight - pane.scrollTop < 40;
 		first = false;
-		if (bottom) tick().then(() => pane && (pane.scrollTop = pane.scrollHeight));
+		if (at != null) tick().then(() => pane && (pane.scrollTop = at));
+		else if (bottom) tick().then(() => pane && (pane.scrollTop = pane.scrollHeight));
 	});
 	// A pane that shrinks (the plan grows over the column, the composer grows) keeps a reader at the bottom there, rather
 	// than cutting the last letter mid-sentence (wvut8 4).
@@ -162,6 +173,23 @@
 	{#if inbox}
 		<Calls calls={B.calls || []} />
 	{:else}
+		{#if from.length}<div class="from">
+				{#each from as row (row.id)}
+					{@const open = b.open.has('from:' + row.id)}
+					<button
+						type="button"
+						class="from-line"
+						class:open
+						data-from={row.id}
+						onclick={() => b.toggle(b.open, 'from:' + row.id)}
+						><b>{row.who}</b>
+						· {hm(row.at)}{#if row.thread}
+							· <span class="th">{row.thread}</span>{/if}
+						{#if open}<div class="from-body">{row.body}</div>{:else}
+							{row.line}{/if}</button
+					>
+				{/each}
+			</div>{/if}
 		<div class="band" class:ex={grown}>
 			<div class="wishpane"><Ledger {t} {letters} /></div>
 		</div>

@@ -1,0 +1,8 @@
+says = "A force-push rewrites a branch others hold. It goes only on the owner's letter naming the branch, stamped on this thread's wish."
+set-by = "{letter}"
+
+[[match]]
+tool = "Bash"
+input = '''\bgit\s+push\b(?=[^;|&\n]*(?:\s-f\b|\s--force|\s\+\S))[^;|&\n]*?\s\+?(?P<target>[^\s;|&+]+)\s*(?:[;|&\n]|$)'''
+refuse = true
+grant = "force-push"

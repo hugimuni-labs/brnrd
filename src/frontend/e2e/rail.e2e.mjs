@@ -55,7 +55,7 @@ test('a working strand plays the running frames and its live line ticks', async 
 
 test('a strand whose state moves flashes and logs was→now', async () => {
 	const parts = fixture();
-	const t = parts.index.threads.find((t) => t.strands.slice(-1)[0]?.state === 'working');
+	const t = Object.values(parts).find((p) => p?.strands?.slice(-1)[0]?.state === 'working');
 	const s = t.strands.slice(-1)[0];
 	s.state = 'holding';
 	// catch the flash the moment the span takes it: it lasts two frames
@@ -81,4 +81,13 @@ test('a strand whose state moves flashes and logs was→now', async () => {
 		['brnrd', 'b-n-d'].includes(r.spans.find((x) => x.thread === t.id).face),
 		'a holding strand rests'
 	);
+});
+
+test('a your-call thread’s chip says waits on you; a waiting one says waits: what', async () => {
+	const text = await B.page.$$eval('#rail span[data-thread]', (ss) =>
+		Object.fromEntries(ss.map((s) => [s.dataset.thread, s.textContent.replace(/\s+/g, ' ').trim()]))
+	);
+	match(text.bravo, /waits on you/);
+	match(text.echo, /waits: the forge to come back/);
+	match(text.charlie, / · idle$/);
 });

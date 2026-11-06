@@ -1,8 +1,21 @@
-"""A person letter's disposition: a wish say or chatter cites it before a reply counts.
+"""A person letter's disposition: one of the triage branches cites it before a reply counts.
 
-A letter is disposed when any wish's says, or any letter's or note's
-``chatter``, cites it. The graph is the facts themselves (letter → say →
-wish → result); nothing here is stored twice.
+Every person letter lands in exactly one branch (threads/letter-triage):
+
+- **wish**: a wish's says cite it (``--wish``);
+- **chatter**: it wants nothing and gets an answer (``--chatter``);
+- **correction**: it changes a page, scar or README (``--correction <path>``);
+- **silent**: a joke, a test or a mistake, answered with one word or
+  nothing (``--silent joke|test|mistake``); the person hears nothing on
+  purpose, so the letter is not left unanswered;
+- **held**: out of the person's pattern and irreversible, or not them at
+  all (``--hold out-of-pattern|not-him``); the send is the check through a
+  second path, and a held letter grants nothing (grants.find).
+
+An out-of-pattern ask that is reversible is a wish, done and said loudly.
+A letter is disposed when any wish's says, any letter's or note's
+``chatter``, or any letter's or note's ``triage`` cites it. The graph is the
+facts themselves (letter → say → wish → result); nothing here is stored twice.
 """
 
 from __future__ import annotations
@@ -14,6 +27,41 @@ from typing import Iterable
 from brr.daemon2.facts import Fact
 
 from .wishes import Say, read_says
+
+#: The details a triage branch takes, by its flag on ``send``.
+SILENT = ("joke", "test", "mistake")
+HOLD = ("out-of-pattern", "not-him")
+#: What a correction changes: a person's page, a scar, a README.
+CORRECTS = ("people/", "memory/scars/")
+
+
+def triage(branch: str, detail: str) -> str:
+    """``silent joke``, ``held not-him``, ``correction people/x/page.md``: the field a send carries."""
+    detail = detail.strip()
+    if branch == "silent" and detail not in SILENT:
+        raise ValueError(f"--silent {detail!r}: one of {', '.join(SILENT)}")
+    if branch == "held" and detail not in HOLD:
+        raise ValueError(f"--hold {detail!r}: one of {', '.join(HOLD)}")
+    if branch == "correction" and (".." in detail.split("/") or not (
+            detail.startswith(CORRECTS) or detail.rsplit("/", 1)[-1] == "README.md")):
+        raise ValueError(f"--correction {detail!r}: a self path under people/ or memory/scars/, or a README.md")
+    return f"{branch} {detail}"
+
+
+def triaged(facts: Iterable[Fact], branch: str | None = None) -> dict[str, str]:
+    """Letter id → the triage field a letter or note carries for it, of ``branch`` when given."""
+    from .ledger import kind_facts
+    found: dict[str, str] = {}
+    for f in kind_facts(facts, "letter", "note"):
+        value, re = str(f.data.get("triage") or ""), f.data.get("re")
+        if value and re and (branch is None or value.split(" ", 1)[0] == branch):
+            found[str(re)] = value
+    return found
+
+
+def held(facts: Iterable[Fact]) -> set[str]:
+    """Letters a body held: they wait for the second path and grant nothing."""
+    return set(triaged(facts, "held"))
 
 
 def is_person(letter: Fact) -> bool:
@@ -72,12 +120,17 @@ def disposed(facts: Iterable[Fact], room: Path | None = None) -> set[str]:
             found.update(say.letter for say in read_says(f.data.get("says")))
         elif f.kind in {"letter", "note"}:
             found.update(f.data.get("chatter") or ())
+            if f.data.get("triage") and f.data.get("re"):
+                found.add(str(f.data["re"]))
     out = Path(room) / "port" / "out" if room is not None else None
     if out is not None and out.is_dir():
         from .port import PortError, parse_frontmatter
         for path in out.glob("*.md"):
             try:
-                found.update((parse_frontmatter(path.read_text()).get("chatter") or "").split())
+                fields = parse_frontmatter(path.read_text())
+                found.update((fields.get("chatter") or "").split())
+                if fields.get("triage") and fields.get("re"):
+                    found.add(fields["re"])
             except (PortError, OSError):
                 continue
     return found

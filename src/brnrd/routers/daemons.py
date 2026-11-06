@@ -788,7 +788,7 @@ def put_loom(doc: dict[str, Any] = Body(...), principal: Principal = Depends(req
 #: set so a thread that left the board leaves the store.
 _MAX_PARTS_GZIP = 4_000_000
 _MAX_PARTS_BYTES = 40_000_000
-_PART_KEY = re.compile(r"^(index|beads|thread/[A-Za-z0-9._-]{1,180})$")
+_PART_KEY = re.compile(r"^(index|beads|topics|unthreaded|thread/[A-Za-z0-9._-]{1,180})$")
 
 
 @router.put("/loom/parts")
@@ -831,7 +831,7 @@ def _store_loom_parts(raw: bytes, encoding: str | None, principal: Principal, db
         keys = set(doc["keys"])
         parts = dict(doc.get("parts") or {})
         if not all(isinstance(k, str) and _PART_KEY.match(k) for k in keys | set(parts)):
-            raise ValueError("a part key is index, beads or thread/<id>")
+            raise ValueError("a part key is index, beads, topics, unthreaded or thread/<id>")
         if not set(parts) <= keys:
             raise ValueError("a pushed part is not in keys")
         rows = {k: (str(v["hash"])[:64], v["part"]) for k, v in parts.items()}

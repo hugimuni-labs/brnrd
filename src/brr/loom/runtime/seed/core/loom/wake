@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Wake recipe. The self owns this file; it imports nothing from brnrd.
+A live self's core/loom/wake is the source; this packaged seed follows it.
 
     core/loom/wake <thread-id> <owed.json>
 
@@ -7,14 +8,17 @@ stdout is the prompt. Exit 0 is ok, exit 3 is over budget (stderr says
 what did not fit), anything else is a broken recipe.
 
 LOOM_BUDGET_BYTES defaults to 24000. LOOM_PART is a file, written by the loom.
-When LOOM_CORE names a file, the core (identity, stance and role) is written there
+When LOOM_CORE names a file, the core (identity and stance) is written there
 and left out of stdout: a body that has a system slot carries it there, where
 automated turns and compaction do not wear it down. The budget still counts it.
 The tree is cut from the bottom, and a narrowed wake says how many entries
 were left out. Then the thread's README folds whole `## ` sections but `## Now` to their
 titles, last first, and only then is cut from its end; each cut says so: it
 is the one part the waking body can fix, so it never costs a letter. The
-identity, the stance, the role, the notes and the occasion are never cut.
+identity, the stance, the notes, the people in hand and the occasion are never
+cut; a person's page renders capped at PAGE_CAP, and the recent topics at
+TOPICS_CAP, each with a receipt. When LOOM_SIZES names a file, the bytes of
+each part the recipe printed are written there as JSON, for the wake gauge.
 """
 
 from __future__ import annotations
@@ -100,6 +104,27 @@ def first_line(path: Path, why: str) -> str:
     return next((line for line in lines if line.strip()), "")
 
 
+def wish_line(path: Path, why: str) -> str:
+    """A thread README's wishes as `<w-id> <line>`, joined by '; '; empty without any.
+
+    The loom writes `opened-for: [w-…]` and a `wish-<id>: "<line>"` beside it, so
+    the purpose is already one sentence; the first line is often the spec's head."""
+    lines = read_exact(path, why).splitlines()
+    if not (lines and lines[0] == "---" and "---" in lines[1:]):
+        return ""
+    data = {}
+    for line in lines[1 : lines.index("---", 1)]:
+        key, sep, raw = line.partition(":")
+        if sep and key[:1] not in " \t":
+            value = raw.strip()
+            if len(value) >= 2 and value[0] == value[-1] == '"':
+                value = value[1:-1]
+            data[key.strip()] = value
+    ids = [part.strip().strip('"') for part in data.get("opened-for", "").strip("[]").split(",")]
+    return "; ".join(f"{ident} {data[f'wish-{ident}']}".strip()
+                     for ident in ids if ident and data.get(f"wish-{ident}"))
+
+
 def tree_lines(root: Path, thread: str) -> list[str]:
     rows: list[tuple[int, str, str]] = []
     times = git_times(root)
@@ -126,7 +151,10 @@ def tree_lines(root: Path, thread: str) -> list[str]:
                 and parts[2] == "notes"
             ):
                 continue
-            line = f"{posix} · {first_line(path, posix)} · {path.stat().st_size}"
+            head = ""
+            if len(parts) == 3 and parts[0] == "threads" and parts[2] == "README.md":
+                head = wish_line(path, posix)
+            line = f"{posix} · {head or first_line(path, posix)} · {path.stat().st_size}"
             rows.append((times.get(posix, 0), posix, line))
     rows.sort(key=lambda row: (-row[0], row[1]))
     return [row[2] for row in rows]
@@ -225,11 +253,142 @@ def core_text(root: Path) -> str:
     return section("core/identity.md", identity) + section("memory/stance.md", stance)
 
 
+PAGE_CAP = 2400
+PAGE_LISTS = ("just do", "ask first", "never")
+
+
+def page_sections(text: str) -> dict[str, list[str]]:
+    """A person page's ``## `` sections by lowercased title, as their non-empty lines."""
+    found: dict[str, list[str]] = {}
+    current = None
+    for line in text.splitlines():
+        if line.startswith("## "):
+            current = line[3:].strip().lower()
+            found[current] = []
+        elif current is not None and line.strip():
+            found[current].append(line)
+    return found
+
+
+def person_of(sender: str) -> str:
+    """The people/ folder a letter's ``from`` names, or ``""`` for a thread or strand."""
+    for prefix in ("person:", "p-"):
+        if sender.startswith(prefix):
+            name = sender[len(prefix):]
+            return name if name and "/" not in name and name not in {".", ".."} else ""
+    return ""
+
+
+def people_block(root: Path, owed: Path) -> str:
+    """The pages of the people whose letters are in hand: their three lists whole and
+    the latest between-us line, each person capped at ``PAGE_CAP`` with a receipt. With
+    nobody in hand, every page's latest between-us line: every strand reads it."""
+    try:
+        letters = json.loads(owed.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return ""
+    in_hand = []
+    for item in letters if isinstance(letters, list) else ():
+        name = person_of(str(item.get("from", ""))) if isinstance(item, dict) else ""
+        if name and name not in in_hand and (root / "people" / name / "page.md").is_file():
+            in_hand.append(name)
+    folder = root / "people"
+    if in_hand:
+        chunks = []
+        for name in in_hand:
+            rel = f"people/{name}/page.md"
+            parts = page_sections(read_exact(root / rel, rel))
+            lines = [f"### {name}"]
+            for title in PAGE_LISTS:
+                lines.append(f"{title}:")
+                lines.extend(parts.get(title) or ["- (none written)"])
+            latest = (parts.get("between us") or [""])[0]
+            if latest:
+                lines.append(f"between us, latest: {latest.lstrip('- ')}")
+            lines.append(f"whole page: {rel}")
+            block = "".join(ensure_nl(line) for line in lines)
+            size = len(block.encode("utf-8"))
+            if size > PAGE_CAP:
+                note = f"[the wake cut this page's render at {PAGE_CAP} of {size} bytes; {rel} is whole on disk]\n"
+                kept = block.encode("utf-8")[: PAGE_CAP - len(note.encode("utf-8"))].decode("utf-8", "ignore")
+                block = kept[: kept.rfind("\n") + 1] + note
+            chunks.append(block)
+        return section("People", "".join(chunks))
+    rows = []
+    for page in sorted(folder.glob("*/page.md")) if folder.is_dir() else ():
+        if page.is_symlink():
+            continue
+        latest = (page_sections(read_exact(page, f"people/{page.parent.name}/page.md")).get("between us") or [""])[0]
+        if latest:
+            rows.append(f"{page.parent.name}: {latest.lstrip('- ')}"[:400])
+    return section("People", "".join(ensure_nl(row) for row in rows)) if rows else ""
+
+
+TOPICS_SHOWN = 10
+TOPICS_CAP = 1200
+TITLE_CUT = 80
+
+
+def topic_newest(text: str) -> tuple[str, str]:
+    """A topic page's newest ``### YYYY-MM-DD · title`` entry as (date, title), its
+    links dropped; the first listed wins a tie. ``("", "")`` without a dated entry."""
+    best = ("", "")
+    for line in text.splitlines():
+        if not line.startswith("### "):
+            continue
+        date, sep, rest = line[4:].partition(" · ")
+        if not (sep and len(date) == 10 and date[4] == date[7] == "-"
+                and date.replace("-", "").isdigit()):
+            continue
+        title = rest.split(" · [", 1)[0].strip()
+        if title and date > best[0]:
+            best = (date, title)
+    return best
+
+
+def topics_block(root: Path) -> str:
+    """The ``TOPICS_SHOWN`` topic pages with the newest dated entry, newest first, ties by
+    name: ``<page> · <date> · <title>``, the title copied and cut at ``TITLE_CUT``. The
+    section is capped at ``TOPICS_CAP`` with a receipt; a page with no entry has no line."""
+    folder = root / "topics"
+    found = []
+    for page in sorted(folder.glob("*.md")) if folder.is_dir() else ():
+        if page.name == "README.md" or page.is_symlink() or not page.is_file():
+            continue
+        rel = f"topics/{page.name}"
+        date, title = topic_newest(read_exact(page, rel))
+        if date:
+            if len(title) > TITLE_CUT:
+                title = title[: TITLE_CUT - 1].rstrip() + "\u2026"
+            found.append((date, rel, title))
+    found.sort(key=lambda item: (-int(item[0].replace("-", "")), item[1]))
+    block = "".join(f"{rel} · {date} · {title}\n" for date, rel, title in found[:TOPICS_SHOWN])
+    if not block:
+        return ""
+    size = len(block.encode("utf-8"))
+    if size > TOPICS_CAP:
+        note = f"[the wake cut this section's render at {TOPICS_CAP} of {size} bytes; topics/ is whole on disk]\n"
+        kept = block.encode("utf-8")[: TOPICS_CAP - len(note.encode("utf-8"))].decode("utf-8", "ignore")
+        block = kept[: kept.rfind("\n") + 1] + note
+    return section("Topics", block)
+
+
 def fixed_text(root: Path, thread: str, loom: str, owed: Path, excess: int = 0, limit: int = 0) -> tuple[str, str]:
     """The parts never cut, as (before the tree, after the tree).
 
     The occasion goes last: it is what this wake is for.
     """
+    return split(fixed_parts(root, thread, loom, owed, excess, limit))
+
+
+def split(parts: dict[str, str]) -> tuple[str, str]:
+    """(before the tree, after the tree)."""
+    head = parts["core"] + parts["readme"] + parts["notes"]
+    return head, parts["people"] + parts["topics"] + parts["loom"] + parts["occasion"]
+
+
+def fixed_parts(root: Path, thread: str, loom: str, owed: Path, excess: int = 0, limit: int = 0) -> dict[str, str]:
+    """The fixed parts by name, in wake order; ``LOOM_SIZES`` reports them."""
     readme_path = root / "threads" / thread / "README.md"
     readme = read_exact(readme_path, f"threads/{thread}/README.md")
     if excess:
@@ -238,12 +397,25 @@ def fixed_text(root: Path, thread: str, loom: str, owed: Path, excess: int = 0, 
         rest = excess - (size - len(readme.encode("utf-8")))
         if rest > 0:
             readme = clip(readme, rest, limit) or readme
-    parts = [
-        core_text(root),
-        section(f"threads/{thread}/README.md", readme),
-        notes_block(root, thread),
-    ]
-    return "".join(parts), section("Loom", loom) + occasion(owed)
+    return {
+        "core": core_text(root),
+        "readme": section(f"threads/{thread}/README.md", readme),
+        "notes": notes_block(root, thread),
+        "people": people_block(root, owed),
+        "topics": topics_block(root),
+        "loom": section("Loom", loom),
+        "occasion": occasion(owed),
+    }
+
+
+def write_sizes(parts: dict[str, str], tree: str) -> None:
+    """Bytes per part to ``LOOM_SIZES``, when the loom names a file: the wake gauge's input."""
+    target = os.environ.get("LOOM_SIZES")
+    if not target:
+        return
+    sizes = {name: len(text.encode("utf-8")) for name, text in parts.items()}
+    sizes["tree"] = len(tree.encode("utf-8"))
+    Path(target).write_text(json.dumps(sizes), encoding="utf-8")
 
 
 def piece_sizes(text: str) -> list[tuple[str, int]]:
@@ -317,12 +489,12 @@ def main() -> None:
                 loom += "\n"
             loom += extra
     root = Path.cwd()
-    head, tail = fixed_text(root, thread, loom, owed)
-    fixed = head + tail
-    total = len(fixed.encode("utf-8"))
+    parts = fixed_parts(root, thread, loom, owed)
+    total = sum(len(text.encode("utf-8")) for text in parts.values())
     if total > limit:
-        head, tail = fixed_text(root, thread, loom, owed, total - limit, limit)
-        fixed = head + tail
+        parts = fixed_parts(root, thread, loom, owed, total - limit, limit)
+    head, tail = split(parts)
+    fixed = head + tail
     total = len(fixed.encode("utf-8"))
     if total > limit:
         sizes = sorted(piece_sizes(fixed), key=lambda item: -item[1])
@@ -333,7 +505,9 @@ def main() -> None:
             f"core/identity.md, memory/stance.md and the letters are never cut.",
             3,
         )
-    out = head + fit_tree(fixed, tree_lines(root, thread), limit) + tail
+    tree = fit_tree(fixed, tree_lines(root, thread), limit)
+    out = head + tree + tail
+    write_sizes(parts, tree)
     core = os.environ.get("LOOM_CORE")
     if core:
         text = core_text(root)

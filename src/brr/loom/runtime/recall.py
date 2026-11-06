@@ -177,7 +177,7 @@ def pinned(readme: str) -> list[str]:
 
 
 def wake_topics(root: Path, readme: str, query: str, most: int = WAKE_MAX) -> str:
-    """``## Topics`` for a wake, or ``""``: the README's ``topic:`` pages, else the closest
+    """``## Topics close to this wake`` for a wake, or ``""``: the README's ``topic:`` pages, else the closest
     ``TOPICS`` pages by recall over ``query`` that reach ``FLOOR``. Heads only, in ``most`` bytes."""
     pages = topics(root)
     if not pages:
@@ -190,7 +190,7 @@ def wake_topics(root: Path, readme: str, query: str, most: int = WAKE_MAX) -> st
         why = "closest topic pages to this occasion"
     if not chosen:
         return ""
-    head = f"## Topics\n{why}; open one before deciding in its area\n"
+    head = f"## Topics close to this wake\n{why}; open one before deciding in its area\n"
     each = max(0, (most - len(head.encode("utf-8"))) // len(chosen))
     return head + "".join(head_block(slug, pages[slug], each) for slug in chosen)
 

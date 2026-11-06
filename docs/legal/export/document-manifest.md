@@ -11,9 +11,9 @@ population was empty of third parties, so no re-acceptance was owed).
 
 Hash snapshot:
 
-- Date: 2026-10-28
+- Date: 2026-11-05
 - Source revision (parent of this export-only change):
-  `fe20aecd5020d7e2843322b446e8f435ba0f074f`
+  `c8bb2017461f0037ff023ea0bf82e7136f01be3c`
 - Algorithm: SHA-256 over raw repository file bytes
 - Machine-readable list: [`SHA256SUMS`](SHA256SUMS)
 - Verification from the repository root:
@@ -47,8 +47,8 @@ hashes below remain authoritative for the snapshot if a deployed page changes.
 | Sub-processor list | [`src/frontend/src/routes/sub-processors/+page.svelte`](../../../src/frontend/src/routes/sub-processors/+page.svelte) | `4e0f5df17271fcc32fb4ab677b4ff499a6493a0cab0a68a49fcdfd702230fb75` |
 | Data Processing Agreement | [`docs/legal/dpa.md`](../dpa.md) | `ee366853701826282da0326092fc4ff504aab99f726e6dfcf234f4d9854f43fd` |
 | Article 30 record of processing | [`docs/legal/art-30-record.md`](../art-30-record.md) | `84d3186f7cf3263cf67d5377aca4d6a94fc56facf0416710cfc0390abb4c446f` |
-| Driven data-flow and trust inventory | [`SECURITY.md`](../../../SECURITY.md) | `2883c0835519ffd0aafed284983b8e5bbe9ef6662aaaa3da476701f0446645a5` |
-| Pricing and offer page | [`src/frontend/src/routes/pricing/+page.svelte`](../../../src/frontend/src/routes/pricing/+page.svelte) | `bbbe96d6db93ed6a875ddb4e6ce6849734de6cbc96414853479e97c9eb2c2e3d` |
+| Driven data-flow and trust inventory | [`SECURITY.md`](../../../SECURITY.md) | `d7140dd0a2d76561f622cdf7dc8ae4fa689006704952900d0e28d104b363a17f` |
+| Pricing and offer page | [`src/frontend/src/routes/pricing/+page.svelte`](../../../src/frontend/src/routes/pricing/+page.svelte) | `6e01198a0b9541bcbeed54617462c37d3c629bde62d47d15ad707c2cb8fb8766` |
 | MIT license | [`LICENSE`](../../../LICENSE) | `3101d42b24f94e634de450ea11eca86b144900590896948376f67936acf02d92` |
 | License boundary overview | [`LICENSE-OVERVIEW.md`](../../../LICENSE-OVERVIEW.md) | `37ed3bb589c5b2a46bcb4a674548d49d433efdda573c003332f7c13405ada0d8` |
 
@@ -60,7 +60,7 @@ factual statements in the pack.
 | Evidence | What it establishes | SHA-256 |
 |---|---|---|
 | [`src/brnrd/account_deletion.py`](../../../src/brnrd/account_deletion.py) | Article 17 deletion/anonymisation sweep, subscription cancellation, retained billing ledger | `947521f87bfd20bfc4a3018978b4ab7f2091ad49c8517c819845245ee866ae6a` |
-| [`src/frontend/src/lib/billing.ts`](../../../src/frontend/src/lib/billing.ts) | Browser sends cadence and follows a Stripe-hosted checkout URL; no brnrd waiver control | `d55d9a0948743b0a83f353849fcd278a0816b3ab74b1fdbb5a94589ddf7ca75a` |
+| [`src/frontend/src/lib/billing.ts`](../../../src/frontend/src/lib/billing.ts) | Browser sends cadence and follows a Stripe-hosted checkout URL; no brnrd waiver control | `ef091337bb53c648e08a2af85d4068ae0e3b8e10461645c2b6b40ad8432c581c` |
 | [`src/brnrd/routers/billing.py`](../../../src/brnrd/routers/billing.py) | Authenticated checkout endpoint and server-side cohort/price selection | `eef001df9ec03d53ffe7a7bd8c91714996321e189d2ffab8f4a5687645afa251` |
 | [`src/brnrd/stripe_api.py`](../../../src/brnrd/stripe_api.py) | Stripe Checkout payload and Managed Payments / merchant-of-record behavior | `dda318565da597f6c808151c265991b59b2f0b9581e0a6a478811d8d3181ce1f` |
 | [`src/brnrd/terms.py`](../../../src/brnrd/terms.py) | Immutable legal-text pins, versions, and SHA-256 acceptance evidence | `3196627add4fd431e74eafa88ba1a67a6ff5c35fa98f00a910185e015ed60526` |

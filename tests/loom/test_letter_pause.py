@@ -97,7 +97,7 @@ ctx.handoff({str(go)!r}, resumed.stdout)
     assert got["code"] == -9
     context = json.loads(got["raw"])["hookSpecificOutput"]
     assert context["hookEventName"] == "PostToolUseFailure"
-    assert context["additionalContext"].startswith(f"paused: {record['argv'].split()[0].rsplit('/', 1)[-1]} ")
+    assert context["additionalContext"].partition(chr(10))[2].startswith(f"paused: {record['argv'].split()[0].rsplit('/', 1)[-1]} ")
     assert kept in context["additionalContext"]
     assert "re-park" not in context["additionalContext"], "a real job is not a poll loop"
     assert got["letters"] == ["stop: wrong branch"]
@@ -146,7 +146,7 @@ ctx.handoff({str(seen)!r}, view.raw)
         loom.halt()
     assert not loom.errors
     said = json.loads(seen.read_text())["hookSpecificOutput"]["additionalContext"]
-    assert said.startswith("paused: sh ") and "sleep or poll loop" in said
+    assert said.partition(chr(10))[2].startswith("paused: sh ") and "sleep or poll loop" in said
     assert f're-park this as `wish <w-id> --read "waiting: …" --wait <{GRAMMAR}>` and stop' in said
 
 

@@ -2,22 +2,29 @@
 	// The board (design §C): every thread as a column, the inbox pinned left, the bead sheet on the right, the composer
 	// below. Data is the loom's parts (design §D1), live over SSE; the order moves at most once per 10 s and holds while
 	// the sheet is open or the pointer is on a thread column (order.ts arrange).
-	import { onMount, untrack } from 'svelte';
+	import { onMount, tick as flushed, untrack } from 'svelte';
 	import { updated } from '$app/state';
 	import './board.css';
-	import { arrange, bst, byThread, SETTLED, sortThreads, wanted } from '../order.ts';
+	import { arrange, bst, byThread, SETTLED, TOPICS, sortThreads, wanted } from '../order.ts';
+	import { headerFuel } from '../parts.ts';
+	import { bindingGauge } from '../../loomSnapshot.ts';
+	import FuelMarks from '../../FuelMarks.svelte';
 	import { INBOX } from '../sides.ts';
 	import { dur, hue, secs } from '../text.ts';
 	import { liveOf, what } from '../tape.ts';
-	import { face, LIVE, LOG, moves, seen, type Seen } from '../rail.ts';
+	import { face, LIVE, LOG, moves, seen, waitOf, type Seen } from '../rail.ts';
 	import Column from './Column.svelte';
+	import Topics from './Topics.svelte';
 	import Stack from './Stack.svelte';
 	import BeadSheet from './BeadSheet.svelte';
 	import Links from './Links.svelte';
 	import Composer from './Composer.svelte';
 	import { Board, provide } from './board.svelte.ts';
-	let { get }: { get?: (path: string) => Promise<unknown> } = $props();
-	const b = provide(untrack(() => new Board(get)));
+	import type { Held } from '../cache.ts';
+	// `held`: the last page's parts from the browser's cache (cache.ts), so the board paints before the network answers
+	let { get, held = null }: { get?: (path: string) => Promise<unknown>; held?: Held | null } =
+		$props();
+	const b = provide(untrack(() => new Board(get, held)));
 
 	const by = $derived(byThread(b.letters));
 	const sorted = $derived(sortThreads(b.model?.threads || [], by));
@@ -61,6 +68,11 @@
 	let flash = $state(new Set<string>()),
 		railLog = $state<string[]>([]),
 		tick = $state(0);
+	// The face tick also moves the reset wedges. Reading `tick` is what subscribes.
+	const fuelNow = $derived.by(() => {
+		void tick;
+		return Date.now();
+	});
 	$effect(() => {
 		const threads = b.model?.threads;
 		if (!threads) return;
@@ -87,25 +99,62 @@
 		location.reload();
 	};
 
+	// Where he was (w-kkghfg2vo6do, his 10361): the place is written as the page hides and a second after a scroll or a
+	// press; the board's horizontal scroll comes back once the columns stand.
+	let main: HTMLElement | undefined = $state();
+	let saver: ReturnType<typeof setTimeout> | null = null;
+	const save = () => {
+		if (saver) clearTimeout(saver);
+		saver = setTimeout(() => ((saver = null), b.savePlace()), 1000);
+	};
+	$effect(() => {
+		void b.beadId;
+		void b.sel;
+		void b.grown.size;
+		void b.open.size;
+		if (b.model) untrack(save);
+	});
+	let landedX = false;
+	$effect(() => {
+		if (landedX || !main || !order.length) return;
+		landedX = true;
+		const x = b.place.x;
+		if (x) flushed().then(() => main && (main.scrollLeft = x));
+	});
 	onMount(() => {
 		// e2e reads the board's state here (src/frontend/e2e), as the board.html proofs read its globals
 		(window as unknown as { __board?: Board }).__board = b;
 		b.load();
 		const faces = setInterval(() => tick++, 400);
 		const off = b.connect();
-		return () => (clearInterval(faces), off());
+		const hide = () => document.hidden && b.savePlace();
+		document.addEventListener('visibilitychange', hide);
+		window.addEventListener('pagehide', b.savePlace);
+		return () => {
+			clearInterval(faces);
+			off();
+			document.removeEventListener('visibilitychange', hide);
+			window.removeEventListener('pagehide', b.savePlace);
+		};
 	});
 </script>
 
 <div class="brd" class:sheet={!!b.beadId}>
 	<header>
-		<b>fuel</b><span id="fuel"
-			>{(b.model?.fuel || [])
-				.map(
-					(f) => `${f.shell} ${f.gauges.map((g) => g.window + ' ' + g.left_pct + '%').join(' ')}`
-				)
-				.join('   ')}</span
-		>
+		<b>fuel</b>
+		<span id="fuel" title={headerFuel(b.model?.fuel)}>
+			{#each b.model?.fuel ?? [] as shell (shell.shell)}
+				{@const binding = bindingGauge(shell.gauges)}
+				<span class="shell" data-shell={shell.shell} data-bar={binding?.window ?? ''}>
+					<span class="name">{shell.shell}</span>
+					{#if shell.gauges?.length}
+						<FuelMarks gauges={shell.gauges} now={fuelNow} />
+					{:else if shell.error}
+						<span class="fail">{shell.error}</span>
+					{/if}
+				</span>
+			{/each}
+		</span>
 		<span id="open" style="color:#d33">{b.letters.filter((l) => l.open).length} open</span>
 		<span class="dim" id="at"
 			>loom {b.heard.slice(11, 19)}Z · {b.letters.length} letters · as {b.model?.person ||
@@ -133,7 +182,8 @@
 				>{#if r.t.board?.state === 'seated'}<b class="pulse"></b>{/if}<i data-state={r.s.state}
 					>{face(b.model?.faces, r.s.state, tick)}</i
 				>
-				{r.t.id} · {r.s.id.slice(-6)} · {r.s.state}{#if r.lv}<em data-since={r.lv.since}
+				{r.t.id} · {r.s.id.slice(-6)} · {waitOf(r.t, r.s.state)}{#if r.lv}<em
+						data-since={r.lv.since}
 						>{` · ${r.lv.verb} ${dur(secs(r.lv.since, new Date(b.now).toISOString()))}`}</em
 					>{#if r.lv.open[0]}{` · ${what(r.lv.open[0]).slice(0, 40)}`}{/if}{/if}</span
 			>{/each}{#each railLog as x, i (i)}<span class="log">{x}</span>{/each}
@@ -150,10 +200,11 @@
 				)}>{id === SETTLED ? 'settled' : id}</a
 			>{/each}
 	</nav>
-	<main id="board">
+	<main id="board" bind:this={main} onscrollcapture={save}>
 		{#if !b.model}<div class="empty">{b.error || 'loading the board'}</div>{/if}
 		{#each order as id (id)}
 			{#if id === INBOX}<Column t={inbox} inbox letters={b.letters} />
+			{:else if id === TOPICS}<Topics />
 			{:else if id === SETTLED}<Stack {settled} {by} />
 			{:else if byId.get(id)}<Column t={byId.get(id)!} letters={by.get(id) || []} />{/if}
 		{/each}

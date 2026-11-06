@@ -14,8 +14,10 @@ while the machine sleeps (``boot_clock``), never on the wall clock.
 
 A renew that fails for want of a network keeps the lease when nobody else is
 contesting it: no peer's ``refs/ledger/*`` moved within ``contest_window`` of
-the last good poll. A strict authority fences anyway. The design and its
-receipts: brnrd-self threads/machines/design.md, section 3.1.
+the last good poll. A strict authority fences anyway. A refused write is not
+a loss: the holder re-reads the ref and fences only when it shows another
+holder at a higher gen, or ``released``. The design and its receipts:
+brnrd-self threads/machines/design.md, sections 3.1 and 3.5.
 """
 
 from __future__ import annotations
@@ -70,7 +72,7 @@ class GitLeaseAuthority:
     """
 
     def __init__(self, repo: Path, remote: str, git: Runner, *,
-                 clock: Callable[[], float] = boot_clock, margin: float = 5.0,
+                 clock: Callable[[], float] = boot_clock, margin: float = 10.0,
                  strict: bool = False, contest_window: float = 600.0,
                  riders: Callable[[], dict[str, str]] = dict):
         self.repo = Path(repo)
@@ -225,22 +227,60 @@ class GitLeaseAuthority:
         held = self.held.get(lease.what)
         if held is None or held[0].gen != lease.gen or held[0].holder != lease.holder:
             return None
-        _old, sha, _until = held
+        _old, sha, until = held
+        body = {"holder": lease.holder, "gen": lease.gen, "ttl": ttl, "released": False}
         try:
-            new, t_send = self._push(lease.what, {"holder": lease.holder, "gen": lease.gen,
-                                                  "ttl": ttl, "released": False}, sha)
+            new, t_send = self._push(lease.what, body, sha)
         except Unreachable:
             if self.strict or self.contested(lease.holder):
                 return None if not self.authorize(lease) else lease
             self.graced.add(lease.what)
             return lease
-        if not new:
+        if new:
+            return self._accepted(lease, new, t_send, ttl)
+        # A refused write is not a loss. Fence only when the ref shows
+        # another holder at a higher gen, or released (11-06, 13:57Z and
+        # 17:24Z: the only machine fenced itself on a rejection).
+        if self._loss(lease):
             self._drop(lease.what)
             return None
+        ours = ""
+        try:
+            ours = self._ours(lease)
+        except Unreachable:
+            return lease
+        if ours:
+            try:
+                new, t_send = self._push(lease.what, body, ours)
+            except Unreachable:
+                new = ""
+            if new:
+                return self._accepted(lease, new, t_send, ttl)
+            if self._loss(lease):
+                self._drop(lease.what)
+                return None
+            self.held[lease.what] = (held[0], ours, until)
+        return lease
+
+    def _accepted(self, lease: Lease, sha: str, t_send: float, ttl: float) -> Lease:
         renewed = Lease(lease.what, lease.holder, lease.gen, t_send + ttl, lease.capabilities)
-        self.held[lease.what] = (renewed, new, t_send + ttl)
+        self.held[lease.what] = (renewed, sha, t_send + ttl)
         self.graced.discard(lease.what)
         return renewed
+
+    def _loss(self, lease: Lease) -> bool:
+        """True only when the ref shows another holder at a higher gen, or released."""
+        try:
+            self.poll()
+        except Unreachable:
+            return False
+        current = self.view(lease.what)
+        if current is None:
+            return False
+        if current.get("released"):
+            return True
+        return (current.get("holder") != lease.holder
+                and int(current.get("gen", 0) or 0) > lease.gen)
 
     def authorize(self, lease: Lease) -> bool:
         """Held at this gen, and inside ``valid_until - margin`` on this clock,
@@ -278,6 +318,16 @@ class GitLeaseAuthority:
             sha = ""
         self._drop(lease.what)
         return bool(sha)
+
+    def _ours(self, lease: Lease) -> str:
+        """The remote's sha for ``lease`` when it still names this holder at
+        this gen, unreleased; "" otherwise. Raises ``Unreachable``."""
+        self.poll()
+        current = self.view(lease.what)
+        if (current is None or current.get("released") or current.get("holder") != lease.holder
+                or int(current.get("gen", 0)) != lease.gen):
+            return ""
+        return current["sha"]
 
     def _drop(self, what: str) -> None:
         self.held.pop(what, None)

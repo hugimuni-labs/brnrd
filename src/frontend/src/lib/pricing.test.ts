@@ -5,7 +5,8 @@ import { fileURLToPath } from 'node:url';
 import { after, test } from 'node:test';
 import { compile } from 'svelte/compiler';
 import { render } from 'svelte/server';
-import { TAX_NOTE, disclosesTax, fetchPricing, formatUsd } from './pricing.ts';
+import { TAX_NOTE, disclosesTax, fetchPricing, formatEur } from './pricing.ts';
+import { INSTALL_LINE } from './install.ts';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const routePath = join(here, '..', 'routes', 'pricing', '+page.svelte');
@@ -20,7 +21,7 @@ async function renderRoute(): Promise<ReturnType<typeof render>> {
 	const runnable = compiled.js.code
 		.replace(/'\$lib\/pricing'/g, "'./pricing.ts'")
 		.replace(/'\$lib\/legalNotice'/g, "'./legalNotice.ts'")
-		.replace(/'\$lib\/publicStats'/g, "'./publicStats.ts'")
+		.replace(/'\$lib\/install'/g, "'./install.ts'")
 		.replace(/import\s*\{[^}]*\}\s*from\s*'\$app\/paths';/, 'const resolve = (path) => path;');
 	writeFileSync(generated, runnable);
 	try {
@@ -33,49 +34,44 @@ async function renderRoute(): Promise<ReturnType<typeof render>> {
 
 after(() => rmSync(join(here, '.pricingRoute.generated.mjs'), { force: true }));
 
-test('the single paid tier on /pricing carries a tax disclosure', async () => {
+test('the paid tier on /pricing carries a tax disclosure, in euros', async () => {
 	const { body: html } = await renderRoute();
-	ok(html.includes('$7'), 'the subscriber price did not render');
-	ok(html.includes(TAX_NOTE), 'the subscriber price rendered without the tax note');
+	ok(html.includes('€12'), 'the premium price did not render');
+	ok(html.includes(TAX_NOTE), 'the premium price rendered without the tax note');
+	ok(!/\$\d/.test(html), 'a dollar figure is still on a euro page');
 });
 
-test('the hosted offer names its real product boundaries and live routes', async () => {
-	const { body: html } = await renderRoute();
-	ok(html.includes('one connected repository'), 'the free repository allowance is not visible');
-	ok(html.includes('WhatsApp'), 'the live hosted WhatsApp route is missing from the offer');
-	ok(
-		html.includes('one-repository product cap is removed'),
-		'the paid repository entitlement is still expressed as an unspecified “more”'
-	);
-	ok(
-		html.includes('free-tier hosted event limits are removed'),
-		'the paid event entitlement is not observable'
-	);
-	ok(
-		html.includes('limit lifts are live now'),
-		'the page still presents a live entitlement as pending'
-	);
-	ok(
-		!html.includes('entitlements are still landing'),
-		'stale pre-entitlement caveat is still rendered'
-	);
-});
-
-test('the page compares hosted tiers and separates deployment from patronage', async () => {
+test('the page offers exactly two tiers: free with the install line, premium', async () => {
 	const { body: html } = await renderRoute();
 	ok(html.includes('<main'), 'the pricing content has no main landmark');
 	ok(/<h1[\s>]/.test(html), 'the page has no h1');
-	const hostedPlans = html.match(/data-pricing-plan=/g) ?? [];
-	ok(hostedPlans.length === 2, `expected two comparable hosted plans, got ${hostedPlans.length}`);
-	ok(
-		html.includes('Self-hosting is a deployment path'),
-		'self-hosting still reads as a third tier'
+	const plans = [...html.matchAll(/data-pricing-plan="([^"]+)"/g)].map((m) => m[1]);
+	ok(plans.join(',') === 'free,premium', `expected free,premium, got ${plans.join(',')}`);
+	const free = html.slice(
+		html.indexOf('data-pricing-plan="free"'),
+		html.indexOf('data-pricing-plan="premium"')
 	);
-	ok(html.includes('support the commons'), 'contributor patronage is not separated from pricing');
+	ok(free.includes(INSTALL_LINE), 'the free tier does not carry the install line');
+	ok(free.includes('every guard and every receipt'), 'the trust product is not in free');
+	ok(free.includes('unlimited repositories'), 'free still reads as capped');
+});
+
+test('premium is a founding price with the lock written on the page', async () => {
+	const { body: html } = await renderRoute();
+	ok(html.includes('founding price'), 'the founding price is not named');
 	ok(
-		!html.includes('premium contributor bundle'),
-		'sponsorship still reads as a premium product tier'
+		html.includes('no price change for a live subscription'),
+		'the lock is not stated as the rule Stripe enforces'
 	);
+	ok(!/annual|\/yr/i.test(html), 'an annual offer is still visible');
+	ok(!/<del[\s>]/i.test(html), 'a price rendered inside a <del> element');
+	ok(!/\bline-through\b/.test(html), 'a price rendered with strikethrough styling');
+});
+
+test('tokens, projects and threads are said to be never priced', async () => {
+	const { body: html } = await renderRoute();
+	ok(html.includes('never priced'), 'the never-priced line is missing');
+	ok(/Tokens, projects, threads/.test(html), 'the never-priced list lost a member');
 });
 
 test('the page carries a search description and its own og/twitter head', async () => {
@@ -89,16 +85,6 @@ test('the page carries a search description and its own og/twitter head', async 
 	// route, via $lib/seo's hasCanonicalMeta) rather than each page repeating a
 	// literal URL — this component, rendered in isolation here, never sees its
 	// own layout. seo.test.ts covers '/pricing' being canonical-eligible.
-});
-
-test('the subscriber offer has one price and no founder-cohort language', async () => {
-	const { body: html } = await renderRoute();
-	ok(html.includes('$7'), 'monthly subscriber price is missing');
-	ok(html.includes('$70'), 'annual subscriber price is missing');
-	ok(!/\$5(?!\d)/.test(html), 'retired founder price is still visible');
-	ok(!/founding price|first 200|first \d+ subscriptions|locked while active|later \$?/i.test(html));
-	ok(!/<del[\s>]/i.test(html), 'subscriber price rendered inside a <del> element');
-	ok(!/\bline-through\b/.test(html), 'subscriber price rendered with strikethrough styling');
 });
 
 test('the tax note names both a tax and a rate', () => {
@@ -127,12 +113,12 @@ test('fetchPricing returns the parsed payload on success', async () => {
 	const payload = {
 		supporter_monthly: { amount: 500, currency: 'usd' },
 		supporter_annual: null,
-		public_monthly: { amount: 700, currency: 'usd' },
-		public_annual: { amount: 7000, currency: 'usd' }
+		public_monthly: { amount: 1200, currency: 'eur' },
+		public_annual: null
 	};
 	const result = await fetchPricing(fakeFetch(200, payload));
-	ok(result?.public_monthly?.amount === 700);
-	ok(result?.public_annual?.amount === 7000);
+	ok(result?.public_monthly?.amount === 1200);
+	ok(result?.public_annual === null);
 });
 
 test('fetchPricing degrades to null on a non-2xx response, never throws', async () => {
@@ -146,19 +132,19 @@ test('fetchPricing degrades to null on a network failure, never throws', async (
 	ok((await fetchPricing(throws)) === null);
 });
 
-test('formatUsd renders a whole-dollar Stripe amount compactly', () => {
-	ok(formatUsd({ amount: 700, currency: 'usd' }) === '$7');
+test('formatEur renders a whole-euro Stripe amount compactly', () => {
+	ok(formatEur({ amount: 1200, currency: 'eur' }) === '€12');
 });
 
-test('formatUsd keeps cents when the amount is not a whole dollar', () => {
-	ok(formatUsd({ amount: 750, currency: 'usd' }) === '$7.50');
+test('formatEur keeps cents when the amount is not a whole euro', () => {
+	ok(formatEur({ amount: 1250, currency: 'eur' }) === '€12.50');
 });
 
-test('formatUsd refuses to mislabel a non-USD figure as dollars', () => {
-	ok(formatUsd({ amount: 700, currency: 'eur' }) === null);
+test('formatEur refuses to relabel a leftover USD Price as euros', () => {
+	ok(formatEur({ amount: 700, currency: 'usd' }) === null);
 });
 
-test('formatUsd is null-safe for an absent figure', () => {
-	ok(formatUsd(null) === null);
-	ok(formatUsd(undefined) === null);
+test('formatEur is null-safe for an absent figure', () => {
+	ok(formatEur(null) === null);
+	ok(formatEur(undefined) === null);
 });

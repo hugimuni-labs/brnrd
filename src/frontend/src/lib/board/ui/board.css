@@ -6,7 +6,9 @@
 .brd .cfold,
 .brd .stp-h,
 .brd .pips,
-.brd .unsettle {
+.brd .unsettle,
+.brd .from-line,
+.brd .topic-row {
 	font: inherit;
 	background: none;
 	border: 0;
@@ -53,10 +55,34 @@
 	height: 40px;
 	padding: 10px 16px;
 	display: flex;
+	align-items: center;
 	gap: 22px;
 	border-bottom: 1px solid #222;
 	white-space: nowrap;
 	overflow: hidden;
+}
+/* each item keeps its own width: a gauge row that shrank drew over the open count on a phone */
+.brd header > * {
+	flex-shrink: 0;
+}
+.brd #fuel {
+	display: inline-flex;
+	align-items: center;
+	gap: 18px;
+	height: 20px;
+	--fuel-track: #e6e6e6;
+	--fuel-ink: #171717;
+	--fuel-dim: #666;
+	--fuel-ring: #ccc;
+}
+.brd #fuel .shell {
+	display: inline-flex;
+	align-items: center;
+	gap: 6px;
+	height: 20px;
+}
+.brd #fuel .name {
+	font-weight: 600;
 }
 .brd .dim {
 	color: #777;
@@ -1618,8 +1644,9 @@
 	position: relative;
 	padding: 5px 6px 5px 26px;
 	cursor: pointer;
-	animation: beadin 0.36s var(--wipe) both;
-	animation-delay: calc(var(--j, 0) * 55ms);
+	/* the stagger is capped: 55 ms a row held a 25-row wish's last row back for 1.7 s (w-h7ik3bznilu5) */
+	animation: beadin 0.22s var(--wipe) both;
+	animation-delay: calc(min(var(--j, 0), 6) * 25ms);
 }
 @keyframes beadin {
 	from {
@@ -1927,6 +1954,60 @@
 .brd .band {
 	display: none;
 }
+.brd .from {
+	flex: 0 0 auto;
+	border-bottom: 1px solid #ccc;
+	max-height: 30%;
+	overflow-y: auto;
+	scrollbar-width: thin;
+}
+.brd .from-line {
+	display: block;
+	width: 100%;
+	padding: 4px 10px;
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	font-size: 11px;
+	line-height: 16px;
+	color: #444;
+}
+.brd .from-line.open {
+	white-space: pre-wrap;
+	overflow: visible;
+}
+.brd .from-line .th {
+	opacity: 0.65;
+}
+.brd .from-body {
+	margin-top: 4px;
+	white-space: pre-wrap;
+	color: #171717;
+}
+.brd .topic-row {
+	display: block;
+	width: 100%;
+	padding: 6px 10px;
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	font-size: 11px;
+	line-height: 16px;
+	border-bottom: 1px solid #eee;
+}
+.brd .topic-row.open {
+	white-space: pre-wrap;
+	overflow: visible;
+}
+.brd .topic-row.linked {
+	background: color-mix(in srgb, var(--h) 12%, transparent);
+}
+.brd .topic-cites {
+	margin-top: 4px;
+}
+.brd .topic-cites .ref {
+	margin-right: 6px;
+}
 .brd .column.threadcol .band {
 	display: block;
 	flex: 0 1 auto;
@@ -2071,6 +2152,29 @@
 .brd #bead .rail em {
 	color: var(--quiet);
 	font-style: normal;
+}
+.brd #bead .rail .bd.stage button[data-act] {
+	font: inherit;
+	font-size: 10px;
+	margin-left: 6px;
+	padding: 0 7px;
+	line-height: 16px;
+	background: none;
+	color: var(--parch);
+	border: 1px solid #5a4a30;
+	cursor: pointer;
+}
+.brd #bead .rail .bd.stage button[data-act]:hover {
+	border-color: var(--parch);
+}
+.brd #bead .rail .bd.stage button[data-act='agree'] {
+	border-color: var(--amber);
+	color: var(--amber);
+}
+.brd #bead .rail .bd.stage button[data-act='done'] {
+	background: var(--ember);
+	border-color: var(--ember);
+	color: var(--void);
 }
 .brd #bead .trace .x a {
 	color: var(--ice);

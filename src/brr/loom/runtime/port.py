@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import re
+import time
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -35,7 +36,14 @@ class PortError(RuntimeError):
     """A port file or an address the loom will not guess its way past."""
 
 
-_HEADER = re.compile(r"<!-- port (\S+) gen (\d+) · owed([^>]*)-->")
+CLOCK = r"\d{4}-\d\d-\d\d \d\d:\d\dZ"
+
+
+def clock(now=None) -> str:
+    return time.strftime("%Y-%m-%d %H:%MZ", time.gmtime(now))
+
+
+_HEADER = re.compile(rf"<!-- port (\S+) gen (\d+)(?: · {CLOCK})? · owed([^>]*)-->")
 _ITEM = re.compile(
     r"^- (?P<id>\S+) · from (?P<sender>\S+) · reply (?P<reply>\S+)"
     r"(?P<mark> · compact)? — (?P<first>.*)$"
@@ -164,6 +172,10 @@ def _letter_attachments(root, facts, selected=None):
     return result
 
 
+#: A triage branch's flag on ``send``.
+_TRIAGE_FLAG = {"correction": "correction", "silent": "silent", "held": "hold"}
+
+
 def letter_replies(facts: list[Fact]) -> dict[str, str]:
     """Reply context for inbound sources; an unknown native id is not a letter id."""
     if isinstance(facts, LedgerView):
@@ -286,7 +298,7 @@ def render_boundary(strand: str, gen: int, thread: str, letters: list[Fact],
     and spend that moves on every call is not news.
     """
     lines = [
-        f"<!-- port {strand} gen {gen} · owed "
+        f"<!-- port {strand} gen {gen} · {clock()} · owed "
         + " ".join(str(letter.data['id']) for letter in letters) + " -->",
         f"status: strand {strand} · gen {gen} · thread {thread}"
         + (f" · {fuel}" if fuel else "") + (f" · {budget}" if budget else "")
@@ -539,13 +551,15 @@ def _check_grant(home, to: str, sender: str, opening: str | None, note, reincarn
     from .ledger import read_facts
     from .lifecycle import read_thread
     from .project import sender_threads
+    from .spend import door
     thread = thread_of(to)
     opener = str(read_thread(home, thread).get("opened-by", ""))
+    hears = door(home, opener) if opener.startswith("thread:") else None
     mine = sender_threads(read_facts(home)).get(sender)
-    if not mine or opener != f"thread:{mine}":
+    if not mine or mine != hears:
         raise PortError(
-            f"send: --budget raises thread {thread}'s allocation, and only its opener "
-            f"({opener or 'none'}) may: ask it by letter")
+            f"send: --budget raises thread {thread}'s allocation, and only "
+            f"{f'thread:{hears}' if hears else 'its opener (none)'} may: ask it by letter")
 
 
 OPEN_NEEDS_WISH = ('send: opening a thread needs the wish behind it: '
@@ -597,12 +611,17 @@ def write_send(room: Path, *, to: str, sender: str, body: str = "",
                clean: bool = False, kind: str | None = None,
                refs: tuple[str, ...] | list[str] = (),
                reincarnate: str | None = None, body_choice: str | None = None,
+               spend: bool = False,
                at: str | None = None, repo_sources: tuple[str, ...] | list[str] = (),
                wish: str | tuple | list | None = None,
                budget: int | None = None, chatter: list[str] | None = None,
                echo: list[str] | None = None, reopen: bool = False,
-               ask_for: str | None = None) -> str:
+               ask_for: str | None = None, attach: str | None = None,
+               triage: tuple[str, str] | None = None) -> str:
     """Write one letter (or note) into port/out, with the wish stamps it carries.
+
+    ``attach`` is ``<sha256> <name>``: a file from the home's blob store that a
+    channel which carries files sends beside the text (a ``host:`` delivery).
 
     ``wish`` items are a ``w-id`` or ``new:"line"``, or a dict with ``value``
     and the ``says``, ``refs`` and ``answered`` bound to it. ``chatter`` is
@@ -610,9 +629,21 @@ def write_send(room: Path, *, to: str, sender: str, body: str = "",
     reply to a person letter that has no disposition yet must carry one.
     ``echo`` gathers the graph this send wrote, one line per wish.
     A question in a letter to a channel files an ask under ``ask_for``
-    (raises.py); a bare ``chatter`` there opts out.
+    (raises.py); a bare ``chatter`` there opts out. ``triage`` is the
+    ``--re`` letter's other branches (dispositions.py): ``(branch, detail)``
+    for a correction, a silent letter or a held one.
     """
     home = home_of_room(Path(room))
+    if spend and body_choice is not None:
+        raise PortError("send: --spend and --body are exclusive")
+    if is_channel(to):
+        from .loom import _fenced
+        from .ledger import read_facts
+        if _fenced(home, read_facts(home)):
+            raise PortError(
+                "send: this machine lost the inbox lease; a letter to a person "
+                "would go out from here. Send to a thread or land with send-self."
+            )
     opening = None
     if at is not None:
         from .timers import stored_when
@@ -623,9 +654,12 @@ def write_send(room: Path, *, to: str, sender: str, body: str = "",
         raise PortError("send: --note requires --re")
     if note is not None and body:
         raise PortError("send: --note is the whole no-answer; drop the body")
+    opening_only = ("send: --body is only for opening a new thread; "
+                    "--spend is only for opening a new thread; "
+                    "--repo is only for opening a new thread")
     if is_channel(to):
-        if body_choice is not None or repo_sources:
-            raise PortError("send: --body is only for opening a new thread; --repo is only for opening a new thread")
+        if body_choice is not None or repo_sources or spend:
+            raise PortError(opening_only)
         try:
             channel_parts(to, home)
         except ValueError as exc:
@@ -641,12 +675,21 @@ def write_send(room: Path, *, to: str, sender: str, body: str = "",
     else:
         thread = thread_of(to)
         if home.routable(thread):
-            if body_choice is not None or repo_sources:
-                raise PortError("send: --body is only for opening a new thread; --repo is only for opening a new thread")
+            if body_choice is not None or repo_sources or spend:
+                raise PortError(opening_only)
         else:
             if note is not None or reincarnate is not None:
                 raise PortError(f"send: no thread {thread} on main")
             opening = thread
+    # Resolve before any stamp. A refusal writes no letter and opens no thread.
+    if opening is not None and spend:
+        from .adapters import spend_choice
+        try:
+            chosen = spend_choice(home)
+        except ValueError as exc:
+            raise PortError(str(exc)) from exc
+        if chosen:
+            body_choice = chosen
     if note is None and reincarnate is None and not is_channel(to):
         _refuse_other_loom(home, thread_of(to))
     if note is None and reincarnate is None and at is None and not is_channel(to):
@@ -675,6 +718,21 @@ def write_send(room: Path, *, to: str, sender: str, body: str = "",
     letter_id = f"{sender}/{stem}"
     wish_stamps, results, cited = [], [], set()
     letters: dict = {}
+    if triage is not None:
+        from .dispositions import triage as triage_field
+        branch, detail = triage
+        try:
+            triage = triage_field(branch, detail)
+        except ValueError as exc:
+            raise PortError(f"send: {exc}") from exc
+        if not re:
+            raise PortError(f"send --{_TRIAGE_FLAG[branch]} disposes the --re letter: name it")
+        if asked or chatter is not None:
+            raise PortError(f"send --{_TRIAGE_FLAG[branch]} is a branch of its own: drop --wish and --chatter")
+        if branch == "silent" and note is None and len(body.split()) > 1:
+            raise PortError("send --silent says one word or nothing: --note \"<what it was>\" or a single word")
+        if branch == "held" and (note is not None or not body.strip()):
+            raise PortError("send --hold is the check through a second path: a letter with words, never a --note")
     if asked or chatter is not None or re:
         from .dispositions import letter_index, resolve, result_of, say_of
         from .ledger import read_facts
@@ -692,6 +750,8 @@ def write_send(room: Path, *, to: str, sender: str, body: str = "",
         # A bare --chatter cites the --re letter; a notice it answers is no letter and cites nothing.
         chatter = list(dict.fromkeys(named or ([re] if re in letters else [])))
         cited.update(chatter)
+    if triage is not None:
+        cited.add(re)
     if asked:
         from .lifecycle import own_thread
         from .registry import admit
@@ -773,7 +833,11 @@ def write_send(room: Path, *, to: str, sender: str, body: str = "",
             raise PortError(
                 f"send: {re} is a person letter with no disposition yet; "
                 + (steer + '--wish new:"<line>"' if steer else 'carry one: --wish <w-id>|new:"<line>"')
-                + ' [--says "quote"] [--ref kind:ref] [--answered], or --chatter if it wants nothing')
+                + ' [--says "quote"] [--ref kind:ref] [--answered]; --chatter if it wants nothing;'
+                ' --correction <path> if it changes a page, scar or README;'
+                ' --silent joke|test|mistake with one word or a --note;'
+                ' --hold out-of-pattern|not-him with the check, when it is irreversible and unlike them'
+                ' or not them (out of pattern but reversible: --wish, and say it loudly)')
     if echo is not None and re in letters and not asked and reincarnate is None:
         from .dispositions import is_person
         from .wishes import untouched_line, wishes
@@ -843,10 +907,17 @@ def write_send(room: Path, *, to: str, sender: str, body: str = "",
         fields["re"] = re
     if chatter:
         fields["chatter"] = " ".join(chatter)
+    if triage is not None:
+        fields["triage"] = triage
     if links:
         fields["links"] = " ".join(links)
     if reincarnate:
         fields["reincarnate"] = reincarnate
+    if attach:
+        if not is_channel(to) or note is not None:
+            raise PortError("send: a file goes only on a letter to a channel")
+        _blob_of(home.root, attach)
+        fields["attach"] = attach
     if note is not None:
         fields["note"] = note
     elif clean:
@@ -917,7 +988,7 @@ def _carried(home, facts, stamped, re, target, sender) -> list:
     return out
 
 
-def write_reincarnate(room: Path, why: str, *, fresh: bool = False) -> str:
+def write_reincarnate(room: Path, why: str, *, fresh: bool = False, cites: str | None = None) -> str:
     """``reincarnate``: hand the seat to a successor."""
     if not why:
         raise PortError("reincarnate: --why is empty")
@@ -933,6 +1004,9 @@ def write_reincarnate(room: Path, why: str, *, fresh: bool = False) -> str:
     thread = sender_threads(facts).get(strand)
     if thread is None:
         raise PortError("reincarnate: room has no thread")
+    if cites:
+        from .cites import check_cite
+        check_cite(facts, cites, thread)
     from .wishes import owed_lefts, wishes
     owed = owed_lefts(wishes(facts), facts, thread, strand)
     if owed:
@@ -960,6 +1034,8 @@ def write_reincarnate(room: Path, why: str, *, fresh: bool = False) -> str:
     fields = {"kind": "reincarnate", "id": fact_id, "why": why}
     if fresh:
         fields["fresh"] = "true"
+    if cites:
+        fields["cites"] = cites
     write_port(room, stem, _front(fields))
     write_send(room, to=f"thread:{thread}", sender=strand,
                body="Fresh reincarnation: start from main." if fresh else why, reincarnate=fact_id)
@@ -1062,6 +1138,17 @@ def fact_from_taint(text: str, strand: str, fact_id: str) -> Fact:
     )
 
 
+def _blob_of(root: Path, attach: str) -> Path:
+    """``<sha256> <name>`` → the stored blob, or PortError."""
+    sha, _, name = attach.partition(" ")
+    if not re.fullmatch(r"[0-9a-f]{64}", sha) or not name.strip():
+        raise PortError(f"attach {attach!r}: expected <sha256> <name>")
+    blob = Path(root) / "blobs" / sha
+    if not blob.is_file():
+        raise PortError(f"attach: no blob {sha} in the home's store")
+    return blob
+
+
 def fact_from_port(fm: dict[str, str], strand: str, gen: int | None,
                    room: Path | None = None) -> Fact:
     """Turn one ingested port file into a fact. ``gen`` is the strand's live lease.
@@ -1091,10 +1178,18 @@ def fact_from_port(fm: dict[str, str], strand: str, gen: int | None,
             data["re"] = fm["re"]
         if fm.get("chatter"):
             data["chatter"] = fm["chatter"].split()
+        if fm.get("triage"):
+            data["triage"] = fm["triage"]
         if fm.get("links"):
             data["links"] = fm["links"].split()
         if fm.get("edit"):
             data["edit"] = fm["edit"]
+        if fm.get("attach"):
+            if not is_channel(data["to"]):
+                raise PortError(f"letter {fact_id}: a file goes only on a letter to a channel")
+            if room is not None:
+                _blob_of(home_of_room(Path(room)).root, fm["attach"])
+            data["attach"] = fm["attach"]
         if fm.get("reincarnate"):
             data["reincarnate"] = fm["reincarnate"]
         if fm.get("budget"):
@@ -1119,7 +1214,8 @@ def fact_from_port(fm: dict[str, str], strand: str, gen: int | None,
         return Fact(
             kind="note", by=f"strand:{strand}", id=fact_id,
             data={"re": fm["re"], "why": fm["note"], "gen": gen,
-                  **({"chatter": fm["chatter"].split()} if fm.get("chatter") else {})},
+                  **({"chatter": fm["chatter"].split()} if fm.get("chatter") else {}),
+                  **({"triage": fm["triage"]} if fm.get("triage") else {})},
         )
     if kind == "shown":
         owner = fm.get("strand") or strand
@@ -1141,7 +1237,8 @@ def fact_from_port(fm: dict[str, str], strand: str, gen: int | None,
             raise PortError(f"reincarnate {fact_id} has no why")
         return Fact(
             kind="reincarnate", by=f"strand:{strand}", id=fact_id,
-            data={"strand": strand, "gen": gen, "why": fm["why"], **({"fresh": True} if fm.get("fresh") == "true" else {})},
+            data={"strand": strand, "gen": gen, "why": fm["why"], **({"fresh": True} if fm.get("fresh") == "true" else {}),
+                  **({"cites": fm["cites"]} if fm.get("cites") else {})},
         )
     if kind == "face":
         from .faces import face_of

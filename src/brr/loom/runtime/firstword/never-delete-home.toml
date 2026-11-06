@@ -1,0 +1,8 @@
+says = "Deleting under a home root destroys rooms, the ledger or the self. It goes only on the owner's letter naming the path, stamped on this thread's wish."
+set-by = "{letter}"
+
+[[match]]
+tool = "Bash"
+input = '''\b(?:rm\s+(?:-[A-Za-z]*[rR][A-Za-z]*|--recursive)(?:\s+-\S+)*\s+|rmdir\s+(?:-\S+\s+)*|git\s+clean\s+-\S*f\S*(?:\s+-\S+)*\s+)(?P<target>\S*(?:loom-home|/accounts/|/rooms/|/ledger|(?<![\w.-])self(?![\w.-]))\S*)'''
+refuse = true
+grant = "delete-home"

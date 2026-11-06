@@ -175,7 +175,7 @@ def open_thread(room: Path, thread: str, sender: str, text: str,
 
 
 def settle(room: Path, thread: str, why: str, retire: bool = False,
-           hand_to: str | None = None, word: str | None = None) -> None:
+           hand_to: str | None = None, word: str | None = None, cites: str | None = None) -> None:
     if not why.strip():
         raise PortError("settle: --why is empty")
     home = home_of_room(room)
@@ -184,16 +184,24 @@ def settle(room: Path, thread: str, why: str, retire: bool = False,
         raise PortError(f"settle: no thread {thread} on main")
     own = own_thread(room)
     opener = data.get("opened-by", "")
-    if opener != f"thread:{own}" and not (
+    # The opener settles; when the opener is a thread no body runs here (its `for:` names another
+    # loom or a person's conversation), the home thread hears for it, as it hears its breaches.
+    from .spend import door
+    hears = door(home, opener) if str(opener).startswith("thread:") else None
+    if hears != own and not (
         own == thread and (not opener or str(opener).startswith("person:"))
     ):
-        raise PortError(f"settle: only {opener or 'its own body on a person’s word'} may settle {thread}")
+        may = f"thread:{hears}" if hears else (opener or "its own body on a person’s word")
+        raise PortError(f"settle: only {may} may settle {thread}")
     from .ledger import append
     from .project import _destination, fold
     from .verbs_wishes import wish_fact
     from .wishes import wishes
 
     facts = read_facts(home)
+    if cites:
+        from .cites import check_cite
+        check_cite(facts, cites, thread)
     mine = [w for w in wishes(facts).values() if w.thread == thread]
     in_hand = sorted(w.id for w in mine if w.state in {"heard", "read", "granting"})
     if opener != f"thread:{own}" and in_hand:
@@ -233,7 +241,7 @@ def settle(room: Path, thread: str, why: str, retire: bool = False,
         append(home, fact)
     for stamp in handed:
         append(home, stamp)
-    land_status(room, thread, "retired" if retire else "settled", f"settle {thread}: {why}")
+    land_status(room, thread, "retired" if retire else "settled", f"settle {thread}: {why}" + (f" (cites {cites})" if cites else ""))
 
 
 IN_HAND = frozenset({"heard", "read", "scoped", "granting"})

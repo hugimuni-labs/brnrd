@@ -59,13 +59,13 @@ def test_the_wake_shows_the_closest_head_before_the_tree_and_nothing_below_the_f
     _topics(clone)
     letter = "The wake should show the session and week quota per harness, fuel as one status line"
     text = _wake(clone, "work", letter, tmp_path)
-    block = text[text.index("## Topics\n"):text.index("## Tree\n")]
+    block = text[text.index("## Topics close to this wake\n"):text.index("## Tree\n")]
     assert "topics/fuel.md · Fuel: reading each shell's quota (2 entries)" in block
     assert "newest: 2026-10-28 · The wake shows fuel as one status line" in block
     assert "fuel-display/README.md" not in block and "site.md" not in block
     assert len(block.encode()) <= 600
     # An occasion no page is close to costs the wake nothing.
-    assert "## Topics" not in _wake(clone, "work", "Rename the pancake recipe", tmp_path)
+    assert "## Topics close to this wake" not in _wake(clone, "work", "Rename the pancake recipe", tmp_path)
 
 
 def test_a_thread_names_its_own_pages_and_their_bytes_come_out_of_the_budget(ledger, tmp_path):

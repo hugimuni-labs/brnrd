@@ -817,6 +817,9 @@ def build_parser() -> argparse.ArgumentParser:
     asks_p.add_argument("--home", help="a loom home: the loom's asks over every thread")
     asks_p.add_argument("--room", help=argparse.SUPPRESS)
     asks_p.add_argument("--thread", help="with a loom home, one thread's asks")
+    asks_p.add_argument("--calibrate", action="store_true",
+                        help="with a loom home, per ask kind: asks, answered, took-rec, lapsed, age at answer")
+    asks_p.add_argument("--days", type=float, default=30, help="the window --calibrate reads")
     asks_p.set_defaults(func=cmd_asks)
     item_p = sub.add_parser("item")
     item_sub = item_p.add_subparsers(dest="item_cmd", required=True)

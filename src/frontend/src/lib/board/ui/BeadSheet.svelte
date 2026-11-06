@@ -1,6 +1,7 @@
 <script lang="ts">
 	// The bead sheet (4920): the pressed item, the chain up to its source and what came out of it, all walked in the
-	// client from the beads part (design §D3). Any bead in it re-centres it; ‹ walks back; esc closes.
+	// client from the beads part (design §D3). Any bead in it re-centres it; ‹ walks back; esc closes. The stage that
+	// waits on him carries the same agree/done and correct buttons as the ledger row (10349: the sheet had none).
 	import { hm, short } from '../text.ts';
 	import { refOf, trace, type Bead, type Root } from '../bead.ts';
 	import { stages, stageText } from '../stages.ts';
@@ -37,7 +38,7 @@
 	);
 	const rows = $derived(T ? trace(wish, T) : []);
 	const steps = $derived((b.model?.threads || []).flatMap((t) => t.steps || []));
-	const ref = (r: string) => refOf(r, b.beads || {}, steps);
+	const ref = (r: string) => refOf(r, b.merged || {}, steps);
 	// a rail time drops its day when the stage before it fell on the same one
 	const when = $derived.by(() => {
 		let day = '';
@@ -120,7 +121,7 @@
 <aside
 	id="bead"
 	class:on={!!b.beadId}
-	class:loading={!!b.beadId && !b.beads}
+	class:loading={!!b.beadId && !b.timeline}
 	aria-label="bead: where an item comes from and what came out of it"
 >
 	<div class="bh">
@@ -182,6 +183,22 @@
 													: 'verdict'
 												: '·'}</em
 								>
+								{#if s.wait}
+									{@const act = asks.has(wish.wish) ? 'done' : 'agree'}
+									<button
+										type="button"
+										data-act={act}
+										disabled={b.sending.has(wish.wish)}
+										onclick={(e) => (e.stopPropagation(), b.answer(wish.wish, act))}
+										>{b.sending.has(wish.wish) ? 'sending…' : act}</button
+									>
+									<button
+										type="button"
+										data-act="correct"
+										onclick={(e) => (e.stopPropagation(), b.answer(wish.wish, 'correct'))}
+										>correct</button
+									>
+								{/if}
 							</div>{/each}
 					</div>{/if}
 			</div>

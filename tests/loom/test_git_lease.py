@@ -202,3 +202,91 @@ def test_strict_fences_even_uncontested(tmp_path):
 def test_boot_clock_moves():
     first = boot_clock()
     assert boot_clock() >= first
+
+
+def _flaky_push(auth: GitLeaseAuthority, answer):
+    """The next push runs, then ``answer(proc)`` says what the caller hears."""
+    real = auth.git
+    state = {"armed": True}
+
+    def git(tail):
+        proc = real(tail)
+        if state["armed"] and tail and tail[0] == "push":
+            state["armed"] = False
+            return answer(proc)
+        return proc
+
+    auth.git = git
+
+
+@pytest.mark.parametrize("ttl", [90, 180])
+def test_a_renew_whose_answer_was_lost_does_not_fence_the_next_one(pair, ttl):
+    # 11-06, 13:57Z: a renew landed but its answer did not arrive; the next
+    # renew named the older sha, lost the swap to its own commit and fenced
+    # the only machine there was. 90 s was live that day; 180 s is the floor.
+    a, _b, clock_a, _clock_b, remote = pair
+    lease = a.acquire("inbox", "aaaa", ttl)
+    _flaky_push(a, lambda proc: subprocess.CompletedProcess(proc.args, 128, "",
+                                                            "fatal: the remote hung up"))
+    clock_a.now += ttl / 3
+    lease = a.renew(lease, ttl)  # landed; heard as no network, so graced
+    assert lease is not None
+    clock_a.now += ttl / 3
+    renewed = a.renew(lease, ttl)
+    assert renewed is not None and renewed.gen == 1
+    assert a.authorize(renewed)
+    assert _remote_sha(remote, "refs/leases/inbox") == a.held["inbox"][1]
+
+
+@pytest.mark.parametrize("ttl", [90, 180])
+def test_a_renew_refused_once_by_the_remote_retries_on_the_ref_it_reads(pair, ttl):
+    a, _b, clock_a, _clock_b, remote = pair
+    lease = a.acquire("inbox", "aaaa", ttl)
+    before = _remote_sha(remote, "refs/leases/inbox")
+    _flaky_push(a, lambda proc: subprocess.CompletedProcess(
+        proc.args, 1, "!\trefs/leases/inbox\t[remote rejected] (failed to update ref)\n", ""))
+    clock_a.now += ttl / 3
+    renewed = a.renew(lease, ttl)
+    assert renewed is not None and a.authorize(renewed)
+    assert _remote_sha(remote, "refs/leases/inbox") not in ("", before)
+
+
+def test_a_renew_still_loses_to_a_takeover(pair):
+    a, b, clock_a, clock_b, _remote = pair
+    lease = a.acquire("inbox", "aaaa", 90)
+    b.poll()
+    clock_b.now += 96
+    assert b.acquire("inbox", "bbbb", 90) is not None
+    assert a.renew(lease, 90) is None
+
+
+@pytest.mark.parametrize("ttl", [90, 180])
+def test_a_renew_refused_every_time_keeps_the_lease_when_the_ref_still_names_us(pair, ttl):
+    # 11-06: every refused write fenced the only machine. A loss is now only
+    # what the ref shows; a rejection alone never fences.
+    a, _b, clock_a, _clock_b, remote = pair
+    lease = a.acquire("inbox", "aaaa", ttl)
+    before = _remote_sha(remote, "refs/leases/inbox")
+    real = a.git
+
+    def git(tail):
+        if tail and tail[0] == "push":
+            return subprocess.CompletedProcess(
+                tail, 1, "!\trefs/leases/inbox\t[remote rejected] (failed to update ref)\n", "")
+        return real(tail)
+
+    a.git = git
+    clock_a.now += ttl / 3
+    renewed = a.renew(lease, ttl)
+    assert renewed is not None and a.authorize(renewed)
+    assert _remote_sha(remote, "refs/leases/inbox") == before == a.held["inbox"][1]
+
+
+def test_a_renew_fences_when_the_ref_reads_released(pair):
+    a, _b, *_ = pair
+    lease = a.acquire("inbox", "aaaa", 90)
+    held = a.held["inbox"]
+    assert a.release(lease, preferred="bbbb", ttl=90)
+    a.held["inbox"] = held
+    assert a.renew(lease, 90) is None
+    assert not a.authorize(lease)

@@ -11,8 +11,16 @@ export const internal = (l: Letter): boolean =>
 export const sender = (l: Letter): string =>
 	l.notice ? 'loom' : l.person ? l.from.replace('person:', '') : l.from.split('/')[0];
 
-export const ownStrands = (threads: Thread[], col: string): Set<string> =>
-	new Set((threads.find((t) => t.id === col)?.strands || []).map((s) => s.id));
+// once per threads array (a model is new on every sync): every card on the board asks it
+const own = new WeakMap<Thread[], Map<string, Set<string>>>();
+export const ownStrands = (threads: Thread[], col: string): Set<string> => {
+	let m = own.get(threads);
+	if (!m) own.set(threads, (m = new Map()));
+	let s = m.get(col);
+	if (!s)
+		m.set(col, (s = new Set((threads.find((t) => t.id === col)?.strands || []).map((x) => x.id))));
+	return s;
+};
 
 // On the right what came into the column: his letters on the inbox and, on a thread, every letter its own
 // strands did not write; on the left what the column's strands wrote.
@@ -53,11 +61,21 @@ export function letterMark(
 	threads: Thread[]
 ): { thread: string | null; line?: 'solid' | 'dashed' } {
 	if (l.person) return { thread: null };
-	const who = sender(l);
+	return marks(threads).get(sender(l)) || { thread: l.threads?.[0] || col, line: 'solid' };
+}
+
+// strand → its mark, once per threads array: a scan of every thread's strands per card ran on every sync
+const marked = new WeakMap<Thread[], Map<string, { thread: string; line: 'solid' | 'dashed' }>>();
+function marks(threads: Thread[]) {
+	let m = marked.get(threads);
+	if (m) return m;
+	marked.set(threads, (m = new Map()));
 	for (const t of threads) {
 		const s = t.strands || [];
-		const i = s.findIndex((x) => x.id === who);
-		if (i >= 0) return { thread: t.id, line: i === s.length - 1 ? 'solid' : 'dashed' };
+		s.forEach((x, i) => {
+			if (!m!.has(x.id))
+				m!.set(x.id, { thread: t.id, line: i === s.length - 1 ? 'solid' : 'dashed' });
+		});
 	}
-	return { thread: l.threads?.[0] || col, line: 'solid' };
+	return m;
 }

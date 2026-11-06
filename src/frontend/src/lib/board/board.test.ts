@@ -3,13 +3,13 @@ import { test } from 'node:test';
 import type { Call, Index, Letter, Thread, ThreadPart, Wish } from './types.ts';
 import { chips, dur, refTokens, splitQuote } from './text.ts';
 import { inSide, internal, letterMark, linked, sender } from './sides.ts';
-import { arrange, REORDER, SETTLED, sortThreads, wanted } from './order.ts';
+import { arrange, REORDER, SETTLED, TOPICS, sortThreads, wanted } from './order.ts';
 import { pipOn, stages, stageWord } from './stages.ts';
 import { answered, stack, verdictLetter } from './calls.ts';
 import { inboxCards, ledger, threadWishes, unechoed } from './ledger.ts';
 import { bar, beats, liveOf, withTools } from './tape.ts';
-import { ancestors, children, moved, Store, type Beads } from './parts.ts';
-import { face, moves, seen } from './rail.ts';
+import { ancestors, children, headerFuel, moved, patchBeads, Store, type Beads } from './parts.ts';
+import { face, moves, seen, waitOf } from './rail.ts';
 import { stamps } from './stamps.ts';
 
 const L = (id: string, at: string, o: Partial<Letter> = {}): Letter => ({
@@ -27,6 +27,31 @@ const W = (wish: string, o: Partial<Wish> = {}): Wish => ({
 	...o
 });
 const T = (id: string, o: Partial<Thread> = {}): Thread => ({ id, ...o });
+
+test('the header names every provider, and a collector error is the word it was given', () => {
+	equal(
+		headerFuel([
+			{
+				shell: 'claude',
+				gauges: [
+					{ window: 'session', left_pct: 15 },
+					{ window: 'week', left_pct: 48 }
+				]
+			},
+			{
+				shell: 'codex',
+				gauges: [
+					{ window: 'session', left_pct: 95 },
+					{ window: 'week', left_pct: 99 }
+				]
+			},
+			{ shell: 'grok', gauges: [{ window: 'week', left_pct: 58 }] },
+			{ shell: 'vibe', gauges: [], error: 'fails' }
+		]),
+		'claude session 15% week 48%   codex session 95% week 99%   grok week 58%   vibe fails'
+	);
+	equal(headerFuel(undefined), '');
+});
 
 test('a Telegram quote and a reply-to both split off as the quote', () => {
 	const by = new Map<string, Letter>();
@@ -94,6 +119,7 @@ test('order: seated by freshest letter, your-call by since, quiet by opened newe
 		sorted.map((t) => t.id),
 		['seat-2', 'seat-1', 'call-a', 'call-b', 'wait', 'stall', 'q-new', 'q-old', 'done']
 	);
+	deepEqual(wanted(sorted, new Set(['done'])).slice(0, 2), ['inbox', TOPICS]);
 	deepEqual(wanted(sorted, new Set(['done'])).slice(-3), ['q-old', SETTLED, 'done']);
 });
 
@@ -219,6 +245,30 @@ test('ledger: sections by who owes the move; an assumed wish nests under the sai
 	equal(g.active?.text, 'do it');
 	deepEqual(g.balance, { said: 3, derived: 1, delivered: 1, owe: 1 });
 	equal(g.sections[2].rows[0].status, 'agree');
+	// a top-level assumed wish names the first said wish elsewhere that holds a letter it cites, never one shown here
+	const far = W('w-far', { thread: 'other', letters: ['l7'] }),
+		near = W('w-near', { thread: 'other', says: [{ id: 'l8', quote: 'y', cites: 'whole' }] }),
+		lone = W('w-lone', {
+			thread: 'web',
+			origin: 'derived',
+			state: 'delivered',
+			says: [
+				{ id: 'l8', quote: 'y', cites: 'whole' },
+				{ id: 'l7', quote: 'z', cites: 'whole' },
+				{ id: 'l1', quote: 'x', cites: 'whole' }
+			]
+		});
+	const wide = [said, far, near, lone];
+	const row = ledger(t, threadWishes(t, [L('l1', '1')], wide), wide, [])
+		.sections.flatMap((s) => s.rows)
+		.find((r) => r.w.wish === 'w-lone');
+	equal(row?.from, 'w-far');
+	equal(
+		ledger(t, threadWishes(t, [L('l1', '1')], [said, lone]), [said, lone], [])
+			.sections.flatMap((s) => s.rows)
+			.find((r) => r.w.wish === 'w-lone')?.from,
+		undefined
+	);
 });
 
 test('tape: finished calls fold per strand between letters; the live line ticks from the open call', () => {
@@ -310,6 +360,56 @@ test('parts: only a moved hash is fetched again; a letter in two parts is held o
 	deepEqual(moved(index({ 'thread/inbox': 'h1' }), store.held).drop, ['thread/web']);
 });
 
+test('parts: a short index row joins its part; unthreaded wishes load from theirs', async () => {
+	const loose = W('w-loose', {
+		line: 'loose',
+		thread: null,
+		says: [{ id: 'l', quote: 'a long quote', cites: 'whole' }]
+	});
+	const idx = index({ 'thread/web': 'h', unthreaded: 'u' }, [
+		T('web', {
+			title: 'Web',
+			status: 'open',
+			last_at: 't',
+			board: { state: 'quiet' },
+			counts: { heard: 1 }
+		})
+	]);
+	const asked: string[] = [];
+	const store = new Store(async (p) => {
+		asked.push(p);
+		if (p === '/v1/loom/index') return idx;
+		if (p === '/v1/loom/unthreaded') return [loose];
+		return {
+			...part('web', []),
+			steps: [{ text: 'fat step', wishes: [], receipt: null }],
+			strands: [{ id: 's-ae66-webbod', state: 'idle' }],
+			board: {
+				state: 'quiet',
+				why: 'parked on ci',
+				calls: [{ kind: 'ask', wish: 'w', line: 'x', at: 't' }]
+			},
+			opened_at: 'opened'
+		};
+	});
+	ok(await store.sync());
+	deepEqual(
+		asked.filter((p) => p.includes('unthreaded')),
+		['/v1/loom/unthreaded']
+	);
+	const t = store.model()!.threads.find((row) => row.id === 'web')!;
+	equal(t.title, 'Web');
+	equal(t.board?.state, 'quiet');
+	equal(t.board?.why, 'parked on ci');
+	equal(t.steps?.[0].text, 'fat step');
+	equal(t.strands?.[0].id, 's-ae66-webbod');
+	equal(t.opened_at, 'opened');
+	equal(store.model()!.wishes[0].says?.[0].quote, 'a long quote');
+	asked.length = 0;
+	equal(await store.sync(), false);
+	deepEqual(asked, ['/v1/loom/index']);
+});
+
 test('parts: older letters load by before=, or back to until=', async () => {
 	const asked: string[] = [];
 	const store = new Store(async (p) => {
@@ -364,8 +464,129 @@ test('beads: the chain walks up to the source; children hang below oldest first'
 	deepEqual(ancestors(b, 'loop'), []);
 });
 
+test('beads: children are indexed once per part, and a patched part answers with what it brought', () => {
+	const b: Beads = {
+		w: [null, null, null, '1', 'wish'],
+		l1: ['w', 're', 's', '3', 'a']
+	};
+	deepEqual(children(b, 'w'), ['l1']);
+	const next = patchBeads(b, {
+		since: 'h1',
+		hash: 'h2',
+		set: { l0: ['w', 're', 's', '2', 'z'] },
+		drop: ['l1']
+	});
+	deepEqual(children(next, 'w'), ['l0']);
+	deepEqual(children(b, 'w'), ['l1']);
+	deepEqual(children(next, 'nobody'), []);
+});
+
+test('beads: a delta patches the held map; drop removes', () => {
+	const held: Beads = {
+		a: [null, 'person', 'person:ada', '1', 'ask'],
+		gone: [null, 'person', 'person:ada', '0', 'old']
+	};
+	deepEqual(
+		patchBeads(held, {
+			since: 'b1',
+			hash: 'b2',
+			set: { b: ['a', 're', 's', '2', 'on it'] },
+			drop: ['gone']
+		}),
+		{
+			a: held.a,
+			b: ['a', 're', 's', '2', 'on it']
+		}
+	);
+});
+
+test('parts: beads patch from the index delta, a letter does not refetch the part', async () => {
+	const row: Beads[string] = [null, 'person', 'person:ada', '1', 'ask'];
+	const beads: Beads = { a: row };
+	let idx = index({ 'thread/web': 'h1', beads: 'b1' });
+	const asked: string[] = [];
+	const store = new Store(async (p) => {
+		asked.push(p);
+		if (p === '/v1/loom/index') return idx;
+		if (p === '/v1/loom/thread/web') return part('web', []);
+		return beads;
+	});
+	await store.sync();
+	await store.loadBeads();
+	asked.length = 0;
+	const added: Beads[string] = ['a', 're', 's', '2', 'on it'];
+	idx = index({ 'thread/web': 'h1', beads: 'b2' });
+	idx.beads_delta = { since: 'b1', hash: 'b2', set: { b: added }, drop: [] };
+	ok(await store.sync());
+	deepEqual(asked, ['/v1/loom/index']);
+	deepEqual(store.beads, { a: row, b: added });
+	equal(store.held.get('beads'), 'b2');
+});
+
+test('parts: two letters between steps, one sync from the first hash holds the current', async () => {
+	const a: Beads[string] = [null, 'person', 'person:ada', '1', 'ask'];
+	const b: Beads[string] = ['a', 're', 's', '2', 'two'];
+	const c: Beads[string] = ['a', 're', 's', '3', 'three'];
+	let idx = index({ 'thread/web': 'h1', beads: 'b1' });
+	const asked: string[] = [];
+	const store = new Store(async (p) => {
+		asked.push(p);
+		if (p === '/v1/loom/index') return idx;
+		if (p === '/v1/loom/thread/web') return part('web', []);
+		if (p === '/v1/loom/beads?since=b1')
+			return { since: 'b1', hash: 'b3', set: { b, c }, drop: [] };
+		return { a };
+	});
+	await store.sync();
+	await store.loadBeads();
+	asked.length = 0;
+	idx = index({ 'thread/web': 'h1', beads: 'b3' });
+	idx.beads_delta = { since: 'b2', hash: 'b3', set: { c }, drop: [] };
+	ok(await store.sync());
+	deepEqual(asked, ['/v1/loom/index', '/v1/loom/beads?since=b1']);
+	equal(store.held.get('beads'), 'b3');
+	deepEqual(store.beads, { a, b, c });
+});
+
+test('from the inbox: person letters in the chain, oldest first; another thread is marked', () => {
+	const chain: Beads = {
+		ask: [null, 'person', 'person:ada', '1', 'please make alpha'],
+		'w-alpha0000000': ['ask', 'says', 'person:ada', '2', 'alpha happens'],
+		other: [null, 'person', 'person:ada', '0', 'from charlie'],
+		reply: ['other', 're', 's-x', '3', 'on it']
+	};
+	const byId = new Map<string, Letter>([
+		[
+			'ask',
+			L('ask', '1', {
+				person: true,
+				from: 'person:ada',
+				threads: ['inbox'],
+				body: 'please make alpha'
+			})
+		],
+		[
+			'other',
+			L('other', '0', {
+				person: true,
+				from: 'person:ada',
+				threads: ['charlie'],
+				body: 'from charlie'
+			})
+		]
+	]);
+	const rows = fromInbox(chain, byId, 'alpha');
+	deepEqual(
+		rows.map((r) => [r.id, r.who, r.thread, r.line]),
+		[
+			['other', 'ada', 'charlie', 'from charlie'],
+			['ask', 'ada', undefined, 'please make alpha']
+		]
+	);
+});
+
 // The bead sheet walks the beads part in the client (no /bead on the loopback): chain up to the source, what hangs below.
-import { kindOf, panelIds, refOf, resolveRef, timeline, trace } from './bead.ts';
+import { fromInbox, kindOf, panelIds, refOf, resolveRef, timeline, trace } from './bead.ts';
 test('a bead timeline walks the parent map up to its source and down to its children', () => {
 	const beads = {
 		'letter:tg:1': [null, null, 'person:ada', '2026-10-27T10:00:00Z', 'make the board'],
@@ -466,6 +687,27 @@ test('the rail logs a moved strand once, the first load moves none, and a workin
 	equal(face(faces, 'working', 3), 'b');
 	equal(face(faces, 'holding', 3), 'c');
 	equal(face(undefined, 'working', 3), 'brnrd');
+	equal(waitOf(T('bravo', { board: { state: 'your-call' } }), 'idle'), 'waits on you');
+	equal(
+		waitOf(
+			T('echo', { board: { state: 'waiting', why: 'waiting: the forge to come back' } }),
+			'parked'
+		),
+		'waits: the forge to come back'
+	);
+	equal(
+		waitOf(
+			T('long', {
+				board: {
+					state: 'waiting',
+					why: 'waiting: ' + 'x'.repeat(60)
+				}
+			}),
+			'parked'
+		),
+		'waits: ' + 'x'.repeat(39) + '…'
+	);
+	equal(waitOf(T('charlie', { board: { state: 'mine' } }), 'idle'), 'idle');
 });
 
 test('a letter stamps who picked it up first, then its disposition, its send and its wishes in board.html order', () => {

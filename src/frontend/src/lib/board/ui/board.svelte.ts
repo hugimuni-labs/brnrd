@@ -8,6 +8,8 @@ import { normalize, panelIds, resolveRef, timeline, type Timeline } from '../bea
 import { armedVerdict, correctDraft, verdictLetter } from '../calls.ts';
 import { refTokens } from '../text.ts';
 import { unechoed } from '../ledger.ts';
+import { remembering, type Held } from '../cache.ts';
+import { EMPTY, PLACE, paneScroll, readPlace, type Place } from '../place.ts';
 
 const KEY = Symbol('board');
 const local = (k: string, d: string) =>
@@ -15,7 +17,9 @@ const local = (k: string, d: string) =>
 
 export class Board {
 	store: Store;
-	model = $state<Model | null>(null);
+	// raw: a sync replaces the model whole and nothing writes into it; a deep proxy put a trap under every read of
+	// every card, and each tick re-ran them all (the live-path bench)
+	model = $state.raw<Model | null>(null);
 	live = $state<'connecting' | 'live' | 'polled' | 'offline'>('connecting');
 	error = $state('');
 	// letters sent from here that the ledger has not shown yet
@@ -36,7 +40,8 @@ export class Board {
 	// the bead sheet
 	beadId = $state<string | null>(null);
 	beadHist = $state<string[]>([]);
-	beads = $state<Beads | null>(null);
+	// raw: a deep proxy over 7k beads made every walk a signal read, and each reassignment a new proxy
+	beads = $state.raw<Beads | null>(null);
 	// the composer
 	draft = $state('');
 	armed = $state<string | null>(null);
@@ -51,9 +56,20 @@ export class Board {
 	// `at` so its hash moves only with the board)
 	heard = $state('');
 
-	constructor(get: (path: string) => Promise<unknown> = getJSON) {
-		this.store = new Store(get);
+	// Where the last page stood (place.ts), read once; the columns take their scroll from it on their first paint.
+	place: Place = EMPTY;
+
+	constructor(get: (path: string) => Promise<unknown> = getJSON, held: Held | null = null) {
+		this.store = new Store(remembering(get));
 		if (typeof window !== 'undefined') {
+			this.place = readPlace(localStorage.getItem(PLACE));
+			// the last page's parts: the board paints now, and load() syncs it against the index
+			if (held) {
+				this.store.prime(held);
+				this.model = this.store.model();
+				this.beads = this.store.beads;
+				this.land();
+			}
 			// eslint-disable-next-line svelte/prefer-svelte-reactivity -- a local, not state
 			const q = new URLSearchParams(location.search).get('typed_by');
 			if (q) sessionStorage.setItem('board.typedBy', q);
@@ -83,8 +99,10 @@ export class Board {
 			if (await this.store.sync()) {
 				this.model = this.store.model();
 				this.pending = unechoed(this.pending, this.model!.letters);
-				if (this.beads && !this.store.beads) this.beads = await this.store.loadBeads();
+				if (this.store.beads) this.beads = this.store.beads;
+				else if (this.beads && !this.store.beads) this.beads = await this.store.loadBeads();
 			}
+			this.land();
 			// eslint-disable-next-line svelte/prefer-svelte-reactivity -- a temporary, not state
 			this.heard = new Date().toISOString();
 			this.error = '';
@@ -132,6 +150,50 @@ export class Board {
 		};
 	}
 
+	// Land where the last page stood, once the model is in: the sheet, the selection, the grown columns and opened
+	// rows. The columns' scrolls are theirs (Column's first paint); the board's is Board.svelte's.
+	landed = false;
+	land() {
+		if (this.landed || !this.model) return;
+		this.landed = true;
+		const p = this.place;
+		for (const id of p.grown) this.grown.add(id);
+		for (const k of p.open) this.open.add(k);
+		if (p.sel) this.select(p.sel, p.selCol);
+		if (p.bead) {
+			this.beadId = normalize(p.bead, this.model);
+			this.beadHist = p.hist;
+			if (!this.store.beads) this.store.loadBeads().then((x) => (this.beads ??= x));
+			else this.beads = this.store.beads;
+		}
+	}
+	// Written as the page hides and after a scroll or a press, so the next page (this phone drops the tab on every
+	// app switch) lands here. Column scrolls are read off the DOM.
+	savePlace() {
+		if (typeof document === 'undefined' || !this.model) return;
+		const y: Place['y'] = {};
+		for (const c of document.querySelectorAll<HTMLElement>('.brd .column[data-column]')) {
+			const pane = c.querySelector<HTMLElement>('.messages');
+			if (pane)
+				y[c.dataset.column!] = paneScroll(pane.scrollTop, pane.scrollHeight, pane.clientHeight);
+		}
+		const place: Place = {
+			bead: this.beadId,
+			hist: this.beadHist,
+			sel: this.sel,
+			selCol: this.selCol,
+			grown: [...this.grown],
+			open: [...this.open],
+			x: Math.round(document.getElementById('board')?.scrollLeft ?? 0),
+			y
+		};
+		try {
+			localStorage.setItem(PLACE, JSON.stringify(place));
+		} catch {
+			/* a full storage keeps the last place */
+		}
+	}
+
 	toggle(set: SvelteSet<string>, k: string) {
 		if (set.has(k)) set.delete(k);
 		else set.add(k);
@@ -150,7 +212,10 @@ export class Board {
 		if (how !== 'back' && this.beadId && this.beadId !== id)
 			this.beadHist = [...this.beadHist, this.beadId];
 		this.beadId = id;
-		if (!this.beads) this.beads = await this.store.loadBeads();
+		if (this.store.beads) return void (this.beads = this.store.beads);
+		const got = await this.store.loadBeads();
+		// closed (or moved on) while the part was in flight: the beads are kept, the sheet stays as he left it
+		this.beads ??= got;
 	}
 	back() {
 		const h = [...this.beadHist],
@@ -165,10 +230,26 @@ export class Board {
 	select(id: string | null, col: string | null = null) {
 		this.sel = id;
 		this.selCol = id ? col : null;
-		if (id && !this.beads) this.store.loadBeads().then((x) => (this.beads ??= x));
+		if (id && !this.store.beads) this.store.loadBeads().then((x) => (this.beads ??= x));
 	}
-	// What the selection links to (Links.svelte draws the lines); the item alone until the beads are in.
-	linked = $derived<ReadonlySet<string>>(panelIds(this.beads || {}, this.sel));
+	// Thread chain roots plus the beads part, so a press draws the chain before the 1 MB part lands.
+	merged = $derived.by((): Beads | null => {
+		void this.model;
+		const chain: Beads = {};
+		for (const p of this.store.threads.values()) Object.assign(chain, p.chain || {});
+		if (!this.beads && !Object.keys(chain).length) return null;
+		return { ...chain, ...(this.beads || {}) };
+	});
+	// What the sheet (or, with it closed, the selection) links to; the item alone until the beads are in.
+	// The same set again keeps its identity, so a sync that moves nothing near the item re-runs no card.
+	// eslint-disable-next-line svelte/prefer-svelte-reactivity -- the last answer, not state
+	#linked: ReadonlySet<string> = new Set();
+	linked = $derived.by<ReadonlySet<string>>(() => {
+		const n = panelIds(this.merged || {}, this.beadId || this.sel),
+			o = this.#linked;
+		if (n.size === o.size && [...n].every((x) => o.has(x))) return o;
+		return (this.#linked = n);
+	});
 	isSel(id: string, col: string) {
 		return this.sel === id && this.selCol === col;
 	}
@@ -183,14 +264,14 @@ export class Board {
 			this.select(id, el.closest<HTMLElement>('[data-column]')?.dataset.column ?? null);
 	}
 	timeline = $derived.by((): Timeline | null =>
-		this.beadId && this.beads ? timeline(this.beads, this.model, this.beadId) : null
+		this.beadId && this.merged ? timeline(this.merged, this.model, this.beadId) : null
 	);
 
 	// The composer's &refs, checked against the beads as he types; an unknown one is named before it goes.
 	refs = $derived.by(() =>
 		refTokens(this.draft).map((t) => ({
 			t,
-			id: this.beads ? resolveRef(this.beads, this.model, t) : null
+			id: this.merged ? resolveRef(this.merged, this.model, t) : null
 		}))
 	);
 	keep() {
@@ -231,7 +312,8 @@ export class Board {
 		const body = this.draft;
 		if (!body.trim()) return;
 		this.sendError = '';
-		if (!this.beads) this.beads = await this.store.loadBeads();
+		if (!this.store.beads) this.beads = await this.store.loadBeads();
+		else this.beads = this.store.beads;
 		const miss = this.refs.filter((r) => !r.id).map((r) => r.t);
 		if (miss.length && !this.force) {
 			this.force = true;

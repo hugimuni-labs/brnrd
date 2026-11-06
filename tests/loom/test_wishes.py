@@ -63,9 +63,9 @@ def test_full_lifecycle_and_wake(ledger):
     assert view(home, ident).state == "read"
     command(home, seat, "wish", ident, "--read", "Only the first part", person=True)
     assert view(home, ident).state == "scoped"
-    command(home, seat, "wish", ident, "--result", "pr:https://example.com/1", "--line", "First part")
+    command(home, seat, "wish", ident, "--result", "url:https://example.com/1", "--line", "First part")
     assert view(home, ident).state == "granting"
-    command(home, seat, "wish", ident, "--result", "pr:https://example.com/1", "--line", "First part", "--deliver")
+    command(home, seat, "wish", ident, "--result", "url:https://example.com/1", "--line", "First part", "--deliver")
     assert view(home, ident).state == "delivered"
     output = StringIO()
     assert run_wake(seat, "work", stdout=output) == 0
@@ -164,7 +164,7 @@ def test_unconfirmed_is_computed_at_read_time_and_fold_orders_facts(ledger):
 def test_wake_bounds_each_line_and_reserves_its_budget(ledger, monkeypatch):
     home, seat = ledger
     ident = heard(home, seat, "recall\n" + "x" * 2000)
-    command(home, seat, "wish", ident, "--result", "file:" + "r" * 1000,
+    command(home, seat, "wish", ident, "--result", "url:" + "r" * 1000,
             "--line", "Result", "--deliver")
     output = StringIO()
     assert run_wake(seat, "work", stdout=output) == 0
@@ -233,7 +233,7 @@ def test_wake_caps_rows_with_asks_first(ledger):
 
 def delivered_wish(home, seat, line="Delivered work"):
     ident = heard(home, seat, line)
-    command(home, seat, "wish", ident, "--result", "pr:https://example.com/1",
+    command(home, seat, "wish", ident, "--result", "url:https://example.com/1",
             "--line", "Ready", "--deliver")
     return ident
 

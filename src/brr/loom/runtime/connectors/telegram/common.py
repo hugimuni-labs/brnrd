@@ -25,9 +25,9 @@ def base():
     return os.environ.get('BRNRD_TELEGRAM_API', 'https://api.telegram.org').rstrip('/')
 
 
-def call(method, payload, timeout=35):
-    request = Request(f'{base()}/bot{token()}/{method}',
-                      json.dumps(payload).encode(), {'Content-Type': 'application/json'})
+def call(method, payload, timeout=35, content_type='application/json'):
+    data = payload if isinstance(payload, bytes) else json.dumps(payload).encode()
+    request = Request(f'{base()}/bot{token()}/{method}', data, {'Content-Type': content_type})
     try:
         with urlopen(request, timeout=timeout) as response:
             result = json.load(response)
@@ -49,6 +49,22 @@ def call(method, payload, timeout=35):
         why = f": {result['description']}" if isinstance(result.get('description'), str) else ''
         raise error(f'Telegram refused {method} ({code}{why})')
     return result['result']
+
+
+def send_document(chat, path, name, reply_to=None, timeout=120):
+    """sendDocument as multipart/form-data: the file under its own name."""
+    import secrets
+    boundary = 'brnrd-' + secrets.token_hex(12)
+    fields = dict(chat_id=str(chat))
+    if reply_to is not None:
+        fields['reply_parameters'] = json.dumps(dict(message_id=reply_to))
+    parts = [f'--{boundary}\r\nContent-Disposition: form-data; name="{k}"\r\n\r\n{v}\r\n'.encode()
+             for k, v in fields.items()]
+    safe = name.replace('"', "'").replace('\r', ' ').replace('\n', ' ')
+    parts.append(f'--{boundary}\r\nContent-Disposition: form-data; name="document"; filename="{safe}"\r\n'
+                 'Content-Type: application/octet-stream\r\n\r\n'.encode())
+    body = b''.join(parts) + Path(path).read_bytes() + f'\r\n--{boundary}--\r\n'.encode()
+    return call('sendDocument', body, timeout, content_type=f'multipart/form-data; boundary={boundary}')
 
 
 def _description(exc):

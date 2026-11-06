@@ -136,6 +136,53 @@ def test_an_ask_that_waits_on_the_person_is_mailed_to_their_direct_channel(ledge
     assert len(mail(leaf, ask)) == 1
 
 
+def test_an_ask_goes_to_the_chat_the_person_last_wrote_from(ledger):
+    # 11-03: every ask went to the first channels.toml entry (an old own bot)
+    # while he wrote from the cloud one, and never reached him.
+    from brr.loom.runtime.connector import ingest
+    home, seat = ledger
+    (home.root / "loom/config.toml").write_text('connectors = ["mine=fake", "cloud=fake"]\n')
+    (home.root / "self/people/ada").mkdir(parents=True)
+    (home.root / "self/people/ada/channels.toml").write_text(
+        'channels = ["mine:42", "cloud:telegram:42"]\n')
+    _wish, mid = child(home, seat, "mid", "s-aaaa-mid")
+    wish, leaf = child(home, mid, "leaf", "s-aaaa-leaf")
+    command(home, seat, "settle", "mid", "--why", "split done")
+    ingest(home, "mine", dict(id="old", kind="letter", to="channel:mine/42", **{"from": "mine:42"},
+                              body="from the own bot", thread="work"), [])
+    ingest(home, "cloud", dict(id="new", kind="letter", to="channel:cloud/telegram:42",
+                               **{"from": "cloud:telegram:42"}, body="from the cloud bot", thread="work"), [])
+    ask = command(home, leaf, "ask", "Keep going?", "--for", wish)
+    sent, = mail(leaf, ask)
+    assert "to: channel:cloud/telegram:42" in sent
+    # A stranger on the same connector never steers it.
+    ingest(home, "mine", dict(id="odd", kind="letter", to="channel:mine/99", **{"from": "mine:99"},
+                              body="hi", thread="work"), [])
+    other = command(home, leaf, "ask", "And the tests?", "--for", wish)
+    assert "to: channel:cloud/telegram:42" in mail(leaf, other)[0]
+    # He writes from the own bot again: the next ask follows him there.
+    ingest(home, "mine", dict(id="back", kind="letter", to="channel:mine/42", **{"from": "mine:42"},
+                              body="back here", thread="work"), [])
+    third = command(home, leaf, "ask", "Ship it?", "--for", wish)
+    assert "to: channel:mine/42" in mail(leaf, third)[0]
+
+
+def test_an_ask_says_where_it_went(ledger):
+    home, seat = ledger
+    _wish, mid = child(home, seat, "mid", "s-aaaa-mid")
+    wish, leaf = child(home, mid, "leaf", "s-aaaa-leaf")
+    command(home, seat, "settle", "mid", "--why", "split done")
+    out = cli(["ask", "Keep going?", "--for", wish, "--room", str(leaf)])
+    assert out.returncode == 0 and "on the board only" in out.stderr
+    (home.root / "loom/config.toml").write_text('connectors = ["mine=fake"]\n')
+    (home.root / "self/people/ada").mkdir(parents=True)
+    (home.root / "self/people/ada/channels.toml").write_text('channels = ["mine:42"]\n')
+    out = cli(["ask", "Go on?", "--for", wish, "--room", str(leaf)])
+    assert "sent to channel:mine/42" in out.stderr
+    again = cli(["ask", "Go on?", "--for", wish, "--room", str(leaf)])
+    assert "already sent to channel:mine/42" in again.stderr
+
+
 def test_the_chain_reaches_a_person_and_survives_a_loop():
     def ask(ident, thread, parent):
         return Wish(ident, sender="resident", thread=thread, parent=parent, line="x")

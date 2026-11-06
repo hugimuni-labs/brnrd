@@ -212,7 +212,7 @@ def test_one_stop_shows_every_miss_at_once_until_each_is_cleared(body):
     third = json.loads(stop(seat))["reason"]
     # A left answers both (it says how the body ends); the letter still owed stays on the list.
     assert "what is left" not in third and "has not said how it ends" not in third
-    assert third.startswith("the stop holds on 1 thing") and "--note" in third
+    assert third.partition(chr(10))[2].startswith("the stop holds on 1 thing") and "--note" in third
     assert not list((seat / "port/out").glob("asked-*.md"))
 
 
@@ -221,7 +221,7 @@ def test_a_delivered_wish_takes_one_line_in_the_wake(body):
     home, seat = body
     done = heard(home, seat, "Ship the switch")
     command(home, seat, "wish", done, "--left", "wait for CI")
-    command(home, seat, "wish", done, "--result", "pr:https://example.com/9", "--line", "Shipped", "--deliver")
+    command(home, seat, "wish", done, "--result", "url:https://example.com/9", "--line", "Shipped", "--deliver")
     live = heard(home, seat, "Paint the board")
     command(home, seat, "wish", live, "--left", "pick a palette")
     shown = wake(seat)

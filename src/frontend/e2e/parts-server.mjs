@@ -1,4 +1,4 @@
-// A loopback loom made of recorded parts: GET /v1/loom/{index,thread/<id>,beads} from a directory of
+// A loopback loom made of recorded parts: GET /v1/loom/{index,thread/<id>,beads,topics,unthreaded} from a directory of
 // <name>.json files (a thread's slash is `__`), /v1/loom/events as an SSE stream that names the index hash,
 // POST /v1/loom/letters kept in memory. `node e2e/parts-server.mjs <dir> <port>`. Given an object ({ name: json }, as
 // fixture.mjs makes) instead of a directory, `set(parts)` swaps it and sends the new index hash to every open stream.
@@ -21,8 +21,40 @@ export function cut(part, q, most = 200) {
 export function partsServer(dir, port = 0, consent = null) {
 	const sent = [],
 		answers = [],
-		streams = new Set();
+		streams = new Set(),
+		beadDeltas = {};
 	let mem = typeof dir === 'string' ? null : dir;
+	const noteDelta = (parts) => {
+		const d = parts?.index?.beads_delta;
+		if (d?.since) beadDeltas[d.since] = d;
+		for (const [k, v] of Object.entries(parts?.index?.beads_deltas || {})) beadDeltas[k] = v;
+	};
+	if (mem) noteDelta(mem);
+	const compose = (since, current) => {
+		if (!current) return null;
+		if (since === current) return { since, hash: current, set: {}, drop: [] };
+		const set = {},
+			drop = new Set();
+		let cur = since;
+		const seen = new Set();
+		while (cur !== current) {
+			if (seen.has(cur)) return null;
+			seen.add(cur);
+			const d = beadDeltas[cur];
+			if (!d) return null;
+			for (const [k, v] of Object.entries(d.set || {})) {
+				set[k] = v;
+				drop.delete(k);
+			}
+			for (const k of d.drop || []) {
+				drop.add(k);
+				delete set[k];
+			}
+			cur = d.hash;
+			if (!cur) return null;
+		}
+		return { since, hash: current, set, drop: [...drop] };
+	};
 	const read = (name) => {
 		if (mem) return name in mem ? JSON.stringify(mem[name]) : null;
 		const f = join(dir, name.replaceAll('/', '__') + '.json');
@@ -34,6 +66,7 @@ export function partsServer(dir, port = 0, consent = null) {
 		);
 	const set = (parts) => {
 		mem = parts;
+		noteDelta(parts);
 		for (const res of streams) ping(res);
 	};
 	const server = createServer((req, res) => {
@@ -75,8 +108,32 @@ export function partsServer(dir, port = 0, consent = null) {
 			req.on('close', () => (clearInterval(t), streams.delete(res)));
 			return;
 		}
+		if (path === 'beads') {
+			const rawBeads = read('beads');
+			if (!rawBeads) {
+				res.writeHead(404, { 'content-type': 'application/json' });
+				res.end(JSON.stringify({ error: 'no part beads' }));
+				return;
+			}
+			const since = url.searchParams.get('since');
+			if (since) {
+				const index = JSON.parse(read('index') || '{}');
+				noteDelta({ index });
+				const composed = compose(since, index.parts?.beads);
+				if (composed) {
+					res.writeHead(200, { 'content-type': 'application/json' });
+					res.end(JSON.stringify(composed));
+					return;
+				}
+			}
+			res.writeHead(200, { 'content-type': 'application/json', 'cache-control': 'no-cache' });
+			res.end(rawBeads);
+			return;
+		}
 		const raw =
-			path === 'index' || path === 'beads' || path.startsWith('thread/') ? read(path) : null;
+			path === 'index' || path === 'topics' || path === 'unthreaded' || path.startsWith('thread/')
+				? read(path)
+				: null;
 		if (!raw) {
 			res.writeHead(404, { 'content-type': 'application/json' });
 			res.end(JSON.stringify({ error: `no part ${path}` }));

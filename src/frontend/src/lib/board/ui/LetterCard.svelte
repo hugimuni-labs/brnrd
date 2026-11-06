@@ -17,6 +17,11 @@
 	const line = $derived(String(l.body).replace(/\s+/g, ' ').trim());
 	const dis = $derived(l.person && b.open.has('d:' + l.id));
 	const st = $derived(stamps(l));
+	// a press moves sel and linked on every card: each is its own derived, so only the cards whose answer changed
+	// re-run their class effect (it held `in` too, and ran inSide on every card of the board at each press)
+	const side = $derived(!inbox && inSide(l, col, b.model?.threads || []));
+	const isSel = $derived(b.isSel(l.id, col));
+	const isLinked = $derived(b.linked.has(l.id) && (b.beadId || b.sel) !== l.id);
 	let quoteOpen = $state(false);
 	function press() {
 		if (shut || (internal(l) && inbox)) return b.toggle(b.open, 'l:' + l.id);
@@ -39,13 +44,13 @@
 <article
 	data-letter={l.id}
 	class="letter {l.person ? 'person' : 'resident'}"
-	class:in={!inbox && inSide(l, col, b.model?.threads || [])}
+	class:in={side}
 	class:notice={l.notice}
 	class:internal={internal(l)}
 	class:collapsed={shut}
 	class:pending={l.pendingNote}
-	class:sel={b.isSel(l.id, col)}
-	class:linked={b.linked.has(l.id) && !b.isSel(l.id, col)}
+	class:sel={isSel}
+	class:linked={isLinked}
 	style:--h={mark.thread ? hue(mark.thread) : ME}
 	style:--line={mark.line}
 	onclick={press}

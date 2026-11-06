@@ -154,12 +154,22 @@ def read_command(root: Path, source: str, tail: list[str],
 
 
 def _declared(home, thread: str, name: str) -> str:
+    """The source ``name`` pushes to: the seat's ``repo:`` line, else its library page.
+
+    The library is the grant for repos; a seat line only wins where it names one.
+    """
     from .adapters import repos, seat_text
+    from .library import sources
     for found, source in repos(seat_text(home, thread), home=home):
         if found == name:
             return source
+    shelf = sources(home)
+    if name in shelf:
+        return shelf[name]
     raise PublishError(
-        f"publish: thread {thread}'s seat on main declares no repo named {name}"
+        f"publish: thread {thread}'s seat on main declares no repo named {name}, "
+        f"and the library has no library/{name}.md with a source; add it with "
+        f"`lib add {name} <url> --kind known --whose <person> --for <why>` and land it"
     )
 
 
@@ -390,6 +400,12 @@ def publish(room: Path | str, name: str, *, worker: str | None = None,
     from .loom import _commit_identity
 
     who = _caller(room, name)
+    from .loom import _fenced
+    if _fenced(who.home, who.facts):
+        raise PublishError(
+            "publish: this machine lost the inbox lease; a push would go out "
+            "from here. Land locally."
+        )
     checkout, strand = who.checkout, who.strand
     if worker is not None:
         branch, source = _for_worker(who, worker)
@@ -658,8 +674,17 @@ def claim_pr(room: Path | str, name: str, number: int, *, merged: bool = False) 
                     id=f"pr.opened:{who.thread}:{name}:{number}:{head}")
     fact = append(who.home, fact)
     if not merged:
-        note = "\n".join(filter(None, [note, _sign_pr(who, source, number)]))
+        note = "\n".join(filter(None, [note, _sign_pr(who, source, number), _weakened(who, source, number)]))
     return Claimed(fact, note)
+
+
+def _weakened(who: _Caller, source: str, number: int) -> str:
+    """The reviewer's fact, on the pull request as it opens: the asserts its tests lose
+    beside a code change (``verify.weakened``), said back to the body too."""
+    from .update import slug
+    from .verify import mark
+    repo = slug(source)
+    return mark(who.home, repo, number) if repo else ""
 
 
 def _arguments(parser) -> None:

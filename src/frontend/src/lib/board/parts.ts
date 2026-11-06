@@ -1,14 +1,45 @@
 // The board's data, as parts (design §D1): GET /v1/loom/index carries every other part's hash; a thread part or beads
-// is fetched again only when its hash in the index moves. /v1/loom/events sends the index hash whenever it moves.
-import type { Index, Letter, Model, ThreadPart } from './types.ts';
+// is fetched again only when its hash in the index moves. Beads then patch from the index's beads_delta or
+// GET /v1/loom/beads?since=<hash>, so a letter does not refetch the whole part. /v1/loom/events sends the index hash
+// whenever it moves.
+import type {
+	BeadsDelta,
+	Fuel,
+	Index,
+	Letter,
+	Model,
+	Thread,
+	ThreadPart,
+	Topic,
+	Wish
+} from './types.ts';
 import { byAt } from './text.ts';
+import type { Held } from './cache.ts';
 
 export const BASE = '/v1/loom';
 export type Beads = Record<
 	string,
 	[string | null, string | null, string | null, string | null, string]
 >;
+export type { BeadsDelta };
 type Get = (path: string) => Promise<unknown>;
+
+export function isDelta(got: unknown): got is BeadsDelta {
+	return (
+		!!got &&
+		typeof got === 'object' &&
+		'set' in got &&
+		'drop' in got &&
+		Array.isArray((got as BeadsDelta).drop) &&
+		typeof (got as BeadsDelta).set === 'object'
+	);
+}
+
+export function patchBeads(held: Beads, delta: BeadsDelta): Beads {
+	const next = { ...held, ...delta.set };
+	for (const id of delta.drop) delete next[id];
+	return next;
+}
 
 export async function getJSON(path: string): Promise<unknown> {
 	const r = await fetch(path, { cache: 'no-store' });
@@ -16,12 +47,37 @@ export async function getJSON(path: string): Promise<unknown> {
 	return r.json();
 }
 
+// The index row is short. Steps, strands and calls ride on the thread part; join puts them back on the column.
+const PART_ONLY = new Set(['letters', 'wishes', 'tools', 'live', 'chain', 'more', 'count', 'id']);
+
+// The header line. One shell per provider, in the index's order (name order, the status line's without a seat
+// pulled forward). A collector error with no window is the word the index carries (`fails`); the error text stays off.
+export function headerFuel(fuel: Fuel[] | undefined): string {
+	return (fuel ?? [])
+		.map((f) => {
+			const gauges = (f.gauges ?? []).map((g) => `${g.window} ${g.left_pct}%`).join(' ');
+			const word = gauges || f.error || '';
+			return word ? `${f.shell} ${word}` : '';
+		})
+		.filter((line) => line)
+		.join('   ');
+}
+
+export function join(row: Thread, part?: ThreadPart): Thread {
+	if (!part) return row;
+	const head: Partial<Thread> = {};
+	for (const [k, v] of Object.entries(part))
+		if (!PART_ONLY.has(k)) (head as Record<string, unknown>)[k] = v;
+	return { ...head, ...row, board: { ...(head.board || {}), ...(row.board || {}) } };
+}
+
 // One letter may sit in several thread parts (its `threads`); the board holds it once.
-export function assemble(index: Index, threads: Map<string, ThreadPart>): Model {
+// `loose` is the unthreaded part. When the caller omits it, a fixture's index.unthreaded still counts.
+export function assemble(index: Index, threads: Map<string, ThreadPart>, loose?: Wish[]): Model {
 	const byId = new Map<string, Letter>(),
 		tools: Model['tools'] = {},
 		live: Model['live'] = {},
-		wishes = [...index.unthreaded];
+		wishes = [...(loose ?? index.unthreaded ?? [])];
 	for (const p of threads.values()) {
 		for (const l of p.letters) if (!byId.has(l.id)) byId.set(l.id, l);
 		wishes.push(...p.wishes);
@@ -29,7 +85,7 @@ export function assemble(index: Index, threads: Map<string, ThreadPart>): Model 
 		Object.assign(live, p.live);
 	}
 	return {
-		threads: index.threads,
+		threads: index.threads.map((t) => join(t, threads.get(t.id))),
 		letters: [...byId.values()].sort(byAt),
 		byId,
 		wishes,
@@ -38,7 +94,8 @@ export function assemble(index: Index, threads: Map<string, ThreadPart>): Model 
 		fuel: index.fuel || [],
 		faces: index.faces,
 		person: index.person,
-		via: index.via
+		via: index.via,
+		topics: []
 	};
 }
 
@@ -70,10 +127,34 @@ export class Store {
 	index: Index | null = null;
 	threads = new Map<string, ThreadPart>();
 	beads: Beads | null = null;
+	topics: Topic[] = [];
+	unthreaded: Wish[] = [];
 	held = new Map<string, string>();
 	private get: Get;
+	private loading: Promise<Beads> | null = null;
 	constructor(get: Get) {
 		this.get = get;
+	}
+
+	// Primed from the last page's cache (cache.ts): model() answers at once, and the first sync fetches only the parts
+	// whose hash moved since. A part the index names but the cache lacks is left unheld, so sync fetches it.
+	prime(held: Held) {
+		this.index = held.index;
+		this.threads = new Map(held.threads);
+		for (const [n, h] of Object.entries(held.index.parts))
+			if (n.startsWith('thread/') && held.threads.has(n.slice(7))) this.held.set(n, h);
+		if (held.topics && held.index.parts.topics) {
+			this.topics = held.topics;
+			this.held.set('topics', held.index.parts.topics);
+		}
+		if (held.unthreaded && held.index.parts.unthreaded) {
+			this.unthreaded = held.unthreaded;
+			this.held.set('unthreaded', held.index.parts.unthreaded);
+		}
+		if (held.beads && held.index.parts.beads) {
+			this.beads = held.beads;
+			this.held.set('beads', held.index.parts.beads);
+		}
 	}
 
 	// Bring every part to the index's hashes; true when anything changed. Thread parts load in parallel.
@@ -92,18 +173,65 @@ export class Store {
 			this.threads.delete(n.slice(7));
 			this.held.delete(n);
 		}
-		if (this.beads && this.held.get('beads') !== index.parts.beads) this.beads = null;
+		if (this.beads && this.held.get('beads') !== index.parts.beads) await this.patchBeads(index);
+		if (index.parts.topics && this.held.get('topics') !== index.parts.topics) {
+			this.topics = (await this.get(`${BASE}/topics`)) as Topic[];
+			this.held.set('topics', index.parts.topics);
+		}
+		if (!index.parts.topics) {
+			this.topics = [];
+			this.held.delete('topics');
+		}
+		if (index.parts.unthreaded && this.held.get('unthreaded') !== index.parts.unthreaded) {
+			this.unthreaded = (await this.get(`${BASE}/unthreaded`)) as Wish[];
+			this.held.set('unthreaded', index.parts.unthreaded);
+		}
+		if (!index.parts.unthreaded) {
+			this.unthreaded = [];
+			this.held.delete('unthreaded');
+		}
 		this.index = index;
 		return true;
 	}
 
-	// Beads load on the first press, then follow the index.
-	async loadBeads(): Promise<Beads> {
-		if (!this.beads && this.index) {
-			this.beads = (await this.get(`${BASE}/beads`)) as Beads;
-			this.held.set('beads', this.index.parts.beads);
+	// Apply the index's last delta when we hold its `since`; otherwise GET ?since= and fall back to the whole part.
+	private async patchBeads(index: Index) {
+		const since = this.held.get('beads');
+		const want = index.parts.beads;
+		if (!this.beads || !since || since === want) return;
+		const delta = index.beads_delta;
+		if (delta && delta.since === since) {
+			this.beads = patchBeads(this.beads, delta);
+			this.held.set('beads', delta.hash || want);
+			return;
 		}
-		return this.beads || {};
+		const got = await this.get(`${BASE}/beads?since=${encodeURIComponent(since)}`);
+		if (isDelta(got)) {
+			this.beads = patchBeads(this.beads, got);
+			this.held.set('beads', got.hash || want);
+			return;
+		}
+		this.beads = got as Beads;
+		this.held.set('beads', want);
+	}
+
+	// Beads load on the first press, then follow the index by patch. One in-flight GET: select and openBead
+	// both ask, and a second 1 MB fetch is the thing this diet exists to stop.
+	async loadBeads(): Promise<Beads> {
+		if (this.beads) return this.beads;
+		if (this.loading) return this.loading;
+		if (!this.index) return {};
+		const index = this.index;
+		this.loading = this.get(`${BASE}/beads`)
+			.then((got) => {
+				this.beads = got as Beads;
+				this.held.set('beads', index.parts.beads);
+				return this.beads;
+			})
+			.finally(() => {
+				this.loading = null;
+			});
+		return this.loading;
 	}
 
 	// History: the 200 letters before the oldest one held, or back to `until` (a verdict, bead or link's letter).
@@ -124,7 +252,12 @@ export class Store {
 	}
 
 	model(): Model | null {
-		return this.index ? assemble(this.index, this.threads) : null;
+		if (!this.index) return null;
+		const loose =
+			this.held.has('unthreaded') || this.index.parts.unthreaded ? this.unthreaded : undefined;
+		const m = assemble(this.index, this.threads, loose);
+		m.topics = this.topics;
+		return m;
 	}
 }
 
@@ -141,10 +274,22 @@ export function ancestors(beads: Beads, id: string): { id: string; edge: string 
 	return out;
 }
 
-// What hangs directly below an item, oldest first.
+// What hangs directly below an item, oldest first. The parent map is inverted once per beads object (a patch makes a
+// new one): a scan of every bead on each press and each selection was most of the sheet's walk.
+const below = new WeakMap<Beads, Map<string, string[]>>();
 export function children(beads: Beads, id: string): string[] {
-	return Object.entries(beads)
-		.filter(([, b]) => b[0] === id)
-		.sort((a, b) => String(a[1][3] || '').localeCompare(String(b[1][3] || '')))
-		.map(([k]) => k);
+	let m = below.get(beads);
+	if (!m) {
+		m = new Map();
+		for (const [k, b] of Object.entries(beads)) {
+			if (!b[0]) continue;
+			const l = m.get(b[0]);
+			if (l) l.push(k);
+			else m.set(b[0], [k]);
+		}
+		for (const l of m.values())
+			l.sort((a, c) => String(beads[a][3] || '').localeCompare(String(beads[c][3] || '')));
+		below.set(beads, m);
+	}
+	return m.get(id) || [];
 }

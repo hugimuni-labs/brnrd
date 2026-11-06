@@ -124,7 +124,7 @@ KEYS: tuple[Key, ...] = (
     Key("lease_remote", "text", None,
         "The self's https URL whose refs/leases/inbox decides which install routes and runs "
         "connectors, so two machines can share one resident; that lease lasts router_ttl but at "
-        "least 90 s. Unset, the router lease is this machine's alone."),
+        "least 180 s. Unset, the router lease is this machine's alone."),
     Key("lease_mode", "choice", "contested",
         "contested: a holder that cannot reach lease_remote keeps routing unless a peer's "
         "ledger moved there in the last 10 minutes; strict: it stops at the end of its ttl.",

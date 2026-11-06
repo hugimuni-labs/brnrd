@@ -2,6 +2,7 @@
 # Install the brnrd command onto PATH. POSIX sh: macOS /bin/sh and Debian dash.
 # Safe to run twice. BRNRD_INSTALL_DRY_RUN=1 prints the commands and does not
 # run them. Probes still run, so a second run prints upgrade rather than install.
+# Both paths end with the loom installed as a login service and its status.
 # --dev (or BRNRD_INSTALL_DEV=1) installs a checkout of main that the loom
 # follows instead of the PyPI release: sh -s -- --dev when piped.
 # The uv bootstrap is not a pipe. POSIX sh has no pipefail, and sh exits 0
@@ -194,13 +195,13 @@ preflight() {
       warn "an old brnrd daemon is installed (${unit}) and runs beside the loom; remove it with brnrd daemon uninstall."
     fi
   done
+  if ! command -v claude >/dev/null 2>&1 && ! command -v codex >/dev/null 2>&1; then
+    warn "neither claude nor codex is on PATH, and loom install picks the loom's body from them; install and sign in to one first."
+  fi
   if [ "$dev" -eq 0 ]; then
     return 0
   fi
   preflight_other_installs
-  if ! command -v claude >/dev/null 2>&1 && ! command -v codex >/dev/null 2>&1; then
-    warn "neither claude nor codex is on PATH, and loom install picks the loom's body from them; install and sign in to one first."
-  fi
   if ! command -v gh >/dev/null 2>&1; then
     warn "gh is not installed, and following main reads CI through it; install the GitHub CLI and run gh auth login."
   elif ! gh auth status >/dev/null 2>&1; then
@@ -279,4 +280,10 @@ else
 fi
 
 show_version
+# Whichever installer ran, show_version proved brnrd is on PATH.
+if [ "$dry" -eq 0 ]; then
+  bindir=$(dirname "$(command -v brnrd)")
+fi
+brnrd_named loom install
+brnrd_named loom status
 show "Next: brnrd setup"

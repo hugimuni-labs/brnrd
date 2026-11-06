@@ -30,7 +30,7 @@ test('columns stand inbox, seated, your call, mine, waiting, no body, quiet, the
 	);
 	assert.deepEqual(
 		cols.map((c) => c.id),
-		['inbox', 'alpha', 'bravo', 'charlie', 'echo', 'delta', 'foxtrot', '~settled']
+		['inbox', 'topics', 'alpha', 'bravo', 'charlie', 'echo', 'delta', 'foxtrot', '~settled']
 	);
 	assert.deepEqual(
 		cols.filter((c) => c.stall).map((c) => c.id),
@@ -47,6 +47,86 @@ test('columns stand inbox, seated, your call, mine, waiting, no body, quiet, the
 		'waiting: the forge to come back'
 	);
 	assert.equal(await B.page.locator('[data-column="bravo"] .badge').innerText(), 'verdict');
+});
+
+test('the topics column sits after the inbox; a press unfolds the newest quote', async () => {
+	const cols = await B.page.$$eval('#board > .column', (cs) => cs.map((c) => c.dataset.column));
+	assert.equal(cols[1], 'topics');
+	const row = B.page.locator('[data-column="topics"] [data-topic="board"]');
+	assert.match(await row.innerText(), /board/);
+	assert.equal(await row.locator('.from-body').count(), 0);
+	await row.click();
+	assert.match(await row.locator('.from-body').innerText(), /Chose four states/);
+});
+
+test('a thread column shows the person letters behind its wishes, collapsed', async () => {
+	const lines = await B.page.$$eval('[data-column="alpha"] .from-line', (es) =>
+		es.map((e) => ({
+			id: e.dataset.from,
+			open: e.classList.contains('open'),
+			text: e.textContent.replace(/\s+/g, ' ').trim()
+		}))
+	);
+	assert.ok(lines.length >= 1, JSON.stringify(lines));
+	assert.match(lines[0].text, /ada/);
+	assert.equal(lines[0].open, false);
+	await B.page.click(`[data-column="alpha"] .from-line[data-from="${lines[0].id}"]`);
+	assert.equal(
+		await B.page.$eval(`[data-column="alpha"] .from-line[data-from="${lines[0].id}"]`, (e) =>
+			e.classList.contains('open')
+		),
+		true
+	);
+	assert.ok(
+		await B.page.$eval(
+			`[data-column="alpha"] .from-line[data-from="${lines[0].id}"] .from-body`,
+			(e) => e.textContent.includes('please make alpha')
+		)
+	);
+	await B.page.click(`[data-column="alpha"] .from-line[data-from="${lines[0].id}"]`);
+	assert.equal(
+		await B.page.$eval(`[data-column="alpha"] .from-line[data-from="${lines[0].id}"]`, (e) =>
+			e.classList.contains('open')
+		),
+		false
+	);
+});
+
+test('a new letter patches beads; the part is not fetched whole again', async () => {
+	const hits = [];
+	const on = (r) => {
+		const u = new URL(r.url());
+		if (u.pathname.endsWith('/beads')) hits.push(u.pathname + u.search);
+	};
+	B.page.on('request', on);
+	try {
+		await B.page.$eval('.brd article.letter', (a) => a.click());
+		await B.page.waitForFunction(
+			() => !!window.__board.beads && Object.keys(window.__board.beads).length > 1
+		);
+		assert.equal(hits.filter((h) => h === '/v1/loom/beads').length, 1, hits.join());
+		const parts = fixture();
+		const prev = parts.index.parts.beads;
+		parts.beads = { ...parts.beads, 'letter:new': [null, 'person', 'person:ada', at(99), 'later'] };
+		const hashed = reindex(parts);
+		hashed.index.beads_delta = {
+			since: prev,
+			hash: hashed.index.parts.beads,
+			set: { 'letter:new': parts.beads['letter:new'] },
+			drop: []
+		};
+		const ready = reindex(hashed);
+		B.loom.set(ready);
+		await B.page.waitForFunction(
+			(h) => window.__board.store.held.get('beads') === h,
+			ready.index.parts.beads
+		);
+		assert.equal(hits.filter((h) => h === '/v1/loom/beads').length, 1, hits.join());
+		assert.equal(await B.page.evaluate(() => window.__board.beads['letter:new']?.[4]), 'later');
+	} finally {
+		B.page.off('request', on);
+		await B.page.evaluate(() => (window.__board.select(null), window.__board.closeBead()));
+	}
 });
 
 test('a settled thread opens beside the stack and folds back', async () => {

@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { INSTALL_LINE } from '$lib/install';
 	import { resolve } from '$app/paths';
 	import { DOCS_URL, GITHUB_REPO } from '$lib/publicStats';
 	import { isComplete as legalNoticeIsComplete } from '$lib/legalNotice';
@@ -42,8 +43,6 @@
 
 	// Arseni's call (letter 5257): the returned pull request is the hook.
 	const HERO_HEADLINE = 'Message it the work. Get back a pull request.';
-	// Served by the app from docs/public/install.sh (spa.py, mount_installer).
-	const INSTALL_LINE = 'curl -fsSL https://brnrd.dev/install | sh';
 
 	interface DeckStep {
 		index: string;

@@ -1,13 +1,26 @@
 <script lang="ts">
-	// The dotted lines (board.html's draw, 53vuyk): from the selected letter to each card it links to in another column,
-	// redrawn on any scroll or resize. Geometry is the DOM's, so the lines are drawn after the cards: `.sel` and
-	// `.linked` come from the Board's selection, and a column off screen or a card under the pinned inbox gets none.
+	// The dotted lines (board.html's draw, 53vuyk): from the sheet's bead (or the selected letter, when the sheet is
+	// closed) to each card it links to in another column, redrawn on any scroll or resize. Geometry is the DOM's.
+	// A column off screen or a card under the pinned inbox gets none.
 	import { board } from './board.svelte.ts';
 	const b = board();
 	type Line = { d: string; x1: number; y1: number; x2: number; y2: number; c: string };
 	let lines = $state<Line[]>([]);
 
-	const sel = () => document.querySelector<HTMLElement>('.brd article.letter.sel');
+	// The sheet's bead is the origin while it is open; `.sel` stays on the letter that was pressed, so a re-centre
+	// in the sheet used to leave the lines on that card.
+	const origin = () => {
+		const id = b.beadId || b.sel;
+		const sel = document.querySelector<HTMLElement>('.brd article.letter.sel');
+		if (!id) return sel;
+		const cards = [
+			...document.querySelectorAll<HTMLElement>(
+				`.brd article.letter[data-letter="${CSS.escape(id)}"], .brd [data-wish="${CSS.escape(id)}"]`
+			)
+		].filter((e) => e.offsetParent);
+		if (sel && cards.includes(sel)) return sel;
+		return cards[0] || sel;
+	};
 	const targets = (s: HTMLElement) =>
 		[...document.querySelectorAll<HTMLElement>('.brd .linked')].filter(
 			(t) => t.offsetParent && !t.contains(s) && !s.contains(t)
@@ -19,7 +32,7 @@
 		if (q) return;
 		q = requestAnimationFrame(() => {
 			q = 0;
-			const s = sel();
+			const s = origin();
 			if (!s?.offsetParent) return (lines = []);
 			const box = (e: Element) => {
 				const r = pane(e).getBoundingClientRect(),
@@ -61,7 +74,7 @@
 	// Bring each other pane's first link into view unless one already is: once per selection, and again when the
 	// beads arrive and the links become the panel's.
 	function bring() {
-		const s = sel();
+		const s = origin();
 		if (!s) return;
 		// eslint-disable-next-line svelte/prefer-svelte-reactivity -- a local, not state
 		const by = new Map<Element, HTMLElement[]>();
@@ -84,7 +97,7 @@
 	}
 	let brought = '';
 	$effect(() => {
-		const key = `${b.sel}|${b.selCol}|${!!b.beads}`;
+		const key = `${b.beadId || b.sel}|${b.selCol}|${!!b.merged}`;
 		void b.linked;
 		void b.letters;
 		requestAnimationFrame(() => {

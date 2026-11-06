@@ -187,10 +187,16 @@ def fuel(home, shell: str) -> str:
 
 
 _SHELL_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*")
+#: What the status line and the board header say when a collector wrote an error and no window.
+FAILS = "fails"
 
 
-def _shown_windows(payload) -> list[str] | None:
-    """Window text for one on-disk reading, or None when it shows nothing."""
+def gauge_windows(payload) -> list[dict] | None:
+    """Windows the status line would show, or None when the file is not a reading.
+
+    An empty list is a reading with nothing to draw. The board header uses this
+    same list, so a gauge the status line hides stays off the header.
+    """
     if not isinstance(payload, dict):
         return None
     windows = payload.get("windows")
@@ -202,7 +208,7 @@ def _shown_windows(payload) -> list[str] | None:
         return None
     if not math.isfinite(at):
         return None
-    parts = []
+    found = []
     for window in windows:
         if not isinstance(window, dict):
             continue
@@ -211,8 +217,27 @@ def _shown_windows(payload) -> list[str] | None:
             continue
         if left > 100 or not isinstance(name, str) or not name:
             continue
-        parts.append(f"{name} {left:g}%")
-    return parts or None
+        row = {"name": name, "left_pct": left}
+        if window.get("resets_at"):
+            row["resets_at"] = window["resets_at"]
+        found.append(row)
+    return found
+
+
+def collector_failed(payload) -> bool:
+    """True when the collector wrote an error string. The text stays in the file; the line says ``fails``."""
+    if not isinstance(payload, dict):
+        return False
+    error = payload.get("error")
+    return isinstance(error, str) and bool(error.strip())
+
+
+def _shown_windows(payload) -> list[str] | None:
+    """Window text for one on-disk reading, or None when it shows nothing."""
+    windows = gauge_windows(payload)
+    if not windows:
+        return None
+    return [f"{w['name']} {w['left_pct']:g}%" for w in windows]
 
 
 def _past_reset(payload, now: float) -> bool:
@@ -229,16 +254,17 @@ def _past_reset(payload, now: float) -> bool:
 def shell_fuels(home) -> dict[str, str]:
     """Window text per shell with a reading in ``loom/usage``.
 
-    A shell with no file, or a file that yields no windows, is omitted. A
-    reading older than its newest reset that has already passed is kept and
-    marked with ``?`` (``grok week 45%?``): dropping it is how a full tank
-    was read as dry.
+    A shell with no file, or a file that yields no windows and no error, is
+    omitted. A collector error with no window is the word ``fails`` (the ask
+    says the same word, and the error text stays in the file). A reading older
+    than its newest reset that has already passed is kept and marked with ``?``
+    (``grok week 45%?``): dropping it is how a full tank was read as dry.
     """
     directory = home.root / "loom" / "usage"
     if not directory.is_dir():
         return {}
     now, found = time.time(), {}
-    for path in directory.glob("*.json"):
+    for path in sorted(directory.glob("*.json")):
         name = path.name.removesuffix(".json")
         if not _SHELL_NAME.fullmatch(name):
             continue
@@ -247,23 +273,49 @@ def shell_fuels(home) -> dict[str, str]:
         except (OSError, ValueError):
             continue
         parts = _shown_windows(payload)
-        if not parts:
-            continue
-        found[name] = " ".join(parts) + ("?" if _past_reset(payload, now) else "")
+        if parts:
+            found[name] = " ".join(parts) + ("?" if _past_reset(payload, now) else "")
+        elif gauge_windows(payload) is not None and collector_failed(payload):
+            found[name] = FAILS
     return found
 
 
 def fuels(home, shell: str) -> str:
     """Every shell with a reading in ``loom/usage``, for the boundary line.
 
-    The seated shell is first, then the rest by name. Hold and park do not
-    call this.
+    The seated shell is first, then the rest by name. With a non-empty
+    ``spend.burn`` and two or more installed harnesses, the other burn shells
+    follow the seat in list order and the words ``burn`` and ``keep`` appear.
+    One harness, or no burn list, stays the unmarked line. Hold and park do
+    not call this.
     """
     found = shell_fuels(home)
     if not found:
         return ""
-    order = ([shell] if shell in found else []) + sorted(n for n in found if n != shell)
-    return "fuel " + " · ".join(f"{name} {found[name]}" for name in order)
+    from .adapters import burn_marks
+    marks = burn_marks(home)
+    if marks is None:
+        order = ([shell] if shell in found else []) + sorted(n for n in found if n != shell)
+        return "fuel " + " · ".join(f"{name} {found[name]}" for name in order)
+    burn, keep = marks
+    order = [shell] if shell in found else []
+    for name in burn:
+        if name in found and name not in order:
+            order.append(name)
+    if keep and keep in found and keep not in order:
+        order.append(keep)
+    order.extend(name for name in sorted(found) if name not in order)
+
+    def shown(name: str) -> str:
+        if name in burn:
+            role = " burn"
+        elif name == keep:
+            role = " keep"
+        else:
+            role = ""
+        return f"{name} {found[name]}{role}"
+
+    return "fuel " + " · ".join(shown(name) for name in order)
 
 
 def below_floor(home, shell: str, after: float = 0) -> bool:

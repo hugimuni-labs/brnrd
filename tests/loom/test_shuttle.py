@@ -11,7 +11,7 @@ import subprocess
 from brr.daemon2.facts import Fact
 from brr.loom.runtime.home import Home
 from brr.loom.runtime.ledger import append, read_facts
-from brr.loom.runtime.router import Router
+from brr.loom.runtime.router import GATE_MIN_TTL, Router
 from brr.loom.runtime.shuttle import segments
 
 
@@ -85,7 +85,8 @@ def test_a_takeover_grants_only_with_the_previous_holders_ledger(tmp_path):
     b.begin_tick(read_facts(b_home))
     assert a.armed() and not b.armed()
 
-    a.gate.clock.now += 31
+    renew = GATE_MIN_TTL / 3 + 1
+    a.gate.clock.now += renew
     a.begin_tick(read_facts(a_home))
     b.gate.clock.now += 60
     b.begin_tick(read_facts(b_home))
@@ -97,11 +98,11 @@ def test_a_takeover_grants_only_with_the_previous_holders_ledger(tmp_path):
 
     # a writes, renews once more (its ledger rides the renewal), then dies.
     _note(a_home, 7)
-    a.gate.clock.now += 31
+    a.gate.clock.now += renew
     a.begin_tick(read_facts(a_home))
-    b.gate.clock.now += 31
+    b.gate.clock.now += renew
     b.begin_tick(read_facts(b_home))  # sees the renewal, counts from here
-    b.gate.clock.now += 200
+    b.gate.clock.now += GATE_MIN_TTL + 20
 
     # b takes the lease but does not grant.
     b.begin_tick(read_facts(b_home))
@@ -109,7 +110,7 @@ def test_a_takeover_grants_only_with_the_previous_holders_ledger(tmp_path):
     assert not b.armed()
 
     b.shuttle.sync = sync
-    b.gate.clock.now += 31
+    b.gate.clock.now += GATE_MIN_TTL / 3 + 1
     b.begin_tick(read_facts(b_home))
     assert b.armed()
     assert "note:aaaa:7" in {f.id for f in read_facts(b_home)}
@@ -128,6 +129,6 @@ def test_a_wiped_gate_repo_still_renews(tmp_path):
     _note(home, 2)
     a.begin_tick(read_facts(home))
     assert a.armed()
-    a.gate.clock.now += 31
+    a.gate.clock.now += GATE_MIN_TTL / 3 + 1
     a.begin_tick(read_facts(home))
     assert a.armed() and a.gate_lease is not None

@@ -18,6 +18,9 @@ Conditions, one row each in ``KINDS``, resolve on any terminal outcome:
   a person's letter cites it. A body's own &ref is progress, never an outcome.
 - ``letter:<id>``: a letter replies to it.
 - ``at:<instant>``: the clock passes it.
+- ``cond:<name>[,<name>…]`` or ``cond:all``: stands; ``outcome`` never resolves it.
+  Each firing of a named condition (``conditions``) is its own notice to the
+  parker's thread, so one park keeps receiving them until it is re-read.
 - ``file:<path>``: the path holds something. A body that starts a long command
   itself runs ``(cmd; echo $? > <path>) &``, parks on the path and stops; the
   jack holds it and the notice says what the file says. The shell creates the
@@ -63,7 +66,8 @@ _WISH = re.compile(r"^wish:(w-[a-z0-9]+)$")
 _LETTER = re.compile(r"^letter:(\S+)$")
 #: Conditions that wait on someone, so a park on them carries a turn; a prose park does too.
 TURNED = ("letter:", "wish:", "pr:")
-GRAMMAR = "pr:[owner/repo]#N, ci:[owner/repo]@sha, wish:<w-id>, letter:<id>, at:<when>, file:<path>"
+#: ``cond:`` names its conditions, ``conditions.NAMES``; its parse error lists them.
+GRAMMAR = "pr:[owner/repo]#N, ci:[owner/repo]@sha, wish:<w-id>, letter:<id>, at:<when>, file:<path>, cond:<names>|all"
 
 
 def _iso(moment: datetime) -> str:
@@ -107,6 +111,9 @@ def canonical(text: str, now: datetime, repo=None) -> str:
         return text
     if text.startswith("at:"):
         return "at:" + when(text[3:], now, "--wait at:")
+    if text.startswith("cond:"):
+        from .conditions import parse
+        return "cond:" + ",".join(parse(text[5:]))
     if text.startswith("file:") and text[5:].strip():
         # Relative to the parker's cwd, which the loom does not share.
         return "file:" + os.path.abspath(os.path.expanduser(text[5:].strip()))
@@ -131,7 +138,11 @@ def park(wish, condition: str | None, until: str | None, now: datetime, *, found
             prose += 1
         span = PROSE[min(prose, len(PROSE) - 1)]
         wait["step"] = min(prose, len(PROSE) - 1) + 1
-    wait["until"] = when(until, now, "--until") if until is not None else _iso(now + span)
+    if until is not None:
+        wait["until"] = when(until, now, "--until")
+    elif not str(condition or "").startswith("cond:"):
+        # A cond: park stands: it is a subscription, not a question with a deadline.
+        wait["until"] = _iso(now + span)
     if default is not None:
         wait["default"] = default
     if turn > 0 and (condition is None or condition.startswith(TURNED)):
@@ -276,6 +287,10 @@ def _advice(wish, read, resolved: bool, said: str = "") -> str:
                 "or deliver, ask or settle")
     if resolved and str(wait.get("on", "")).startswith("pr:") and "cannot be read" in said:
         return f"the forge has no such pull request: re-park {wish.id} with the repo and number corrected"
+    on = str(wait.get("on") or "")
+    if resolved and on.startswith("wish:") and " was answered by " in said:
+        return (f"record how it was answered: wish {on[5:]} --answer took|changed|never; "
+                f"then go on with {wish.id}: deliver, re-park with a new --wait, or ask")
     if resolved:
         return f"go on with {wish.id}: deliver, re-park with a new --wait, or ask"
     return f"re-judge {wish.id}: re-park with a new --wait or --until, deliver, ask or drop it"
@@ -353,6 +368,7 @@ def observe_waits(home, facts, armed: bool, forge: dict | None = None, now: date
     without it no park takes its turn."""
     if not armed:
         return facts
+    from .home import notice_id
     from .loom import notice
     from .wishes import told
     found = told(facts)
@@ -379,8 +395,14 @@ def observe_waits(home, facts, armed: bool, forge: dict | None = None, now: date
         resolved = not said.startswith("nothing resolved by")
         head = (f"wait on {wish.id} {'resolved' if resolved else 'ran out'}: {said}. "
                 f"Parked as: {read['reading']}")
-        notice(home, facts, "wait", subject(wish, read), head, _advice(wish, read, resolved, said),
-               thread=parker(home, facts, wish, read))
+        wrote = notice(home, facts, "wait", subject(wish, read), head, _advice(wish, read, resolved, said),
+                       thread=parker(home, facts, wish, read))
+        on = str(read["wait"].get("on") or "")
+        if wrote and not resolved and read["wait"].get("default") is not None and on.startswith("wish:"):
+            # The default date passed unanswered and the body is told to do its rec: the ask lapsed.
+            from .ledger import append
+            from .trust import answer_fact
+            append(home, answer_fact(f"loom:{home.install_id()}", on[5:], "lapsed", notice_id("wait", subject(wish, read))))
     return facts
 
 

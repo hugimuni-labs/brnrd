@@ -79,6 +79,19 @@ def test_the_verb_pushes_the_thread_branch_and_records_it(tmp_path: Path) -> Non
         _kill(read_facts(Home(root)))
 
 
+def test_publish_is_refused_when_this_machine_lost_the_inbox_lease(tmp_path, monkeypatch):
+    root, room, checkout, bare = _open(tmp_path)
+    try:
+        _note(checkout, room, "fix.txt", "fixed\n")
+        monkeypatch.setattr("brr.loom.runtime.loom._fenced", lambda *a, **k: True)
+        with pytest.raises(PublishError, match="lost the inbox lease"):
+            publish(room, "widget")
+        assert _tip(bare, "refs/heads/loom/work") is None
+        assert _published(root) == []
+    finally:
+        _kill(read_facts(Home(root)))
+
+
 def test_a_tainted_strand_is_refused_and_told_what_to_send(tmp_path: Path) -> None:
     root, room, checkout, bare = _open(tmp_path)
     try:
@@ -171,15 +184,34 @@ def test_the_push_goes_to_the_seat_source_not_the_checkout_remote(tmp_path: Path
         _kill(read_facts(Home(root)))
 
 
-def test_a_repo_the_seat_does_not_declare_is_refused(tmp_path: Path) -> None:
+def test_a_repo_the_seat_does_not_declare_is_refused_unless_the_library_has_it(tmp_path: Path) -> None:
+    from test_library import _add
+
     root, room, _checkout, _bare = _open(tmp_path)
     try:
-        git(None, "init", "-b", "loom/work", str(room / "sneak"))
-        _note(room / "sneak", room, "a.txt", "a\n")
-        with pytest.raises(PublishError, match="declares no repo named sneak"):
+        sneak = room / "sneak"
+        git(None, "clone", "-q", "-b", "main", str(_source(tmp_path / "other", "sneak")[0]), str(sneak))
+        git(sneak, "checkout", "-q", "-b", "loom/work")
+        git(sneak, "remote", "set-url", "origin", str(tmp_path / "elsewhere.git"))
+        _note(sneak, room, "a.txt", "a\n")
+        with pytest.raises(PublishError, match="declares no repo named sneak.*lib add sneak"):
             publish(room, "sneak")
         with pytest.raises(PublishError, match="not a project repo"):
             publish(room, "self")
+        # A folder page is no grant to push: only a page with a source is.
+        folder = tmp_path / "sneak-folder"
+        folder.mkdir()
+        assert _add(root, "sneak", str(folder), "--kind", "known", "--whose", "Ada", "--for", "a folder") == 0
+        with pytest.raises(PublishError, match="lib add sneak"):
+            publish(room, "sneak")
+        git(root / "self", "rm", "-q", "library/sneak.md")
+        git(root / "self", "commit", "-q", "-m", "drop" + LABEL)
+        # The library grants it: the push goes to the page's source, not the checkout's origin.
+        bare = tmp_path / "other" / "sources" / "sneak.git"
+        assert _add(root, "sneak", f"file://{bare}", "--kind", "known", "--whose", "Ada", "--for", "her sneak") == 0
+        published = publish(room, "sneak")
+        assert _tip(bare, "refs/heads/loom/work") == _tip(sneak, "HEAD") == published.commit
+        assert not (tmp_path / "elsewhere.git").exists()
     finally:
         _kill(read_facts(Home(root)))
 

@@ -26,8 +26,10 @@ from .lifecycle import main_snapshot
 from .speak import speak
 
 REST_FACE = "b·_·d"
-#: The shortest git inbox lease, whatever ``router_ttl`` says (design §3.1: renew every 30 s).
-GATE_MIN_TTL = 90.0
+#: design §3.1 Times: ttl 180 s, renew every 60 s (ttl / 3), margin 10 s, poll every 40 s.
+GATE_MIN_TTL = 180.0
+GATE_MARGIN = 10.0
+GATE_POLL = 40.0
 
 
 def install_of(strand: str) -> str | None:
@@ -104,7 +106,7 @@ def gate_for(home: Home, config: LoomConfig):
         except subprocess.TimeoutExpired:
             return subprocess.CompletedProcess(tail, 128, "", "git timed out")
 
-    return GitLeaseAuthority(repo, remote, git, margin=max(config.margin, 1.0),
+    return GitLeaseAuthority(repo, remote, git, margin=GATE_MARGIN,
                              strict=config.lease_mode == "strict")
 
 
@@ -164,7 +166,7 @@ class Router:
         self.gate_lease: Lease | None = None
         self._gate_at: float | None = None
         # A git renew is a network round trip that may stall for tens of
-        # seconds; 30 s, the local default, would fence on one slow push.
+        # seconds; the local 30 s default would fence on one slow push.
         self.gate_ttl = max(float(self.config.router_ttl), GATE_MIN_TTL)
 
     def _window(self) -> bool:
@@ -247,15 +249,18 @@ class Router:
         return all(g in held for g in range(gen, self.lease.gen + 1))
 
     def _gate_tick(self, facts: list[Fact]) -> list[Fact]:
-        """Renew or take the git inbox lease, at most every ``gate_ttl / 3``.
+        """Renew or take the git inbox lease.
 
-        Losing it releases the local lease at once, so ``speak`` steps down
-        before the next send, and records ``lease.fenced`` and a
-        ``loom.degraded`` streak at step ``lease`` that taking it back closes.
+        A holder renews at most every ``gate_ttl / 3`` (60 s at the floor).
+        A follower polls at most every ``GATE_POLL``. Losing the lease
+        releases the local one at once, so ``speak`` steps down before the
+        next send, and records ``lease.fenced`` and a ``loom.degraded``
+        streak at step ``lease`` that taking it back closes.
         """
         ttl = self.gate_ttl
         now = self.gate.clock()
-        if self._gate_at is not None and now - self._gate_at < ttl / 3:
+        interval = ttl / 3 if self.gate_lease is not None else GATE_POLL
+        if self._gate_at is not None and now - self._gate_at < interval:
             if self.gate_lease is not None and not self.gate.authorize(self.gate_lease):
                 return self._fence(facts, "expired")
             return facts
@@ -354,7 +359,10 @@ class Router:
             self.lease = None
             self.granting = False
             self.caught_up = False
-            return self._acquire(facts)
+            # The git lease owns the generation, including recovery from a
+            # local expiry. Bumping locally makes every later git-gen acquire
+            # fail until the remote generation catches up.
+            return self._acquire(facts, gen=self.gate_lease.gen if self.gate_lease else None)
         self.lease = renewed
         facts = self._mark_renewed(facts)
         self.granting = self.caught_up and self._window()
@@ -721,9 +729,10 @@ class Router:
                     tell("stale-speech", "was not sent: it was drafted under router "
                          f"gen {grant} and a new router (gen {self.lease.gen}) took over", fresh)
                 continue
+            interview = person = None
             try:
                 body = str(fact.data.get("body") or "")
-                context = {k: str(fact.data[k]) for k in ("from", "clean", "edit") if k in fact.data}
+                context = {k: str(fact.data[k]) for k in ("from", "clean", "edit", "attach") if k in fact.data}
                 if fact.data.get("refs"):
                     context["refs"] = " ".join(fact.data["refs"])
                 from .home import channel_parts
@@ -735,6 +744,11 @@ class Router:
                              "was refused: that is not a known person's direct chat", fresh)
                         continue
                     body = f"{_header(state, fact, facts)}\n\n{body}"
+                    from .firstword import pending
+                    person = person_dm(self.home, str(to)).removeprefix("person:")
+                    interview = pending(facts, person)
+                    if interview:  # once, on the first message after setup saw the person's first word
+                        body = f"{body}\n\n{interview}"
                     event_id = _answers_event(state, fact)
                     from .project import reply_channels
                     if event_id and reply_channels(facts).get(fact.data.get("re")) == to:
@@ -747,6 +761,9 @@ class Router:
                 tell("speech-refused", why, fresh)
                 _log(self.home, f"speech {key} {why}")
                 continue
+            if status == "sent" and interview:
+                from .firstword import offered
+                facts.append(offered(self.home, person, key))
             if status == "not-sent":
                 tell("speech-refused", f"was not sent: {speech.data['reason']}", fresh)
             if unsure:
