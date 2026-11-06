@@ -30,7 +30,7 @@ const Lower = ({text, len}) => {
   const n = Math.round(lerp(frame, 0, 8, 0, text.length, Easing.linear));
   const out = lerp(frame, len - 6, len, 0, -60);
   return (
-    <div style={{position: 'absolute', left: 90, bottom: 84, transform: `translateX(${out}px)`, opacity: lerp(frame, len - 6, len, 1, 0)}}>
+    <div style={{position: 'absolute', left: 90, bottom: 84, transform: `translateX(${out}px)`, opacity: n === 0 ? 0 : lerp(frame, len - 6, len, 1, 0)}}>
       <div style={{background: 'rgba(12,10,8,0.86)', borderLeft: `6px solid ${HOT}`, color: FG, fontFamily: SANS, fontWeight: 600,
         fontSize: 60, padding: '16px 34px', letterSpacing: -0.5, whiteSpace: 'pre'}}>
         {text.slice(0, n)}<span style={{opacity: 0}}>{text.slice(n)}</span>
@@ -258,7 +258,8 @@ const Odometer = ({value, size}) => {
   const cols = [];
   for (let k = digits - 1; k >= 0; k--) {
     const place = 10 ** k;
-    const roll = (v / place) % 10;
+    // a place turns only while the places below it carry, as on a real odometer
+    const roll = (Math.floor(v / place) % 10) + Math.max(0, (v % place) - (place - 1));
     const shown = v < place && k > 0 ? null : roll;
     cols.push(
       <div key={k} style={{height: size * 1.1, overflow: 'hidden', width: size * 0.62, opacity: shown === null ? 0.15 : 1}}>
