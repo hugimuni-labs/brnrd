@@ -964,3 +964,34 @@ def test_cli_install_dry_run_prints_the_receipt_and_changes_nothing(tmp_path, ma
     assert manager.changes() == []
     assert not macos.plist_path(label=service.LABEL).exists()
     assert not (home / "loom" / "config.toml").exists()
+
+
+@pytest.mark.parametrize('config_text, expected_body', [
+    ('body = "grok/grok-4"\nfuture_option = true\n', 'grok/grok-4'),
+    ('body = 12\n', 'unavailable (invalid config)'),
+])
+def test_status_warns_on_incompatible_config_and_stop_still_works(tmp_path, capsys, config_text, expected_body):
+    from brr.loom.runtime.config import ConfigError, load_config
+
+    home = tmp_path / 'home'
+    _body(home)
+    mac = _Mac()
+    assert _install_mac(tmp_path, mac, home, extra=['--no-start']) == 0
+    path = home / 'loom' / 'config.toml'
+    path.write_text(config_text)
+    mac.job_up = True
+    capsys.readouterr()
+    assert service.main(['status'], run=mac.run, agents_home=tmp_path / 'agents',
+                        pid_alive=mac.pid_alive, system='Darwin') == 0
+    output = capsys.readouterr()
+    assert 'state: running' in output.out
+    assert 'pid: 4242' in output.out
+    assert f'body: {expected_body}' in output.out
+    assert f'warning: {path}:' in output.err
+    if 'future_option' in config_text:
+        assert "unknown key 'future_option'" in output.err
+    with pytest.raises(ConfigError):
+        load_config(home)
+    assert service.main(['stop'], run=mac.run, agents_home=tmp_path / 'agents', system='Darwin') == 0
+    assert any(call[1:2] == ['bootout'] for call in mac.calls)
+    assert path.read_text() == config_text

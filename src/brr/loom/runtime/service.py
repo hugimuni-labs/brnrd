@@ -465,7 +465,16 @@ def _body_line(home: Path | None) -> str:
         return "body: -"
     from .adapters import default_body
     from .home import Home
-    choice = default_body(Home(home))
+    from .config import ConfigError, load_config_report, tick_config
+    try:
+        config, _ = load_config_report(
+            home, unknown=lambda message: print(f"warning: {message}; ignored for status", file=sys.stderr),
+        )
+        with tick_config(home, config):
+            choice = default_body(Home(home))
+    except ConfigError as exc:
+        print(f"warning: {exc}", file=sys.stderr)
+        return "body: unavailable (invalid config)"
     return f"body: {choice}" if choice else "body: unset"
 
 
