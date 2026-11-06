@@ -3,12 +3,13 @@
 
     python3 media/booth/cut.py [--raw ~/Desktop/brnrd/booth/raw] [--out ~/Desktop/brnrd/booth] [--pr N]
 
-1. Counts the numbers card from this repo's git (and GitHub for merged PRs),
-   so the card is true on the day it renders.
+1. Counts the numbers from this repo's git (and GitHub for merged PRs), reads
+   the git logs the cut scrolls (this repo's and the self's), act 1's PR checks
+   and the board stills capture.py wrote, so everything is true the day it renders.
 2. Normalizes every raw recording cut.json names (any extension ffmpeg reads)
-   to an h264 clip of exactly its slot, from its `start` second; a shot with
-   no recording renders as a labelled placeholder, an optional one is dropped
-   and its seconds go to the shot before it.
+   to an h264 clip of exactly its slot, from its `start` second (a screenshot
+   is copied as it is); a recording not there yet renders as a labelled
+   placeholder.
 3. Renders both compositions with remotion, then ffmpeg finishes them: booth
    muted for the loop; readme with `music.*` from the raw folder under it,
    faded out, or silent when there is none.
@@ -31,6 +32,7 @@ SINCE = "2026-03-28"
 # The resident's commits over the months, under every name it has written as.
 RESIDENT = ["brnrd-bot", "brnrd-dev[bot]", "brr agent", "brnrd", "brnrd-loom"]
 VIDEO = (".mov", ".mp4", ".m4v", ".mkv", ".webm")
+IMAGE = (".png", ".jpg", ".jpeg", ".heic")
 AUDIO = (".mp3", ".m4a", ".wav", ".aac", ".flac", ".ogg")
 
 
@@ -64,6 +66,34 @@ def numbers() -> dict:
     }
 
 
+def log(repo: Path, n: int) -> list[str]:
+    return subprocess.run(["git", "-C", str(repo), "log", "--oneline", f"-{n}", "--no-decorate", "HEAD"],
+                          check=True, capture_output=True, text=True).stdout.splitlines()
+
+
+def checks(pr: int) -> list[list[str]]:
+    """Act 1's PR checks as GitHub reports them: [name, state] per check that ran."""
+    try:
+        out = subprocess.run(["gh", "pr", "checks", str(pr), "-R", "hugimuni-labs/brnrd", "--json", "name,state"],
+                             check=True, capture_output=True, text=True, timeout=30).stdout
+        return [[c["name"], c["state"]] for c in json.loads(out) if c["state"] != "SKIPPED"]
+    except (subprocess.SubprocessError, ValueError, FileNotFoundError):
+        return []
+
+
+def stills(shots: Path, public: Path) -> dict:
+    """capture.py's stills, copied where remotion serves them, with their size and subject box."""
+    index = shots / "shots.json"
+    if not index.exists():
+        return {}
+    (public / "shots").mkdir(parents=True, exist_ok=True)
+    out = {}
+    for name, s in json.loads(index.read_text()).items():
+        shutil.copy(shots / s["png"], public / "shots" / s["png"])
+        out[name] = {**s, "file": f"shots/{s['png']}"}
+    return out
+
+
 def find(raw: Path, stem: str, exts: tuple) -> Path | None:
     for p in sorted(raw.glob(stem + ".*")):
         if p.suffix.lower() in exts:
@@ -81,26 +111,24 @@ def normalize(src: Path, dst: Path, start: float, sec: float, fps: int, phone: b
 
 
 def timeline(cut: dict, raw: Path, public: Path) -> tuple[list, list]:
-    out, missing, src_of = [], [], {}
+    out, missing = [], []
     shutil.rmtree(public / "raw", ignore_errors=True)
     (public / "raw").mkdir(parents=True)
     for e in cut["timeline"]:
         e = dict(e)
-        if e["kind"] == "shot":
-            src = find(raw, e["raw"], VIDEO)
-            if src is None and e.get("optional"):
-                if out:
-                    out[-1]["sec"] += e["sec"]
-                continue
+        if e["kind"] == "rec" and not e.get("held"):
+            src = find(raw, e["raw"], VIDEO + IMAGE)
             if src is None:
-                missing.append(e["raw"] + (" (its fallback card)" if e.get("fallback") else ""))
+                missing.append(e["raw"])
+            elif src.suffix.lower() in IMAGE:
+                e["file"], e["image"] = f"raw/{e['raw']}{src.suffix.lower()}", True
+                shutil.copy(src, public / e["file"])
             else:
-                e["file"], src_of[id(e)] = f"raw/{e['raw']}.mp4", src
+                e["file"] = f"raw/{e['raw']}.mp4"
+                normalize(src, public / e["file"], e.get("start", 0), e["sec"], cut["fps"], e.get("phone", False))
+        elif e["kind"] == "rec":
+            missing.append(f"{e['raw']} ({e['held']})")
         out.append(e)
-    # Encoded after the walk: a slot grows when the optional shot after it is dropped.
-    for e in out:
-        if e.get("file"):
-            normalize(src_of[id(e)], public / e["file"], e.get("start", 0), e["sec"], cut["fps"], e.get("phone", False))
     return out, missing
 
 
@@ -129,13 +157,19 @@ def main() -> None:
     ap.add_argument("--raw", type=Path, default=Path.home() / "Desktop/brnrd/booth/raw")
     ap.add_argument("--out", type=Path, default=Path.home() / "Desktop/brnrd/booth")
     ap.add_argument("--pr", type=int, help="this project's PR, for the end card")
+    ap.add_argument("--shots", type=Path, default=Path.home() / "Desktop/brnrd/booth/shots", help="capture.py's stills")
+    ap.add_argument("--self", type=Path, default=REPO.parent / "self", help="the self's clone, whose log answers pain 1")
+    ap.add_argument("--act1-pr", type=int, default=2618, help="act 1's PR, whose checks sit under the numbers")
     a = ap.parse_args()
 
     cut = json.loads((HERE / "cut.json").read_text())
     public = HERE / "public"
-    shutil.copy(REPO / "media/brnrd-boot.gif", public / "boot.gif")
     tl, missing = timeline(cut, a.raw, public)
-    props = {**{k: v for k, v in cut.items() if k != "timeline"}, "timeline": tl, "numbers": numbers(), "pr": a.pr}
+    shots = stills(a.shots, public)
+    props = {**{k: v for k, v in cut.items() if k not in ("timeline", "backdrop")}, "timeline": tl, "numbers": numbers(), "pr": a.pr,
+             "shots": shots, "backdrop": shots.get(cut.get("backdrop")), "studio": shots.get("studio"),
+             "logs": {"repo": log(REPO, 160), "self": log(a.self, 160)}, "checks": {"pr": a.act1_pr, "rows": checks(a.act1_pr)}}
+    missing += [f"{e['still']} (still)" for e in tl if e["kind"] == "still" and e["still"] not in shots]
     (HERE / "props.json").write_text(json.dumps(props, indent=1, ensure_ascii=False))
     sec = sum(round(e["sec"] * cut["fps"]) for e in tl) / cut["fps"]
 

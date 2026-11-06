@@ -1,5 +1,4 @@
 node_modules/
 out/
-public/raw/
-public/boot.gif
+public/
 props.json
