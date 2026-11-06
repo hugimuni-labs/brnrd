@@ -98,19 +98,31 @@ def _state(now: str) -> str | None:
 
 
 def _fuel(home: Home, cores: dict[str, list[str]], floor: float) -> list[dict]:
-    from .usage import _SHELL_NAME, _past_reset
+    """One row per shell the status line names, in name order.
+
+    The status line pulls the seated shell forward; the board has no seat, so
+    the order is the status line's with that pull left out. A collector error
+    with no window is ``fails``, the same word the line uses, and the error
+    text stays in the file.
+    """
+    from .usage import FAILS, _SHELL_NAME, _past_reset, collector_failed, gauge_windows
     found = []
     for path in sorted((home.root / "loom/usage").glob("*.json")):
         shell = path.name.removesuffix(".json")
+        if not _SHELL_NAME.fullmatch(shell):
+            continue
         try:
             payload = json.loads(path.read_text())
+            windows = gauge_windows(payload)
+            if not windows:
+                if windows is not None and collector_failed(payload):
+                    found.append({"shell": shell, "state": "error", "error": FAILS, "gauges": [],
+                                  **({"cores": cores[shell]} if cores.get(shell) else {})})
+                continue
             gauges = [{"window": w["name"], "left_pct": w["left_pct"],
                        **({"resets_at": _iso(w["resets_at"])} if w.get("resets_at") else {})}
-                      for w in payload["windows"]
-                      if isinstance(w.get("name"), str) and isinstance(w.get("left_pct"), (int, float))]
+                      for w in windows]
         except (OSError, ValueError, KeyError, TypeError, AttributeError):
-            continue
-        if not _SHELL_NAME.fullmatch(shell) or not gauges:
             continue
         state = ("dry" if any(g["left_pct"] <= floor for g in gauges)
                  else "stale" if _past_reset(payload, time.time()) else "ok")

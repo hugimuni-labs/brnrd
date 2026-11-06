@@ -66,6 +66,8 @@
 							class="text-[10px] tracking-wider text-ink-mute uppercase"
 							title="read before its last reset">stale</span
 						>
+					{:else if shell.state === 'error'}
+						<span class="text-[10px] tracking-wider text-orange-300 uppercase">fails</span>
 					{:else if low}
 						<span class="text-[10px] tracking-wider text-orange-300 uppercase">low</span>
 					{/if}

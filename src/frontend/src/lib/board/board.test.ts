@@ -8,7 +8,7 @@ import { pipOn, stages, stageWord } from './stages.ts';
 import { answered, stack, verdictLetter } from './calls.ts';
 import { inboxCards, ledger, threadWishes, unechoed } from './ledger.ts';
 import { bar, beats, liveOf, withTools } from './tape.ts';
-import { ancestors, children, moved, patchBeads, Store, type Beads } from './parts.ts';
+import { ancestors, children, headerFuel, moved, patchBeads, Store, type Beads } from './parts.ts';
 import { face, moves, seen, waitOf } from './rail.ts';
 import { stamps } from './stamps.ts';
 
@@ -27,6 +27,31 @@ const W = (wish: string, o: Partial<Wish> = {}): Wish => ({
 	...o
 });
 const T = (id: string, o: Partial<Thread> = {}): Thread => ({ id, ...o });
+
+test('the header names every provider, and a collector error is the word it was given', () => {
+	equal(
+		headerFuel([
+			{
+				shell: 'claude',
+				gauges: [
+					{ window: 'session', left_pct: 15 },
+					{ window: 'week', left_pct: 48 }
+				]
+			},
+			{
+				shell: 'codex',
+				gauges: [
+					{ window: 'session', left_pct: 95 },
+					{ window: 'week', left_pct: 99 }
+				]
+			},
+			{ shell: 'grok', gauges: [{ window: 'week', left_pct: 58 }] },
+			{ shell: 'vibe', gauges: [], error: 'fails' }
+		]),
+		'claude session 15% week 48%   codex session 95% week 99%   grok week 58%   vibe fails'
+	);
+	equal(headerFuel(undefined), '');
+});
 
 test('a Telegram quote and a reply-to both split off as the quote', () => {
 	const by = new Map<string, Letter>();

@@ -553,3 +553,52 @@ def test_topics_is_its_own_part_not_on_the_index(parts):
         parts.stop.set()
         server.shutdown()
         server.server_close()
+
+
+def _reading(directory: Path, shell: str, windows: list, error: str | None = None) -> None:
+    directory.mkdir(parents=True, exist_ok=True)
+    body = {"at": time.time(), "windows": windows}
+    if error:
+        body["error"] = error
+    (directory / f"{shell}.json").write_text(json.dumps(body))
+
+
+def test_usage_moves_the_header_fuel_without_a_recompute(parts, monkeypatch):
+    """The header reads the files the status line reads. A usage write is not a ledger move, and a collector
+    error with no window is the word ``fails``, not an absent shell and not the error text."""
+    from brr.loom.runtime import board
+    from brr.loom.runtime.usage import shell_fuels
+    root = parts.home.root
+    inject_letter(root, to="thread:web", body="first")
+    assert parts.step()
+    assert "fuel" not in parts.parts["index"]
+    computed = []
+    real = board.compute
+    monkeypatch.setattr(board, "compute", lambda *a, **k: computed.append(1) or real(*a, **k))
+    usage = root / "loom/usage"
+    _reading(usage, "grok", [{"name": "week", "left_pct": 58}])
+    _reading(usage, "claude", [
+        {"name": "session", "left_pct": 15}, {"name": "week", "left_pct": 48}])
+    _reading(usage, "vibe", [], error="token totals only, secret-looking")
+    assert parts.step()
+    assert computed == []
+    fuel = parts.parts["index"]["fuel"]
+    assert [row["shell"] for row in fuel] == ["claude", "grok", "vibe"]
+    assert fuel[0]["gauges"] == [
+        {"window": "session", "left_pct": 15}, {"window": "week", "left_pct": 48}]
+    assert fuel[1]["gauges"] == [{"window": "week", "left_pct": 58}]
+    assert fuel[2]["state"] == "error" and fuel[2]["error"] == "fails" and fuel[2]["gauges"] == []
+    assert "secret-looking" not in json.dumps(fuel)
+    words = shell_fuels(parts.home)
+    assert words["claude"] == "session 15% week 48%"
+    assert words["grok"] == "week 58%"
+    assert words["vibe"] == "fails"
+    assert [row["shell"] for row in fuel] == sorted(words)
+    held = parts.hashes["thread/web"]
+    assert not parts.step()
+    _reading(usage, "grok", [])
+    assert parts.step()
+    assert computed == []
+    assert [row["shell"] for row in parts.parts["index"]["fuel"]] == ["claude", "vibe"]
+    assert "grok" not in shell_fuels(parts.home)
+    assert parts.hashes["thread/web"] == held

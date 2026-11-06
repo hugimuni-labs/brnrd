@@ -762,6 +762,7 @@ class Parts:
         self.bead_deltas: dict[str, dict] = {}  # previous beads hash → delta, for GET ?since=
         self.revision = None
         self.taped, self.tape_at = False, None  # a tape move not shown yet; when the last one was
+        self.usage = None  # loom/usage stamp at the last fuel read; the status line reads those files live
         # Which strand typed a letter through the board: the board's own note, outside the self repo.
         self.typed_path, self.typed, self.typed_mtime = home.root / "loom/board/typed.json", {}, None
         self.changed = threading.Condition()
@@ -769,14 +770,19 @@ class Parts:
         self.said: dict[tuple[str, str], tuple[float, dict]] = {}  # (wish, verdict) -> (when, the answer sent)
 
     def step(self) -> bool:
-        """One recompute when the ledger moved, one re-cut of the tapes when only they did; True when a part's
-        hash moved."""
+        """One recompute when the ledger moved, one re-cut of the tapes when only they did, and a fuel splice when
+        only ``loom/usage`` moved. True when a part's hash moved.
+
+        Fuel is what the status line reads on each wake. A whole compute stays on the ledger: usage files move
+        on their own, and splicing the fuel rows into the index is the whole of that change.
+        """
         facts = self.reader.refresh(self.home)
         self.taped |= self.tape.read()
         typed = self._typed()
         # semantic_revision: the loom's own router.renewed heartbeat (6 a minute) is no change here.
         revision = (id(facts), facts.semantic_revision)
         now = time.monotonic()
+        usage = self._usage_stamp()
         if revision != self.revision or typed or not self.parts:
             self.revision, self.taped, self.tape_at = revision, False, now
             with projection_cache(self.cache):
@@ -792,9 +798,14 @@ class Parts:
                     self.bead_deltas.pop(next(iter(self.bead_deltas)))
                 parts["index"] = dict(parts["index"], beads_delta=delta, beads_deltas=dict(self.bead_deltas))
                 hashes["index"] = digest(parts["index"])
+            self.usage = usage
         elif self.taped and (self.tape_at is None or now - self.tape_at >= TAPE):
             self.taped, self.tape_at = False, now
             parts, hashes = self._retaped()
+            if usage != self.usage:
+                parts, hashes = self._with_fuel(parts, hashes, usage)
+        elif usage != self.usage:
+            parts, hashes = self._with_fuel(dict(self.parts), dict(self.hashes), usage)
         else:
             return False
         if hashes == self.hashes:
@@ -803,6 +814,44 @@ class Parts:
             self.parts, self.hashes = parts, hashes
             self.changed.notify_all()
         return True
+
+    def _usage_stamp(self) -> tuple:
+        """``(name, mtime_ns, size)`` for each ``loom/usage/*.json``. The status line reads these files at each wake."""
+        directory = self.home.root / "loom" / "usage"
+        if not directory.is_dir():
+            return ()
+        found = []
+        for path in sorted(directory.glob("*.json")):
+            try:
+                st = path.stat()
+            except OSError:
+                continue
+            found.append((path.name, st.st_mtime_ns, st.st_size))
+        return tuple(found)
+
+    def _fuel_rows(self, index: dict) -> list:
+        from .snapshot import _fuel
+        cores = {row["shell"]: row["cores"] for row in index.get("fuel") or []
+                 if isinstance(row, dict) and row.get("cores")}
+        return _fuel(self.home, cores, self.config_of().hold_floor_pct)
+
+    def _with_fuel(self, parts: dict, hashes: dict, usage: tuple) -> tuple[dict, dict]:
+        """The index's fuel rows, replaced when they differ. Cores already on a row stay until the next compute."""
+        self.usage = usage
+        index = parts.get("index")
+        if not isinstance(index, dict):
+            return parts, hashes
+        fuel = self._fuel_rows(index)
+        if (index.get("fuel") or []) == fuel:
+            return parts, hashes
+        index = dict(index)
+        if fuel:
+            index["fuel"] = fuel
+        else:
+            index.pop("fuel", None)
+        parts = dict(parts, index=index)
+        hashes = dict(hashes, index=digest(index))
+        return parts, hashes
 
     def _retaped(self) -> tuple[dict, dict]:
         """The last compute with each thread part's tapes cut fresh: only a part whose tapes moved is hashed again."""

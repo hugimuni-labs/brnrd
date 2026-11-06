@@ -2,7 +2,17 @@
 // is fetched again only when its hash in the index moves. Beads then patch from the index's beads_delta or
 // GET /v1/loom/beads?since=<hash>, so a letter does not refetch the whole part. /v1/loom/events sends the index hash
 // whenever it moves.
-import type { BeadsDelta, Index, Letter, Model, Thread, ThreadPart, Topic, Wish } from './types.ts';
+import type {
+	BeadsDelta,
+	Fuel,
+	Index,
+	Letter,
+	Model,
+	Thread,
+	ThreadPart,
+	Topic,
+	Wish
+} from './types.ts';
 import { byAt } from './text.ts';
 
 export const BASE = '/v1/loom';
@@ -38,6 +48,19 @@ export async function getJSON(path: string): Promise<unknown> {
 
 // The index row is short. Steps, strands and calls ride on the thread part; join puts them back on the column.
 const PART_ONLY = new Set(['letters', 'wishes', 'tools', 'live', 'chain', 'more', 'count', 'id']);
+
+// The header line. One shell per provider, in the index's order (name order, the status line's without a seat
+// pulled forward). A collector error with no window is the word the index carries (`fails`); the error text stays off.
+export function headerFuel(fuel: Fuel[] | undefined): string {
+	return (fuel ?? [])
+		.map((f) => {
+			const gauges = (f.gauges ?? []).map((g) => `${g.window} ${g.left_pct}%`).join(' ');
+			const word = gauges || f.error || '';
+			return word ? `${f.shell} ${word}` : '';
+		})
+		.filter((line) => line)
+		.join('   ');
+}
 
 export function join(row: Thread, part?: ThreadPart): Thread {
 	if (!part) return row;
