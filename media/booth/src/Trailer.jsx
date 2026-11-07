@@ -113,12 +113,17 @@ const Backdrop = ({props, opacity = 0.12, blur = 6}) => {
   );
 };
 
-// The corner QR's ground on a light still (board, GitHub): the page fades to its own white before the plate,
-// so the plate sits on paper and never on a cut word.
+// The corner QR's ground on a still: the shot fades to the piece's dark before the plate, so the plate sits on
+// ground and never on a cut word.
 const Paper = () => {
   const [cx, cy] = [CORNER.x + CORNER.size / 2, CORNER.y + CORNER.size / 2 + 17];
-  return <AbsoluteFill style={{background: `radial-gradient(ellipse 330px 300px at ${cx}px ${cy}px, rgba(255,255,255,0.97) 0%, rgba(255,255,255,0.97) 52%, rgba(255,255,255,0) 100%)`}} />;
+  return <AbsoluteFill style={{background: `radial-gradient(ellipse 330px 300px at ${cx}px ${cy}px, rgba(12,10,8,0.96) 0%, rgba(12,10,8,0.96) 52%, rgba(12,10,8,0) 100%)`}} />;
 };
+
+// The board has no dark theme; its captures are turned dark here so the piece keeps one tone: invert, then the
+// hue turned back, so orange stays orange and blue stays blue. GitHub (g*) is captured dark, the studio is dark.
+const DARKEN = 'invert(0.93) hue-rotate(180deg)';
+const isBoard = (still) => still !== 'studio' && !still.startsWith('g');
 
 // ---- camera -----------------------------------------------------------------------------------------------
 
@@ -166,7 +171,7 @@ const Still = ({e, props}) => {
   const layer = (f, opacity, key) => (
     <div key={key} style={{position: 'absolute', left: 0, top: 0, width: img.w, height: img.h, transformOrigin: '0 0', opacity,
       transform: `translateX(${whip(f)}px) ${place(at(f))}`}}>
-      <Img src={staticFile(sh.file)} style={{width: img.w, height: img.h}} />
+      <Img src={staticFile(sh.file)} style={{width: img.w, height: img.h, filter: isBoard(e.still) ? DARKEN : undefined}} />
       {e.ring && fb ? <Ring box={fb} start={Math.round(e.ring * fps)} f={f} /> : null}
     </div>
   );
