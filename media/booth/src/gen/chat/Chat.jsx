@@ -27,6 +27,7 @@ const TEXT = 34;
 const ZOOM = 1.45;
 const FOOT = 870; // frame y of the chat's foot
 const LIFT = 760; // frame y of the compose box's centre while he types
+const DROP = 1030; // frame y of the chat's foot while a tall bubble lands whole (the compose bar off frame)
 const RATE = 3.5; // characters per frame: a bubble line (~25 characters) in about 8 frames
 
 const clamp = {extrapolateLeft: 'clamp', extrapolateRight: 'clamp'};
@@ -365,8 +366,9 @@ export const ChatShot = ({shot: key, sec}) => {
   const foot = PHONE.h - PHONE.bezel - COMPOSE;
   const box = PHONE.h - PHONE.bezel - COMPOSE / 2;
   const lifted = (shot.lift ?? []).reduce((v, [a, z]) => Math.max(v, interpolate(frame, [F(a) - 6, F(a), F(z), F(z) + 6], [0, 1, 1, 0], {...clamp, easing: EASE})), 0);
+  const dropped = (shot.drop ?? []).reduce((v, [a, z]) => Math.max(v, interpolate(frame, [F(a), F(a) + 6, F(z), F(z) + 6], [0, 1, 1, 0], {...clamp, easing: EASE})), 0);
   const fy = foot + (box - foot) * lifted;
-  const ty = FOOT + (LIFT - FOOT) * lifted;
+  const ty = FOOT + (LIFT - FOOT) * lifted + (DROP - FOOT) * dropped;
 
   return (
     <AbsoluteFill style={{background: BG}}>
