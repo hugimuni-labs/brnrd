@@ -67,7 +67,7 @@ REGISTRY = (
     _kind("body.stopped",      "body",    "strand gen pid why",                               "loom",        "machine", once=True),
     _kind("body.unidentified", "body",    "strand gen pid why",                               "loom",        "machine"),
     _kind("body.exited",       "body",    "strand gen code why? failure_origin? failure_letters?",                             "loom",        "global",  once=True),
-    _kind("wish",              "wish",    "wish says from line thread parent? rec? kind? deadline?",     "strand person loom", "global"),
+    _kind("wish",              "wish",    "wish says from line thread parent? rec? kind?",     "strand person loom", "global"),
     _kind("ask.answer",        "wish",    "wish as ref",                                      "strand person loom", "global"),
     _kind("wish.read",         "wish",    "wish reading by wait?",                             "strand person", "global"),
     _kind("wish.result",       "wish",    "wish kind ref line delivered cmd? sha256? size? name? mime? verified? word? unverified? weakened?", "strand loom", "global"),

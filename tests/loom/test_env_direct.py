@@ -44,15 +44,15 @@ def test_long_grant_park_requires_a_reason(ledger, monkeypatch):
     gauge.parent.mkdir(parents=True)
     gauge.write_text(json.dumps({"at": time.time(), "windows": [{"name": "week", "left_pct": 64,
         "resets_at": (datetime.now(timezone.utc) + timedelta(days=2)).isoformat()}]}))
-    ident = heard(home, seat, "Iterate to the deadline")
+    ident = heard(home, seat, "Iterate until the afternoon of 2026-11-07")
     command(home, seat, "wish", ident, "--result", "url:https://example.com/render",
             "--line", "First render")
     assert view(home, ident).state == "granting"
-    # Without a recorded deadline even an overnight park is accepted.
+    # A daytime park is accepted and reminds in its receipt and boundary.
     from test_wake import cli as process_cli
     receipt = process_cli(["wish", "--room", str(seat), ident, "--read", "waiting: his review",
-                           "--wait", "at:+13h"])
-    assert receipt.returncode == 0 and "this wait idles 13.0 h" in receipt.stderr
+                           "--wait", "at:+6h"])
+    assert receipt.returncode == 0 and "this wait idles 6.0 h" in receipt.stderr
     from brr.loom.runtime.loom import park_reminders
     reminder = park_reminders(read_facts(home), view(home, ident).thread)
     from types import SimpleNamespace
@@ -60,16 +60,11 @@ def test_long_grant_park_requires_a_reason(ledger, monkeypatch):
     boundary = _render_boundary(home, read_facts(home), "s-aaaa-test", 1,
                                 SimpleNamespace(thread="work", fuel="", why="", shell="fake"))
     assert reminder in boundary
-    assert "this wait idles 13.0 h" in reminder and "no recorded grant deadline" in reminder
-    deadline = (datetime.now(timezone.utc) + timedelta(days=1)).strftime("%Y-%m-%dT%H:%M:%SZ")
-    command(home, seat, "wish", ident, "--deadline", deadline)
-    # A long daytime wait is only a reminder, even ahead of pace with a deadline.
-    command(home, seat, "wish", ident, "--read", "waiting: daytime", "--wait", "at:+6h")
-    assert deadline in view(home, ident).reads[-1]["wait"]["reminder"]
+    assert "this wait idles 6.0 h" in reminder and "until the afternoon of 2026-11-07" in reminder
     before = view(home, ident).reads
     error = command(home, seat, "wish", ident, "--read", "waiting: his review",
                     "--wait", "at:+13h", ok=False)
-    assert "13.0 h" in error and "fuel in hand" in error and deadline in error
+    assert "13.0 h" in error and "fuel in hand" in error and "until the afternoon of 2026-11-07" in error
     assert 'idle: <why>' in error and "or shorten" in error
     assert view(home, ident).reads == before
     command(home, seat, "wish", ident, "--read", "idle: ", "--wait", "at:+13h", ok=False)
@@ -82,7 +77,7 @@ def test_long_grant_park_requires_a_reason(ledger, monkeypatch):
     payload["windows"][0]["left_pct"] = load_config(home.root).hold_floor_pct
     gauge.write_text(json.dumps(payload))
     command(home, seat, "wish", ident, "--read", "waiting: fuel floor", "--wait", "at:+13h")
-    # Behind pace the overnight wait is accepted even with a deadline.
+    # Behind pace the overnight wait is accepted on the same grant.
     payload["windows"][0]["left_pct"] = 20
     gauge.write_text(json.dumps(payload))
     command(home, seat, "wish", ident, "--read", "waiting: behind pace", "--wait", "at:+13h")
