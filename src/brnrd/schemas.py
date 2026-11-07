@@ -1637,3 +1637,9 @@ class AccountDeletionOut(BaseModel):
     deleted_at: datetime
     stripe_subscription_canceled: bool
     retained: list[RetainedStoreOut] = Field(default_factory=list)
+
+
+class LetterPresence(BaseModel):
+    event_id: str = Field(min_length=1, max_length=64)
+    verb: Literal['seen', 'working']
+    on: bool = False

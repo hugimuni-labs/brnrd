@@ -1,0 +1,30 @@
+#!/usr/bin/env python3
+"""Native seen and working verbs; neither is a delivery receipt."""
+import json
+import sys
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).parent))
+from common import call, reply_id
+
+
+def apply(operations, api=call):
+    for op in operations:
+        letter = op['letter']
+        chat, _, topic = str(letter['chat']).partition(':')
+        try:
+            if op['verb'] == 'seen':
+                ident = reply_id(letter['native'], chat)
+                api('setMessageReaction', dict(chat_id=chat, message_id=ident,
+                    reaction=[dict(type='emoji', emoji='👀')]), timeout=2)
+            elif op['verb'] == 'working' and op.get('on'):
+                payload = dict(chat_id=chat, action='typing')
+                if topic:
+                    payload['message_thread_id'] = int(topic)
+                api('sendChatAction', payload, timeout=2)
+            # Telegram has no stop-typing verb; its indicator expires naturally.
+        except Exception:
+            continue
+
+
+if __name__ == '__main__':
+    apply(json.load(sys.stdin))

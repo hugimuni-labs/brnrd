@@ -1,0 +1,24 @@
+#!/usr/bin/env python3
+"""Resolve native letters to authenticated cloud events; never accept a target URL."""
+import json
+import sys
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).parent))
+from common import RelayClient, read, settings
+
+
+def apply(operations, state, client):
+    mapping = read(state / 'messages.json', {})
+    payload = []
+    for op in operations:
+        event = mapping.get(op['letter']['native'])
+        if event:
+            payload.append(dict(event_id=event, verb=op['verb'], on=op.get('on', False)))
+    for start in range(0, len(payload), 100):
+        client.presence(payload[start:start + 100])
+
+
+if __name__ == '__main__':
+    config, state, gate = settings()
+    if gate is not None:
+        apply(json.load(sys.stdin), state, RelayClient(gate))

@@ -41,6 +41,8 @@ def test_failed_ingest_keeps_body_ticks_and_quarantines_after_three_tries(tmp_pa
         notices = [f for f in loop.facts() if f.kind == 'letter' and 'ingest failed 3 times' in f.data.get('body', '')]
         assert len(notices) == 1
         assert any(f.kind == 'note' and f.data.get('re') == original for f in loop.facts())
+        wait_until(lambda: {'admitted', 'booted'} <= {f.data['step'] for f in loop.facts()
+                   if f.kind == 'letter.presence' and f.data['letter'] == original}, 8, loop.dump)
     finally:
         loop.halt()
 

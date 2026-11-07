@@ -58,6 +58,7 @@ ROLES = ("loom", "strand", "person")
 SCOPES = ("global", "machine")
 
 REGISTRY = (
+    _kind("letter.presence", "letter", "letter step at channel? native? chat? strand? gen?", "loom", "global"),
     #     kind                resource   fields                                              writer         scope
     _kind("body.pending",      "body",    "strand gen shell core why?",                       "loom",        "machine", once=True),
     _kind("body.parked",       "body",    "strand gen shell core window left_pct until",      "loom",        "machine"),
