@@ -159,6 +159,7 @@ def cmd_wish(args):
                     data["reading"] = "waiting: " + args.read
                 if data["reading"].startswith("waiting:"):
                     data["wait"] = _wait(home, facts, args.id, args.wait, args.until)
+                    _guard_long_park(home, facts, args.id, data["wait"], args.read, thread, by)
             elif args.result is not None:
                 result_kind, sep, ref = args.result.partition(":")
                 if not sep or not result_kind or not ref or not args.line:
@@ -448,6 +449,31 @@ def _wait(home, facts, ident, condition, until, default=None):
             raise ValueError(f"--wait {condition}: no wish {condition[5:]}")
     return waits.park(found[ident], condition, until, now, found=found, default=default,
                       turn=float(load_config(home.root).turn or 0))
+
+
+def _guard_long_park(home, facts, ident, park, reading, thread, by):
+    """An active grant may idle for hours only with an explicit reason."""
+    from datetime import datetime, timezone
+    from . import usage, waits
+    from .config import load_config
+    current = wishes(facts)[ident]
+    on = park.get("on", "")
+    if (not by.startswith("strand:") or current.thread != thread
+            or current.state != "granting" or not on.startswith("at:")):
+        return
+    hours = (waits._instant(on[3:]) - datetime.now(timezone.utc)).total_seconds() / 3600
+    if hours <= 4 or (reading.startswith("idle:") and reading[5:].strip()):
+        return
+    shell = os.environ.get("BRNRD_BODY_SHELL")
+    if not shell:
+        return
+    value = usage.reading(home, shell)
+    week = next((w for w in (value or {}).get("windows", []) if w.get("name") == "week"), None)
+    floor = load_config(home.root).hold_floor_pct
+    if week is not None and week["left_pct"] > floor:
+        raise ValueError(f'--wait at: {hours:.1f} hours out; wish {ident} is granting; '
+                         f'fuel {shell} week {week["left_pct"]:g}% above floor {floor:g}%. '
+                         'Shorten the wait to at most 4 hours, or use --read "idle: <why>".')
 
 
 def _repo(facts, number):

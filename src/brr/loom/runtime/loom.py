@@ -706,7 +706,7 @@ def _prepare(home: Home, strand: str, thread: str, gen: int,
     if any((room / name / ".git").exists() for name, _ in repos):
         repo_text += PUBLISH_HINT
     from . import library
-    repo_text += library.wake_text(home)
+    repo_text += library.wake_text(home, room)
     shelf = library.entries(home)[0]
     library.write_room_list(room, shelf)
     for trouble in library.link(room, shelf):

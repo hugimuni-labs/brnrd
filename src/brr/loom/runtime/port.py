@@ -681,6 +681,15 @@ def write_send(room: Path, *, to: str, sender: str, body: str = "",
             if note is not None or reincarnate is not None:
                 raise PortError(f"send: no thread {thread} on main")
             opening = thread
+    if opening is not None:
+        from .library import entries
+        known = [entry for entry in entries(home)[0] if entry.source]
+        if not repo_sources and len(known) > 1:
+            shown = "\n".join(f"  {entry.name}; for: {entry.purpose}" for entry in known)
+            raise PortError("send: a new thread must choose --repo; library holds:\n" + shown
+                            + "\nUse --repo <name>, or --repo none for self-only work such as research.")
+        if "none" in repo_sources and len(repo_sources) != 1:
+            raise PortError("send: --repo none must stand alone")
     # Resolve before any stamp. A refusal writes no letter and opens no thread.
     if opening is not None and spend:
         from .adapters import spend_choice
