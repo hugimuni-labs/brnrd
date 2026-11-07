@@ -5,6 +5,8 @@ from __future__ import annotations
 import socket
 from pathlib import Path
 
+import pytest
+
 from brr.loom.runtime import library
 import json
 import time
@@ -71,7 +73,10 @@ def test_lib_drop_removes_the_page_and_leaves_the_folder(tmp_path: Path) -> None
     assert (kb / "a.md").read_text() == "mine\n"
 
 
-def test_the_wake_names_each_library_entry(tmp_path: Path) -> None:
+@pytest.mark.parametrize("short_paths", [False, True])
+def test_the_wake_names_each_library_entry(tmp_path: Path, monkeypatch, short_paths) -> None:
+    if short_paths:
+        monkeypatch.setattr(library, "_home_short", lambda path: "/short/" + Path(path).name)
     root = _home(tmp_path)
     kb = tmp_path / "kb"
     kb.mkdir()
@@ -93,7 +98,9 @@ def test_the_wake_names_each_library_entry(tmp_path: Path) -> None:
     assert (f"kept notes: Ada's at lib/notes ({shown}); I commit here; no commits, clean; "
             "for: her working notes").startswith(kept.rstrip("…"))
     old = next(line for line in wake.splitlines() if line.startswith("known old: "))
-    assert f"known old: Ada's MISSING at {library._home_short(str(gone.resolve()))}; read and work on request".startswith(old.rstrip("…"))
+    assert len(old) <= library.LINE_CAP
+    assert (f"known old: Ada's MISSING at {library._home_short(str(gone.resolve()))}; "
+            "read and work on request, tidy after; for: old kb").startswith(old.rstrip("…"))
 
 
 def test_the_wake_names_library_repos_with_purposes(tmp_path: Path) -> None:
