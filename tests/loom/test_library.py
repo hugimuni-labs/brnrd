@@ -5,6 +5,8 @@ from __future__ import annotations
 import socket
 from pathlib import Path
 
+import pytest
+
 from brr.loom.runtime import library
 import json
 import time
@@ -71,7 +73,10 @@ def test_lib_drop_removes_the_page_and_leaves_the_folder(tmp_path: Path) -> None
     assert (kb / "a.md").read_text() == "mine\n"
 
 
-def test_the_wake_names_each_library_entry(tmp_path: Path) -> None:
+@pytest.mark.parametrize("short_paths", [False, True])
+def test_the_wake_names_each_library_entry(tmp_path: Path, monkeypatch, short_paths) -> None:
+    if short_paths:
+        monkeypatch.setattr(library, "_home_short", lambda path: "/short/" + Path(path).name)
     root = _home(tmp_path)
     kb = tmp_path / "kb"
     kb.mkdir()
@@ -92,11 +97,14 @@ def test_the_wake_names_each_library_entry(tmp_path: Path) -> None:
     assert len(kept) <= library.LINE_CAP
     assert (f"kept notes: Ada's at lib/notes ({shown}); I commit here; no commits, clean; "
             "for: her working notes").startswith(kept.rstrip("…"))
-    assert f"known old: Ada's MISSING at {gone.resolve()}; read and work on request" in wake
+    old = next(line for line in wake.splitlines() if line.startswith("known old: "))
+    assert len(old) <= library.LINE_CAP
+    assert (f"known old: Ada's MISSING at {library._home_short(str(gone.resolve()))}; "
+            "read and work on request, tidy after; for: old kb").startswith(old.rstrip("…"))
 
 
-def test_the_wake_names_library_repos_in_one_line(tmp_path: Path) -> None:
-    """A repo costs its name in the wake; a folder keeps its line."""
+def test_the_wake_names_library_repos_with_purposes(tmp_path: Path) -> None:
+    """Every source is visible, even without a checkout."""
     root = _home(tmp_path)
     kb = tmp_path / "kb"
     kb.mkdir()
@@ -105,8 +113,9 @@ def test_the_wake_names_library_repos_in_one_line(tmp_path: Path) -> None:
                     "--for", "x" * 150) == 0
     assert _add(root, "kb", str(kb), "--kind", "known", "--whose", "Ada", "--for", "notes") == 0
     lines = library.wake_text(Home(root)).splitlines()
-    assert lines[0] == "repos: brnrd, site"
-    assert [line.split(":")[0] for line in lines[1:]] == ["known kb"]
+    assert lines[0] == "repo brnrd; for: " + "x" * 150
+    assert lines[1] == "repo site; for: " + "x" * 150
+    assert [line.split(":")[0] for line in lines[2:]] == ["known kb"]
     assert "github.com" not in library.wake_text(Home(root))
 
 
@@ -129,6 +138,8 @@ def test_a_seat_names_a_library_repo_by_name(tmp_path: Path) -> None:
     bare, _work = _source(tmp_path)
     assert _add(root, "widget", f"file://{bare}", "--kind", "kept", "--whose", "Ada",
                 "--for", "her widget") == 0
+    assert _add(root, "uncloned", "https://github.com/ada/other", "--kind", "known",
+                "--whose", "Ada", "--for", "other work") == 0
     _seat(root, "work", ["widget"])
     home = Home(root)
     bodies: dict = {}
@@ -140,7 +151,9 @@ def test_a_seat_names_a_library_repo_by_name(tmp_path: Path) -> None:
     assert git(checkout, "remote", "get-url", "origin").stdout.strip() == f"file://{bare}"
     wake = (room / "port" / "wake.md").read_text()
     assert f"repo widget: {checkout} on loom/work" in wake
-    assert "repos: widget\n" in wake
+    assert "repo widget (cloned); for: her widget\n" in wake
+    assert "repo uncloned; for: other work\n" in wake
+    assert not (room / "uncloned").exists()
     assert "kept widget:" not in wake
 
 

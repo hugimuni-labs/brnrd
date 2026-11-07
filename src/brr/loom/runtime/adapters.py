@@ -127,7 +127,12 @@ def repos(text: str, home=None) -> list[tuple[str, str]]:
     found: list[tuple[str, str]] = []
     seen: set[str] = set()
     shelf = None
-    for key, value in _entries(text):
+    rows = list(_entries(text))
+    if ("repo", "none") in rows:
+        if sum(key == "repo" for key, _ in rows) != 1:
+            raise RepoSeatError("--repo none must stand alone")
+        return []
+    for key, value in rows:
         if key != "repo":
             continue
         if _NAME.fullmatch(value) and value != "self":
