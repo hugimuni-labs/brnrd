@@ -172,3 +172,22 @@ def test_router_lease_loss_and_stale_snapshot_stop_typing(ledger, monkeypatch):
     worker_.update(incoming() + boot(), armed=False)
     worker_.flush()
     assert calls == []
+
+
+def test_incomplete_source_keeps_progress_and_first_word(ledger):
+    home, _ = ledger
+    for metadata in ({}, {'channel': 'channel:fake'},
+                     {'channel': 'channel:tg/42', 'origin': 'tg:1'},
+                     {'channel': 'channel:tg/42', 'origin': 'invalid', 'chat': '42'}):
+        facts = incoming()
+        facts[0] = fact('source', facts[0].id, 1000, **metadata)
+        facts += [fact('letter', 'reply', 1012, by='strand:s-test',
+                       re='letter:tg:42:1', body='Checking')]
+        rows = presence.steps(facts)
+        assert [(r['step'], r['at']) for r in rows] == [
+            ('admitted', 1000), ('first-word', 1012)]
+        assert presence.first_words(facts, {'letter:tg:42:1'}) == {'letter:tg:42:1': 12}
+        worker_ = Presence(home)
+        worker_.thread = object()
+        worker_.update(facts)
+        assert worker_.snapshot == ({}, {})

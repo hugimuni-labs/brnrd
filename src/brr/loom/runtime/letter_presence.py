@@ -55,8 +55,13 @@ def steps(facts):
         letter = letters[row['letter']]
         source = sources.get(letter.data.get('cites'))
         if source:
-            row.update(channel=source.data['channel'], native=source.data['origin'].split(':', 1)[1],
-                       chat=source.data['chat'])
+            d = source.data
+            origin = d.get('origin') or ''
+            _, separator, native = origin.partition(':')
+            # Historical and injected sources need not have a platform address.
+            # Keep their timing, but only dispatch feedback with a complete route.
+            if d.get('channel') and d.get('chat') and separator and native:
+                row.update(channel=d['channel'], native=native, chat=d['chat'])
     return sorted(rows.values(), key=lambda r: (r['at'], r['letter'], r['step']))
 
 
