@@ -49,6 +49,54 @@ class RelayClient:
             path = '/v1/daemons/messages'
         return cloud._request(state['brnrd_url'], 'POST', path, token=state['token'], json=payload, retry=False)
 
+    def typing(self, chats):
+        state = self._state()
+        return cloud._request(state['brnrd_url'], 'POST', '/v1/daemons/loom/typing',
+                              token=state['token'], json=chats, retry=False, timeout=5)
+
     def download_attachment(self, event_id, index, dest):
         state = self._state()
         return cloud._download_attachment(state['brnrd_url'], state['token'], event_id, index, dest)
+
+
+def typing_targets(root, *, alive=None):
+    """Only live rooms owing a person letter. Replies clear before the next loom tick.
+
+    No ledger fold, model, or message body leaves the machine. A dead or
+    stopped room drops out even when its last boundary is still on disk.
+    """
+    from brr.loom.runtime.port import parse_boundary, answered
+    if alive is None:
+        from brr.loom.runtime.loom import body_alive
+        alive = body_alive
+    chats = set()
+    for path in (Path(root) / 'rooms').glob('*/port/in/boundary.md'):
+        room = path.parents[2]
+        if not alive(room):
+            continue
+        try:
+            boundary = parse_boundary(path.read_text())
+            done = answered(room)
+            for letter in boundary.letters:
+                if letter.id not in boundary.first_words or letter.id in done:
+                    continue
+                # Port addresses are cloud/telegram:<chat>[:<topic>]; the
+                # existing relay target parser takes cloud:telegram:<chat>.
+                target = letter.reply.removeprefix('channel:')
+                if target.startswith(('cloud/telegram:', 'relay/telegram:')):
+                    chats.add('cloud:telegram:' + target.split('/telegram:', 1)[1])
+        except (OSError, ValueError, RuntimeError):
+            continue
+    return sorted(chats)
+
+
+def typing_forever(root, client, stop, log, lock):
+    """Telegram's typing expires after five seconds; renew every four."""
+    while not stop.is_set():
+        try:
+            chats = typing_targets(root) if lock.held else []
+            if chats:
+                client.typing(chats[:100])
+        except Exception as exc:
+            log(f'relay typing: {type(exc).__name__}: {exc}')
+        stop.wait(4)

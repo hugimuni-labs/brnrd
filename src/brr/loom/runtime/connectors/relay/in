@@ -3,6 +3,7 @@
 
 import hashlib
 import json
+import os
 import signal
 import sys
 import threading
@@ -11,7 +12,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
-from common import RelayClient, atomic_write, cloud, message_id, read, settings
+from common import RelayClient, atomic_write, cloud, message_id, read, settings, typing_forever
 from brr.gates.relay_lock import RelayLock
 from brr.loom.runtime.port import _front
 
@@ -176,5 +177,10 @@ if __name__ == '__main__':
     stop = threading.Event()
     signal.signal(signal.SIGTERM, lambda *_: stop.set())
     signal.signal(signal.SIGINT, lambda *_: stop.set())
-    poll_forever(Path(sys.argv[1]), state, RelayClient(gate),
-                 RelayLock(gate, 'loom'), stop)
+    client = RelayClient(gate)
+    lock = RelayLock(gate, 'loom')
+    threading.Thread(target=typing_forever,
+                     args=(Path(os.environ['BRNRD_CONFIG']).parent.parent, client, stop, stamped, lock),
+                     daemon=True, name='relay-typing').start()
+    poll_forever(Path(sys.argv[1]), state, client,
+                 lock, stop)

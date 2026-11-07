@@ -66,6 +66,7 @@ class Boundary:
     ids: list[str] = field(default_factory=list)
     letters: list[LetterView] = field(default_factory=list)
     settled: str | None = None
+    first_words: dict[str, str] = field(default_factory=dict)
 
 
 def parse_boundary(text: str) -> Boundary:
@@ -83,11 +84,17 @@ def parse_boundary(text: str) -> Boundary:
     letters: list[LetterView] = []
     current: LetterView | None = None
     settled = None
+    first_words = {}
     for line in text[header.end():].splitlines():
         # Continuation first: a blank line inside a body renders as two
         # spaces, and must not end the letter (#2223 review).
         if line.startswith("  ") and current is not None:
             current.body += "\n" + line[2:]
+            continue
+        if line.startswith("first-word: "):
+            _, ident, at = line.split(maxsplit=2)
+            first_words[ident] = at
+            current = None
             continue
         if line.startswith("settled:"):
             settled = line.partition(":")[2].strip()
@@ -113,7 +120,7 @@ def parse_boundary(text: str) -> Boundary:
     if [letter.id for letter in letters] != ids:
         raise PortError("owed ids do not match the letter list")
     return Boundary(strand=header.group(1), gen=int(header.group(2)),
-                    ids=ids, letters=letters, settled=settled)
+                    ids=ids, letters=letters, settled=settled, first_words=first_words)
 
 
 def _reply(letter: Fact, sender_threads: dict[str, str], own: str,
@@ -305,6 +312,9 @@ def render_boundary(strand: str, gen: int, thread: str, letters: list[Fact],
         + (f" · {plan}" if plan else ""),
         "owed:",
     ]
+    from .dispositions import is_person
+    lines[2:2] = [f"first-word: {letter.data.get('id', letter.id)} {letter.at}"
+                  for letter in letters if is_person(letter)]
     if left:
         # What the stop will ask for; never after `` · plan``, so it wakes nobody.
         lines.insert(2, left)
@@ -899,6 +909,10 @@ def write_send(room: Path, *, to: str, sender: str, body: str = "",
         "kind": "note" if note is not None else "letter",
         "id": letter_id, "to": to, "from": sender,
     }
+    if re and note is None and body.strip() and re in letters:
+        from .dispositions import is_person
+        if is_person(letters[re]):
+            fields["sent_at"] = str(time.time())
     if at is not None:
         fields["at"] = at
     if budget is not None:
@@ -1207,6 +1221,8 @@ def fact_from_port(fm: dict[str, str], strand: str, gen: int | None,
                 data["label"] = {"taint": False, "audience": sorted(sender.audience)}
             else:
                 data["label"] = sender.as_dict()
+        if fm.get("sent_at"):
+            data["sent_at"] = float(fm["sent_at"])
         return Fact(kind="letter", by=f"strand:{strand}", data=data, id=fact_id)
     if kind == "note":
         if not fm.get("re") or not fm.get("note"):
