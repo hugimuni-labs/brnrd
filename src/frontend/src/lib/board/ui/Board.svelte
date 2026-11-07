@@ -7,7 +7,7 @@
 	import './board.css';
 	import { arrange, bst, byThread, SETTLED, TOPICS, sortThreads, wanted } from '../order.ts';
 	import { headerFuel } from '../parts.ts';
-	import { bindingGauge } from '../../loomSnapshot.ts';
+	import { barGauge } from '../../loomSnapshot.ts';
 	import FuelMarks from '../../FuelMarks.svelte';
 	import { INBOX } from '../sides.ts';
 	import { dur, hue, secs } from '../text.ts';
@@ -144,8 +144,8 @@
 		<b>fuel</b>
 		<span id="fuel" title={headerFuel(b.model?.fuel)}>
 			{#each b.model?.fuel ?? [] as shell (shell.shell)}
-				{@const binding = bindingGauge(shell.gauges)}
-				<span class="shell" data-shell={shell.shell} data-bar={binding?.window ?? ''}>
+				{@const bar = barGauge(shell.gauges)}
+				<span class="shell" data-shell={shell.shell} data-bar={bar?.window ?? ''}>
 					<span class="name">{shell.shell}</span>
 					{#if shell.gauges?.length}
 						<FuelMarks gauges={shell.gauges} now={fuelNow} />

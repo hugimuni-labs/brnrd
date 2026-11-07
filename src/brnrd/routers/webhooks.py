@@ -1259,6 +1259,19 @@ def telegram_webhook(request: Request, payload: dict, x_telegram_bot_api_secret_
             _audit_reject(parsed, reason=f"limit:{decision.reason}")
             _reply(settings, parsed, decision.message)
             return {"ok": True}
+        _enqueue_telegram_event(db, parsed, repo_id=repo.id, body=body)
+        if settings.telegram_bot_token:
+            # Admission is committed before best-effort presence. A blocked reaction
+            # (chat permissions, old message, Telegram outage) never loses the letter.
+            for action in (
+                lambda: tg.mark_seen(settings.telegram_bot_token, parsed.chat_id, parsed.message_id),
+                lambda: tg.send_chat_action(settings.telegram_bot_token, parsed.chat_id,
+                                            topic_id=parsed.topic_id, timeout=2.0),
+            ):
+                try:
+                    action()
+                except Exception as exc:
+                    logger.warning("telegram first-word acknowledgement failed: %s", exc)
         online, last_seen_at = _account_daemon_status(db, route.account_id)
         if not online:
             # #1282 / #1486 — still enqueue either way (a daemon that comes
@@ -1272,7 +1285,6 @@ def telegram_webhook(request: Request, payload: dict, x_telegram_bot_api_secret_
                 _reply(settings, parsed, _NO_RUNNER_TEXT)
             else:
                 _reply(settings, parsed, _STALE_DAEMON_TEXT.format(last_seen_label=_last_seen_label(last_seen_at)))
-        _enqueue_telegram_event(db, parsed, repo_id=repo.id, body=body)
     return {"ok": True}
 
 

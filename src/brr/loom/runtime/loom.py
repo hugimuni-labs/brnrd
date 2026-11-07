@@ -1357,6 +1357,8 @@ def _end_attempt(home, facts, strand, thread, gen, code, letters, cause, failure
     changed = _readme(room, thread) != start.data.get("readme") if start else "unknown"
     tank = fuel(home, start.data["shell"]) if start else ""
     reads = _reads(room, start)
+    from .tooltrace import first_words
+    first_word_s = first_words(facts, ids)
     dispositions = []
     writers = sender_threads(facts)
     channels = reply_channels(facts, home)
@@ -1461,6 +1463,7 @@ def _end_attempt(home, facts, strand, thread, gen, code, letters, cause, failure
                      **({"home_failure": True} if cause == "failed" and failure_origin == "home" else {}),
                      **({"self_revision": retry_revision} if retry_revision else {}),
                      **({"reads": reads} if reads else {}),
+                     "first_word_s": first_word_s,
                      **({"unpublished": left} if left else {}),
                      **({"kept": kept} if kept else {}),
                      **({"why": stopped_why} if cause == "stopped" else {})},

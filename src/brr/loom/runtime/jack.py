@@ -16,7 +16,7 @@ from brr.pause import read_paused_record
 from .home import atomic_write, home_of_room, mint
 from .pausing import describe
 from .waits import GRAMMAR
-from .port import CLOCK, Boundary, answered, clock, parse_boundary
+from .port import CLOCK, Boundary, PortError, answered, clock, parse_boundary
 
 _HEADER_LINE = re.compile(rf"<!-- port (\S+) gen (\d+)(?: · {CLOCK})? · owed[^>]*-->")
 _ITEM_LINE = re.compile(r"^- (\S+) · from \S+ · reply \S+")
@@ -137,6 +137,8 @@ def _news(text: str, state: dict, plan_changed: bool) -> tuple[str, list[str], l
     for line in text[header.end():].splitlines():
         if line.startswith("  ") and units:
             units[-1].append(line)
+        elif line.startswith("first-word: "):
+            continue
         elif line.strip() and line != "owed:":
             units.append([line])
     before = set(state.get("said", []))
@@ -662,6 +664,55 @@ def _lib_changes(room: Path) -> str:
         return ""
 
 
+def _first_word(room: Path, stdin_text: str = "", *, refuse: bool = False) -> tuple[str, bool]:
+    """A live clock, independent of the loom's cached rendering; one refusal per letter."""
+    from datetime import datetime
+    import shlex
+    try:
+        parsed = parse_boundary(_boundary_text(room))
+    except PortError:
+        # A missing/corrupt clock must not bypass the independent act guards.
+        return "", False
+    done = answered(room)
+    late = []
+    for ident, at in parsed.first_words.items():
+        if ident in done or ident not in parsed.ids:
+            continue
+        age = max(0, int(time.time() - datetime.fromisoformat(at).timestamp()))
+        if age > 60:
+            late.append((ident, age))
+    text = "\n".join(f"owed {ident} for {age} s: one line to him first, saying what you will do"
+                     for ident, age in late)
+    if not refuse:
+        return text, False
+    try:
+        payload = json.loads(stdin_text or "{}")
+        args = payload.get("tool_input") or {}
+        command = args.get("command", args.get("cmd", ""))
+        words = shlex.split(command)
+    except (ValueError, TypeError, AttributeError):
+        words = []
+    # Only the command itself, never a description or quoted prose mentioning send.
+    sending = (len(words) >= 3 and Path(words[0]).name == "brnrd" and words[1:3] == ["runtime", "send"])
+    sending |= (len(words) >= 4 and Path(words[0]).name in {"python", "python3"}
+                and words[1:4] == ["-m", "brr.loom.runtime", "send"])
+    if sending:
+        return text, False
+    refused = set(_state(room).get("first_word_refused", []))
+    overdue = [ident for ident, age in late if age > 120 and ident not in refused]
+    if not overdue:
+        return text, False
+    from .grants import refused as record_refusal
+    for ident in overdue:
+        record_refusal(home_of_room(room), room.name, parsed.gen,
+                       next((line.split(" · thread ", 1)[1].split(" · ", 1)[0]
+                             for line in _boundary_text(room).splitlines() if " · thread " in line), ""),
+                       "first-word", ident)
+        refused.add(ident)
+    _set_state(room, first_word_refused=sorted(refused))
+    return text, True
+
+
 def execute(event: str, room: Path, stdin_text: str) -> str:
     """Return the hook's stdout. Raise on trouble; ``run`` turns that into fail-open."""
     room = Path(room)
@@ -675,15 +726,20 @@ def execute(event: str, room: Path, stdin_text: str) -> str:
         # Not a boundary: letters wait for the call's result. A delegate's
         # call is guarded too, since the act is the strand's.
         said, refuse = _guard_warnings(room, "pre", stdin_text)
+        first, first_refuse = _first_word(room, stdin_text, refuse=True)
+        said = "\n".join(filter(None, (first, said)))
+        refuse = refuse or first_refuse
         tooltrace.note(room, stdin_text, "pre")
         if refuse:
             # A refused call gets no post hook; its end is written here.
             tooltrace.note(room, stdin_text, "refused")
             return _json({"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "deny",
-                                                 "permissionDecisionReason": "refused by a guard:\n" + said}})
+                                                 "permissionDecisionReason": _clocked("refused by a guard:\n" + said)}})
         return _json({"hookSpecificOutput": {"hookEventName": "PreToolUse",
                                              "additionalContext": said}}) if said else ""
     guarded = _guard_warnings(room, "post", stdin_text)[0] if event == "post" else ""
+    if event == "post":
+        guarded = "\n".join(filter(None, (_first_word(room)[0], guarded)))
     if event == "post":
         tooltrace.note(room, stdin_text, "post")
         _keep_transcript(room, stdin_text)
@@ -719,6 +775,9 @@ def execute(event: str, room: Path, stdin_text: str) -> str:
             text = "".join(f"guards: skipped {line}\n" for line in broken) + text
         left = _left(room, True)
         text = left + text
+        first = _first_word(room)[0]
+        if first:
+            text = first + "\n" + text
         if not parsed.ids and not opened and not plan and not broken and not left:
             return ""
         if parsed.ids:

@@ -190,3 +190,64 @@ def test_cloud_chat_target_parses_and_rejects():
     assert daemons_router._cloud_chat_target("telegram:555:") is None
     assert daemons_router._cloud_chat_target("spawn:default") is None
     assert daemons_router._cloud_chat_target("") is None
+
+
+def test_first_word_acknowledges_admitted_telegram_without_model(env, monkeypatch):
+    app, client, _, _ = env
+    acc = _account(client)
+    rid = _repo(client, acc)
+    _pair_telegram(client, acc, rid)
+    actions = []
+    monkeypatch.setattr('brnrd.platforms.telegram.mark_seen', lambda *a, **kw: actions.append(('seen', a[1:])))
+    monkeypatch.setattr('brnrd.platforms.telegram.send_chat_action', lambda *a, **kw: actions.append(('typing', a[1:])))
+    response = client.post('/v1/webhooks/telegram', json=_tg_message(555, 'check it', message_id=100), headers=_TG_HDR)
+    assert response.status_code == 200
+    assert actions == [('seen', ('555', 100)), ('typing', ('555',))]
+    with app.state.SessionLocal() as db:
+        assert db.execute(select(Event).where(Event.body == 'check it')).scalar_one()
+    actions.clear()
+    client.post('/v1/webhooks/telegram', json=_tg_message(555, 'intruder', message_id=101, user_id=999), headers=_TG_HDR)
+    assert actions == []
+
+
+def test_first_word_ack_failure_preserves_letter_and_attempts_typing(env, monkeypatch):
+    app, client, _, _ = env
+    acc = _account(client)
+    rid = _repo(client, acc)
+    _pair_telegram(client, acc, rid)
+    def fail(*a, **kw):
+        raise RuntimeError('reaction unavailable')
+    actions = []
+    monkeypatch.setattr('brnrd.platforms.telegram.mark_seen', fail)
+    monkeypatch.setattr('brnrd.platforms.telegram.send_chat_action', lambda *a, **kw: actions.append(a[1]))
+    assert client.post('/v1/webhooks/telegram', json=_tg_message(555, 'saved', message_id=100), headers=_TG_HDR).status_code == 200
+    assert actions == ['555']
+    with app.state.SessionLocal() as db:
+        assert db.execute(select(Event).where(Event.body == 'saved')).scalar_one()
+
+
+def test_typing_endpoint_authorizes_paired_chat(env, monkeypatch):
+    app, client, _, _ = env
+    acc = _account(client)
+    rid = _repo(client, acc)
+    _pair_telegram(client, acc, rid)
+    headers = _daemon_headers(client, acc, rid)
+    actions = []
+    monkeypatch.setattr('brnrd.platforms.telegram.send_chat_action', lambda *a, **kw: actions.append(a[1]))
+    monkeypatch.setattr(daemons_router, '_last_typing_sent', {})
+    response = client.post('/v1/daemons/loom/typing', json=['cloud:telegram:555', 'cloud:telegram:999'], headers=headers)
+    assert response.status_code == 200
+    assert actions == ['555']
+    client.post('/v1/daemons/loom/typing', json=['cloud:telegram:555'], headers=headers)
+    assert actions == ['555']
+    assert client.post('/v1/daemons/loom/typing', json=['cloud:telegram:555']).status_code == 401
+
+
+def test_seen_uses_telegram_reaction_primitive(monkeypatch):
+    from brnrd.platforms import telegram
+    calls = []
+    monkeypatch.setattr(telegram, '_post_json', lambda *a: calls.append(a))
+    telegram.mark_seen('token', '555', '123')
+    assert calls == [('token', 'setMessageReaction',
+                      {'chat_id': '555', 'message_id': 123,
+                       'reaction': [{'type': 'emoji', 'emoji': '👀'}]}, 2.0)]
