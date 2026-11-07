@@ -375,6 +375,8 @@
  "act1": {
   "pr": 2606,
   "asked": "letter:cloud:telegram:155783668:10416",
-  "green": "s-ae66-n5nv7e/yun90"
+  "green": "s-ae66-n5nv7e/yun90",
+  "asked_on_phone": "21:49",
+  "why_phone": "his phone's screenshot (ref/tg) shows the ask sent 22:49 local; the ledger's 21:56:36Z is the loom's receipt after the lockout"
  }
 }

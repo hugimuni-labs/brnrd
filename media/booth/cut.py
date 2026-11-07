@@ -150,7 +150,7 @@ def stamps(cut: dict) -> list:
         print(f"stamps: fell back to cut.json (ledger found {sorted(at)}, merged {merged!r})")
         return cut["stamps"]
     hm = lambda t: t[11:16]
-    return [[hm(at[a["asked"]]), "asked"], [hm(at[a["green"]]), "green"], [hm(merged), "merged"]]
+    return [[a.get("asked_on_phone") or hm(at[a["asked"]]), "asked"], [hm(at[a["green"]]), "green"], [hm(merged), "merged"]]
 
 
 def timeline(cut: dict, raw: Path, public: Path, ctx: dict) -> tuple[list, list]:
