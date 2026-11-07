@@ -1,16 +1,10 @@
 <script lang="ts">
-	// The fuel strip: one bar per shell, the binding window, sticky at the top of
+	// The fuel strip: one bar per shell, the 5h window or else the week, sticky at the top of
 	// the cloud board. Quiet while every shell is healthy; promoted (warm border)
 	// the moment a shell is low or dry. Promotion does not change the height: the
 	// booth crop of a header must not jump. Tapping a shell opens its cores, and
 	// picking a core sets the body the composer sends with.
-	import {
-		bindingGauge,
-		fuelPromoted,
-		resetsIn,
-		shellLow,
-		type LoomShell
-	} from './loomSnapshot.ts';
+	import { barGauge, fuelPromoted, resetsIn, shellLow, type LoomShell } from './loomSnapshot.ts';
 	import { STATUS_BURNING, STATUS_SPENT } from './statusPalette.ts';
 	import FuelMarks from './FuelMarks.svelte';
 
@@ -36,7 +30,7 @@
 	<div class="flex flex-wrap items-stretch gap-2">
 		{#each fuel as shell (shell.shell)}
 			{@const low = shellLow(shell)}
-			{@const binding = bindingGauge(shell.gauges)}
+			{@const binding = barGauge(shell.gauges)}
 			<button
 				type="button"
 				class="min-w-0 flex-1 basis-36 border border-stone-800 bg-stone-900/30 px-2.5 py-1.5 text-left font-mono"

@@ -356,31 +356,40 @@ export function resetFraction(
 	return Math.max(0, Math.min(1, (at - now) / 1000 / duration));
 }
 
-function resetAt(iso: string | undefined): number {
-	if (!iso) return 0;
-	const t = Date.parse(iso);
-	return Number.isFinite(t) ? t : 0;
+const FIVE_HOUR = new Set(['session', '5h']);
+const WEEK = new Set(['week', 'weekly']);
+
+/** `session` is the status line's name for the five-hour window. */
+export function isFiveHour(window: string): boolean {
+	return FIVE_HOUR.has(window);
 }
 
-/** The one bar for a shell: the window with the least fuel left. A tie goes
- * to the later reset. A missing or unreadable reset compares as none, so it
- * loses the tie the way a dial with no time remaining does. When no gauge
- * has a readable percent, the first gauge still names the bar. */
-export function bindingGauge(gauges: readonly LoomGauge[] | undefined): LoomGauge | null {
+export function isWeek(window: string): boolean {
+	return WEEK.has(window);
+}
+
+function readablePct(gauge: LoomGauge): boolean {
+	return typeof gauge.left_pct === 'number' && Number.isFinite(gauge.left_pct);
+}
+
+/** The one bar for a shell. A 5h window is the bar when the harness has one;
+ * otherwise the week is the bar. A window with no readable percent cannot
+ * be drawn, so it is skipped. */
+export function barGauge(gauges: readonly LoomGauge[] | undefined): LoomGauge | null {
 	const list = gauges ?? [];
-	let chosen: LoomGauge | null = null;
-	for (const gauge of list) {
-		const left = gauge.left_pct;
-		if (typeof left !== 'number' || !Number.isFinite(left)) continue;
-		if (
-			!chosen ||
-			chosen.left_pct === undefined ||
-			left < chosen.left_pct ||
-			(left === chosen.left_pct && resetAt(gauge.resets_at) > resetAt(chosen.resets_at))
-		)
-			chosen = gauge;
-	}
-	return chosen ?? list[0] ?? null;
+	return (
+		list.find((gauge) => isFiveHour(gauge.window) && readablePct(gauge)) ??
+		list.find((gauge) => isWeek(gauge.window) && readablePct(gauge)) ??
+		null
+	);
+}
+
+/** A percent for the fixed-width slot beside the bar. One decimal when the
+ * reading has one, so `week 100%` and `week 99.9%` share a width. */
+export function formatPct(left: number | undefined): string {
+	if (typeof left !== 'number' || !Number.isFinite(left)) return '—';
+	const n = Math.round(left * 10) / 10;
+	return `${Number.isInteger(n) ? n.toString() : n.toFixed(1)}%`;
 }
 
 /** Every body a picker can offer: the declared choices, else shell/core. */

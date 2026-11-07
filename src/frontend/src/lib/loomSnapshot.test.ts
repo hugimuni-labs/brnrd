@@ -8,7 +8,8 @@ import {
 	defaultBody,
 	fetchLoom,
 	filterCounts,
-	bindingGauge,
+	barGauge,
+	formatPct,
 	fuelPromoted,
 	isUnread,
 	latestReceipt,
@@ -128,30 +129,24 @@ test('fuel: low at ≤15% left or dry, never from a stale reading; promoted when
 	assert.equal(fuelPromoted(undefined), false);
 });
 
-test('the binding window is the bar: least left, a tie to the later reset', () => {
+test('the bar is the 5h window when the harness has one, else the week', () => {
 	const now = Date.parse('2026-11-06T12:00:00Z');
-	const session = { window: 'session', left_pct: 15, resets_at: '2026-11-06T14:00:00Z' };
-	const week = { window: 'week', left_pct: 48, resets_at: '2026-11-10T12:00:00Z' };
-	// The header and the strip mark this gauge with data-bar and draw it as the bar.
-	assert.equal(bindingGauge([session, week])?.window, 'session');
-	assert.equal(
-		bindingGauge([
-			{ window: 'session', left_pct: 20, resets_at: '2026-11-06T15:00:00Z' },
-			{ window: 'week', left_pct: 20, resets_at: '2026-11-09T12:00:00Z' }
-		])?.window,
-		'week'
-	);
-	// a missing reset loses the tie
-	assert.equal(
-		bindingGauge([
-			{ window: 'session', left_pct: 20 },
-			{ window: 'week', left_pct: 20, resets_at: '2026-11-09T12:00:00Z' }
-		])?.window,
-		'week'
-	);
-	assert.equal(bindingGauge([{ window: 'week' }, { window: 'session' }])?.window, 'week');
-	assert.equal(bindingGauge([]), null);
-	assert.equal(bindingGauge(undefined), null);
+	const session = { window: 'session', left_pct: 70, resets_at: '2026-11-06T14:00:00Z' };
+	const week = { window: 'week', left_pct: 20, resets_at: '2026-11-10T12:00:00Z' };
+	// The week is lower. The header and the strip still mark the 5h with data-bar.
+	assert.equal(barGauge([session, week])?.window, 'session');
+	assert.equal(barGauge([week, session])?.window, 'session');
+	assert.equal(barGauge([week])?.window, 'week');
+	assert.equal(barGauge([{ window: '5h', left_pct: 10 }])?.window, '5h');
+	assert.equal(barGauge([{ window: 'weekly', left_pct: 40 }])?.window, 'weekly');
+	// a 5h with no readable percent cannot be the bar
+	assert.equal(barGauge([{ window: 'session' }, week])?.window, 'week');
+	assert.equal(barGauge([{ window: 'month', left_pct: 10 }]), null);
+	assert.equal(barGauge([]), null);
+	assert.equal(barGauge(undefined), null);
+	assert.equal(formatPct(100), '100%');
+	assert.equal(formatPct(99.94), '99.9%');
+	assert.equal(formatPct(undefined), '—');
 	const halfWeek = resetFraction('week', new Date(now + 3.5 * 86400 * 1000).toISOString(), now);
 	assert.ok(halfWeek !== null && Math.abs(halfWeek - 0.5) < 1e-9);
 	const halfSession = resetFraction(

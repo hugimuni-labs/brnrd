@@ -1,10 +1,19 @@
 <script lang="ts">
-	// One shell's fuel marks: the binding window is the bar (`data-bar` names it),
-	// the other windows sit beside it as short numbers, and a wedge empties toward
-	// that window's reset. Colours are the status palette. Both the board header
-	// and the loom strip draw this, so the booth crop and the cloud strip agree.
+	// One shell's fuel marks. The bar is the 5h window when the harness has one
+	// (`session` or `5h`, `data-bar` names it) and the week is a number in a
+	// fixed-width slot beside it. With no 5h window the week is the bar. A wedge
+	// empties toward the bar's reset. Both the board header and the loom strip
+	// draw this, so the booth crop and the cloud strip agree.
 	import { quotaLevel } from './quota.ts';
-	import { bindingGauge, resetFraction, resetsIn, type LoomGauge } from './loomSnapshot.ts';
+	import {
+		barGauge,
+		formatPct,
+		isFiveHour,
+		isWeek,
+		resetFraction,
+		resetsIn,
+		type LoomGauge
+	} from './loomSnapshot.ts';
 	import { DIAL_WEDGE_RADIUS, dialDasharray } from './railGauge.ts';
 	import { STATUS_BURNING, STATUS_COOLING, STATUS_SPENT, STATUS_UNKNOWN } from './statusPalette.ts';
 
@@ -17,30 +26,29 @@
 		unknown: STATUS_UNKNOWN
 	};
 
-	const binding = $derived(bindingGauge(gauges));
-	const others = $derived((gauges ?? []).filter((gauge) => gauge !== binding));
-	const level = $derived(quotaLevel(binding?.left_pct));
-	const colour = $derived(fill[level]);
-	const fraction = $derived(binding ? resetFraction(binding.window, binding.resets_at, now) : null);
-	const when = $derived(binding ? resetsIn(binding.resets_at, now) : null);
-	const width = $derived(
-		binding?.left_pct === undefined ? null : Math.max(0, Math.min(100, binding.left_pct))
+	const bar = $derived(barGauge(gauges));
+	const week = $derived(
+		(gauges ?? []).find((gauge) => isWeek(gauge.window) && typeof gauge.left_pct === 'number') ??
+			null
 	);
+	const level = $derived(quotaLevel(bar?.left_pct));
+	const colour = $derived(fill[level]);
+	const fraction = $derived(bar ? resetFraction(bar.window, bar.resets_at, now) : null);
+	const when = $derived(bar ? resetsIn(bar.resets_at, now) : null);
+	const width = $derived(
+		bar?.left_pct === undefined ? null : Math.max(0, Math.min(100, bar.left_pct))
+	);
+	const weekBeside = $derived(!!bar && !!week && isFiveHour(bar.window));
 </script>
 
-<span class="fuel-marks" data-bar={binding?.window ?? ''}>
-	{#if binding}
-		<span
-			class="fuel-track"
-			data-bar={binding.window}
-			role="img"
-			aria-label={`${binding.window} left`}
-		>
+<span class="fuel-marks" data-bar={bar?.window ?? ''}>
+	{#if bar}
+		<span class="fuel-track" data-bar={bar.window} role="img" aria-label={`${bar.window} left`}>
 			{#if width !== null}
 				<span class="fuel-fill" style:width={`${width}%`} style:background={colour}></span>
 			{/if}
 		</span>
-		<span class="fuel-pct">{binding.left_pct === undefined ? '—' : `${binding.left_pct}%`}</span>
+		<span class="fuel-pct">{formatPct(bar.left_pct)}</span>
 		{#if fraction !== null}
 			<svg class="fuel-dial" viewBox="0 0 12 12" aria-label="reset window remaining">
 				<circle cx="6" cy="6" r="5.5" fill="none" stroke-width="1" class="fuel-ring" />
@@ -56,12 +64,9 @@
 			</svg>
 		{/if}
 		{#if when}<span class="fuel-when">resets {when}</span>{/if}
-		{#each others as gauge (gauge.window)}
-			<span class="fuel-side">
-				{gauge.window}
-				{gauge.left_pct === undefined ? '—' : `${gauge.left_pct}%`}
-			</span>
-		{/each}
+		{#if weekBeside && week}
+			<span class="fuel-week">{week.window} {formatPct(week.left_pct)}</span>
+		{/if}
 	{/if}
 </span>
 
@@ -107,10 +112,11 @@
 		stroke: var(--fuel-ring, #ccc);
 	}
 	.fuel-when,
-	.fuel-side {
+	.fuel-week {
 		color: var(--fuel-dim, #666);
 	}
-	.fuel-side {
+	.fuel-week {
 		flex: none;
+		width: 12ch;
 	}
 </style>
