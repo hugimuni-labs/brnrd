@@ -40,7 +40,7 @@ RECIPES = {
                       why="answer 5: the live header's gauges, claude, codex and grok, as they read at capture"),
     "studio": dict(studio=True, at="live",
                    why="act 3: remotion studio with this cut open (props.json from the last cut.py run); the preview box is where the cut plays act 1"),
-    "g1-pr": dict(url="https://github.com/hugimuni-labs/brnrd/pull/2606", zoom=1.5, text="Merged",
+    "g1-pr": dict(url="https://github.com/hugimuni-labs/brnrd/pull/2606", zoom=1.5, text="Merged", patch="PR_BAND",
                   at="2026-11-06T22:18:13Z", why="act 1: brnrd#2606 on GitHub, rebased on his 10416, merged at 4714e0ea"),
     "a3-night": dict(at="2026-11-06T06:00:00Z", column="inbox", letter="s-ae66-sp1alj/jv2ea",
                      why="answer 3 (night): the board at 06:00Z after his 00:1xZ sign-off; the subject is this cut's own overnight receipt (s-ae66-sp1alj/jv2ea)"),
@@ -95,6 +95,21 @@ BEAT = """(beat) => {
   if (!h) return false;
   h.click();
   return true;
+}"""
+
+# g1-pr: the merge's minute where GitHub prints the capture's "1 hour ago", and everything under the tabs row
+# dimmed and blurred, so the frame reads as the title band and the lower third sits on nothing legible.
+PR_BAND = """() => {
+  const t = document.querySelector('relative-time[datetime^="2026-11-06T22:18:13"]');
+  if (t) { const s = document.createElement('span'); s.textContent = 'merged 22:18'; t.replaceWith(s); }
+  const tabs = document.querySelector('nav[aria-label="Pull request navigation"]');
+  if (!tabs) return false;
+  // on <html>, outside the body's zoom: the rect is already in viewport px
+  const v = document.createElement('div');
+  v.style.cssText = `position:fixed;left:0;right:0;top:${tabs.getBoundingClientRect().bottom + 6}px;bottom:0;`
+    + 'background:rgba(255,255,255,0.72);backdrop-filter:blur(5px);z-index:99999';
+  document.documentElement.appendChild(v);
+  return !!t;
 }"""
 
 LOCATE = """([text, open]) => {
@@ -191,6 +206,9 @@ def shoot_url(page, name: str, r: dict, out: Path) -> dict:
     if r.get("zoom"):
         page.evaluate("(z) => { document.body.style.zoom = z }", r["zoom"])
     page.wait_for_timeout(800)
+    if r.get("patch") and not page.evaluate(globals()[r["patch"]]):
+        raise SystemExit(f"{name}: {r['patch']} found no relative-time or tabs row on {r['url']}")
+    page.wait_for_timeout(400)
     el = page.locator(r["sel"]).first if r.get("sel") else page.get_by_text(r["text"], exact=True).first
     box = el.bounding_box()
     if box is None:
