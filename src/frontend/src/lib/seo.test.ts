@@ -38,6 +38,7 @@ test('only intentional public surfaces are indexable', () => {
 		'/garage',
 		'/connect',
 		'/brand-bench',
+		'/logo-bench',
 		'/ascii'
 	]) {
 		ok(!isIndexablePath(path), `${path} should remain out of search inventory`);
