@@ -113,6 +113,13 @@ const Backdrop = ({props, opacity = 0.12, blur = 6}) => {
   );
 };
 
+// The corner QR's ground on a light still (board, GitHub): the page fades to its own white before the plate,
+// so the plate sits on paper and never on a cut word.
+const Paper = () => {
+  const [cx, cy] = [CORNER.x + CORNER.size / 2, CORNER.y + CORNER.size / 2 + 17];
+  return <AbsoluteFill style={{background: `radial-gradient(ellipse 330px 300px at ${cx}px ${cy}px, rgba(255,255,255,0.97) 0%, rgba(255,255,255,0.97) 52%, rgba(255,255,255,0) 100%)`}} />;
+};
+
 // ---- camera -----------------------------------------------------------------------------------------------
 
 // A key is [second, x, y, scale]: the image point (css px) at the frame centre. x and y may be 'f' (the
@@ -170,6 +177,7 @@ const Still = ({e, props}) => {
       {moving ? [4, 3, 2, 1].map((d) => layer(frame - d * 0.5, 0.18, `b${d}`)) : null}
       {echo ? [3, 2, 1].map((d) => layer(frame - d * 2, 0.12 * (4 - d), `e${d}`)) : null}
       {layer(frame, moving ? 0.6 : 1, 'main')}
+      {props.nested || e.still === 'studio' ? null : <Paper />}
       {e.clock ? <Clock span={e.clock} /> : null}
       {e.flash !== undefined && frame >= e.flash * fps && frame < e.flash * fps + 2 ? <AbsoluteFill style={{background: '#fff', opacity: 0.15}} /> : null}
     </AbsoluteFill>
