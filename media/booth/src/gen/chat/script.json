@@ -7,7 +7,7 @@
   "2606": {
    "repo": "brnrd",
    "number": 2606,
-   "title": "topics in the wake, recall and related:",
+   "title": "topics: the wake shows the closest heads…",
    "mergedAt": "2026-11-06T22:18:13Z"
   }
  },
@@ -20,7 +20,8 @@
    "card": {
     "pr": "2606",
     "state": "conflicts"
-   }
+   },
+   "stamp": "21:49"
   },
   "yun90-tail": {
    "from": "resident",
@@ -37,8 +38,7 @@
    "id": "s-ae66-79qfzj/yy6ug",
    "at": "2026-11-06T22:18:46Z",
    "kind": "delivered",
-   "title": "brnrd#2606 … rebased on main …",
-   "text": "Reply ok to accept, or say what is off.",
+   "title": "brnrd#2606 … rebased on main",
    "merged": "2606"
   },
   "10435": {
@@ -96,12 +96,6 @@
    "at": "2026-11-05T18:19:19Z",
    "kind": "notice",
    "title": "Out of claude session fuel (1% left) until about 21:00.",
-   "text": "Your letter is kept on thread inbox and is answered when it refills.",
-   "options": [
-    "wake",
-    "wake codex",
-    "wake grok"
-   ],
    "gauge": [
     0.03,
     0.01
@@ -116,7 +110,7 @@
    "sec": 2.5,
    "camera": {
     "from": 1.0,
-    "to": 1.08
+    "to": 1.05
    },
    "before": [],
    "beats": [
@@ -130,11 +124,28 @@
      "at": 1.15
     },
     {
+     "dots": true,
+     "at": 1.25,
+     "to": 1.55
+    },
+    {
      "land": "wrt3a",
-     "at": 1.5,
+     "at": 1.55,
      "type": true,
      "rate": 5
     }
+   ],
+   "lift": [
+    [
+     0,
+     1.15
+    ]
+   ],
+   "drop": [
+    [
+     1.0,
+     1.55
+    ]
    ]
   },
   {
@@ -152,8 +163,13 @@
    ],
    "beats": [
     {
-     "land": "yun90-tail",
+     "dots": true,
      "at": 0.0,
+     "to": 0.3
+    },
+    {
+     "land": "yun90-tail",
+     "at": 0.3,
      "type": true
     },
     {
@@ -201,8 +217,13 @@
    },
    "beats": [
     {
+     "dots": true,
+     "at": 0.05,
+     "to": 0.35
+    },
+    {
      "land": "mvsel",
-     "at": 0.1,
+     "at": 0.35,
      "type": true
     }
    ]
@@ -246,26 +267,6 @@
    ]
   },
   {
-   "key": "p2-agree",
-   "act": 2,
-   "slot": "28.15",
-   "sec": 1.0,
-   "camera": {
-    "from": 1.04,
-    "to": 1.0
-   },
-   "before": [
-    "yy6ug"
-   ],
-   "staged": true,
-   "beats": [
-    {
-     "tap": "yy6ug",
-     "at": 0.35
-    }
-   ]
-  },
-  {
    "key": "a3-human",
    "act": 3,
    "slot": "booth-gen places it",
@@ -281,8 +282,13 @@
      "at": 0.05
     },
     {
+     "dots": true,
+     "at": 0.35,
+     "to": 0.6
+    },
+    {
      "land": "3be0e-head",
-     "at": 0.45,
+     "at": 0.6,
      "type": true,
      "rate": 5
     },
@@ -299,8 +305,13 @@
      "at": 1.1
     },
     {
+     "dots": true,
+     "at": 1.35,
+     "to": 1.6
+    },
+    {
      "land": "yun90-head",
-     "at": 1.45,
+     "at": 1.6,
      "type": true,
      "rate": 5
     }
