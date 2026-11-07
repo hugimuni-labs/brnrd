@@ -791,6 +791,32 @@ _MAX_PARTS_BYTES = 40_000_000
 _PART_KEY = re.compile(r"^(index|beads|topics|unthreaded|thread/[A-Za-z0-9._-]{1,180})$")
 
 
+@router.post("/loom/typing")
+def loom_typing(request: Request, chats: list[str] = Body(...),
+                principal: Principal = Depends(require_daemon), db: Session = Depends(get_db)):
+    """Typing for person letters a live local room still owes, renewed without a model.
+
+    Authorize each chat against the account's pairing; a daemon cannot type
+    at arbitrary Telegram users. A batch is bounded and coalesced by chat.
+    """
+    if len(chats) > 100:
+        raise HTTPException(status_code=422, detail="at most 100 typing targets")
+    settings = request.app.state.settings
+    for stream in set(chats):
+        target = _cloud_chat_target(stream)
+        if target is None or target[0] != "telegram":
+            continue
+        platform, chat_id, topic_id = target
+        route = db.execute(select(ChannelRoute).where(
+            ChannelRoute.account_id == principal.account_id,
+            ChannelRoute.platform == platform, ChannelRoute.channel_id == chat_id,
+            ChannelRoute.topic_id == (str(topic_id) if topic_id is not None else None),
+        )).scalar_one_or_none()
+        if route is not None and _should_send_typing(platform, chat_id):
+            _send_typing_indicator(settings, platform, chat_id, topic_id)
+    return {"ok": True}
+
+
 @router.put("/loom/parts")
 async def put_loom_parts(request: Request, principal: Principal = Depends(require_daemon), db: Session = Depends(get_db)):
     """Store the board parts whose hash moved; answer every hash now held.

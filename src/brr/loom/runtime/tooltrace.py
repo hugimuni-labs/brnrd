@@ -521,3 +521,30 @@ def live(room: Path) -> dict:
     paused = read_paused_record(Path(room) / "port") or None
     return {"open": [dict(c) for c in calls if c["end"] is None], "say": said,
             "last_end": max(ended) if ended else None, "paused": paused}
+
+
+def first_words(facts, ids) -> dict:
+    """Seconds from each person letter to its first successful send (any address).
+
+    The port stamps the send before the loom drains it, so a slow tick does
+    not become apparent thinking time. Missing replies stay explicitly None.
+    """
+    from .dispositions import is_person
+    from .project import is_notice
+    letters = {str(f.data.get("id", f.id)): f for f in facts
+               if is_person(f) and str(f.data.get("id", f.id)) in ids}
+    result = {ident: None for ident in letters}
+    if not letters:
+        return result
+    for fact in facts:
+        ref = fact.data.get("re")
+        if fact.kind != "letter" or ref not in letters or is_notice(fact):
+            continue
+        if not fact.by.startswith("strand:") or not fact.data.get("body", "").strip():
+            continue
+        at = fact.data.get("sent_at")
+        at = float(at) if at is not None else datetime.fromisoformat(fact.at).timestamp()
+        seconds = max(0, round(at - datetime.fromisoformat(letters[ref].at).timestamp()))
+        if result[ref] is None or seconds < result[ref]:
+            result[ref] = seconds
+    return result

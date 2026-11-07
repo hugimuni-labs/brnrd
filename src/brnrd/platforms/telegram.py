@@ -177,6 +177,12 @@ def send_fresh_message(
     return None if message_id is None else str(message_id)
 
 
+def mark_seen(token: str, chat_id: str | int, message_id: str | int, *, timeout: float = 2.0) -> None:
+    """Best-effort acknowledgement primitive; no model or message text involved."""
+    _post_json(token, "setMessageReaction", {"chat_id": chat_id, "message_id": int(message_id),
+               "reaction": [{"type": "emoji", "emoji": "👀"}]}, timeout)
+
+
 def send_chat_action(
     token: str,
     chat_id: str | int,
