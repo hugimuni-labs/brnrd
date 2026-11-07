@@ -17,11 +17,16 @@ const MONO = 'Menlo, "DejaVu Sans Mono", monospace';
 const SANS = '"Helvetica Neue", Helvetica, Arial, sans-serif';
 const EMOJI = '"Apple Color Emoji", "Noto Color Emoji"';
 
-// The phone ends 196 px above the frame's bottom: the trailer's lower third and QR live there (booth-gen).
-const PHONE = {w: 520, h: 860, top: 24, r: 76, bezel: 12};
+// The camera holds the phone at 1.45x so bubble type is 49 px at 1080p (script.md's floor is 48): the phone
+// bleeds off the top, the chat's foot sits at y 870, and the bottom band (the trailer's lower third and QR,
+// booth-gen) holds only the compose bar, which reads only while he types (the camera lifts it then).
+const PHONE = {w: 520, h: 1000, r: 76, bezel: 12};
 const HEADER = 100;
-const COMPOSE = 104;
-const TEXT = 30;
+const COMPOSE = 112;
+const TEXT = 34;
+const ZOOM = 1.45;
+const FOOT = 870; // frame y of the chat's foot
+const LIFT = 760; // frame y of the compose box's centre while he types
 const RATE = 3.5; // characters per frame: a bubble line (~25 characters) in about 8 frames
 
 const clamp = {extrapolateLeft: 'clamp', extrapolateRight: 'clamp'};
@@ -133,26 +138,25 @@ const PRCard = ({pr, state, flip}) => {
   const pill = merged
     ? {label: 'Merged', bg: PURPLE, fg: '#1a1030', Icon: MergeIcon}
     : state === 'green'
-      ? {label: 'Open · checks green', bg: GREEN, fg: '#0d2414', Icon: OpenIcon}
-      : {label: 'Open · conflicts', bg: '#e0b04a', fg: '#2a1e05', Icon: OpenIcon};
+      ? {label: 'checks green', bg: GREEN, fg: '#0d2414', Icon: OpenIcon}
+      : {label: 'conflicts', bg: '#e0b04a', fg: '#2a1e05', Icon: OpenIcon};
   return (
-    <div style={{marginTop: 16, borderRadius: 18, background: '#0f0c09', border: `2px solid ${merged ? PURPLE + '88' : '#3a3228'}`, padding: '16px 18px',
+    <div style={{marginTop: 14, borderRadius: 18, background: '#0f0c09', border: `2px solid ${merged ? PURPLE + '88' : '#3a3228'}`, padding: '14px 16px',
       display: 'flex', flexDirection: 'column', gap: 10}}>
-      <div style={{fontFamily: MONO, fontSize: 22, color: DIM}}>{`hugimuni-labs/${p.repo}`}</div>
-      <div style={{fontSize: 28, fontWeight: 600, lineHeight: 1.2, color: FG}}>{p.title} <span style={{color: DIM, fontWeight: 400}}>#{p.number}</span></div>
-      <div style={{display: 'flex', alignItems: 'center', gap: 10}}>
-        <div style={{display: 'flex', alignItems: 'center', gap: 8, background: pill.bg, color: pill.fg, borderRadius: 999, padding: '6px 14px 6px 10px',
-          fontSize: 22, fontWeight: 700, transform: `scale(${flip})`, transformOrigin: 'left center'}}>
+      <div style={{display: 'flex', alignItems: 'center', gap: 12}}>
+        <div style={{fontFamily: MONO, fontSize: 26, color: FG}}>{`${p.repo}#${p.number}`}</div>
+        <div style={{display: 'flex', alignItems: 'center', gap: 6, background: pill.bg, color: pill.fg, borderRadius: 999, padding: '5px 12px 5px 8px',
+          fontSize: 22, fontWeight: 700, transform: `scale(${flip})`, transformOrigin: 'left center', whiteSpace: 'nowrap'}}>
           <pill.Icon size={22} color={pill.fg} />{pill.label}
         </div>
-        {merged ? <div style={{fontFamily: MONO, fontSize: 20, color: DIM}}>{hhmm(p.mergedAt)}</div> : null}
       </div>
+      <div style={{fontSize: 28, fontWeight: 600, lineHeight: 1.2, color: '#d8cdb9'}}>{p.title}</div>
     </div>
   );
 };
 
 const Stamp = ({at, right}) => (
-  <div style={{fontFamily: MONO, fontSize: 20, color: DIM, marginTop: 8, textAlign: right ? 'right' : 'left', paddingLeft: right ? 0 : 64}}>{hhmm(at)}</div>
+  <div style={{fontFamily: MONO, fontSize: 24, color: DIM, marginTop: 8, textAlign: right ? 'right' : 'left', paddingLeft: right ? 0 : 64}}>{hhmm(at)}</div>
 );
 
 // The loom's own notice, not the resident's voice: a gauge for an avatar, the fuel draining to its last percent.
@@ -168,20 +172,13 @@ const GaugeAvatar = ({size}) => (
 const Notice = ({m, t}) => {
   const level = interpolate(t, [4, 22], m.gauge, {...clamp, easing: EASE});
   return (
-    <div style={{display: 'flex', flexDirection: 'column', gap: 12}}>
-      <div style={{fontFamily: MONO, fontSize: 20, color: DIM, letterSpacing: 1}}>LOOM</div>
-      <div style={{fontSize: 28, fontWeight: 600, lineHeight: 1.22}}>{m.title}</div>
+    <div style={{display: 'flex', flexDirection: 'column', gap: 16}}>
+      <div style={{fontSize: TEXT, fontWeight: 600, lineHeight: 1.22}}>{m.title}</div>
       <div style={{display: 'flex', alignItems: 'center', gap: 12}}>
-        <div style={{flex: 1, height: 14, borderRadius: 7, background: '#2e2720', overflow: 'hidden'}}>
-          <div style={{width: `${Math.max(1.5, level * 100)}%`, height: '100%', background: '#ff4a3a', borderRadius: 7}} />
+        <div style={{flex: 1, height: 16, borderRadius: 8, background: '#2e2720', overflow: 'hidden'}}>
+          <div style={{width: `${Math.max(1.5, level * 100)}%`, height: '100%', background: '#ff4a3a', borderRadius: 8}} />
         </div>
-        <div style={{fontFamily: MONO, fontSize: 22, color: '#ff6a5a', fontVariantNumeric: 'tabular-nums'}}>{Math.round(level * 100)}%</div>
-      </div>
-      <div style={{fontSize: 24, color: '#c9bfae', lineHeight: 1.25}}>{m.text}</div>
-      <div style={{display: 'flex', flexWrap: 'wrap', gap: 10}}>
-        {m.options.map((o) => (
-          <div key={o} style={{border: '2px solid #3a3228', borderRadius: 12, padding: '6px 14px', fontFamily: MONO, fontSize: 20, color: FG}}>{o}</div>
-        ))}
+        <div style={{fontFamily: MONO, fontSize: 28, color: '#ff6a5a', fontVariantNumeric: 'tabular-nums'}}>{Math.round(level * 100)}%</div>
       </div>
     </div>
   );
@@ -189,47 +186,28 @@ const Notice = ({m, t}) => {
 
 const Quote = ({m}) => (
   <div style={{borderLeft: `4px solid ${HOT}`, background: '#00000033', borderRadius: 8, padding: '6px 12px', marginBottom: 10}}>
-    <div style={{fontSize: 20, fontWeight: 700, color: HOT}}>brnrd</div>
-    <div style={{fontSize: 22, color: '#c9bfae', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: 360}}>{m.title}</div>
+    <div style={{fontSize: 26, color: '#c9bfae', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: 340}}>{m.title}</div>
   </div>
 );
 
-// A delivered card: what landed, and his two answers. `tapped` (0..1) presses ok and turns the card accepted.
-const Delivered = ({m, tapped}) => {
-  const done = tapped >= 1;
-  return (
-    <div style={{display: 'flex', flexDirection: 'column', gap: 10}}>
-      <div style={{display: 'flex', alignItems: 'center', gap: 10, fontFamily: MONO, fontSize: 20, color: done ? GREEN : HOT, letterSpacing: 1}}>
-        <span style={{width: 12, height: 12, borderRadius: 6, background: done ? GREEN : HOT}} />{done ? 'ACCEPTED' : 'DELIVERED'}
+// A delivered card, as his answer quotes it: what landed and that it merged; one text element.
+const Delivered = ({m}) => (
+  <div style={{display: 'flex', flexDirection: 'column', gap: 12, borderLeft: `5px solid ${HOT}`, paddingLeft: 16}}>
+    <div style={{fontSize: TEXT, fontWeight: 600, lineHeight: 1.2}}>{m.title}</div>
+    {m.merged ? (
+      <div style={{display: 'flex', alignItems: 'center', gap: 10}}>
+        <div style={{display: 'flex', alignItems: 'center', gap: 8, background: PURPLE, color: '#1a1030', borderRadius: 999, padding: '6px 16px 6px 12px',
+          fontSize: 26, fontWeight: 700}}><MergeIcon size={26} color="#1a1030" />Merged</div>
+        <div style={{fontFamily: MONO, fontSize: 24, color: DIM}}>{hhmm(script.prs[m.merged].mergedAt)}</div>
       </div>
-      <div style={{fontSize: 28, fontWeight: 600, lineHeight: 1.2}}>{m.title}</div>
-      {m.merged ? (
-        <div style={{display: 'flex', alignItems: 'center', gap: 10}}>
-          <div style={{display: 'flex', alignItems: 'center', gap: 8, background: PURPLE, color: '#1a1030', borderRadius: 999, padding: '5px 14px 5px 10px',
-            fontSize: 21, fontWeight: 700}}><MergeIcon size={21} color="#1a1030" />Merged</div>
-          <div style={{fontFamily: MONO, fontSize: 20, color: DIM}}>{hhmm(script.prs[m.merged].mergedAt)}</div>
-        </div>
-      ) : null}
-      <div style={{fontSize: 24, color: '#c9bfae', lineHeight: 1.25}}>{m.text}</div>
-      <div style={{display: 'flex', gap: 12, marginTop: 4}}>
-        {['ok', 'say what is off'].map((b) => {
-          const ok = b === 'ok';
-          const press = ok && tapped > 0 && tapped < 1 ? 0.9 : 1;
-          return (
-            <div key={b} style={{flex: ok ? 'none' : 1, textAlign: 'center', border: `2px solid ${ok ? (done ? GREEN : HOT) : '#3a3228'}`,
-              background: ok && done ? GREEN : 'transparent', color: ok ? (done ? '#0d2414' : HOT) : DIM, borderRadius: 14, padding: '8px 22px',
-              fontSize: 22, fontWeight: 700, transform: `scale(${press})`, opacity: done && !ok ? 0.4 : 1}}>{ok && done ? 'ok ✓' : b}</div>
-          );
-        })}
-      </div>
-    </div>
-  );
-};
+    ) : null}
+  </div>
+);
 
-const Bubble = ({m, shown, cardState, flip, t = 99, tapped = 0}) => {
+const Bubble = ({m, shown, cardState, flip, t = 99}) => {
   const him = m.from === 'him';
   const msgs = script.messages;
-  const body = m.kind === 'notice' ? <Notice m={m} t={t} /> : m.kind === 'delivered' ? <Delivered m={m} tapped={tapped} />  : (
+  const body = m.kind === 'notice' ? <Notice m={m} t={t} /> : m.kind === 'delivered' ? <Delivered m={m} />  : (
     <>
       {m.quote ? <Quote m={msgs[m.quote]} /> : null}
       <div style={{fontSize: TEXT, lineHeight: 1.3}}><Typed text={m.text} shown={shown} /></div>
@@ -251,21 +229,34 @@ const Bubble = ({m, shown, cardState, flip, t = 99, tapped = 0}) => {
   );
 };
 
+// The resident is answering: three dots breathing in a bubble of its own, where its reply will land.
+const Dots = ({frame}) => (
+  <div style={{display: 'flex', alignItems: 'flex-end', gap: 14, padding: '0 22px 22px'}}>
+    <Mark size={50} />
+    <div style={{display: 'flex', gap: 10, background: '#211c17', border: '2px solid #2e2720', borderRadius: 30, borderBottomLeftRadius: 8, padding: '22px 26px'}}>
+      {[0, 1, 2].map((i) => {
+        const k = Math.max(0, Math.sin((frame - i * 3) / 2.5));
+        return <div key={i} style={{width: 14, height: 14, borderRadius: 7, background: FG, opacity: 0.35 + 0.65 * k, transform: `translateY(${-5 * k}px)`}} />;
+      })}
+    </div>
+  </div>
+);
+
 // ---- the phone ---------------------------------------------------------------------------------------------
 
-const Header = () => (
+const Header = ({typing}) => (
   <div style={{height: HEADER, flex: 'none', display: 'flex', alignItems: 'center', gap: 18, padding: '14px 28px 0', borderBottom: '2px solid #221d18',
     background: '#120f0c'}}>
     <Mark size={56} />
     <div style={{display: 'flex', flexDirection: 'column', gap: 4}}>
       <div style={{fontFamily: SANS, fontSize: 30, fontWeight: 700, color: FG}}>brnrd</div>
-      <div style={{fontFamily: SANS, fontSize: 22, color: GREEN}}>resident · awake</div>
+      <div style={{fontFamily: SANS, fontSize: 22, color: typing ? HOT : GREEN}}>{typing ? 'typing…' : 'resident · awake'}</div>
     </div>
   </div>
 );
 
 const SendButton = ({press}) => (
-  <div style={{width: 66, height: 66, borderRadius: 33, background: HOT, flex: 'none', display: 'flex', alignItems: 'center', justifyContent: 'center',
+  <div style={{width: 72, height: 72, borderRadius: 36, background: HOT, flex: 'none', display: 'flex', alignItems: 'center', justifyContent: 'center',
     transform: `scale(${press})`, position: 'relative'}}>
     <svg width={34} height={34} viewBox="0 0 24 24" fill="none" stroke={BG} strokeWidth={2.8} strokeLinecap="round" strokeLinejoin="round">
       <path d="M12 19V5" /><path d="M5 12l7-7 7 7" />
@@ -276,18 +267,18 @@ const SendButton = ({press}) => (
 const Compose = ({text, shown, press, ripple}) => (
   <div style={{height: COMPOSE, flex: 'none', display: 'flex', alignItems: 'flex-end', gap: 14, padding: '12px 18px 22px', background: '#120f0c',
     borderTop: '2px solid #221d18', position: 'relative'}}>
-    <div style={{flex: 1, minHeight: 66, maxHeight: 66 + 3 * 34, borderRadius: 33, background: '#1d1813', border: '2px solid #2e2720', padding: '0 26px',
-      display: 'flex', flexDirection: 'column', justifyContent: 'flex-end', overflow: 'hidden', fontFamily: SANS, fontSize: 27, lineHeight: '34px', color: FG,
-      paddingBottom: 15, paddingTop: 15, boxSizing: 'border-box', position: 'absolute', left: 18, right: 98, bottom: 22}}>
+    <div style={{flex: 1, minHeight: 72, maxHeight: 72 + 3 * 42, borderRadius: 36, background: '#1d1813', border: '2px solid #2e2720', padding: '0 26px',
+      display: 'flex', flexDirection: 'column', justifyContent: 'flex-end', overflow: 'hidden', fontFamily: SANS, fontSize: 34, lineHeight: '42px', color: FG,
+      paddingBottom: 15, paddingTop: 15, boxSizing: 'border-box', position: 'absolute', left: 18, right: 104, bottom: 22}}>
       {text ? (
-        <div><Typed text={text} shown={shown} only /><span style={{display: 'inline-block', width: 3, height: 28, background: HOT, marginLeft: 2, verticalAlign: -5}} /></div>
+        <div><Typed text={text} shown={shown} only /><span style={{display: 'inline-block', width: 3, height: 34, background: HOT, marginLeft: 2, verticalAlign: -5}} /></div>
       ) : <div style={{color: '#5a5248'}}>Message</div>}
     </div>
     <div style={{flex: 1}} />
     <div style={{position: 'relative'}}>
       <SendButton press={press} />
       {ripple > 0 && ripple < 1 ? (
-        <div style={{position: 'absolute', left: 33 - 33 * (1 + ripple), top: 33 - 33 * (1 + ripple), width: 66 * (1 + ripple), height: 66 * (1 + ripple),
+        <div style={{position: 'absolute', left: 36 - 36 * (1 + ripple), top: 36 - 36 * (1 + ripple), width: 72 * (1 + ripple), height: 72 * (1 + ripple),
           borderRadius: '50%', border: `3px solid ${HOT}`, opacity: 1 - ripple}} />
       ) : null}
     </div>
@@ -307,8 +298,6 @@ export const ChatShot = ({shot: key, sec}) => {
 
   // What is on screen at this frame: the history, then each landed beat with its spring.
   const rows = shot.before.map((id) => ({id, enter: 1, shown: Infinity, t: 99}));
-  let tap = null;
-  const tapped = {};
   let compose = null;
   let press = 1;
   let ripple = 0;
@@ -317,6 +306,7 @@ export const ChatShot = ({shot: key, sec}) => {
   let dip = 0;
   let clock = null;
   let sleep = 0;
+  let dots = 0;
   for (const b of shot.beats) {
     if (b.compose) {
       const a = F(b.from), z = F(b.to);
@@ -358,46 +348,48 @@ export const ChatShot = ({shot: key, sec}) => {
       const show = interpolate(frame, [t - 24, t - 20, t + 30, t + 34], [0, 1, 1, 0], clamp);
       clock = {text: `${String(Math.floor(mins / 60)).padStart(2, '0')}:${String(mins % 60).padStart(2, '0')}`, show, ticking: frame >= t && frame < t + 6};
     }
-    if (b.tap) {
-      // the thumb: a soft cream disc comes down on ok, holds 3 frames, lifts; the card turns at the lift
-      const t = F(b.at);
-      tap = interpolate(frame, [t - 4, t, t + 3, t + 7], [0, 1, 1, 0], clamp);
-      tapped[b.tap] = frame < t ? 0 : frame < t + 3 ? 0.5 : 1;
+    if (b.dots) {
+      // the resident is answering: three dots for the beat before its bubble, in 3 frames, out in 3
+      const a = F(b.at), z = F(b.to);
+      dots = interpolate(frame, [a, a + 3, z - 2, z], [0, 1, 1, 0], clamp);
+      if (dots > 0) rows.push({id: '__dots', enter: dots});
     }
     if (b.sleep) sleep = interpolate(frame, [F(b.at), F(b.at) + 6], [0, 0.7], clamp);
   }
 
-  // Camera: a push between two scales, anchored on the compose box or the chat, eased over the whole shot.
+  // Camera: the phone at ZOOM times the shot's push, its focus held at a frame height. The focus is the chat's
+  // foot, or the compose box while he types; a move between them takes 6 frames.
   const cam = shot.camera;
-  const s = interpolate(frame, [0, total], [cam.from, cam.to], {...clamp, easing: EASE});
-  // anchored at the phone's foot, so a push never carries the chat into the trailer's bottom band
-  const originY = PHONE.top + PHONE.h - COMPOSE / 2;
+  const S = ZOOM * interpolate(frame, [0, total], [cam.from, cam.to], {...clamp, easing: EASE});
+  const foot = PHONE.h - PHONE.bezel - COMPOSE;
+  const box = PHONE.h - PHONE.bezel - COMPOSE / 2;
+  const lifted = (shot.lift ?? []).reduce((v, [a, z]) => Math.max(v, interpolate(frame, [F(a) - 6, F(a), F(z), F(z) + 6], [0, 1, 1, 0], {...clamp, easing: EASE})), 0);
+  const fy = foot + (box - foot) * lifted;
+  const ty = FOOT + (LIFT - FOOT) * lifted;
 
   return (
     <AbsoluteFill style={{background: BG}}>
       <Backdrop frame={frame} />
-      <AbsoluteFill style={{transform: `scale(${s})`, transformOrigin: `960px ${originY}px`}}>
-        <div style={{position: 'absolute', left: 960 - PHONE.w / 2, top: PHONE.top, width: PHONE.w, height: PHONE.h, borderRadius: PHONE.r,
+      <AbsoluteFill style={{transform: `translate(${960 - (PHONE.w / 2) * S}px, ${ty - fy * S}px) scale(${S})`, transformOrigin: '0 0'}}>
+        <div style={{position: 'absolute', left: 0, top: 0, width: PHONE.w, height: PHONE.h, borderRadius: PHONE.r,
           background: '#2a251e', padding: PHONE.bezel, boxSizing: 'border-box', boxShadow: '0 40px 120px rgba(0,0,0,0.75), inset 0 0 0 2px #3a332a'}}>
           <div style={{width: '100%', height: '100%', borderRadius: PHONE.r - PHONE.bezel, overflow: 'hidden', background: '#0e0b09',
             display: 'flex', flexDirection: 'column', position: 'relative'}}>
-            <Header />
+            <Header typing={dots > 0.5} />
             <div style={{flex: 1, minHeight: 0, overflow: 'hidden', display: 'flex', flexDirection: 'column', justifyContent: 'flex-end', paddingTop: 20}}>
               {rows.map((r) => (
                 <div key={r.id} style={{display: 'grid', gridTemplateRows: `${Math.min(1, Math.max(0, r.enter))}fr`, flex: 'none'}}>
                   <div style={{minHeight: 0, overflow: r.enter < 1 ? 'hidden' : 'visible', opacity: Math.min(1, r.enter * 1.4),
                     transform: `translateY(${(1 - r.enter) * 50}px) scale(${0.94 + 0.06 * r.enter})`,
-                    transformOrigin: msgs[r.id].from === 'him' ? 'right bottom' : 'left bottom'}}>
-                    <Bubble m={msgs[r.id]} shown={r.shown} cardState={cardState[r.id]} flip={flip[r.id] ?? 1} t={r.t} tapped={tapped[r.id] ?? 0} />
+                    transformOrigin: r.id === '__dots' || msgs[r.id].from !== 'him' ? 'left bottom' : 'right bottom'}}>
+                    {r.id === '__dots' ? <Dots frame={frame} /> : (
+                      <Bubble m={msgs[r.id]} shown={r.shown} cardState={cardState[r.id]} flip={flip[r.id] ?? 1} t={r.t} />
+                    )}
                   </div>
                 </div>
               ))}
             </div>
             <Compose text={compose?.text} shown={compose?.shown ?? 0} press={press} ripple={ripple} />
-            {tap ? (
-              <div style={{position: 'absolute', left: 92, bottom: COMPOSE + 52, width: 84, height: 84, borderRadius: 42,
-                background: 'rgba(242,232,216,0.3)', border: '2px solid rgba(242,232,216,0.5)', opacity: tap, transform: `scale(${1.3 - 0.3 * tap})`}} />
-            ) : null}
             {sleep ? <AbsoluteFill style={{background: '#000', opacity: sleep}} /> : null}
           </div>
         </div>
