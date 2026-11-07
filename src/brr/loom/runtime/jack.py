@@ -16,7 +16,7 @@ from brr.pause import read_paused_record
 from .home import atomic_write, home_of_room, mint
 from .pausing import describe
 from .waits import GRAMMAR
-from .port import CLOCK, Boundary, answered, clock, parse_boundary
+from .port import CLOCK, Boundary, PortError, answered, clock, parse_boundary
 
 _HEADER_LINE = re.compile(rf"<!-- port (\S+) gen (\d+)(?: · {CLOCK})? · owed[^>]*-->")
 _ITEM_LINE = re.compile(r"^- (\S+) · from \S+ · reply \S+")
@@ -668,7 +668,11 @@ def _first_word(room: Path, stdin_text: str = "", *, refuse: bool = False) -> tu
     """A live clock, independent of the loom's cached rendering; one refusal per letter."""
     from datetime import datetime
     import shlex
-    parsed = parse_boundary(_boundary_text(room))
+    try:
+        parsed = parse_boundary(_boundary_text(room))
+    except PortError:
+        # A missing/corrupt clock must not bypass the independent act guards.
+        return "", False
     done = answered(room)
     late = []
     for ident, at in parsed.first_words.items():

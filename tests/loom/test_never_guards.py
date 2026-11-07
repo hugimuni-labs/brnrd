@@ -103,9 +103,11 @@ def _room(tmp_path, facts=()):
     return room, home
 
 
-def test_the_jack_refuses_without_a_grant_and_says_the_override(tmp_path, monkeypatch):
+@pytest.mark.parametrize("boundary", ["", "status: strand x\n"])
+def test_the_jack_refuses_without_a_grant_and_says_the_override(tmp_path, monkeypatch, boundary):
     monkeypatch.setenv("BRNRD_THREAD", "ta")
     room, _home = _room(tmp_path)
+    (room / "port" / "in" / "boundary.md").write_text(boundary)
     said = json.loads(execute("pre", room, _call("Bash", command="gh pr merge 2610 --squash")))["hookSpecificOutput"]
     assert said["permissionDecision"] == "deny"
     reason = said["permissionDecisionReason"]
