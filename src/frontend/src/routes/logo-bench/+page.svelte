@@ -7,6 +7,7 @@
 		AWAKE,
 		DEFAULTS,
 		FX_KEYS,
+		frameKey,
 		NO_FX,
 		PALETTES,
 		RANGES,
@@ -25,6 +26,8 @@
 		fg: PALETTES[1].fg,
 		bg: PALETTES[1].bg,
 		accent: PALETTES[1].accent,
+		glowColor: '',
+		ov: {},
 		fx: { ...NO_FX }
 	};
 
@@ -50,7 +53,7 @@
 	let pose = $derived(playPose ?? s.pose);
 	let palette = $derived({ fg: s.fg, bg: s.bg, accent: s.accent });
 	const svg = (p: Pose, o: Partial<Parameters<typeof toSvg>[1]> = {}, id = 'm') =>
-		toSvg(s.p, { pose: p, palette, fx: s.fx, id, ...o });
+		toSvg(s.p, { pose: p, palette, fx: s.fx, id, ov: s.ov, glowColor: s.glowColor, ...o });
 
 	let timer: ReturnType<typeof setTimeout> | undefined;
 	function stop() {
@@ -78,6 +81,25 @@
 		s.bg = c.bg;
 		s.accent = c.accent;
 	}
+	// click a pixel in the main view: force it on or off for this frame
+	function toggleCell(e: MouseEvent) {
+		const el = (e.target as Element).closest('svg');
+		if (!el) return;
+		const r = el.getBoundingClientRect();
+		const lay = layout(s.p, pose, s.ov);
+		const x = Math.floor(((e.clientX - r.left) / r.width) * (lay.cols + 2) - 1);
+		const y = Math.floor(((e.clientY - r.top) / r.height) * (lay.rows + 2) - 1);
+		if (x < 0 || y < 0 || x >= lay.cols || y >= lay.rows) return;
+		const k = `${x},${y}`;
+		const f = frameKey(pose);
+		const on = lay.cells.some((c) => c.x === x && c.y === y);
+		const base = layout(s.p, pose).cells.some((c) => c.x === x && c.y === y);
+		const m = { ...(s.ov[f] ?? {}) };
+		if (!on === base) delete m[k];
+		else m[k] = !on;
+		s.ov[f] = m;
+	}
+	const nOv = $derived(Object.values(s.ov).reduce((n, m) => n + Object.keys(m).length, 0));
 	const cols = $derived(layout(s.p, REST).cols);
 
 	// export
@@ -138,7 +160,10 @@
 				class="panel flex items-center justify-center overflow-auto p-4"
 				style="background:{s.bg}"
 			>
-				<div>{@html svg(pose, { background: false }, 'main')}</div>
+				<!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
+				<div class="cursor-crosshair" onclick={toggleCell}>
+					{@html svg(pose, { background: false }, 'main')}
+				</div>
 			</div>
 			<div class="grid grid-cols-2 gap-4">
 				{#each [['brnrd', REST], ['b^n^d', AWAKE]] as [label, p] (label)}
@@ -187,8 +212,12 @@
 					}}
 				/>
 			</label>
+			<label class="flex flex-col gap-1">
+				<span class="text-xs font-semibold text-amber-100">pixel size · {s.p.cell}px</span>
+				<input class="w-full" type="range" min="4" max="48" step="1" bind:value={s.p.cell} />
+			</label>
 			<hr class="border-stone-800" />
-			{#each RANGES as r (r.key)}
+			{#each RANGES.filter((x) => x.key !== 'cell' && x.key !== 'nStyle') as r (r.key)}
 				<label class="flex items-center gap-2">
 					<span class="w-32 shrink-0 text-[11px] text-ink-quiet">{r.label}</span>
 					<input
@@ -219,11 +248,32 @@
 					</label>
 				{/each}
 			</div>
+			<label class="flex items-center gap-2 text-[11px] text-ink-quiet">
+				n style
+				<select class="panel px-1 py-1" bind:value={s.p.nStyle}>
+					<option value={0}>arch</option>
+					<option value={1}>mirror</option>
+				</select>
+			</label>
+			<label class="flex items-center gap-2 text-[10px] text-ink-quiet">
+				glow colour
+				<input
+					type="color"
+					value={s.glowColor || s.fg}
+					oninput={(e) => (s.glowColor = e.currentTarget.value)}
+					class="h-6 w-8 cursor-pointer border border-stone-700 bg-transparent p-0.5"
+				/>
+				<button class="underline" onclick={() => (s.glowColor = '')}>ink</button>
+			</label>
+			<div class="flex items-center gap-2 text-[10px] text-ink-quiet">
+				click a pixel in the big view to flip it ({nOv} flipped)
+				<button class="underline" onclick={() => (s.ov = {})}>clear</button>
+			</div>
 			<div class="flex flex-wrap gap-3">
 				{#each FX_KEYS as k (k)}
 					<label class="flex items-center gap-1 text-[11px] text-ink-quiet">
 						<input type="checkbox" bind:checked={s.fx[k as keyof Effects]} />
-						{{ glow: 'glow', scan: 'scanlines', grain: 'grain', jitter: 'jitter' }[k]}
+						{{ scan: 'scanlines', grain: 'grain', jitter: 'jitter' }[k]}
 					</label>
 				{/each}
 			</div>
@@ -251,6 +301,8 @@
 							pose,
 							palette: c,
 							fx: s.fx,
+							ov: s.ov,
+							glowColor: s.glowColor,
 							height: 96,
 							id: 'c' + c.name.replace(/\W/g, '')
 						})}

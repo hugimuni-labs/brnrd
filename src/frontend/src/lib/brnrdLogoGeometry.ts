@@ -22,20 +22,26 @@ export interface Params {
 	leg: number; // r leg length below the ^, cells
 	nDrop: number; // how far the n drops in the awake frame, rows
 	space: number; // gap between letters, cells
+	nStyle: number; // 0 arch (corner cells cut), 1 mirror (the r and its reflection)
+	glow: number; // glow strength 0..1 (0 = off)
+	glowSpread: number; // glow blur radius, cells
 }
 
 export const DEFAULTS: Params = {
 	cell: 22,
 	radius: 0.22,
 	gap: 0.08,
-	rows: 10,
-	bar: 10,
-	xh: 6,
+	rows: 8,
+	bar: 8,
+	xh: 5,
 	bowl: 4,
 	caret: 3,
-	leg: 4,
-	nDrop: 3,
-	space: 1
+	leg: 3,
+	nDrop: 2,
+	space: 1,
+	nStyle: 0,
+	glow: 0,
+	glowSpread: 0.5
 };
 
 export interface Range {
@@ -57,7 +63,10 @@ export const RANGES: Range[] = [
 	{ key: 'caret', label: '^ width', min: 3, max: 9, step: 2 },
 	{ key: 'leg', label: 'r leg length', min: 0, max: 10, step: 1 },
 	{ key: 'nDrop', label: 'n offset (awake)', min: 0, max: 8, step: 1 },
-	{ key: 'space', label: 'letter spacing', min: 0, max: 3, step: 1 }
+	{ key: 'space', label: 'letter spacing', min: 0, max: 3, step: 1 },
+	{ key: 'nStyle', label: 'n style (0 arch, 1 mirror)', min: 0, max: 1, step: 1 },
+	{ key: 'glow', label: 'glow strength', min: 0, max: 1, step: 0.05 },
+	{ key: 'glowSpread', label: 'glow spread', min: 0.1, max: 2, step: 0.05 }
 ];
 
 export type Eye = 'caret' | 'dash';
@@ -76,6 +85,15 @@ export const WINK: Array<{ name: string; pose: Pose; ms: number }> = [
 	{ name: 'b^n-d', pose: { t: 1, eyeL: 'caret', eyeR: 'dash' }, ms: 220 },
 	{ name: 'b^n^d', pose: AWAKE, ms: 1400 }
 ];
+
+/** Per-frame pixel overrides: 'x,y' -> true (forced on) or false (forced off). Keyed by frameKey(). */
+export type Overrides = Record<string, Record<string, boolean>>;
+export function frameKey(pose: Pose): string {
+	const caret = pose.eyeL === 'caret' && pose.eyeR === 'caret';
+	if (caret && pose.t === 0) return 'rest';
+	if (caret && pose.t === 1) return 'awake';
+	return `${pose.t}:${pose.eyeL}:${pose.eyeR}`;
+}
 
 export interface Cell {
 	x: number;
@@ -99,7 +117,7 @@ export function fit(p: Params): Params {
 	return { ...p, rows, bar, xh, caret, bowl: Math.round(clamp(p.bowl, 3, 7)) };
 }
 
-export function layout(params: Params, pose: Pose = REST): Layout {
+export function layout(params: Params, pose: Pose = REST, ov?: Overrides): Layout {
 	const p = fit(params);
 	const base = p.rows - 1; // baseline row
 	const top = p.rows - p.xh; // x-height row
@@ -141,17 +159,35 @@ export function layout(params: Params, pose: Pose = REST): Layout {
 	r(x0, pose.eyeL);
 	x0 += p.caret + p.space;
 
-	// n: arch; awake, the top drops by nDrop rows (feet stay on the baseline).
-	const nTop = top + Math.round(Math.min(p.nDrop, p.xh - 2) * pose.t);
-	for (let y = nTop + 1; y <= base; y++) {
-		put(x0, y);
-		put(x0 + 3, y);
+	// n, two builds. Awake, its top drops (feet stay on the baseline).
+	const rise = (p.caret + 1) / 2;
+	const mid = (p.caret - 1) / 2;
+	if (p.nStyle === 1) {
+		// mirror: the r and its reflection sharing one foot column.
+		const nw = 2 * p.caret - 1;
+		const nTop = top + Math.round(Math.min(p.nDrop, p.xh - rise) * pose.t);
+		for (const c0 of [x0, x0 + p.caret - 1]) {
+			for (let k = 0; k < rise; k++) {
+				put(c0 + mid - k, nTop + k);
+				if (k > 0) put(c0 + mid + k, nTop + k);
+			}
+		}
+		for (let y = nTop + rise; y <= base; y++) {
+			put(x0, y);
+			put(x0 + nw - 1, y);
+		}
+		x0 += nw + p.space;
+	} else {
+		// arch: two legs and a lid; the lid's corner cells are cut so the shoulders round.
+		const nTop = top + Math.round(Math.min(p.nDrop, p.xh - 2) * pose.t);
+		for (let y = nTop + 1; y <= base; y++) {
+			put(x0, y);
+			put(x0 + 3, y);
+		}
+		put(x0 + 1, nTop);
+		put(x0 + 2, nTop);
+		x0 += 4 + p.space;
 	}
-	put(x0, nTop);
-	put(x0 + 1, nTop);
-	put(x0 + 2, nTop);
-	put(x0 + 3, nTop);
-	x0 += 4 + p.space;
 
 	r(x0, pose.eyeR);
 	x0 += p.caret + p.space;
@@ -161,12 +197,21 @@ export function layout(params: Params, pose: Pose = REST): Layout {
 
 	// a cell can be emitted twice (n corners, ^ apex); keep the first.
 	const seen = new Set<string>();
-	const uniq = cells.filter((c) => {
+	let uniq = cells.filter((c) => {
 		const k = `${c.x},${c.y}`;
 		if (seen.has(k)) return false;
 		seen.add(k);
 		return true;
 	});
+	const mine = ov?.[frameKey(pose)];
+	if (mine) {
+		const forced = (k: string) => mine[k];
+		uniq = uniq.filter((c) => forced(`${c.x},${c.y}`) !== false);
+		for (const [k, on] of Object.entries(mine)) {
+			const [x, y] = k.split(',').map(Number);
+			if (on && x < x0 && y < p.rows && !seen.has(k)) uniq.push({ x, y, eye: false });
+		}
+	}
 	return { cols: x0, rows: p.rows, cells: uniq };
 }
 
@@ -187,12 +232,11 @@ export const PALETTES: Palette[] = [
 ];
 
 export interface Effects {
-	glow: boolean;
 	scan: boolean;
 	grain: boolean;
 	jitter: boolean;
 }
-export const NO_FX: Effects = { glow: false, scan: false, grain: false, jitter: false };
+export const NO_FX: Effects = { scan: false, grain: false, jitter: false };
 
 export interface Render {
 	pose: Pose;
@@ -206,6 +250,10 @@ export interface Render {
 	height?: number;
 	/** Unique id prefix when several SVGs share a page. */
 	id?: string;
+	/** Glow colour; empty = the ink colour. */
+	glowColor?: string;
+	/** Per-frame pixel overrides. */
+	ov?: Overrides;
 	/** Draw the background (false = transparent). */
 	background?: boolean;
 }
@@ -218,7 +266,7 @@ const hash = (x: number, y: number) => {
 
 export function toSvg(params: Params, r: Render): string {
 	const p = fit(params);
-	const lay = layout(p, r.pose);
+	const lay = layout(p, r.pose, r.ov);
 	const id = r.id ?? 'bl';
 	const pad = r.frame === 'fit' || !r.frame ? 1 : r.frame === 'wide' ? 0 : 0;
 	// logical canvas in cell units
@@ -254,9 +302,9 @@ export function toSvg(params: Params, r: Render): string {
 		})
 		.join('');
 	const defs: string[] = [];
-	if (r.fx.glow)
+	if (p.glow > 0)
 		defs.push(
-			`<filter id="${id}g" x="-30%" y="-30%" width="160%" height="160%"><feGaussianBlur stdDeviation="${(0.45).toFixed(2)}" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter>`
+			`<filter id="${id}g" x="-50%" y="-50%" width="200%" height="200%"><feGaussianBlur in="SourceAlpha" stdDeviation="${p.glowSpread}"/><feComponentTransfer result="a"><feFuncA type="linear" slope="${(p.glow * 4).toFixed(2)}"/></feComponentTransfer><feFlood flood-color="${r.glowColor || r.palette.fg}" result="c"/><feComposite in="c" in2="a" operator="in"/><feMerge><feMergeNode/><feMergeNode in="SourceGraphic"/></feMerge></filter>`
 		);
 	if (r.fx.grain)
 		defs.push(
@@ -271,7 +319,7 @@ export function toSvg(params: Params, r: Render): string {
 			? `<clipPath id="${id}c"><circle cx="${w / 2}" cy="${h / 2}" r="${Math.min(w, h) / 2}"/></clipPath>`
 			: '';
 	const body =
-		`<g${r.fx.glow ? ` filter="url(#${id}g)"` : ''}>${rects}</g>` +
+		`<g${p.glow > 0 ? ` filter="url(#${id}g)"` : ''}>${rects}</g>` +
 		(r.fx.scan ? `<rect width="${w}" height="${h}" fill="url(#${id}s)"/>` : '') +
 		(r.fx.grain ? `<rect width="${w}" height="${h}" filter="url(#${id}n)"/>` : '');
 	return (
@@ -290,10 +338,12 @@ export interface Settings {
 	fg: string;
 	bg: string;
 	accent: string;
+	glowColor: string; // '' = ink
+	ov: Overrides;
 	fx: Effects;
 }
 
-export const FX_KEYS = ['glow', 'scan', 'grain', 'jitter'] as const;
+export const FX_KEYS = ['scan', 'grain', 'jitter'] as const;
 
 export function toQuery(s: Settings, base: Settings): string {
 	const q = new URLSearchParams();
@@ -304,13 +354,30 @@ export function toQuery(s: Settings, base: Settings): string {
 	if (s.pose.eyeR !== base.pose.eyeR) q.set('eyeR', s.pose.eyeR);
 	for (const k of ['fg', 'bg', 'accent'] as const)
 		if (s[k] !== base[k]) q.set(k, s[k].replace('#', ''));
+	if (s.glowColor !== base.glowColor) q.set('glowColor', s.glowColor.replace('#', ''));
+	const ov = Object.entries(s.ov)
+		.filter(([, m]) => Object.keys(m).length)
+		.map(
+			([f, m]) =>
+				`${f}~${Object.entries(m)
+					.map(([k, on]) => `${k.replace(',', '.')}${on ? '+' : '-'}`)
+					.join('_')}`
+		)
+		.join('!');
+	if (ov) q.set('ov', ov);
 	const fx = FX_KEYS.filter((k) => s.fx[k]).join(',');
 	if (fx) q.set('fx', fx);
 	return q.toString();
 }
 
 export function fromQuery(q: URLSearchParams, base: Settings): Settings {
-	const s: Settings = { ...base, p: { ...base.p }, pose: { ...base.pose }, fx: { ...NO_FX } };
+	const s: Settings = {
+		...base,
+		p: { ...base.p },
+		pose: { ...base.pose },
+		ov: {},
+		fx: { ...NO_FX }
+	};
 	for (const k of Object.keys(DEFAULTS) as (keyof Params)[]) {
 		const v = Number(q.get(k));
 		if (q.has(k) && Number.isFinite(v)) s.p[k] = v;
@@ -324,6 +391,17 @@ export function fromQuery(q: URLSearchParams, base: Settings): Settings {
 	for (const k of ['fg', 'bg', 'accent'] as const) {
 		const v = q.get(k);
 		if (v && /^[0-9a-f]{6}$/i.test(v)) s[k] = `#${v}`;
+	}
+	const gc = q.get('glowColor');
+	if (gc && /^[0-9a-f]{6}$/i.test(gc)) s.glowColor = `#${gc}`;
+	for (const part of (q.get('ov') ?? '').split('!')) {
+		const [f, cellsStr] = part.split('~');
+		if (!f || !cellsStr) continue;
+		s.ov[f] = {};
+		for (const c of cellsStr.split('_')) {
+			const m = /^(\d+)\.(\d+)([+-])$/.exec(c);
+			if (m) s.ov[f][`${m[1]},${m[2]}`] = m[3] === '+';
+		}
 	}
 	for (const k of (q.get('fx') ?? '').split(','))
 		if ((FX_KEYS as readonly string[]).includes(k)) s.fx[k as keyof Effects] = true;
