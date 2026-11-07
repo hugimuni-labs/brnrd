@@ -21,9 +21,7 @@
 
 <div
 	class="sticky top-0 z-40 -mx-5 border-b border-stone-800/70 bg-[#0c0906]/88 px-5 py-2 backdrop-blur sm:-mx-6 sm:px-6"
-	style="--fuel-track:#292524;--fuel-ink:#e7e5e4;--fuel-dim:#a8a29e;--fuel-ring:#44403c{promoted
-		? `;border-color:${STATUS_BURNING}`
-		: ''}"
+	style="--fuel-ink:#e7e5e4;--fuel-dim:#a8a29e{promoted ? `;border-color:${STATUS_BURNING}` : ''}"
 	data-testid="fuel-strip"
 	data-promoted={promoted ? 'true' : 'false'}
 >

@@ -392,6 +392,61 @@ export function formatPct(left: number | undefined): string {
 	return `${Number.isInteger(n) ? n.toString() : n.toFixed(1)}%`;
 }
 
+/** Fuel spent may run this far past the share of the week elapsed and the
+ * week still counts as on pace. Past it the track is amber, then red. */
+export const PACE_SLACK = 0.02;
+export const PACE_RED = 0.2;
+
+export type WeekPace = 'healthy' | 'amber' | 'red';
+
+/** The week's health. Pace is the share of the week elapsed against the share
+ * of weekly fuel spent. On pace or ahead, or within {@link PACE_SLACK}, the
+ * week is healthy. Further behind is amber until {@link PACE_RED}, then red.
+ * Null when the reset is missing or already past: that is not a pace. */
+export function weekPace(week: LoomGauge | null | undefined, now: number): WeekPace | null {
+	if (!week || !isWeek(week.window)) return null;
+	const leftPct = week.left_pct;
+	if (typeof leftPct !== 'number' || !Number.isFinite(leftPct) || !week.resets_at) return null;
+	const end = Date.parse(week.resets_at);
+	if (!Number.isFinite(end) || end <= now) return null;
+	const remaining = resetFraction(week.window, week.resets_at, now);
+	if (remaining === null) return null;
+	const spent = 1 - Math.max(0, Math.min(100, leftPct)) / 100;
+	const deficit = spent - (1 - remaining);
+	if (deficit <= PACE_SLACK) return 'healthy';
+	if (deficit < PACE_RED) return 'amber';
+	return 'red';
+}
+
+const WEEK_MS = 7 * 86400 * 1000;
+const DAY_MS = 86400 * 1000;
+
+/** Time marks on the week's span, as percentages of that span. The tick is
+ * the 5h reset. Each dot is a day boundary still ahead of now and short of
+ * the weekly reset, so the count is the days left to wait. */
+export function weekMarks(
+	week: LoomGauge | null | undefined,
+	five: LoomGauge | null | undefined,
+	now: number
+): { tick: number | null; dots: number[] } {
+	if (!week?.resets_at || !isWeek(week.window)) return { tick: null, dots: [] };
+	const end = Date.parse(week.resets_at);
+	if (!Number.isFinite(end) || end <= now) return { tick: null, dots: [] };
+	const start = end - WEEK_MS;
+	const pos = (t: number) => Math.max(0, Math.min(100, ((t - start) / WEEK_MS) * 100));
+	const dots: number[] = [];
+	for (let k = 1; k <= 6; k++) {
+		const boundary = start + k * DAY_MS;
+		if (boundary > now && boundary < end) dots.push(pos(boundary));
+	}
+	let tick: number | null = null;
+	if (five?.resets_at && isFiveHour(five.window)) {
+		const at = Date.parse(five.resets_at);
+		if (Number.isFinite(at) && at > now && at <= end) tick = pos(at);
+	}
+	return { tick, dots };
+}
+
 /** Every body a picker can offer: the declared choices, else shell/core. */
 export function bodyChoices(snapshot: LoomSnapshot): string[] {
 	const declared = snapshot.bodies?.choices ?? [];
