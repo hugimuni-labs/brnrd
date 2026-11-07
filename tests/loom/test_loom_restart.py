@@ -143,13 +143,15 @@ two = wish("new", "--line", "Second " + "long " * 20, "--say", letter)
 ctx.send("thread:work", note="begin", re=letter)
 deadline = time.monotonic() + 30
 until("plan 0/2")
-assert ctx.jack("post").raw == ""
+quiet = ctx.jack("post").raw
+assert quiet == "", quiet
 wish(one, "--result", "url:https://example.com/1", "--line", "First done", "--deliver")
 view = until("plan 1/2")
 text = json.loads(view.raw)["hookSpecificOutput"]["additionalContext"]
 next_row = text.split(" · next: ")[1].split("\\n")[0]
 assert len(next_row) == 60 and next_row.startswith("Second"), next_row
-assert ctx.jack("post").raw == ""
+quiet = ctx.jack("post").raw
+assert quiet == "", quiet
 ctx.handoff({str(ready)!r}, view.raw)
 view = ctx.jack("post")
 while not view.letters:
