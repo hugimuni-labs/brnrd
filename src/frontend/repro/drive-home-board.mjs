@@ -299,7 +299,16 @@ async function main() {
 					.evaluateAll((els) => els.map((el) => `${el.dataset.shell}:${el.dataset.low}`));
 				assert.deepEqual(low, ['claude:true', 'codex:true'], `both shells low (${low})`);
 				const stripText = await text(strip);
-				assert.ok(/dry/i.test(stripText) && /resets in/.test(stripText), `strip (${stripText})`);
+				// The reset phrase left the marks so a gauge's width stays fixed.
+				// The week number stays beside the 5h bar, including a week on pace
+				// (claude's 61%, codex's 40%). Opening a shell still names each reset.
+				assert.ok(
+					/dry/i.test(stripText) &&
+						/low/i.test(stripText) &&
+						/week 61%/.test(stripText) &&
+						/week 40%/.test(stripText),
+					`strip (${stripText})`
+				);
 				const age = await text(page.locator('[data-testid="snapshot-age"]'));
 				assert.equal(age, 'snapshot 5m old', `stale snapshot says its age (${age})`);
 				await shot(page, `${viewport}-3-low-fuel`);

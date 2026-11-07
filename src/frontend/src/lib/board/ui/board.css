@@ -70,10 +70,8 @@
 	align-items: center;
 	gap: 18px;
 	height: 20px;
-	--fuel-track: #e6e6e6;
 	--fuel-ink: #171717;
 	--fuel-dim: #666;
-	--fuel-ring: #ccc;
 }
 .brd #fuel .shell {
 	display: inline-flex;

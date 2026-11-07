@@ -8,7 +8,11 @@ import {
 	defaultBody,
 	fetchLoom,
 	filterCounts,
-	bindingGauge,
+	barGauge,
+	formatPct,
+	PACE_SLACK,
+	weekMarks,
+	weekPace,
 	fuelPromoted,
 	isUnread,
 	latestReceipt,
@@ -128,30 +132,24 @@ test('fuel: low at ≤15% left or dry, never from a stale reading; promoted when
 	assert.equal(fuelPromoted(undefined), false);
 });
 
-test('the binding window is the bar: least left, a tie to the later reset', () => {
+test('the bar is the 5h window when the harness has one, else the week', () => {
 	const now = Date.parse('2026-11-06T12:00:00Z');
-	const session = { window: 'session', left_pct: 15, resets_at: '2026-11-06T14:00:00Z' };
-	const week = { window: 'week', left_pct: 48, resets_at: '2026-11-10T12:00:00Z' };
-	// The header and the strip mark this gauge with data-bar and draw it as the bar.
-	assert.equal(bindingGauge([session, week])?.window, 'session');
-	assert.equal(
-		bindingGauge([
-			{ window: 'session', left_pct: 20, resets_at: '2026-11-06T15:00:00Z' },
-			{ window: 'week', left_pct: 20, resets_at: '2026-11-09T12:00:00Z' }
-		])?.window,
-		'week'
-	);
-	// a missing reset loses the tie
-	assert.equal(
-		bindingGauge([
-			{ window: 'session', left_pct: 20 },
-			{ window: 'week', left_pct: 20, resets_at: '2026-11-09T12:00:00Z' }
-		])?.window,
-		'week'
-	);
-	assert.equal(bindingGauge([{ window: 'week' }, { window: 'session' }])?.window, 'week');
-	assert.equal(bindingGauge([]), null);
-	assert.equal(bindingGauge(undefined), null);
+	const session = { window: 'session', left_pct: 70, resets_at: '2026-11-06T14:00:00Z' };
+	const week = { window: 'week', left_pct: 20, resets_at: '2026-11-10T12:00:00Z' };
+	// The week is lower. The header and the strip still mark the 5h with data-bar.
+	assert.equal(barGauge([session, week])?.window, 'session');
+	assert.equal(barGauge([week, session])?.window, 'session');
+	assert.equal(barGauge([week])?.window, 'week');
+	assert.equal(barGauge([{ window: '5h', left_pct: 10 }])?.window, '5h');
+	assert.equal(barGauge([{ window: 'weekly', left_pct: 40 }])?.window, 'weekly');
+	// a 5h with no readable percent cannot be the bar
+	assert.equal(barGauge([{ window: 'session' }, week])?.window, 'week');
+	assert.equal(barGauge([{ window: 'month', left_pct: 10 }]), null);
+	assert.equal(barGauge([]), null);
+	assert.equal(barGauge(undefined), null);
+	assert.equal(formatPct(100), '100%');
+	assert.equal(formatPct(99.94), '99.9%');
+	assert.equal(formatPct(undefined), '—');
 	const halfWeek = resetFraction('week', new Date(now + 3.5 * 86400 * 1000).toISOString(), now);
 	assert.ok(halfWeek !== null && Math.abs(halfWeek - 0.5) < 1e-9);
 	const halfSession = resetFraction(
@@ -162,6 +160,52 @@ test('the binding window is the bar: least left, a tie to the later reset', () =
 	assert.ok(halfSession !== null && Math.abs(halfSession - 0.5) < 1e-9);
 	assert.equal(resetFraction('month', new Date(now + 86400 * 1000).toISOString(), now), null);
 	assert.equal(resetFraction('week', 'not-a-stamp', now), null);
+});
+
+test('week pace is elapsed share against fuel spent: neutral, then amber, then red', () => {
+	const now = Date.parse('2026-11-06T12:00:00Z');
+	const resets = new Date(now + 3.5 * 86400 * 1000).toISOString();
+	const week = (left: number) => ({ window: 'week', left_pct: left, resets_at: resets });
+	const remaining = resetFraction('week', resets, now);
+	assert.ok(remaining !== null);
+	const elapsed = 1 - remaining;
+	const at = (deficit: number) => (1 - (elapsed + deficit)) * 100;
+	assert.equal(weekPace(week(at(0)), now), 'healthy');
+	assert.equal(weekPace(week(at(PACE_SLACK - 0.001)), now), 'healthy');
+	assert.equal(weekPace(week(at(PACE_SLACK + 0.001)), now), 'amber');
+	assert.equal(weekPace(week(at(0.19)), now), 'amber');
+	assert.equal(weekPace(week(at(0.201)), now), 'red');
+	// ahead of the clock: more fuel left than time left
+	assert.equal(weekPace(week(80), now), 'healthy');
+	assert.equal(weekPace({ window: 'week', left_pct: 40 }, now), null);
+	assert.equal(
+		weekPace({ window: 'week', left_pct: 10, resets_at: new Date(now - 1000).toISOString() }, now),
+		null
+	);
+});
+
+test('a tick marks the 5h reset and a dot marks each day still ahead of the weekly reset', () => {
+	const now = Date.parse('2026-11-06T12:00:00Z');
+	const week = {
+		window: 'week',
+		left_pct: 50,
+		resets_at: new Date(now + 3.5 * 86400 * 1000).toISOString()
+	};
+	const five = {
+		window: 'session',
+		left_pct: 40,
+		resets_at: new Date(now + 2 * 3600 * 1000).toISOString()
+	};
+	const marks = weekMarks(week, five, now);
+	const expectTick = ((3.5 * 86400 + 2 * 3600) / (7 * 86400)) * 100;
+	assert.ok(marks.tick !== null && Math.abs(marks.tick - expectTick) < 1e-6);
+	assert.equal(marks.dots.length, 3);
+	assert.equal(weekMarks(week, null, now).tick, null);
+	assert.equal(weekMarks(week, null, now).dots.length, 3);
+	assert.deepEqual(
+		weekMarks({ ...week, resets_at: new Date(now - 1000).toISOString() }, five, now),
+		{ tick: null, dots: [] }
+	);
 });
 
 test('bodies: declared choices win; else shell/core; default falls back to presence', () => {

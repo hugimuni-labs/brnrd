@@ -1,67 +1,78 @@
 <script lang="ts">
-	// One shell's fuel marks: the binding window is the bar (`data-bar` names it),
-	// the other windows sit beside it as short numbers, and a wedge empties toward
-	// that window's reset. Colours are the status palette. Both the board header
-	// and the loom strip draw this, so the booth crop and the cloud strip agree.
-	import { quotaLevel } from './quota.ts';
-	import { bindingGauge, resetFraction, resetsIn, type LoomGauge } from './loomSnapshot.ts';
-	import { DIAL_WEDGE_RADIUS, dialDasharray } from './railGauge.ts';
-	import { STATUS_BURNING, STATUS_COOLING, STATUS_SPENT, STATUS_UNKNOWN } from './statusPalette.ts';
+	// One shell's fuel marks, drawn the same in the board header and the loom strip.
+	// The bar's length is fuel left: the 5h window when the harness has one, else
+	// the week. The track's colour is the week's pace (neutral dark on pace, amber
+	// then red as fuel spent runs ahead of the week elapsed). The week number sits
+	// beside a 5h bar whenever the harness has a week, on pace or behind. A tick is
+	// the 5h reset and each dot is a day still ahead of the weekly reset, both
+	// placed on the week's span. The gauge's width does not change with the pace.
+	import {
+		barGauge,
+		formatPct,
+		isFiveHour,
+		isWeek,
+		weekMarks,
+		weekPace,
+		type LoomGauge
+	} from './loomSnapshot.ts';
 
 	let { gauges, now }: { gauges: LoomGauge[] | undefined; now: number } = $props();
 
-	const fill: Record<string, string> = {
-		burning: STATUS_BURNING,
-		cooling: STATUS_COOLING,
-		spent: STATUS_SPENT,
-		unknown: STATUS_UNKNOWN
-	};
-
-	const binding = $derived(bindingGauge(gauges));
-	const others = $derived((gauges ?? []).filter((gauge) => gauge !== binding));
-	const level = $derived(quotaLevel(binding?.left_pct));
-	const colour = $derived(fill[level]);
-	const fraction = $derived(binding ? resetFraction(binding.window, binding.resets_at, now) : null);
-	const when = $derived(binding ? resetsIn(binding.resets_at, now) : null);
-	const width = $derived(
-		binding?.left_pct === undefined ? null : Math.max(0, Math.min(100, binding.left_pct))
+	const bar = $derived(barGauge(gauges));
+	const week = $derived(
+		(gauges ?? []).find((gauge) => isWeek(gauge.window) && typeof gauge.left_pct === 'number') ??
+			null
 	);
+	const five = $derived(
+		(gauges ?? []).find((gauge) => isFiveHour(gauge.window) && gauge.resets_at) ?? null
+	);
+	const pace = $derived(weekPace(week, now));
+	const marks = $derived(weekMarks(week, five, now));
+	const width = $derived(
+		bar?.left_pct === undefined ? null : Math.max(0, Math.min(100, bar.left_pct))
+	);
+	const weekBeside = $derived(!!bar && !!week && isFiveHour(bar.window));
+	const label = $derived.by(() => {
+		if (!bar) return '';
+		const head = `${bar.window} ${formatPct(bar.left_pct)} left`;
+		if (!week) return head;
+		const paceWord =
+			pace === 'amber' || pace === 'red'
+				? 'behind'
+				: pace === 'healthy'
+					? 'on pace'
+					: 'pace unknown';
+		const days = marks.dots.length;
+		const wait = `${days} ${days === 1 ? 'day' : 'days'} to the weekly reset`;
+		if (isWeek(bar.window)) return `${head}, ${paceWord}, ${wait}`;
+		return `${head}, week ${formatPct(week.left_pct)} ${paceWord}, ${wait}`;
+	});
 </script>
 
-<span class="fuel-marks" data-bar={binding?.window ?? ''}>
-	{#if binding}
+<span class="fuel-marks" data-bar={bar?.window ?? ''} data-pace={pace ?? ''}>
+	{#if bar}
 		<span
 			class="fuel-track"
-			data-bar={binding.window}
+			data-bar={bar.window}
+			data-pace={pace ?? ''}
 			role="img"
-			aria-label={`${binding.window} left`}
+			aria-label={label}
 		>
 			{#if width !== null}
-				<span class="fuel-fill" style:width={`${width}%`} style:background={colour}></span>
+				<span class="fuel-fill" style:width={`${width}%`}></span>
 			{/if}
+			{#if marks.tick !== null}
+				<span class="fuel-tick" style:left={`${marks.tick}%`} title="5h reset" aria-hidden="true"
+				></span>
+			{/if}
+			{#each marks.dots as dot (dot)}
+				<span class="fuel-dot" style:left={`${dot}%`} aria-hidden="true"></span>
+			{/each}
 		</span>
-		<span class="fuel-pct">{binding.left_pct === undefined ? '—' : `${binding.left_pct}%`}</span>
-		{#if fraction !== null}
-			<svg class="fuel-dial" viewBox="0 0 12 12" aria-label="reset window remaining">
-				<circle cx="6" cy="6" r="5.5" fill="none" stroke-width="1" class="fuel-ring" />
-				<circle
-					cx="6"
-					cy="6"
-					r={DIAL_WEDGE_RADIUS}
-					fill="none"
-					stroke-width={DIAL_WEDGE_RADIUS * 2}
-					stroke={colour}
-					stroke-dasharray={dialDasharray(fraction)}
-				/>
-			</svg>
+		<span class="fuel-pct">{formatPct(bar.left_pct)}</span>
+		{#if weekBeside && week}
+			<span class="fuel-week">{week.window} {formatPct(week.left_pct)}</span>
 		{/if}
-		{#if when}<span class="fuel-when">resets {when}</span>{/if}
-		{#each others as gauge (gauge.window)}
-			<span class="fuel-side">
-				{gauge.window}
-				{gauge.left_pct === undefined ? '—' : `${gauge.left_pct}%`}
-			</span>
-		{/each}
 	{/if}
 </span>
 
@@ -83,34 +94,51 @@
 		position: relative;
 		flex: none;
 		width: 64px;
-		height: 6px;
-		background: var(--fuel-track, #e6e6e6);
+		height: 8px;
+		background: #2a2a2a;
+	}
+	.fuel-track[data-pace='amber'] {
+		background: #e8b34a;
+	}
+	.fuel-track[data-pace='red'] {
+		background: #d33;
 	}
 	.fuel-fill {
 		position: absolute;
+		top: 2px;
+		left: 0;
+		height: 4px;
+		background: #f4f4f5;
+	}
+	.fuel-tick,
+	.fuel-dot {
+		position: absolute;
+		z-index: 1;
+		background: #171717;
+		box-shadow: 0 0 0 0.5px #fff;
+	}
+	.fuel-tick {
 		top: 0;
 		bottom: 0;
-		left: 0;
+		width: 1px;
+		margin-left: -0.5px;
+	}
+	.fuel-dot {
+		top: 50%;
+		width: 3px;
+		height: 3px;
+		margin-top: -1.5px;
+		margin-left: -1.5px;
+		border-radius: 50%;
 	}
 	.fuel-pct {
 		flex: none;
-		min-width: 2.6em;
+		width: 5ch;
 		text-align: right;
 	}
-	.fuel-dial {
+	.fuel-week {
 		flex: none;
-		width: 14px;
-		height: 14px;
-		transform: rotate(90deg) scaleX(-1);
-	}
-	.fuel-ring {
-		stroke: var(--fuel-ring, #ccc);
-	}
-	.fuel-when,
-	.fuel-side {
+		width: 12ch;
 		color: var(--fuel-dim, #666);
-	}
-	.fuel-side {
-		flex: none;
 	}
 </style>
