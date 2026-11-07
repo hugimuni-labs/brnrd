@@ -295,7 +295,7 @@ def test_boundary_lists_every_cached_shell_and_park_stays_seated(tmp_path, monke
     status = next(line for line in (home.room(strand) / "port/in/boundary.md").read_text().splitlines()
                   if line.startswith("status:"))
     assert status.endswith(
-        "fuel grok week 45% · claude session 72% week 11% · codex session 100% week 100%?")
+        "fuel grok week 45% left · 7.0d to reset · pace 100% · 3.8d behind · claude session 72% week 11% left · 7.0d to reset · pace 100% · 6.2d behind · codex session 100% week 100%?")
     assert "vibe" not in status and "blank" not in status
     # threads.py strips this prefix. It must stay one shell.
     assert usage.fuel(home, "grok") == "fuel grok week 45%"
@@ -373,8 +373,8 @@ def test_one_installed_harness_keeps_todays_fuel_line_and_briefing(tmp_path, mon
     marked = usage.fuels(home, "grok")
     assert marked != today
     assert marked == (
-        "fuel grok week 45% burn · codex session 92% week 98% burn · "
-        "claude session 72% week 11% keep · vibe fails"
+        "fuel grok week 45% left · 7.0d to reset · pace 100% · 3.8d behind burn · codex session 92% week 98% left · 7.0d to reset · pace 100% · 0.1d behind burn · "
+        "claude session 72% week 11% left · 7.0d to reset · pace 100% · 6.2d behind keep · vibe fails"
     )
     assert " burn" not in usage.fuel(home, "grok")
     assert "burn" not in " ".join(usage.shell_fuels(home).values())

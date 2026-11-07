@@ -159,6 +159,7 @@ def cmd_wish(args):
                     data["reading"] = "waiting: " + args.read
                 if data["reading"].startswith("waiting:"):
                     data["wait"] = _wait(home, facts, args.id, args.wait, args.until)
+                    _guard_long_park(home, facts, args.id, data["wait"], args.read, thread, by)
             elif args.result is not None:
                 result_kind, sep, ref = args.result.partition(":")
                 if not sep or not result_kind or not ref or not args.line:
@@ -215,6 +216,8 @@ def cmd_wish(args):
         elif actions and kind == "wish.read" and by.startswith("strand:") and "wait" in data:
             _declare(args, "park")
             _say([_wakes(home, facts, by, data)])
+            if data["wait"].get("reminder"):
+                _say([data["wait"]["reminder"]])
             _rest_line(args, data)
         if fact.kind == "wish" and args.id == "new":
             _related(home, fact.data["line"], facts, fact.data["thread"])
@@ -448,6 +451,37 @@ def _wait(home, facts, ident, condition, until, default=None):
             raise ValueError(f"--wait {condition}: no wish {condition[5:]}")
     return waits.park(found[ident], condition, until, now, found=found, default=default,
                       turn=float(load_config(home.root).turn or 0))
+
+
+def _guard_long_park(home, facts, ident, park, reading, thread, by):
+    """Remind about available fuel; refuse only overnight, ahead-of-pace parks."""
+    from datetime import datetime, timezone
+    from . import usage, waits
+    from .config import load_config
+    current = wishes(facts)[ident]
+    on = park.get("on", "")
+    if (not by.startswith("strand:") or current.thread != thread
+            or current.state != "granting" or not on.startswith("at:")):
+        return
+    hours = (waits._instant(on[3:]) - datetime.now(timezone.utc)).total_seconds() / 3600
+    if hours <= 4:
+        return
+    shell = os.environ.get("BRNRD_BODY_SHELL")
+    if not shell:
+        return
+    value = usage.reading(home, shell)
+    week = next((w for w in (value or {}).get("windows", []) if w.get("name") == "week"), None)
+    floor = load_config(home.root).hold_floor_pct
+    if week is None or week["left_pct"] <= floor:
+        return
+    pace = usage.week_pace(week)
+    days = week["left_pct"] / 100 * 7
+    reminder = (f"this wait idles {hours:.1f} h with {days:.1f} days of fuel in hand; "
+                + f"the wish's grant: {current.line}")
+    if (hours > 8 and pace is not None and pace[2] > 0
+            and not (reading.startswith("idle:") and reading[5:].strip())):
+        raise ValueError(reminder + '; say why with --read "idle: <why>" or shorten')
+    park["reminder"] = reminder
 
 
 def _repo(facts, number):

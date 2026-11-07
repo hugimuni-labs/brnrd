@@ -232,12 +232,32 @@ def collector_failed(payload) -> bool:
     return isinstance(error, str) and bool(error.strip())
 
 
+def week_pace(window, now=None):
+    """Time remaining at even weekly spend, and days of fuel ahead of it."""
+    now = time.time() if now is None else now
+    reset = _reset(window)
+    if not now < reset <= now + 7 * 86400:
+        return None
+    days = (reset - now) / 86400
+    return days, days / 7 * 100, window["left_pct"] / 100 * 7 - days
+
+
+def window_text(window):
+    text = f"{window['name']} {window['left_pct']:g}%"
+    pace = week_pace(window) if window['name'] == 'week' else None
+    if pace is not None:
+        days, left, ahead = pace
+        text += (f" left · {days:.1f}d to reset · pace {left:.0f}%"
+                 f" · {abs(ahead):.1f}d {'ahead' if ahead > 0 else 'behind'}")
+    return text
+
+
 def _shown_windows(payload) -> list[str] | None:
     """Window text for one on-disk reading, or None when it shows nothing."""
     windows = gauge_windows(payload)
     if not windows:
         return None
-    return [f"{w['name']} {w['left_pct']:g}%" for w in windows]
+    return [window_text(w) for w in windows]
 
 
 def _past_reset(payload, now: float) -> bool:

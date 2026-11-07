@@ -30,7 +30,7 @@ from .selfrepo import SelfError, git
 
 KINDS = ("kept", "known")
 NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*")
-# The wake budget is 24 KB for everything: repos are one line of names, folders a line each.
+# Each library entry takes at most one bounded line in the wake.
 LINE_CAP = 200
 SHOWN = 12
 # His edits left this long with nobody committing them become a problem.
@@ -223,15 +223,18 @@ def line(entry: Entry, here: str | None = None) -> str:
     return text
 
 
-def wake_text(home) -> str:
+def wake_text(home, room: Path | None = None) -> str:
     found, bad = entries(home)
     if not found and not bad:
         return ""
     here = machine()
-    # A repo is a name the body can publish to; its source and purpose are one `lib list` away.
-    names = [entry.name for entry in found if entry.cloned]
-    folders = [entry for entry in found if not entry.cloned]
-    lines = [f"repos: {', '.join(names)}"] if names else []
+    folders = [entry for entry in found if not entry.source]
+    lines = []
+    for entry in found:
+        if entry.source:
+            cloned = " (cloned)" if room is not None and (room / entry.name / ".git").exists() else ""
+            text = f"repo {entry.name}{cloned}; for: {entry.purpose}"
+            lines.append(text if len(text) <= LINE_CAP else text[:LINE_CAP - 1] + "…")
     lines += [line(entry, here) for entry in folders[:SHOWN]]
     if len(folders) > SHOWN:
         lines.append(f"and {len(folders) - SHOWN} more: `python -m brr.loom.runtime lib list`")
