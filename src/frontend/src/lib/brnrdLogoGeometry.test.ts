@@ -8,6 +8,7 @@ import {
 	REST,
 	WINK,
 	frameKey,
+	canvas,
 	fromQuery,
 	layout,
 	toQuery,
@@ -108,4 +109,64 @@ test('a pixel override sticks to its frame and survives a slider', () => {
 	assert.ok(on({ ...DEFAULTS, cell: 40, radius: 0.4 }));
 	assert.ok(!on(DEFAULTS, AWAKE));
 	assert.equal(frameKey(AWAKE), 'awake');
+});
+
+test('density N draws the same shape from N x N blocks, and flips address the fine grid', () => {
+	const one = layout(DEFAULTS, AWAKE);
+	for (const n of [2, 3, 4]) {
+		const p = { ...DEFAULTS, density: n };
+		const fine = layout(p, AWAKE);
+		assert.equal(fine.cols, one.cols * n);
+		assert.equal(fine.rows, one.rows * n);
+		assert.equal(fine.cells.length, one.cells.length * n * n);
+		const on = new Set(fine.cells.map(key));
+		for (const c of one.cells) assert.ok(on.has(`${c.x * n},${c.y * n}`));
+		assert.equal(frameKey(AWAKE, n), `awake@${n}`);
+	}
+	const p = { ...DEFAULTS, density: 2 };
+	const flipped = layout(p, REST, { 'rest@2': { '0,0': true } }).cells.some(
+		(c) => c.x === 0 && c.y === 0
+	);
+	assert.ok(flipped);
+	assert.ok(
+		!layout(p, REST, { rest: { '0,0': true } }).cells.some((c) => c.x === 1 && c.y === 0 && false)
+	);
+});
+
+test('every box holds the whole mark plus margin and centres it; the avatar fits the inscribed square', () => {
+	for (const frame of ['fit', 'square', 'wide'] as const)
+		for (const shape of ['rect', 'circle'] as const)
+			for (const glow of [0, 0.6]) {
+				const p = { ...DEFAULTS, glow, margin: 1.5, density: 2 };
+				const c = canvas(p, AWAKE, undefined, frame, shape);
+				const m = (p.margin + (glow ? 3 * p.glowSpread : 0)) * p.density;
+				assert.ok(c.ox >= m - 1e-9 && c.oy >= m - 1e-9, `${frame}/${shape} margin left/top`);
+				assert.ok(c.w - (c.ox + c.lay.cols) >= m - 1e-9, `${frame}/${shape} right`);
+				assert.ok(c.h - (c.oy + c.lay.rows) >= m - 1e-9, `${frame}/${shape} bottom`);
+				assert.ok(Math.abs(c.ox - (c.w - c.lay.cols - c.ox)) < 1e-9, 'centred x');
+				if (shape === 'circle' && frame === 'square') {
+					const half = c.w / 2;
+					const reach = Math.hypot(c.lay.cols / 2 + m, c.lay.rows / 2 + m);
+					assert.ok(reach <= half + 1e-9, 'whole mark inside the circle');
+				}
+			}
+	const c0 = canvas(DEFAULTS, REST);
+	const c1 = canvas({ ...DEFAULTS, nudgeX: 2 }, REST);
+	assert.equal(c1.ox - c0.ox, 2);
+});
+
+test('the svg is its own pixels: box, viewBox and style agree', () => {
+	const svg = toSvg(DEFAULTS, {
+		pose: REST,
+		palette: PALETTES[1],
+		fx: NO_FX,
+		height: 96,
+		frame: 'wide'
+	});
+	const [, w, h] = /viewBox="0 0 (\d+) (\d+)"/.exec(svg)!;
+	assert.ok(
+		svg.includes(`width="${w}" height="${h}"`) && svg.includes(`style="width:${w}px;height:${h}px;`)
+	);
+	assert.equal(h, '96');
+	assert.equal(Number(w), 288);
 });

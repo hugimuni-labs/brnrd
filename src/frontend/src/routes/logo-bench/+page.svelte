@@ -7,6 +7,8 @@
 		AWAKE,
 		DEFAULTS,
 		FX_KEYS,
+		cellAt,
+		canvas,
 		frameKey,
 		NO_FX,
 		PALETTES,
@@ -86,18 +88,29 @@
 		const el = (e.target as Element).closest('svg');
 		if (!el) return;
 		const r = el.getBoundingClientRect();
-		const lay = layout(s.p, pose, s.ov);
-		const x = Math.floor(((e.clientX - r.left) / r.width) * (lay.cols + 2) - 1);
-		const y = Math.floor(((e.clientY - r.top) / r.height) * (lay.rows + 2) - 1);
-		if (x < 0 || y < 0 || x >= lay.cols || y >= lay.rows) return;
+		const hit = cellAt(
+			s.p,
+			pose,
+			s.ov,
+			(e.clientX - r.left) / r.width,
+			(e.clientY - r.top) / r.height
+		);
+		if (!hit) return;
+		const { x, y } = hit;
 		const k = `${x},${y}`;
-		const f = frameKey(pose);
-		const on = lay.cells.some((c) => c.x === x && c.y === y);
+		const f = frameKey(pose, s.p.density);
+		const on = layout(s.p, pose, s.ov).cells.some((c) => c.x === x && c.y === y);
 		const base = layout(s.p, pose).cells.some((c) => c.x === x && c.y === y);
 		const m = { ...(s.ov[f] ?? {}) };
 		if (!on === base) delete m[k];
 		else m[k] = !on;
 		s.ov[f] = m;
+	}
+	// a new density keeps the letter's size: the pixel shrinks by the same factor
+	function setDensity(n: number) {
+		const old = s.p.density;
+		s.p.cell = Math.max(2, Math.min(48, Math.round((s.p.cell * old) / n)));
+		s.p.density = n;
 	}
 	const nOv = $derived(Object.values(s.ov).reduce((n, m) => n + Object.keys(m).length, 0));
 	const cols = $derived(layout(s.p, REST).cols);
@@ -114,8 +127,7 @@
 	const downloadSvg = () =>
 		download('brnrd-logo.svg', new Blob([exportSvg()], { type: 'image/svg+xml' }));
 	function downloadPng() {
-		const lay = layout(s.p, pose);
-		const h = (lay.rows + 2) * s.p.cell * scale;
+		const h = canvas(s.p, pose, s.ov).h * s.p.cell * scale;
 		const markup = svg(pose, { id: 'x', height: h });
 		const img = new Image();
 		img.onload = () => {
@@ -217,7 +229,7 @@
 				<input class="w-full" type="range" min="4" max="48" step="1" bind:value={s.p.cell} />
 			</label>
 			<hr class="border-stone-800" />
-			{#each RANGES.filter((x) => x.key !== 'cell' && x.key !== 'nStyle') as r (r.key)}
+			{#each RANGES.filter((x) => x.key !== 'cell' && x.key !== 'nStyle' && x.key !== 'density') as r (r.key)}
 				<label class="flex items-center gap-2">
 					<span class="w-32 shrink-0 text-[11px] text-ink-quiet">{r.label}</span>
 					<input
@@ -248,6 +260,16 @@
 					</label>
 				{/each}
 			</div>
+			<label class="flex items-center gap-2 text-[11px] text-ink-quiet">
+				density
+				<select
+					class="panel px-1 py-1"
+					value={s.p.density}
+					onchange={(e) => setDensity(+e.currentTarget.value)}
+				>
+					{#each [1, 2, 3, 4] as n (n)}<option value={n}>{n}</option>{/each}
+				</select>
+			</label>
 			<label class="flex items-center gap-2 text-[11px] text-ink-quiet">
 				n style
 				<select class="panel px-1 py-1" bind:value={s.p.nStyle}>
@@ -309,6 +331,29 @@
 					</div>
 					<span class="text-[10px] text-ink-mute">{c.name}</span>
 				</button>
+			{/each}
+		</div>
+	</section>
+
+	<section class="panel flex flex-col gap-3 p-4">
+		<p class="text-[10px] text-ink-mute">density · 1 to 4, same letter, finer pixels</p>
+		<div class="flex flex-wrap items-end gap-4">
+			{#each [1, 2, 3, 4] as n (n)}
+				<div class="flex flex-col items-center gap-1">
+					{@html toSvg(
+						{ ...s.p, density: n },
+						{
+							pose,
+							palette,
+							fx: s.fx,
+							glowColor: s.glowColor,
+							ov: s.ov,
+							height: 110,
+							id: 'dn' + n
+						}
+					)}
+					<span class="text-[9px] text-ink-mute">density {n}</span>
+				</div>
 			{/each}
 		</div>
 	</section>
