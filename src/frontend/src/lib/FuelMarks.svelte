@@ -2,10 +2,10 @@
 	// One shell's fuel marks, drawn the same in the board header and the loom strip.
 	// The bar's length is fuel left: the 5h window when the harness has one, else
 	// the week. The track's colour is the week's pace (neutral dark on pace, amber
-	// then red as fuel spent runs ahead of the week elapsed). The week number keeps
-	// its slot and shows only when the week is behind. A tick is the 5h reset and
-	// each dot is a day still ahead of the weekly reset, both placed on the week's
-	// span. The gauge's width does not change with the pace.
+	// then red as fuel spent runs ahead of the week elapsed). The week number sits
+	// beside a 5h bar whenever the harness has a week, on pace or behind. A tick is
+	// the 5h reset and each dot is a day still ahead of the weekly reset, both
+	// placed on the week's span. The gauge's width does not change with the pace.
 	import {
 		barGauge,
 		formatPct,
@@ -27,7 +27,6 @@
 		(gauges ?? []).find((gauge) => isFiveHour(gauge.window) && gauge.resets_at) ?? null
 	);
 	const pace = $derived(weekPace(week, now));
-	const behind = $derived(pace === 'amber' || pace === 'red');
 	const marks = $derived(weekMarks(week, five, now));
 	const width = $derived(
 		bar?.left_pct === undefined ? null : Math.max(0, Math.min(100, bar.left_pct))
@@ -70,11 +69,9 @@
 				<span class="fuel-dot" style:left={`${dot}%`} aria-hidden="true"></span>
 			{/each}
 		</span>
-		<span class="fuel-pct" class:week={isWeek(bar.window)} class:on={behind}>
-			{formatPct(bar.left_pct)}
-		</span>
+		<span class="fuel-pct">{formatPct(bar.left_pct)}</span>
 		{#if weekBeside && week}
-			<span class="fuel-week" class:on={behind}>{week.window} {formatPct(week.left_pct)}</span>
+			<span class="fuel-week">{week.window} {formatPct(week.left_pct)}</span>
 		{/if}
 	{/if}
 </span>
@@ -139,19 +136,9 @@
 		width: 5ch;
 		text-align: right;
 	}
-	.fuel-pct.week {
-		visibility: hidden;
-	}
-	.fuel-pct.week.on {
-		visibility: visible;
-	}
 	.fuel-week {
 		flex: none;
 		width: 12ch;
-		visibility: hidden;
 		color: var(--fuel-dim, #666);
-	}
-	.fuel-week.on {
-		visibility: visible;
 	}
 </style>
