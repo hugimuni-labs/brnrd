@@ -23,6 +23,10 @@ export interface Params {
 	nDrop: number; // how far the n drops in the awake frame, rows
 	space: number; // gap between letters, cells
 	nStyle: number; // 0 arch (corner cells cut), 1 mirror (the r and its reflection)
+	density: number; // 1..4: pixels per cell side; the letter keeps its shape, the pixels shrink
+	margin: number; // room around the mark, in cells
+	nudgeX: number; // shift the mark inside its box, in cells
+	nudgeY: number;
 	glow: number; // glow strength 0..1 (0 = off)
 	glowSpread: number; // glow blur radius, cells
 }
@@ -39,6 +43,10 @@ export const DEFAULTS: Params = {
 	leg: 3,
 	nDrop: 2,
 	space: 1,
+	density: 1,
+	margin: 1,
+	nudgeX: 0,
+	nudgeY: 0,
 	nStyle: 0,
 	glow: 0,
 	glowSpread: 0.5
@@ -65,6 +73,10 @@ export const RANGES: Range[] = [
 	{ key: 'nDrop', label: 'n offset (awake)', min: 0, max: 8, step: 1 },
 	{ key: 'space', label: 'letter spacing', min: 0, max: 3, step: 1 },
 	{ key: 'nStyle', label: 'n style (0 arch, 1 mirror)', min: 0, max: 1, step: 1 },
+	{ key: 'density', label: 'density (pixels per cell side)', min: 1, max: 4, step: 1 },
+	{ key: 'margin', label: 'margin (cells)', min: 0, max: 4, step: 0.25 },
+	{ key: 'nudgeX', label: 'nudge x (cells)', min: -4, max: 4, step: 0.25 },
+	{ key: 'nudgeY', label: 'nudge y (cells)', min: -4, max: 4, step: 0.25 },
 	{ key: 'glow', label: 'glow strength', min: 0, max: 1, step: 0.05 },
 	{ key: 'glowSpread', label: 'glow spread', min: 0.1, max: 2, step: 0.05 }
 ];
@@ -88,11 +100,16 @@ export const WINK: Array<{ name: string; pose: Pose; ms: number }> = [
 
 /** Per-frame pixel overrides: 'x,y' -> true (forced on) or false (forced off). Keyed by frameKey(). */
 export type Overrides = Record<string, Record<string, boolean>>;
-export function frameKey(pose: Pose): string {
+export function frameKey(pose: Pose, density = 1): string {
 	const caret = pose.eyeL === 'caret' && pose.eyeR === 'caret';
-	if (caret && pose.t === 0) return 'rest';
-	if (caret && pose.t === 1) return 'awake';
-	return `${pose.t}:${pose.eyeL}:${pose.eyeR}`;
+	const k =
+		caret && pose.t === 0
+			? 'rest'
+			: caret && pose.t === 1
+				? 'awake'
+				: `${pose.t}:${pose.eyeL}:${pose.eyeR}`;
+	// flips address the fine grid, so each density keeps its own set
+	return density > 1 ? `${k}@${density}` : k;
 }
 
 export interface Cell {
@@ -114,7 +131,15 @@ export function fit(p: Params): Params {
 	const bar = Math.round(clamp(p.bar, 4, rows));
 	const xh = Math.round(clamp(p.xh, 3, bar));
 	const caret = Math.round(clamp(p.caret, 3, 9));
-	return { ...p, rows, bar, xh, caret, bowl: Math.round(clamp(p.bowl, 3, 7)) };
+	return {
+		...p,
+		rows,
+		bar,
+		xh,
+		caret,
+		bowl: Math.round(clamp(p.bowl, 3, 7)),
+		density: Math.round(clamp(p.density, 1, 4))
+	};
 }
 
 export function layout(params: Params, pose: Pose = REST, ov?: Overrides): Layout {
@@ -197,22 +222,33 @@ export function layout(params: Params, pose: Pose = REST, ov?: Overrides): Layou
 
 	// a cell can be emitted twice (n corners, ^ apex); keep the first.
 	const seen = new Set<string>();
-	let uniq = cells.filter((c) => {
+	const uniq0 = cells.filter((c) => {
 		const k = `${c.x},${c.y}`;
 		if (seen.has(k)) return false;
 		seen.add(k);
 		return true;
 	});
-	const mine = ov?.[frameKey(pose)];
+	// density N: every cell becomes an N x N block of pixels
+	const n = p.density;
+	let uniq: Cell[] = uniq0;
+	if (n > 1) {
+		uniq = [];
+		for (const c of uniq0)
+			for (let i = 0; i < n; i++)
+				for (let j = 0; j < n; j++) uniq.push({ x: c.x * n + i, y: c.y * n + j, eye: c.eye });
+	}
+	const cols = x0 * n;
+	const rowsF = p.rows * n;
+	const mine = ov?.[frameKey(pose, n)];
 	if (mine) {
-		const forced = (k: string) => mine[k];
-		uniq = uniq.filter((c) => forced(`${c.x},${c.y}`) !== false);
+		uniq = uniq.filter((c) => mine[`${c.x},${c.y}`] !== false);
+		const have = new Set(uniq.map((c) => `${c.x},${c.y}`));
 		for (const [k, on] of Object.entries(mine)) {
 			const [x, y] = k.split(',').map(Number);
-			if (on && x < x0 && y < p.rows && !seen.has(k)) uniq.push({ x, y, eye: false });
+			if (on && x < cols && y < rowsF && !have.has(k)) uniq.push({ x, y, eye: false });
 		}
 	}
-	return { cols: x0, rows: p.rows, cells: uniq };
+	return { cols, rows: rowsF, cells: uniq };
 }
 
 export interface Palette {
@@ -246,7 +282,7 @@ export interface Render {
 	frame?: 'fit' | 'square' | 'wide';
 	/** 'circle' clips the background to a circle (the avatar). */
 	shape?: 'rect' | 'circle';
-	/** Rendered pixel height; width follows. Defaults to the params' cell size. */
+	/** Rendered pixel height; width follows. Defaults to pixel size x the canvas height in pixels. */
 	height?: number;
 	/** Unique id prefix when several SVGs share a page. */
 	id?: string;
@@ -264,67 +300,119 @@ const hash = (x: number, y: number) => {
 	return ((h ^ (h >>> 16)) >>> 0) / 4294967295;
 };
 
+/** The canvas a mark is drawn on, in fine pixels (one pixel = 1 unit), and where the mark sits on it. */
+export interface Canvas {
+	w: number;
+	h: number;
+	ox: number;
+	oy: number;
+	lay: Layout;
+}
+
+/**
+ * Every box fits the whole mark plus its margin (and the glow's reach) and
+ * centres it, never crops: 'fit' hugs it, 'square' is a tile, 'wide' a 3:1
+ * banner, and a 'circle' shape fits the mark inside the inscribed square.
+ */
+export function canvas(
+	params: Params,
+	pose: Pose,
+	ov?: Overrides,
+	frame: 'fit' | 'square' | 'wide' = 'fit',
+	shape: 'rect' | 'circle' = 'rect'
+): Canvas {
+	const p = fit(params);
+	const lay = layout(p, pose, ov);
+	const n = p.density;
+	const room = (p.margin + (p.glow > 0 ? 3 * p.glowSpread : 0)) * n;
+	const mw = lay.cols + 2 * room;
+	const mh = lay.rows + 2 * room;
+	let w = mw;
+	let h = mh;
+	if (frame === 'square') w = h = Math.max(mw, mh) * (shape === 'circle' ? Math.SQRT2 : 1);
+	else if (frame === 'wide') {
+		h = Math.max(mh, mw / 3);
+		w = 3 * h;
+	}
+	return {
+		w,
+		h,
+		ox: (w - lay.cols) / 2 + p.nudgeX * n,
+		oy: (h - lay.rows) / 2 + p.nudgeY * n,
+		lay
+	};
+}
+
+/** The pixel under a point given as fractions (0..1) of the rendered box, or null outside the mark's grid. */
+export function cellAt(
+	params: Params,
+	pose: Pose,
+	ov: Overrides | undefined,
+	fx: number,
+	fy: number,
+	frame: 'fit' | 'square' | 'wide' = 'fit'
+): { x: number; y: number } | null {
+	const c = canvas(params, pose, ov, frame);
+	const x = Math.floor(fx * c.w - c.ox);
+	const y = Math.floor(fy * c.h - c.oy);
+	return x < 0 || y < 0 || x >= c.lay.cols || y >= c.lay.rows ? null : { x, y };
+}
+
 export function toSvg(params: Params, r: Render): string {
 	const p = fit(params);
-	const lay = layout(p, r.pose, r.ov);
+	const frame = r.frame ?? 'fit';
+	const cv = canvas(p, r.pose, r.ov, frame, r.shape);
 	const id = r.id ?? 'bl';
-	const pad = r.frame === 'fit' || !r.frame ? 1 : r.frame === 'wide' ? 0 : 0;
-	// logical canvas in cell units
-	let w = lay.cols + 2 * pad;
-	let h = lay.rows + 2 * pad;
-	if (r.frame === 'square') {
-		const s = Math.max(lay.cols, lay.rows) + 2;
-		w = h = s;
-	} else if (r.frame === 'wide') {
-		w = Math.ceil(lay.cols * 1.6) + 2;
-		h = Math.ceil(lay.rows * 1.6);
-		w = Math.max(w, Math.ceil(h * 3));
-	}
-	const ox = (w - lay.cols) / 2;
-	const oy = (h - lay.rows) / 2;
-	const px = r.height ?? p.cell * lay.rows + 2 * p.cell * pad;
-	const wpx = (px * w) / h;
-	const inset = p.gap / 2;
-	const size = 1 - p.gap;
+	// Draw in output pixels, svg box = viewBox, so no browser has a scale to get wrong.
+	const H = Math.round(r.height ?? p.cell * cv.h);
+	const u = H / cv.h;
+	const W = Math.round(cv.w * u);
+	const inset = (p.gap / 2) * u;
+	const size = (1 - p.gap) * u;
 	const rx = p.radius * size;
 	const bgRect =
 		r.background === false
 			? ''
 			: r.shape === 'circle'
-				? `<circle cx="${w / 2}" cy="${h / 2}" r="${Math.min(w, h) / 2}" fill="${r.palette.bg}"/>`
-				: `<rect width="${w}" height="${h}" fill="${r.palette.bg}"/>`;
-	const rects = lay.cells
+				? `<circle cx="${W / 2}" cy="${H / 2}" r="${Math.min(W, H) / 2}" fill="${r.palette.bg}"/>`
+				: `<rect width="${W}" height="${H}" fill="${r.palette.bg}"/>`;
+	const rects = cv.lay.cells
 		.map((c) => {
 			const j = r.fx.jitter ? 0.55 + 0.45 * hash(c.x, c.y) : 1;
 			const fill = c.eye ? r.palette.accent : r.palette.fg;
 			const op = j < 1 ? ` fill-opacity="${j.toFixed(2)}"` : '';
-			return `<rect x="${(ox + c.x + inset).toFixed(3)}" y="${(oy + c.y + inset).toFixed(3)}" width="${size.toFixed(3)}" height="${size.toFixed(3)}" rx="${rx.toFixed(3)}" fill="${fill}"${op}/>`;
+			return `<rect x="${((cv.ox + c.x) * u + inset).toFixed(2)}" y="${((cv.oy + c.y) * u + inset).toFixed(2)}" width="${size.toFixed(2)}" height="${size.toFixed(2)}" rx="${rx.toFixed(2)}" fill="${fill}"${op}/>`;
 		})
 		.join('');
 	const defs: string[] = [];
-	if (p.glow > 0)
+	if (p.glow > 0) {
+		// spread is in cells, so it grows with the grid and not with the pixel size
+		const sd = (p.glowSpread * p.density * u).toFixed(2);
 		defs.push(
-			`<filter id="${id}g" x="-50%" y="-50%" width="200%" height="200%"><feGaussianBlur in="SourceAlpha" stdDeviation="${p.glowSpread}"/><feComponentTransfer result="a"><feFuncA type="linear" slope="${(p.glow * 4).toFixed(2)}"/></feComponentTransfer><feFlood flood-color="${r.glowColor || r.palette.fg}" result="c"/><feComposite in="c" in2="a" operator="in"/><feMerge><feMergeNode/><feMergeNode in="SourceGraphic"/></feMerge></filter>`
+			`<filter id="${id}g" filterUnits="userSpaceOnUse" x="0" y="0" width="${W}" height="${H}"><feGaussianBlur in="SourceAlpha" stdDeviation="${sd}"/><feComponentTransfer result="a"><feFuncA type="linear" slope="${(p.glow * 4).toFixed(2)}"/></feComponentTransfer><feFlood flood-color="${r.glowColor || r.palette.fg}" result="c"/><feComposite in="c" in2="a" operator="in"/><feMerge><feMergeNode/><feMergeNode in="SourceGraphic"/></feMerge></filter>`
 		);
+	}
 	if (r.fx.grain)
 		defs.push(
-			`<filter id="${id}n" x="0" y="0" width="100%" height="100%"><feTurbulence type="fractalNoise" baseFrequency="${(2.2 / (px / h)).toFixed(3)}" numOctaves="2" seed="7"/><feColorMatrix values="0 0 0 0 0.5  0 0 0 0 0.5  0 0 0 0 0.5  0 0 0 0.35 0"/></filter>`
+			`<filter id="${id}n" filterUnits="userSpaceOnUse" x="0" y="0" width="${W}" height="${H}"><feTurbulence type="fractalNoise" baseFrequency="0.9" numOctaves="2" seed="7"/><feColorMatrix values="0 0 0 0 0.5  0 0 0 0 0.5  0 0 0 0 0.5  0 0 0 0.35 0"/></filter>`
 		);
-	if (r.fx.scan)
+	if (r.fx.scan) {
+		const per = Math.max(2, u / 3);
 		defs.push(
-			`<pattern id="${id}s" width="1" height="${(1 / 3).toFixed(4)}" patternUnits="userSpaceOnUse"><rect width="1" height="${(1 / 6).toFixed(4)}" fill="#000" fill-opacity="0.28"/></pattern>`
+			`<pattern id="${id}s" width="${W}" height="${per.toFixed(2)}" patternUnits="userSpaceOnUse"><rect width="${W}" height="${(per / 2).toFixed(2)}" fill="#000" fill-opacity="0.28"/></pattern>`
 		);
-	const clip =
-		r.shape === 'circle'
-			? `<clipPath id="${id}c"><circle cx="${w / 2}" cy="${h / 2}" r="${Math.min(w, h) / 2}"/></clipPath>`
-			: '';
+	}
+	if (r.shape === 'circle')
+		defs.push(
+			`<clipPath id="${id}c"><circle cx="${W / 2}" cy="${H / 2}" r="${Math.min(W, H) / 2}"/></clipPath>`
+		);
 	const body =
 		`<g${p.glow > 0 ? ` filter="url(#${id}g)"` : ''}>${rects}</g>` +
-		(r.fx.scan ? `<rect width="${w}" height="${h}" fill="url(#${id}s)"/>` : '') +
-		(r.fx.grain ? `<rect width="${w}" height="${h}" filter="url(#${id}n)"/>` : '');
+		(r.fx.scan ? `<rect width="${W}" height="${H}" fill="url(#${id}s)"/>` : '') +
+		(r.fx.grain ? `<rect width="${W}" height="${H}" filter="url(#${id}n)"/>` : '');
 	return (
-		`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${w} ${h}" width="${wpx.toFixed(1)}" height="${px}" shape-rendering="geometricPrecision">` +
-		(defs.length || clip ? `<defs>${defs.join('')}${clip}</defs>` : '') +
+		`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${W} ${H}" width="${W}" height="${H}" style="width:${W}px;height:${H}px;max-width:none;display:block" shape-rendering="geometricPrecision">` +
+		(defs.length ? `<defs>${defs.join('')}</defs>` : '') +
 		(r.shape === 'circle' ? `<g clip-path="url(#${id}c)">${bgRect}${body}</g>` : bgRect + body) +
 		`</svg>`
 	);
