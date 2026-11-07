@@ -291,7 +291,8 @@ def render_boundary(strand: str, gen: int, thread: str, letters: list[Fact],
                     budget: str = "", over: str = "", repaired: str = "",
                     degraded: str = "", face: str = "", left: str = "", moved: str = "",
                     library: str = "", forge: str = "", band: str = "",
-                    done: str = "", room: str = "", cited: str = "", idle: str = "") -> str:
+                    done: str = "", room: str = "", cited: str = "", idle: str = "",
+                    park_reminder: str = "") -> str:
     """Shown letters keep their first line, reply context and attachments when compacted.
 
     ``budget`` sits before the plan: the jack compares what follows `` · plan ``,
@@ -305,6 +306,8 @@ def render_boundary(strand: str, gen: int, thread: str, letters: list[Fact],
         + (f" · {plan}" if plan else ""),
         "owed:",
     ]
+    if park_reminder:
+        lines.insert(2, park_reminder)
     if left:
         # What the stop will ask for; never after `` · plan``, so it wakes nobody.
         lines.insert(2, left)

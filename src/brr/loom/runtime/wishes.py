@@ -70,6 +70,7 @@ class Wish:
     line: str = ""
     thread: str = ""
     parent: str = ""
+    deadline: str = ""
     reading: str = ""
     # An ask's recommendation: the asker's proposal, never a reading of the person's answer.
     rec: str = ""
@@ -170,6 +171,7 @@ def wishes(facts: Iterable[Fact]) -> dict[str, Wish]:
                 if say not in wish.says:
                     wish.says.append(say)
             wish.sender, wish.line, wish.thread = d["from"], d["line"], d["thread"]
+            wish.deadline = d.get("deadline", wish.deadline)
             wish.parent = d.get("parent") or wish.parent
             wish.rec = d.get("rec") or wish.rec
             wish.kind = d.get("kind") or wish.kind

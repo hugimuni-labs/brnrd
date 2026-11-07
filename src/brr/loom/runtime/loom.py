@@ -1917,6 +1917,7 @@ def _render_boundary(home, facts, strand, gen, context):
         state.shown.get(strand, set()), sender_threads(facts), context.fuel,
         context.why or None, reply_channels(facts, home),
         opened=opened, forge=_forge(home),
+        park_reminder=park_reminders(facts, context.thread),
         plan=_plan(home, context.thread, facts),
         replies={f.letter.id: f.reply_to for f in active_owners(facts, main)},
         attachments=letter_attachments(home.root, facts),
@@ -1933,6 +1934,13 @@ def _render_boundary(home, facts, strand, gen, context):
         **_budget(home, context.thread, facts, strand),
     )
     return text
+
+
+def park_reminders(facts, thread):
+    from .waits import live
+    from .wishes import wishes
+    return "\n".join(read["wait"]["reminder"] for wish, read in live(wishes(facts))
+                     if wish.thread == thread and read.get("wait", {}).get("reminder"))
 
 
 def _turn_pace(home, facts, config):

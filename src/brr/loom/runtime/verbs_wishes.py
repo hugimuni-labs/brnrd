@@ -48,7 +48,7 @@ def say_span(raw: str, facts) -> Say:
     return Say(ident, off, size)
 
 
-def wish_fact(facts, *, by, ident, says=(), line=None, thread=None, sender=None, parent=None, rec=None, kind=None):
+def wish_fact(facts, *, by, ident, says=(), line=None, thread=None, sender=None, parent=None, rec=None, kind=None, deadline=None):
     known = wishes(facts)
     current = known.get(ident)
     if parent is not None and parent not in known:
@@ -67,6 +67,10 @@ def wish_fact(facts, *, by, ident, says=(), line=None, thread=None, sender=None,
         "line": line if line is not None else current.line,
         "thread": thread if thread is not None else current.thread,
     }
+    if deadline is not None:
+        from .waits import when
+        from datetime import datetime, timezone
+        data["deadline"] = when(deadline, datetime.now(timezone.utc), "--deadline")
     if parent is not None:
         data["parent"] = parent
     if rec is not None:
@@ -90,6 +94,7 @@ def _wish_arguments(parser):
     parser.add_argument("--say", action="append", default=[])
     parser.add_argument("--line")
     parser.add_argument("--parent")
+    parser.add_argument("--deadline", help="the grant deadline, an exact instant")
     parser.add_argument("--from", dest="sender", choices=("person", "resident"))
     action = parser.add_mutually_exclusive_group()
     action.add_argument("--read")
@@ -125,7 +130,7 @@ def cmd_wish(args):
         actions = any(x is not None for x in (args.read, args.result, args.accept, args.drop))
         left = _left_fact(args, facts, by) if args.left else None
         if left is not None and not actions:
-            if args.say or any(x is not None for x in (args.line, args.sender, args.thread, args.parent)):
+            if args.say or any(x is not None for x in (args.line, args.sender, args.thread, args.parent, args.deadline)):
                 raise ValueError("--left restates what is left; it takes no touch flags")
             append(home, left)
             _declare(args, "left")
@@ -139,7 +144,7 @@ def cmd_wish(args):
             raise ValueError("--ref requires --accept or --answer")
         if (args.wait is not None or args.until is not None) and args.read is None:
             raise ValueError("--wait and --until go with --read \"waiting: …\"")
-        touches = args.say or any(x is not None for x in (args.line, args.sender, args.thread, args.parent))
+        touches = args.say or any(x is not None for x in (args.line, args.sender, args.thread, args.parent, args.deadline))
         if args.id != "new" and not actions and not touches:
             current = wishes(facts).get(args.id)
             if current is None:
@@ -149,7 +154,7 @@ def cmd_wish(args):
         if actions:
             if args.id == "new" or args.id not in wishes(facts):
                 raise ValueError(f"no wish {args.id}; create it with wish new first")
-            if args.say or args.sender or args.thread or args.parent or (args.line is not None and args.result is None):
+            if args.say or args.sender or args.thread or args.parent or args.deadline or (args.line is not None and args.result is None):
                 raise ValueError("touch flags cannot accompany a reading, result or verdict")
             data = {"wish": args.id}
             if args.read is not None:
@@ -182,7 +187,7 @@ def cmd_wish(args):
             fact = wish_fact(facts, by=by, ident=args.id,
                              says=[say_span(s, facts) for s in args.say], line=args.line,
                              thread=args.thread or (thread if args.id == "new" else None), sender=args.sender,
-                             parent=args.parent)
+                             parent=args.parent, deadline=args.deadline)
         target = fact.data["thread"] if "thread" in fact.data else wishes(facts)[args.id].thread
         if not home.routable(target):
             raise ValueError("wish: thread must exist on main")
@@ -216,6 +221,8 @@ def cmd_wish(args):
         elif actions and kind == "wish.read" and by.startswith("strand:") and "wait" in data:
             _declare(args, "park")
             _say([_wakes(home, facts, by, data)])
+            if data["wait"].get("reminder"):
+                _say([data["wait"]["reminder"]])
             _rest_line(args, data)
         if fact.kind == "wish" and args.id == "new":
             _related(home, fact.data["line"], facts, fact.data["thread"])
@@ -452,7 +459,7 @@ def _wait(home, facts, ident, condition, until, default=None):
 
 
 def _guard_long_park(home, facts, ident, park, reading, thread, by):
-    """An active grant may idle for hours only with an explicit reason."""
+    """Remind about available fuel; refuse only overnight, ahead-of-pace deadline parks."""
     from datetime import datetime, timezone
     from . import usage, waits
     from .config import load_config
@@ -462,7 +469,7 @@ def _guard_long_park(home, facts, ident, park, reading, thread, by):
             or current.state != "granting" or not on.startswith("at:")):
         return
     hours = (waits._instant(on[3:]) - datetime.now(timezone.utc)).total_seconds() / 3600
-    if hours <= 4 or (reading.startswith("idle:") and reading[5:].strip()):
+    if hours <= 4:
         return
     shell = os.environ.get("BRNRD_BODY_SHELL")
     if not shell:
@@ -470,10 +477,17 @@ def _guard_long_park(home, facts, ident, park, reading, thread, by):
     value = usage.reading(home, shell)
     week = next((w for w in (value or {}).get("windows", []) if w.get("name") == "week"), None)
     floor = load_config(home.root).hold_floor_pct
-    if week is not None and week["left_pct"] > floor:
-        raise ValueError(f'--wait at: {hours:.1f} hours out; wish {ident} is granting; '
-                         f'fuel {shell} week {week["left_pct"]:g}% above floor {floor:g}%. '
-                         'Shorten the wait to at most 4 hours, or use --read "idle: <why>".')
+    if week is None or week["left_pct"] <= floor:
+        return
+    pace = usage.week_pace(week)
+    days = week["left_pct"] / 100 * 7
+    reminder = (f"this wait idles {hours:.1f} h with {days:.1f} days of fuel in hand; "
+                + (f"the wish's grant was until {current.deadline}" if current.deadline
+                   else "the wish has no recorded grant deadline"))
+    if (hours > 8 and pace is not None and pace[2] > 0 and current.deadline
+            and not (reading.startswith("idle:") and reading[5:].strip())):
+        raise ValueError(reminder + '; say why with --read "idle: <why>" or shorten')
+    park["reminder"] = reminder
 
 
 def _repo(facts, number):
