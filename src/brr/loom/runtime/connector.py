@@ -56,6 +56,8 @@ class Inputs:
         carries(home)  # validate the complete declaration before starting any child
         self.home, self.children, self.failures = home, {}, {}
         self.names = instances(home)
+        from .connector_presence import Presence
+        self.presence = Presence(home)
 
     def step(self):
         # Read at every step: a channel paired while the loom runs is heard
@@ -86,6 +88,7 @@ class Inputs:
             drain(self.home, name, drop, self.failures)
 
     def close(self):
+        self.presence.close()
         for child, _due, _delay in self.children.values():
             self._stop(child)
         self.children.clear()

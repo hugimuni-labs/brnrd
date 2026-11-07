@@ -791,6 +791,54 @@ _MAX_PARTS_BYTES = 40_000_000
 _PART_KEY = re.compile(r"^(index|beads|topics|unthreaded|thread/[A-Za-z0-9._-]{1,180})$")
 
 
+def _letter_presence(settings, origin, verb, on):
+    """Only stored event origins reach native clients. Feedback never sends words."""
+    platform = origin.get('platform')
+    if verb == 'working' and not on:
+        return  # These platforms expire typing; GitHub has no typing primitive.
+    if platform == 'telegram' and settings.telegram_bot_token:
+        from ..platforms import telegram as tg
+        if verb == 'seen':
+            tg.mark_seen(settings.telegram_bot_token, origin['chat_id'], origin['message_id'])
+        elif _should_send_typing(platform, str(origin['chat_id'])):
+            tg.send_chat_action(settings.telegram_bot_token, origin['chat_id'],
+                                topic_id=origin.get('topic_id'), timeout=2)
+    elif platform == 'whatsapp' and settings.whatsapp_access_token and settings.whatsapp_phone_number_id:
+        from ..platforms import whatsapp as wa
+        if verb == 'seen' or _should_send_typing(platform, str(origin['chat_id'])):
+            wa.presence(settings.whatsapp_access_token, settings.whatsapp_phone_number_id,
+                        origin['chat_id'], origin['message_id'], working=verb == 'working',
+                        api_base_url=settings.whatsapp_api_base_url, api_version=settings.whatsapp_api_version)
+    elif platform == 'github' and verb == 'seen' and origin.get('comment_id'):
+        from ..platforms import github as gh
+        repo = origin['repo']
+        token = settings.github_bot_token
+        if origin.get('installation_id'):
+            token = github_app_client.installation_access_credential(settings,
+                str(origin['installation_id']), repositories=[repo.rsplit('/', 1)[-1]])['token']
+        if token:
+            gh.add_reaction(token, settings.github_api_base_url, settings.github_api_version, repo,
+                target='review_comment' if origin.get('kind') == 'pr-review-comment' else 'issue_comment',
+                target_id=int(origin['comment_id']), timeout=2)
+
+
+@router.post('/loom/presence')
+def loom_presence(request: Request, operations: list[schemas.LetterPresence] = Body(...),
+                  principal: Principal = Depends(require_daemon), db: Session = Depends(get_db)):
+    """Authorize each event against its owning account, then use its stored origin."""
+    if len(operations) > 100:
+        raise HTTPException(status_code=422, detail='at most 100 presence operations')
+    for op in operations:
+        event = _account_event(db, principal, op.event_id)
+        if event is None:
+            continue
+        try:
+            _letter_presence(request.app.state.settings, inbox_service.reply_to_of(event), op.verb, op.on)
+        except Exception:
+            logger.warning('letter presence failed event=%s verb=%s', op.event_id, op.verb)
+    return {'ok': True}
+
+
 @router.post("/loom/typing")
 def loom_typing(request: Request, chats: list[str] = Body(...),
                 principal: Principal = Depends(require_daemon), db: Session = Depends(get_db)):

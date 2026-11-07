@@ -251,3 +251,76 @@ def test_seen_uses_telegram_reaction_primitive(monkeypatch):
     assert calls == [('token', 'setMessageReaction',
                       {'chat_id': '555', 'message_id': 123,
                        'reaction': [{'type': 'emoji', 'emoji': '👀'}]}, 2.0)]
+
+
+def test_letter_presence_authorizes_event_and_preserves_origin(env, monkeypatch):
+    app, client, _, _ = env
+    acc = _account(client)
+    rid = _repo(client, acc)
+    headers = _daemon_headers(client, acc, rid)
+    other = brnrd_account_headers(app, github_id='901', login='other', email='o@b.com')
+    other_repo = _repo(client, other, 'other')
+    with app.state.SessionLocal() as db:
+        db.add_all([
+            Event(event_id='mine', repo_id=rid, reply_to='{"platform":"telegram","chat_id":"555","message_id":"12"}'),
+            Event(event_id='theirs', repo_id=other_repo, reply_to='{"platform":"telegram","chat_id":"999","message_id":"13"}')])
+        db.commit()
+    calls = []
+    monkeypatch.setattr('brnrd.platforms.telegram.mark_seen', lambda *a, **kw: calls.append(('seen', a[1:])))
+    monkeypatch.setattr('brnrd.platforms.telegram.send_chat_action', lambda *a, **kw: calls.append(('working', a[1:])))
+    monkeypatch.setattr(daemons_router, '_last_typing_sent', {})
+    operations = [dict(event_id=e, verb='seen') for e in ('mine', 'theirs', 'missing')]
+    operations += [dict(event_id='mine', verb='working', on=True), dict(event_id='mine', verb='working', on=False)]
+    assert client.post('/v1/daemons/loom/presence', json=operations, headers=headers).status_code == 200
+    assert calls == [('seen', ('555', '12')), ('working', ('555',))]
+    assert client.post('/v1/daemons/loom/presence', json=operations).status_code == 401
+    assert client.post('/v1/daemons/loom/presence', json=operations * 21, headers=headers).status_code == 422
+    assert client.post('/v1/daemons/loom/presence', json=[dict(event_id='mine', verb='send')], headers=headers).status_code == 422
+
+
+def test_letter_presence_native_whatsapp_and_github(env, monkeypatch):
+    app, _, _, _ = env
+    from dataclasses import replace
+    settings = replace(app.state.settings, github_bot_token='gh-test')
+    calls = []
+    monkeypatch.setattr('brnrd.platforms.whatsapp.presence', lambda *a, **kw: calls.append(('wa', a, kw)))
+    monkeypatch.setattr('brnrd.platforms.github.add_reaction', lambda *a, **kw: calls.append(('gh', a, kw)))
+    monkeypatch.setattr(daemons_router, '_last_typing_sent', {})
+    wa = dict(platform='whatsapp', chat_id='555', message_id='wamid.1')
+    gh = dict(platform='github', repo='owner/repo', comment_id=42, kind='pr-review-comment')
+    for origin in (wa, gh):
+        for verb, on in [('seen', False), ('working', True), ('working', False)]:
+            daemons_router._letter_presence(settings, origin, verb, on)
+    assert [c[0] for c in calls] == ['wa', 'wa', 'gh']
+    assert [c[2]['working'] for c in calls[:2]] == [False, True]
+    assert calls[2][2]['target'] == 'review_comment'
+    assert calls[2][2]['target_id'] == 42
+
+
+def test_whatsapp_presence_wire_payload(monkeypatch):
+    from brnrd.platforms import whatsapp
+    from types import SimpleNamespace
+    calls = []
+    def post(url, **kw):
+        calls.append(kw['json'])
+        return SimpleNamespace(status_code=200, json=lambda: {'success': True})
+    monkeypatch.setattr(whatsapp.httpx, 'post', post)
+    whatsapp.presence('token', 'phone', '555', 'wamid.1')
+    whatsapp.presence('token', 'phone', '555', 'wamid.1', working=True)
+    assert calls == [dict(messaging_product='whatsapp', to='555', type='reaction',
+                          reaction=dict(message_id='wamid.1', emoji='👀')),
+                     dict(messaging_product='whatsapp', status='read', message_id='wamid.1',
+                          typing_indicator=dict(type='text'))]
+
+
+def test_presence_transport_failure_is_best_effort(env, monkeypatch):
+    app, client, _, _ = env
+    acc = _account(client)
+    rid = _repo(client, acc)
+    headers = _daemon_headers(client, acc, rid)
+    with app.state.SessionLocal() as db:
+        db.add(Event(event_id='fail', repo_id=rid, reply_to='{"platform":"telegram","chat_id":"555","message_id":"12"}'))
+        db.commit()
+    monkeypatch.setattr('brnrd.platforms.telegram.mark_seen', lambda *a, **kw: (_ for _ in ()).throw(RuntimeError('offline')))
+    assert client.post('/v1/daemons/loom/presence', headers=headers,
+                       json=[dict(event_id='fail', verb='seen')]).status_code == 200
