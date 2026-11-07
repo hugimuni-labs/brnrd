@@ -155,8 +155,9 @@ const PRCard = ({pr, state, flip}) => {
   );
 };
 
-const Stamp = ({at, right}) => (
-  <div style={{fontFamily: MONO, fontSize: 24, color: DIM, marginTop: 8, textAlign: right ? 'right' : 'left', paddingLeft: right ? 0 : 64}}>{hhmm(at)}</div>
+// The stamp is the ledger's minute, or the phone's own where his screenshot shows it (`stamp`).
+const Stamp = ({text, right}) => (
+  <div style={{fontFamily: MONO, fontSize: 24, color: DIM, marginTop: 8, textAlign: right ? 'right' : 'left', paddingLeft: right ? 0 : 64}}>{text}</div>
 );
 
 // The loom's own notice, not the resident's voice: a gauge for an avatar, the fuel draining to its last percent.
@@ -224,7 +225,7 @@ const Bubble = ({m, shown, cardState, flip, t = 99}) => {
           {body}
         </div>
       </div>
-      <Stamp at={m.at} right={him} />
+      <Stamp text={m.stamp ?? hhmm(m.at)} right={him} />
     </div>
   );
 };

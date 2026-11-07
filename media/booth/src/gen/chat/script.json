@@ -7,7 +7,7 @@
   "2606": {
    "repo": "brnrd",
    "number": 2606,
-   "title": "topics in the wake, recall and related:",
+   "title": "topics: the wake shows the closest heads…",
    "mergedAt": "2026-11-06T22:18:13Z"
   }
  },
@@ -20,7 +20,8 @@
    "card": {
     "pr": "2606",
     "state": "conflicts"
-   }
+   },
+   "stamp": "21:49"
   },
   "yun90-tail": {
    "from": "resident",

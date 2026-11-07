@@ -8,7 +8,7 @@ The phone shots (`src/gen/chat/`, data in `script.json`) are drawn, not recorded
 
 | shot | on screen | from | source | at (UTC) |
 |---|---|---|---|---|
-| a1-ask | "Hey we still need brnrd#2606 don't we? Could you please rebase it? There are conflicts. Lmk if somethings changed, or if wasn't it merged for some reason" + PR card | him | letter 10416 (`letter:cloud:telegram:155783668:10416`) | 2026-11-06 21:56:36 |
+| a1-ask | "Hey we still need brnrd#2606 don't we? Could you please rebase it? There are conflicts. Lmk if somethings changed, or if wasn't it merged for some reason" + PR card | him | letter 10416 (`letter:cloud:telegram:155783668:10416`); stamped 21:49, the minute his phone shows it leaving (22:49 local, his screenshot via the inbox's 2zxc0) | 2026-11-06 21:56:36 in the ledger, the loom's receipt after the lockout |
 | a1-ask | "Yes, #2606 is still wanted and was never merged; it just sat while main moved on. The wiki thread is rebasing it now." | resident | `s-ae66-x5fukd/wrt3a` | 2026-11-06 22:00:48 |
 | a1-reply (spare) | "Also: the change that puts the closest notes in front of me when I wake is updated, all checks green, ready for you: brnrd#2606" + PR card | resident | `s-ae66-n5nv7e/yun90`, last paragraph | 2026-11-06 22:15:21 |
 | a1-reply, a1-nice | delivered card: "brnrd#2606 … rebased on main" | resident | `s-ae66-79qfzj/yy6ug` | 2026-11-06 22:18:46 |
@@ -26,7 +26,9 @@ The phone shots (`src/gen/chat/`, data in `script.json`) are drawn, not recorded
 Edits:
 
 - 10416: "Hew" → "Hey" (typo); the PR URL `https://github.com/hugimuni-labs/brnrd/pull/2606` is drawn as the token `brnrd#2606` plus a card. Straight apostrophes in the ledger are drawn as typographic ones throughout.
-- The PR card's title is the delivered card's name for the PR, "topics in the wake, recall and related:" (yy6ug); GitHub's title is "topics: the wake shows the closest heads; recall, related: and INDEX name topics first; the trace keeps the self path". The card's state is the PR's at that message: "Open · conflicts" at 21:56 (his own words in 10416), "Open · checks green" at 22:15 (yun90's words), Merged at 22:18:13 (on the delivered card, which arrived 33 s after the merge).
+- The PR card's title is GitHub's, as his phone's link card shows it, cut after its first clause: "topics: the wake shows the closest heads…" (in full: "topics: the wake shows the closest heads; recall, related: and INDEX name topics first; the trace keeps the self path").
+- Stamps are UTC from the ledger; his phone shows local time (UTC+1). The one stamp taken from the phone is 10416's, 21:49Z: it left his phone 7 minutes before the loom could take it in, during the lockout.
+- What sat above his ask on his phone (the lockout note, 21:46Z) is not drawn: every shot starts after it. The card's state is the PR's at that message: "Open · conflicts" at 21:56 (his own words in 10416), "Open · checks green" at 22:15 (yun90's words), Merged at 22:18:13 (on the delivered card, which arrived 33 s after the merge).
 - yy6ug is four lines; the card keeps only its PR and "rebased on main" (one text element, script.md's rule), plus the Merged pill its second line names. Its first line in full: "delivered &w-hxx3euxqdo1k: brnrd#2606 (topics in the wake, recall and related:) lands: rebased on main, checked against threads/wiki/design.md F4+F5, with what main already carries named".
 - wrt3a and 3be0e are cut to their first sentences; yun90 is shown as its first two sentences (a3-human) and its last paragraph (a1-reply), never whole.
 - Order: in the ledger 10421 (21:57:47, the same ask restated) follows 10416; it is not drawn. In a3-human, x5fukd's 22:10 reply about reloading and 10426's neighbours are cut by the dip.
