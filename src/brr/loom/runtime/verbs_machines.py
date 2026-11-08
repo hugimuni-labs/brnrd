@@ -1,4 +1,6 @@
 """``python -m brr.loom.runtime machines prefer <install>``: ask for inbox on one machine.
+``machines priority <install>``: persist which install leads when available.
+``machines enable <self-url>``: configure shared leases in strict mode.
 ``machines pin <thread> <install>`` / ``machines unpin <thread>``: run a thread on one machine.
 ``machines join <self-url>``: make an empty home a second machine of the resident (``installs.join``).
 
@@ -28,6 +30,10 @@ def _machines(argv: list[str]) -> int:
     sub = parser.add_subparsers(dest="verb", required=True)
     prefer = sub.add_parser("prefer", help="hand the inbox lease, and the connectors, to this install")
     prefer.add_argument("to", metavar="INSTALL")
+    priority = sub.add_parser("priority", help="persist the install that leads whenever it is available")
+    priority.add_argument("to", metavar="INSTALL")
+    enable = sub.add_parser("enable", help="enable shared leases in strict mode on this install")
+    enable.add_argument("url", metavar="SELF_URL")
     pin = sub.add_parser("pin", help="run this thread only on this install; it never fails over")
     pin.add_argument("thread")
     pin.add_argument("to", metavar="INSTALL")
@@ -48,6 +54,11 @@ def _machines(argv: list[str]) -> int:
         return 0
     root, _ = resolve_home(args.home)
     home = Home(root, install=args.install)
+    if args.verb == "enable":
+        from .installs import enable_leases
+        enable_leases(root, args.url)
+        sys.stdout.write("lease_remote is set; strict mode, ttl 180 s. Restart the loom before joining another machine.\n")
+        return 0
     to = None
     if args.verb != "unpin":
         try:
@@ -58,6 +69,20 @@ def _machines(argv: list[str]) -> int:
             # A typo would hand inbox, or the thread, to nobody: the bodies
             # here leave and nothing takes over.
             return refuse("machines", f"{to}: no ledger from that install here; is it joined and shuttled?", 2)
+    if args.verb == "priority":
+        from .config import load_config
+        from .gitlease import Unreachable
+        from .router import gate_for
+        gate = gate_for(home, load_config(root))
+        if gate is None:
+            return refuse("machines", "enable shared leases with `machines enable SELF_URL` first", 2)
+        try:
+            if not gate.set_priority("inbox", to):
+                return refuse("machines", "lease changed or is absent; retry after the loom acquires it", 2)
+        except Unreachable as exc:
+            return refuse("machines", exc, 2)
+        sys.stdout.write(f"inbox priority is {to}, saved on the shared lease; return handback within one ttl on healthy ticks\n")
+        return 0
     if args.verb != "prefer":
         if args.thread == HOME_THREAD:
             return refuse("machines", f"{HOME_THREAD} follows the inbox lease; use `machines prefer`", 2)

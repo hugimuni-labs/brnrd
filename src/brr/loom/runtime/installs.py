@@ -123,12 +123,19 @@ def _git(*args: str, cwd: Path | None = None) -> subprocess.CompletedProcess:
         env={**os.environ, "GIT_TERMINAL_PROMPT": "0"})
 
 
+def enable_leases(root: Path, url: str) -> None:
+    """Configure either machine for partition-safe shared leadership."""
+    from .config import set_value
+    set_value(root, "lease_remote", url)
+    set_value(root, "lease_mode", "strict")
+    set_value(root, "router_ttl", 180)
+
+
 def join(root: Path, url: str) -> str:
     """Make ``root`` a second machine of the resident whose self is at ``url``;
     the one-line result. Refuses a home that has a self, a remote that holds
     none, and one whose machine is not leasing on it yet: that machine routes
     on its own local lease, so a second one would lead beside it."""
-    from .config import set_value
     from .selfrepo import restore_self
 
     root = Path(root).resolve()
@@ -144,7 +151,7 @@ def join(root: Path, url: str) -> str:
     if LEASES + "inbox" not in refs:
         raise JoinError(
             f"no loom leases on {url} yet ({LEASES}inbox is absent). On the machine brnrd runs on "
-            f'now, add lease_remote = "{url}" to loom/config.toml (`brnrd runtime config edit`) '
+            f'now, run `brnrd runtime machines enable {url}` and restart the loom '
             "and wait for its loom to take the lease; then join again.")
     claimed = {ref[len(LEDGERS):] for ref in refs if ref.startswith(LEDGERS)}
     for _ in range(16):
@@ -162,7 +169,7 @@ def join(root: Path, url: str) -> str:
         raise JoinError("could not mint an install id no ledger on the remote holds")
     claim(home)
     sha = restore_self(root, url)
-    set_value(root, "lease_remote", url)
+    enable_leases(root, url)
     return (f"joined {url} as install {install} at self {sha}; lease_remote is set. "
             f"Next: `brnrd setup` for this machine's harness logins, then start the loom: it waits "
             f"for the inbox lease and runs what it is granted.")

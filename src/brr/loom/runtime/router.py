@@ -163,6 +163,7 @@ class Router:
             from .shuttle import Shuttle
             self.shuttle = Shuttle(home, self.gate)
             self.gate.riders = self.shuttle.riders
+            self.gate.before_yield = self._fence_local
         self.gate_lease: Lease | None = None
         self._gate_at: float | None = None
         # A git renew is a network round trip that may stall for tens of
@@ -320,6 +321,10 @@ class Router:
     def _step_down(self) -> None:
         self.gate_lease = None
         self._gate_at = None
+        self._fence_local()
+
+    def _fence_local(self) -> None:
+        """Close outward authorization before publishing a shared release."""
         if self.lease is not None:
             self.authority.release(self.lease)
         self.lease = None
@@ -354,7 +359,10 @@ class Router:
                 self.caught_up = self._caught_up(facts, self.lease.gen)
         if self.lease is None:
             return self._acquire(facts)
-        renewed = self.authority.renew(self.lease, self.config.router_ttl)
+        ttl = self._local_ttl()
+        if ttl <= 0:
+            return self._fence(facts, "expired")
+        renewed = self.authority.renew(self.lease, ttl)
         if renewed is None:
             self.lease = None
             self.granting = False
@@ -368,9 +376,18 @@ class Router:
         self.granting = self.caught_up and self._window()
         return facts
 
+    def _local_ttl(self) -> float:
+        ttl = float(self.config.router_ttl)
+        if self.gate is not None and self.gate.strict and self.gate_lease is not None:
+            ttl = min(ttl, self.gate_lease.until - self.gate.margin - self.gate.clock())
+        return ttl
+
     def _acquire(self, facts: list[Fact], gen: int | None = None) -> list[Fact]:
+        ttl = self._local_ttl()
+        if ttl <= 0:
+            return self._fence(facts, "expired")
         acquired = self.authority.acquire(
-            "router", self.home.install_id(), self.config.router_ttl, gen=gen,
+            "router", self.home.install_id(), ttl, gen=gen,
         )
         if acquired is None:
             self.lease = None

@@ -290,3 +290,73 @@ def test_a_renew_fences_when_the_ref_reads_released(pair):
     a.held["inbox"] = held
     assert a.renew(lease, 90) is None
     assert not a.authorize(lease)
+
+
+def test_persistent_priority_survives_absence_return_and_restart(pair, tmp_path):
+    from brr.loom.runtime.router import GATE_MIN_TTL, GATE_MARGIN, GATE_POLL
+    a, b, ca, cb, remote = pair
+    a.strict = b.strict = True
+    ttl = GATE_MIN_TTL
+    first = a.acquire("inbox", "aaaa", ttl)
+    assert a.set_priority("inbox", "aaaa")
+    # Preferred up: the other cannot displace it, even over several renewals.
+    for _ in range(3):
+        ca.now += ttl / 3
+        cb.now += ttl / 3
+        first = a.renew(first, ttl)
+        assert first and b.acquire("inbox", "bbbb", ttl) is None
+    b.poll()
+    ca.now += ttl + GATE_MARGIN + GATE_POLL
+    cb.now += ttl + GATE_MARGIN + GATE_POLL
+    assert not a.authorize(first)
+    fallback = b.acquire("inbox", "bbbb", ttl)
+    assert fallback and fallback.gen > first.gen
+    # Preferred absent: the fallback keeps renewing, preserving the preference.
+    for _ in range(3):
+        cb.now += ttl / 3
+        fallback = b.renew(fallback, ttl)
+        assert fallback and b.authorize(fallback)
+        assert b.view("inbox")["priority"] == "aaaa"
+    # A fresh process needs no private config copy to know the preference.
+    returning = _authority(tmp_path, "returning", remote, ca, strict=True)
+    assert returning.acquire("inbox", "aaaa", ttl) is None
+    assert returning.view("inbox")["request"] == "aaaa"
+    cb.now += ttl / 3
+    assert b.renew(fallback, ttl) is None
+    assert not b.authorize(fallback)
+    returned = returning.acquire("inbox", "aaaa", ttl)
+    assert returned and returned.gen > fallback.gen
+    assert returning.authorize(returned)
+    assert b.acquire("inbox", "bbbb", ttl) is None
+    assert returning.view("inbox")["priority"] == "aaaa"
+
+
+def test_observing_a_fresh_holder_fences_even_inside_old_validity(pair):
+    a, b, ca, cb, _ = pair
+    old = a.acquire("inbox", "aaaa", 180)
+    # Replay a stale process that still believes its old deadline is live.
+    assert a.release(old)
+    new = b.acquire("inbox", "bbbb", 180)
+    assert new
+    a.held["inbox"] = (old, "stale", ca.now + 180)
+    a.poll()
+    assert not a.authorize(old)
+
+
+def test_request_racing_a_renewal_is_not_erased(pair):
+    a, b, *_ = pair
+    old = a.acquire("inbox", "aaaa", 180)
+    assert a.set_priority("inbox", "bbbb")
+    original = a._push
+    raced = []
+
+    def push(what, body, expected):
+        if not raced:
+            raced.append(True)
+            assert b.acquire("inbox", "bbbb", 180) is None
+        return original(what, body, expected)
+
+    a._push = push
+    assert a.renew(old, 180) is None
+    assert not a.authorize(old)
+    assert b.acquire("inbox", "bbbb", 180) is not None

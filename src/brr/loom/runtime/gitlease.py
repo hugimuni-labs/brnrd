@@ -1,11 +1,15 @@
 """Leases held as refs on the self's remote, swapped by ``git push --force-with-lease``.
 
 A lease is ``refs/leases/<what>``: a commit with an empty tree whose message is
-one JSON line, ``{holder, gen, ttl, ledger, released, preferred?}``. Acquire, renew and
+one JSON line, ``{holder, gen, ttl, ledger, released, preferred?, priority?, request?}``. Acquire, renew and
 release are one atomic push that names the sha this loom last saw, so of two
 racing pushes exactly one lands. A renewal keeps ``gen`` and changes the sha;
 a takeover bumps ``gen``. A release that names ``preferred`` is a handover:
 every other install yields to it for ``ttl`` after it first saw the release.
+
+``priority`` persists across all swaps. Its install, on returning, writes a
+``request`` without changing the holder or generation. The holder fences its
+local outward acts before releasing to it; no live lease is preempted.
 
 No two machines compare clocks. The holder's lease runs ``ttl`` from the moment
 it began the push that landed. A follower counts ``ttl + margin`` from the
@@ -87,6 +91,7 @@ class GitLeaseAuthority:
         self.polled: float | None = None
         self.held: dict[str, tuple[Lease, str, float]] = {}  # what -> (lease, sha, valid_until)
         self.graced: set[str] = set()
+        self.before_yield: Callable[[], None] = lambda: None
         self.prior: dict[str, tuple[str, str]] = {}  # what -> (holder, ledger) we took over
 
     # -- local plumbing -------------------------------------------------
@@ -133,6 +138,16 @@ class GitLeaseAuthority:
             for ref in wanted:
                 self.seen[ref].body = self._body(refs[ref])
         self.polled = now
+        # A shuttle poll can observe loss between renewals. Fence the local
+        # hands at that observation, not at the next scheduled renew.
+        for what, (lease, _sha, _until) in list(self.held.items()):
+            current = self.view(what)
+            if current and (current.get("released") or (
+                    current.get("holder") != lease.holder
+                    and int(current.get("gen", 0)) > lease.gen)):
+                self.before_yield()
+                self.held.pop(what, None)
+                self.graced.discard(what)
         return refs
 
     def _body(self, sha: str) -> dict:
@@ -187,6 +202,22 @@ class GitLeaseAuthority:
             return "", t_send
         raise Unreachable(proc.stderr.strip() or f"push exited {proc.returncode}")
 
+    def set_priority(self, what: str, install: str) -> bool:
+        """Persist a preference with CAS; never change the holder or its gen.
+
+        The preferred follower requests a release. It cannot seize a live
+        lease: the current holder must fence itself first, or expire.
+        """
+        self.poll()
+        current = self.view(what)
+        if current is None:
+            return False
+        body = dict(self.seen[LEASES + what].body)
+        body["priority"] = install
+        body.pop("request", None)
+        sha, _ = self._push(what, body, current["sha"])
+        return bool(sha)
+
     def acquire(self, what: str, holder: str, ttl: float, *,
                 capabilities: set[str] | None = None,
                 required: set[str] | None = None, floor: int = 1) -> Lease | None:
@@ -202,6 +233,12 @@ class GitLeaseAuthority:
             return None
         current = self.view(what)
         if current is not None and not current["expired"] and current.get("holder") != holder:
+            if current.get("priority") == holder and current.get("request") != holder:
+                body = dict(self.seen[LEASES + what].body, request=holder)
+                try:
+                    self._push(what, body, current["sha"])
+                except Unreachable:
+                    pass
             return None
         if current is not None and self._yields(what, current, holder):
             return None
@@ -212,7 +249,8 @@ class GitLeaseAuthority:
                             if current else ("", ""))
         try:
             sha, t_send = self._push(what, {"holder": holder, "gen": gen, "ttl": ttl,
-                                            "released": False}, expected)
+                                            "released": False,
+                                            "priority": current.get("priority", "") if current else ""}, expected)
         except Unreachable:
             return None
         if not sha:
@@ -228,7 +266,26 @@ class GitLeaseAuthority:
         if held is None or held[0].gen != lease.gen or held[0].holder != lease.holder:
             return None
         _old, sha, until = held
-        body = {"holder": lease.holder, "gen": lease.gen, "ttl": ttl, "released": False}
+        # Read metadata before writing, so a renewal never erases a preference.
+        # A preferred follower requests a cooperative handback, never preempts.
+        try:
+            self.poll()
+        except Unreachable:
+            if self.strict or self.contested(lease.holder):
+                return lease if self.authorize(lease) else None
+            self.graced.add(lease.what)
+            return lease
+        current = self.view(lease.what)
+        if current and (current.get("released") or (
+                current.get("holder") != lease.holder and int(current.get("gen", 0)) > lease.gen)):
+            self._drop(lease.what)
+            return None
+        priority = current.get("priority", "") if current else ""
+        if self._handback(lease, ttl, current, held):
+            return None
+        if current and current.get("holder") == lease.holder and current.get("gen") == lease.gen:
+            sha = current["sha"]
+        body = {"holder": lease.holder, "gen": lease.gen, "ttl": ttl, "released": False, "priority": priority}
         try:
             new, t_send = self._push(lease.what, body, sha)
         except Unreachable:
@@ -250,6 +307,10 @@ class GitLeaseAuthority:
         except Unreachable:
             return lease
         if ours:
+            current = self.view(lease.what)
+            if self._handback(lease, ttl, current, held):
+                return None
+            body["priority"] = current.get("priority", "")
             try:
                 new, t_send = self._push(lease.what, body, ours)
             except Unreachable:
@@ -261,6 +322,16 @@ class GitLeaseAuthority:
                 return None
             self.held[lease.what] = (held[0], ours, until)
         return lease
+
+    def _handback(self, lease: Lease, ttl: float, current: dict | None, held: tuple) -> bool:
+        priority = current.get("priority", "") if current else ""
+        if (current and current.get("holder") == lease.holder and priority
+                and priority != lease.holder and current.get("request") == priority):
+            self.before_yield()
+            self.held[lease.what] = (held[0], current["sha"], held[2])
+            self.release(lease, preferred=priority, ttl=ttl)
+            return True
+        return False
 
     def _accepted(self, lease: Lease, sha: str, t_send: float, ttl: float) -> Lease:
         renewed = Lease(lease.what, lease.holder, lease.gen, t_send + ttl, lease.capabilities)
@@ -289,6 +360,10 @@ class GitLeaseAuthority:
         held = self.held.get(lease.what)
         if held is None or held[0].gen != lease.gen or held[0].holder != lease.holder:
             return False
+        current = self.view(lease.what)
+        if current and (current.get("released") or (
+                current.get("holder") != lease.holder and int(current.get("gen", 0)) > lease.gen)):
+            return False
         if self.clock() < held[2] - self.margin:
             return True
         return (lease.what in self.graced and not self.strict
@@ -309,7 +384,8 @@ class GitLeaseAuthority:
         held = self.held.get(lease.what)
         if held is None or held[0].gen != lease.gen:
             return False
-        body = {"holder": lease.holder, "gen": lease.gen, "ttl": 0, "released": True}
+        body = {"holder": lease.holder, "gen": lease.gen, "ttl": 0, "released": True,
+                "priority": (self.view(lease.what) or {}).get("priority", "")}
         if preferred:
             body.update(preferred=preferred, ttl=ttl)
         try:
