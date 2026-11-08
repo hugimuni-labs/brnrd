@@ -179,3 +179,50 @@ def test_a_loom_notice_on_a_persons_chat_is_headed_as_the_loom():
     from brr.loom.runtime.router import LOOM_HEADER, _header
     told = Fact(kind="letter", by="loom:aaaa", id="loom/ref-told-x", data={"from": "loom", "body": "x"})
     assert _header(None, told) == LOOM_HEADER and "not the resident" in LOOM_HEADER
+
+
+def test_a_track_keeps_its_whole_provenance_after_the_verdict(ledger):
+    """10595: the ask, the delivery, his 'Merged' and his board agree stay one chain after the agree.
+
+    The board's agree links the wish and is the verdict's ref; the wish climbing to it made a
+    two-node loop, and the ask and the delivery dropped out of every chain under the wish."""
+    from brr.loom.runtime.asks import Beads, roots
+    from brr.loom.runtime.board import beads_of
+    from brr.loom.runtime.lifecycle import main_snapshot
+    from test_wake import cli
+    home, seat = ledger
+
+    def walk(ident):
+        return Beads(read_facts(home), main_snapshot(home)).chain(ident)
+
+    ask = inject_letter(home.root, to="thread:work", body="a logo bench, please")
+    made = cli(["wish", "new", "--room", str(seat), "--line", "A logo bench", "--say", ask])
+    assert made.returncode == 0, made.stderr
+    wish = made.stdout.strip()
+    sent = send(seat, "--re", ask, f"delivered &{wish}: the bench is up")
+    assert sent.returncode == 0, sent.stderr
+    delivered = sent.stdout.strip()
+    append(home, fact_from_port(parse_frontmatter(out_file(seat, delivered).read_text()), "s-aaaa-test", 1))
+    merged = inject_letter(home.root, to="thread:work", body="Merged", re=delivered)
+    before = {i: walk(i) for i in (ask, wish, delivered, merged)}
+    # The board's agree: a person letter that links the wish, then the verdict citing it.
+    agree = "p-test/agree"
+    append(home, Fact(kind="letter", by="person:p-test", id=agree, data={
+        "id": agree, "to": "thread:work", "from": "p-test", "body": f"agree &{wish}", "links": [wish]}))
+    agreed = cli(["wish", wish, "--home", str(home.root), "--accept", "word", "--ref", agree])
+    assert agreed.returncode == 0, agreed.stderr
+
+    assert walk(wish) == ([(ask, "says")], "person")
+    assert walk(merged) == ([(delivered, "re"), (ask, "re")], "person")
+    assert walk(agree) == ([(wish, "link"), (ask, "says")], "person")
+    # The verdict moved nothing above the agree: every earlier chain reads as it did before it.
+    assert {i: walk(i) for i in before} == before
+    # Every letter of the track sits in one tree rooted at the ask, on the beads the board walks too.
+    rows = beads_of(read_facts(home), main_snapshot(home))
+    for letter in (delivered, merged, agree):
+        at, seen = letter, []
+        while rows[at][0]:
+            at = rows[at][0]
+            seen.append(at)
+        assert at == ask, (letter, seen)
+    assert set(roots(read_facts(home), main_snapshot(home))) <= {"person", "loom", "unconfirmed"}

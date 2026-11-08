@@ -119,6 +119,7 @@ class Beads:
         self.facts = {f.id: f for f in facts}
         self.wishes, self.writers, self.main = told(facts), sender_threads(facts), main
         self.leases = [f for f in state.accepted if f.kind == "lease"]
+        self._busy: set[str] = set()  # wishes whose verdict loop check is running
 
     def kind(self, ident: str) -> str:
         from .refs import kind_of
@@ -170,16 +171,40 @@ class Beads:
             w = self.wishes.get(ident)
             if w is None:
                 return None, "dangling"
-            # A verdict's ref is the letter that gave it, when a letter did.
+            # A said wish climbs to the letter that asked for it, verdict or not: the verdict
+            # comes after the ask and hangs below the wish, so a track keeps its provenance (10595).
+            if w.origin != "derived" and w.says:
+                return w.says[0].letter, "says"
+            # A verdict's ref is the letter that gave it, when a letter did, unless that letter
+            # climbs back to this wish (the board's `agree &w-…` links it): that would be a loop.
             ref = str((w.verdict or {}).get("ref") or "")
-            if ref in self.letters:
-                return ref, "verdict"
+            if ref in self.letters and ident not in self._busy:
+                self._busy.add(ident)
+                try:
+                    loops = self._climbs_to(ref, ident)
+                finally:
+                    self._busy.discard(ident)
+                if not loops:
+                    return ref, "verdict"
             if w.origin == "derived":
-                return None, "unconfirmed"
+                # Confirmed by a verdict that hangs below it: a person's word is the root.
+                return None, "person" if w.verdict else "unconfirmed"
             if w.says:
                 return w.says[0].letter, "says"
             return (f"thread:{w.thread}", "asked") if w.thread else (None, "dangling")
         return None, "dangling"
+
+    def _climbs_to(self, start: str, target: str) -> bool:
+        """Whether walking up from ``start`` reaches ``target`` (never asks ``target`` its own parent)."""
+        seen, at = {start}, start
+        while True:
+            up, _ = self.parent(at)
+            if up == target:
+                return True
+            if up is None or up in seen:
+                return False
+            seen.add(up)
+            at = up
 
     def chain(self, ident: str) -> tuple[list[tuple[str, str]], str]:
         """``ident``'s ancestors as ``(id, edge)``, nearest first, and the root kind."""
