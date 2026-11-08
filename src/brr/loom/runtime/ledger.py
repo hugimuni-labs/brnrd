@@ -40,7 +40,7 @@ def _freeze(data: dict) -> dict:
 # The loom's own file, not a strand's. One writer: the router, except a
 # strand's loom still records that strand's exit and a person asks for a machine.
 _LOOM_KINDS = {
-    "lease", "released", "attention", "router", "router.renewed",
+    "letter.presence", "lease", "released", "attention", "router", "router.renewed",
     "speech", "speech.part", "thread.closed", "attempt.ended", "port.drained", "letter.disposed", "letter.due",
     "loom.started", "home.migrated", "loom.degraded", "loom.recovered", "loom.moved", "loom.pruned", "lease.fenced", "lease.handed", "machines.prefer", "machines.pin", "self.healed",
     "library.problem", "library.cleared", "interview.offer", "interview.offered",

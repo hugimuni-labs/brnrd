@@ -123,7 +123,7 @@ def test_the_registry_is_well_formed():
         assert row.scope in registry.SCOPES, row
         assert len(set(row.names())) == len(row.fields), row
         # The body table folds by strand and generation: its own rows and the ones it reads.
-        if row.resource == "body" or row.resource not in CLOSED:
+        if row.resource == "body" or row.kind in _kinds_read(bodies):
             assert {"strand", "gen"} <= set(row.required()), row
 
 

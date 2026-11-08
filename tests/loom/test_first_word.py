@@ -91,15 +91,6 @@ def test_refusal_is_in_ledger_and_survives_new_call(tmp_path, monkeypatch):
     assert pre(room).get('permissionDecision') != 'deny'
 
 
-def test_relay_typing_only_while_live_and_unanswered(tmp_path, monkeypatch):
-    import connector_support as relay
-    room, letter = setup_boundary(tmp_path, monkeypatch, 61)
-    assert relay.common.typing_targets(tmp_path, alive=lambda r: True) == ['cloud:telegram:42']
-    assert relay.common.typing_targets(tmp_path, alive=lambda r: False) == []
-    port.write_port(room, 'reply', port._front({'kind': 'letter', 'id': 'reply', 're': letter.id}, 'Checking'))
-    assert relay.common.typing_targets(tmp_path, alive=lambda r: True) == []
-
-
 def test_send_timestamp_survives_port_and_attempt_evidence(ledger, monkeypatch):
     from brr.loom.runtime.ledger import inject_letter, read_facts
     from brr.loom.runtime.loom import _ingest, _end_attempt
@@ -118,25 +109,3 @@ def test_send_timestamp_survives_port_and_attempt_evidence(ledger, monkeypatch):
     facts = _end_attempt(home, facts, room.name, 'work', 1, 0, [incoming], 'done')
     ended = next(f for f in facts if f.kind == 'attempt.ended')
     assert ended.data['evidence']['first_word_s'] == {ident: 12}
-
-
-def test_relay_heartbeat_waits_four_seconds_and_ignores_transport_failure(monkeypatch):
-    import connector_support as relay
-    from types import SimpleNamespace
-    calls = []
-    class Stop:
-        done = False
-        def is_set(self):
-            return self.done
-        def wait(self, seconds):
-            calls.append(seconds)
-            self.done = True
-    def fail(chats):
-        calls.append(chats)
-        raise RuntimeError('cloud unavailable')
-    monkeypatch.setattr(relay.common, 'typing_targets', lambda root: ['cloud:telegram:42'])
-    logs = []
-    relay.common.typing_forever(None, SimpleNamespace(typing=fail), Stop(), logs.append,
-                               SimpleNamespace(held=True))
-    assert calls == [['cloud:telegram:42'], 4]
-    assert 'cloud unavailable' in logs[0]

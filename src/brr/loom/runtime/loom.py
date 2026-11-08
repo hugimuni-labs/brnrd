@@ -2350,6 +2350,9 @@ def tick_once(home: Home, bodies: dict[str, Body], adapter: str, core: str,
         facts = _grant_landed(home, facts)
         facts = _grant_opened(home, facts)
         facts = _advance_bodies(home, bodies, facts, (adapter, core), reader=router.reader)
+        presence = getattr(router, "presence", None)
+        if presence is not None:
+            presence.update(facts, armed=router.armed())
         _displace(home, facts)
         # Time enters the owner table once, using only the facts already held.
         facts = observe_due(home, facts, router.armed())
@@ -2577,6 +2580,7 @@ def run(root: Path | str, *, adapter: str = "fake", core: str = "haiku",
             return
         from .connector import Inputs
         inputs = Inputs(home)
+        router.presence = inputs.presence
         health = Health(home, read_facts(home), _log)
         from .snapshot import Publisher
         publisher = Publisher(home, _log, functools.partial(health.guard, backoff=False))

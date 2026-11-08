@@ -18,8 +18,8 @@ ledger's one write path, a kind under its name that has no row here, a writer
 the row does not name, and fields the row does not list. The body's table
 folds ``body`` rows by strand and generation; the other closed resources
 (wishes, pull request receipts, loom starts) are declared for that check
-alone. Rows of any other resource are here because the body's table reads
-them; their writers are not checked and kinds beside them stay undeclared.
+alone. Rows of any other resource document observations, including inputs the body's
+table reads; their writers are not checked and kinds beside them stay undeclared.
 """
 
 from __future__ import annotations
@@ -58,6 +58,7 @@ ROLES = ("loom", "strand", "person")
 SCOPES = ("global", "machine")
 
 REGISTRY = (
+    _kind("letter.presence", "letter", "letter step at channel? native? chat? strand? gen?", "loom", "global"),
     #     kind                resource   fields                                              writer         scope
     _kind("body.pending",      "body",    "strand gen shell core why?",                       "loom",        "machine", once=True),
     _kind("body.parked",       "body",    "strand gen shell core window left_pct until",      "loom",        "machine"),

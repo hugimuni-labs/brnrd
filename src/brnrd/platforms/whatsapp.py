@@ -469,3 +469,21 @@ def verify_subscription(
     if not hmac.compare_digest(verify_token or "", configured_verify_token):
         return None
     return challenge
+
+
+def presence(access_token, phone_number_id, chat_id, message_id, *, working=False,
+             api_base_url='https://graph.facebook.com', api_version='v22.0', timeout=2.0):
+    """React to admission, or mark read with Meta's native typing indicator.
+
+    https://developers.facebook.com/docs/whatsapp/cloud-api/typing-indicators
+    Typing expires at Meta or when a response is sent; there is no off verb.
+    """
+    if working:
+        payload = dict(messaging_product='whatsapp', status='read', message_id=message_id,
+                       typing_indicator=dict(type='text'))
+    else:
+        payload = dict(messaging_product='whatsapp', to=str(chat_id), type='reaction',
+                       reaction=dict(message_id=message_id, emoji='👀'))
+    response = httpx.post(_messages_url(api_base_url, api_version, phone_number_id),
+        headers={'Authorization': f'Bearer {access_token}'}, json=payload, timeout=timeout)
+    _raise_for_response(response)
