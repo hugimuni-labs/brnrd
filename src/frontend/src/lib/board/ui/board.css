@@ -82,6 +82,12 @@
 .brd #fuel .name {
 	font-weight: 600;
 }
+.brd #lead {
+	cursor: help;
+}
+.brd #lead b {
+	color: #171717;
+}
 .brd .dim {
 	color: #777;
 }
