@@ -1541,7 +1541,18 @@ def _handed_away(home, facts) -> bool:
 
 def _fenced(home, facts) -> bool:
     """This install should not speak or publish: it lost inbox, or handed it."""
-    return _lease_lost(home, facts) or _handed_away(home, facts)
+    if _lease_lost(home, facts) or _handed_away(home, facts):
+        return True
+    # Bodies use this guard in their own processes. A poll closes the local
+    # lease before a remote release, and strict deadlines must hold even if
+    # the routing loop stalls before it can append a lease.fenced fact.
+    from .config import load_config, loom_clock
+    if load_config(home.root).lease_remote:
+        from brr.daemon2.leases import LocalLeaseAuthority
+        authority = LocalLeaseAuthority(home.root / "ledger/leases", clock=loom_clock)
+        row = authority._read(authority._paths("router")[0])
+        return row.get("holder") != home.install_id() or row.get("until", 0) <= loom_clock()
+    return False
 
 
 def _observe_body(home, facts, strand, thread, gen, bodies, *, choice=None, force=False):

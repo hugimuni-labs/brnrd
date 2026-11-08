@@ -17,17 +17,18 @@ the existing self instead of seeding a new one.
 
 ## 1. The machine that already runs
 
-Point the lease at the self's GitHub repository, in `<home>/loom/config.toml`:
+Enable the shared lease on the existing machine:
 
-```toml
-lease_remote = "https://github.com/<you>/<self-repo>.git"
+```sh
+brnrd runtime machines --home <home> enable https://github.com/<you>/<self-repo>.git
 ```
 
-The lease lasts `router_ttl`, and at least 180 s. `lease_mode` decides what a
-leader does when it cannot reach GitHub. With `contested`, the default, it
-keeps routing unless another machine's ledger moved in the last 10 minutes.
-With `strict` it stops when its lease runs out, even when it is the only
-machine.
+This writes `lease_remote`, `lease_mode = "strict"` and `router_ttl = 180`,
+preserving other settings. Strict mode stops outward acts when the lease
+expires during a partition. Joining a second machine writes the same settings
+there. The lease renews every 60 s; followers poll every 40 s, with a 10 s
+expiry margin. Healthy expiry takeover takes about 190–230 s after the last
+renewal the follower observed. Slow Git calls and ticks add to that allowance.
 
 Restart the loom. Each install's ledger then travels on its own
 `refs/ledger/<install>` ref of the self. A machine without `lease_remote`
@@ -46,7 +47,8 @@ leads only itself and shares no ledger.
    It clones the self into an empty home (`--home`, `BRNRD_HOME`, or
    `~/brnrd`, as setup picks), mints an install id that no ledger on the
    remote holds, and writes `lease_remote` into this machine's
-   `loom/config.toml`. It refuses a home that already has a self, and a
+   `loom/config.toml`, with strict mode and a 180 s TTL. It refuses a home
+   that already has a self, and a
    remote that has no `refs/leases/inbox` yet: that means step 1 is not done,
    and the first machine still leads on its own local lease.
 3. Run `brnrd setup` for this machine's channel and logins. It finds the
@@ -67,6 +69,26 @@ start. Its log says `not starting:` and why.
   other's id, refuses with "no ledger from that install here" until that
   ledger has arrived. Once it is accepted, the leader hands the inbox lease
   over at its next renew.
+
+## Keep the laptop preferred
+
+After its ledger has arrived, run once on either machine:
+
+```sh
+brnrd runtime machines --home <home> priority <laptop-install-id>
+```
+
+The preference lives in the shared lease ref and survives both machines'
+restarts. When the laptop is absent the other machine leads. On returning,
+the laptop requests handback; the current holder fences its outward acts
+before releasing. With healthy ticks and GitHub, allow one TTL (180 s): a
+40 s follower poll, a 60 s holder renew and another 40 s poll. No live lease
+is seized. If the holder cannot respond, strict expiry remains the fallback.
+The old holder also fences as soon as any poll observes a newer holder.
+
+`prefer` remains a one-use handover. A persistent priority can subsequently
+return the lead to its named machine; change `priority` to change that policy.
+Both machines must run a version supporting priority before enabling it.
 
 ## Moving work between machines
 

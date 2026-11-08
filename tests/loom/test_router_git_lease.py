@@ -443,3 +443,81 @@ def test_expired_local_lease_keeps_the_git_generation(tmp_path):
     router.begin_tick(facts)
     assert router.lease is not None and router.lease.gen == gen
     assert router.armed()
+
+
+def test_priority_handback_fences_local_speech_before_remote_release(tmp_path):
+    from brr.loom.runtime.verbs_machines import _machines
+    remote = tmp_path / "self.git"
+    subprocess.run(["git", "init", "--bare", "-q", str(remote)], check=True)
+    ah, bh = _home(tmp_path, "aaaa", remote), _home(tmp_path, "bbbb", remote)
+    a, b = _router(ah, 100), _router(bh, 9000)
+    a.begin_tick(read_facts(ah))
+    b.begin_tick(read_facts(bh))
+    assert a.armed() and not b.armed()
+    stale = a.lease
+    # CLI writes the shared ref; no ledger preference replay is needed.
+    assert _machines(["--home", str(bh.root), "--install", "bbbb", "priority", "bbbb"]) == 0
+    b.gate.clock.now += GATE_POLL
+    b.begin_tick(read_facts(bh))
+    assert not b.armed() and a.armed()
+    release = a.gate.release
+    checked = []
+
+    def releasing(lease, **kw):
+        assert not a.authority.authorize(stale)
+        assert not a.armed()
+        checked.append(True)
+        return release(lease, **kw)
+
+    a.gate.release = releasing
+    a.gate.clock.now += GATE_MIN_TTL / 3
+    a.begin_tick(read_facts(ah))
+    assert checked and not a.armed()
+    b.gate.clock.now += GATE_POLL
+    b.begin_tick(read_facts(bh))
+    assert b.armed() and not a.armed()
+    assert b.gate_lease.gen == 2
+
+
+def test_shuttle_observation_of_new_generation_closes_local_outward_fence(tmp_path):
+    remote = tmp_path / "self.git"
+    subprocess.run(["git", "init", "--bare", "-q", str(remote)], check=True)
+    ah, bh = _home(tmp_path, "aaaa", remote), _home(tmp_path, "bbbb", remote)
+    a, b = _router(ah, 100), _router(bh, 9000)
+    a.begin_tick(read_facts(ah))
+    local, old = a.lease, a.gate.held["inbox"]
+    # Simulate both processes believing they hold: stale RAM, newer remote.
+    a.gate.release(a.gate_lease)
+    b.begin_tick(read_facts(bh))
+    assert b.armed()
+    a.gate.held["inbox"] = old
+    assert a.authority.authorize(local)
+    a.gate.poll()  # the shuttle also polls; no renewal is required to fence
+    assert not a.authority.authorize(local)
+    assert not a.armed()
+
+
+def test_strict_local_deadline_never_outlives_git_even_without_another_tick(tmp_path, monkeypatch):
+    from brr.loom.runtime import config, loom
+    from brr.loom.runtime.installs import enable_leases
+    remote = tmp_path / "self.git"
+    subprocess.run(["git", "init", "--bare", "-q", str(remote)], check=True)
+    home = _home(tmp_path, "aaaa", remote)
+    enable_leases(home.root, str(remote))
+    router = _router(home, 100)
+    local_clock = Clock(5000)
+    router.clock = router.authority.clock = local_clock
+    monkeypatch.setattr(config, "loom_clock", local_clock)
+    router.begin_tick(read_facts(home))
+    assert not loom._fenced(home, read_facts(home))
+    # Renew locally just before the Git renew beat, then stall the loom.
+    router.gate.clock.now += GATE_MIN_TTL / 3 - 1
+    local_clock.now += GATE_MIN_TTL / 3 - 1
+    router.begin_tick(read_facts(home))
+    assert router.lease.until <= 5000 + GATE_MIN_TTL - GATE_MARGIN
+    router.gate.clock.now += GATE_MIN_TTL
+    local_clock.now += GATE_MIN_TTL
+    assert not router.authority.authorize(router.lease)
+    # This is the actual guard called by person send and publish, without
+    # any new tick or lease.fenced fact being available to their process.
+    assert loom._fenced(home, read_facts(home))

@@ -61,6 +61,8 @@ def test_join_clones_the_self_with_a_new_install_and_one_union(tmp_path, monkeyp
     assert _git("-C", str(out / "self"), "rev-parse", "HEAD") == _git(
         "-C", str(remote), "rev-parse", "main")
     assert load_config(out).lease_remote == str(remote)
+    assert load_config(out).lease_mode == "strict"
+    assert load_config(out).router_ttl == 180
     assert refusal(second, Router(second).gate) == ""
 
     # One union: the second machine reads the first's facts off the shuttle.
@@ -147,3 +149,14 @@ def test_a_home_reading_while_another_mints_sees_the_whole_id(tmp_path, monkeypa
     ids.append(Home(tmp_path).install_id())
     minting.join(5)
     assert len(ids) == 2 and ids[0] == ids[1] == (tmp_path / "loom/install-id").read_text().strip()
+
+
+def test_enable_sets_partition_safe_config_preserving_other_settings(tmp_path):
+    root = tmp_path / "imac"
+    (root / "loom").mkdir(parents=True)
+    (root / "loom/config.toml").write_text('router_ttl = 30\nlease_mode = "contested"\nmargin = 2\n')
+    assert _machines(["--home", str(root), "enable", "https://github.com/example/self.git"]) == 0
+    config = load_config(root)
+    assert config.lease_remote == "https://github.com/example/self.git"
+    assert config.lease_mode == "strict" and config.router_ttl == 180
+    assert config.margin == 2
