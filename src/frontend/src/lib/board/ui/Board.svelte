@@ -6,7 +6,7 @@
 	import { updated } from '$app/state';
 	import './board.css';
 	import { arrange, bst, byThread, SETTLED, TOPICS, sortThreads, wanted } from '../order.ts';
-	import { headerFuel } from '../parts.ts';
+	import { headerFuel, leadName, machinesTitle } from '../parts.ts';
 	import { barGauge } from '../../loomSnapshot.ts';
 	import FuelMarks from '../../FuelMarks.svelte';
 	import { INBOX } from '../sides.ts';
@@ -155,6 +155,11 @@
 				</span>
 			{/each}
 		</span>
+		{#if leadName(b.model?.machines)}
+			<span id="lead" class="dim" title={machinesTitle(b.model?.machines)}
+				>leads <b>{leadName(b.model?.machines)}</b></span
+			>
+		{/if}
 		<span id="open" style="color:#d33">{b.letters.filter((l) => l.open).length} open</span>
 		<span class="dim" id="at"
 			>loom {b.heard.slice(11, 19)}Z · {b.letters.length} letters · as {b.model?.person ||

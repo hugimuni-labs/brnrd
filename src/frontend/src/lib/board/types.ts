@@ -116,10 +116,14 @@ export type Live = {
 export type Gauge = { window: string; left_pct: number; resets_at?: string };
 export type Fuel = { shell: string; gauges: Gauge[]; error?: string };
 
+export type Machine = { id: string; lead: boolean; here: boolean; gen?: number; seen?: string };
+
 export type Index = {
 	v: number;
 	threads: Thread[];
 	fuel?: Fuel[];
+	// the resident's installs, the one leading inbox first (absent until a router fact is heard)
+	machines?: Machine[];
 	// the rail's face frames by 'running' / 'idle' (brr.emotes.for_telemetry)
 	faces?: Record<string, string[]>;
 	wishes: Record<string, Record<string, number>>;
@@ -161,6 +165,7 @@ export type Model = {
 	tools: Record<string, ToolCall[]>;
 	live: Record<string, Live>;
 	fuel: Fuel[];
+	machines: Machine[];
 	faces?: Record<string, string[]>;
 	person: string | null;
 	via?: string | null;

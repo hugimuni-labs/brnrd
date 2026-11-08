@@ -7,6 +7,7 @@ import type {
 	Fuel,
 	Index,
 	Letter,
+	Machine,
 	Model,
 	Thread,
 	ThreadPart,
@@ -63,6 +64,22 @@ export function headerFuel(fuel: Fuel[] | undefined): string {
 		.join('   ');
 }
 
+// The leading machine, and on hover every machine this install has heard of. `seen` is the newest router beat
+// that reached this install, not liveness: a peer's facts come through the shuttle a couple of minutes late.
+export function leadName(machines: Machine[] | undefined): string {
+	return (machines ?? []).find((m) => m.lead)?.id ?? '';
+}
+
+export function machinesTitle(machines: Machine[] | undefined): string {
+	return (machines ?? [])
+		.map((m) => {
+			const beat = m.seen ? `, beat ${m.seen.slice(11, 19)}Z` : '';
+			const gen = m.gen !== undefined ? ` gen ${m.gen}` : '';
+			return `${m.id}${m.here ? ' (the loom serving this page)' : ''}: ${m.lead ? 'leads' : 'follows'}${gen}${beat}`;
+		})
+		.join('\n');
+}
+
 export function join(row: Thread, part?: ThreadPart): Thread {
 	if (!part) return row;
 	const head: Partial<Thread> = {};
@@ -92,6 +109,7 @@ export function assemble(index: Index, threads: Map<string, ThreadPart>, loose?:
 		tools,
 		live,
 		fuel: index.fuel || [],
+		machines: index.machines || [],
 		faces: index.faces,
 		person: index.person,
 		via: index.via,

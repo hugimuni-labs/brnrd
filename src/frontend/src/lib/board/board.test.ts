@@ -8,7 +8,17 @@ import { pipOn, stages, stageWord } from './stages.ts';
 import { answered, stack, verdictLetter } from './calls.ts';
 import { inboxCards, ledger, threadWishes, unechoed } from './ledger.ts';
 import { bar, beats, liveOf, withTools } from './tape.ts';
-import { ancestors, children, headerFuel, moved, patchBeads, Store, type Beads } from './parts.ts';
+import {
+	ancestors,
+	children,
+	headerFuel,
+	leadName,
+	machinesTitle,
+	moved,
+	patchBeads,
+	Store,
+	type Beads
+} from './parts.ts';
 import { face, moves, seen, waitOf } from './rail.ts';
 import { stamps } from './stamps.ts';
 
@@ -808,4 +818,19 @@ test('colour is the thread: a strand letter takes its thread, his letters the ne
 		thread: 'inbox',
 		line: 'solid'
 	});
+});
+
+test('the header names the leading machine and lists every machine on hover', () => {
+	const m = [
+		{ id: 'ae66', lead: true, here: false, gen: 12, seen: '2026-11-08T22:17:00+00:00' },
+		{ id: '46a2', lead: false, here: true }
+	];
+	equal(leadName(m), 'ae66');
+	equal(leadName([]), '');
+	equal(leadName(undefined), '');
+	equal(
+		machinesTitle(m),
+		'ae66: leads gen 12, beat 22:17:00Z\n46a2 (the loom serving this page): follows'
+	);
+	equal(machinesTitle(undefined), '');
 });

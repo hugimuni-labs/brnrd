@@ -602,3 +602,22 @@ def test_usage_moves_the_header_fuel_without_a_recompute(parts, monkeypatch):
     assert [row["shell"] for row in parts.parts["index"]["fuel"]] == ["claude", "vibe"]
     assert "grok" not in shell_fuels(parts.home)
     assert parts.hashes["thread/web"] == held
+
+
+def test_the_index_names_the_leading_machine_and_the_others(parts):
+    root = parts.home.root
+    me = parts.home.install_id()
+    inject_letter(root, to="thread:web", body="first")
+    assert parts.step()
+    assert "machines" not in parts.parts["index"]  # no router fact heard: nothing is claimed
+    (root / "ledger" / "facts" / "beef").mkdir(parents=True)  # a peer with a ledger and no router fact
+    append(parts.home, Fact(kind="router", by="loom", id="router:old:3",
+                            data={"install": "old1", "gen": 3, "until": time.time() + 60}))
+    append(parts.home, Fact(kind="router", by="loom", id="router:me:4",
+                            data={"install": me, "gen": 4, "until": time.time() + 60}))
+    inject_letter(root, to="thread:web", body="second")
+    assert parts.step()
+    rows = parts.parts["index"]["machines"]
+    assert [(r["id"], r["lead"], r["here"]) for r in rows] == [
+        (me, True, True), ("beef", False, False), ("old1", False, False)]
+    assert rows[0]["gen"] == 4 and "gen" not in rows[1] and rows[2]["gen"] == 3

@@ -32,6 +32,7 @@ from urllib.parse import parse_qs, urlsplit
 from .dispositions import letter_index
 from .config import read_array
 from .connector import instances
+from .ledger import kind_facts
 from .home import Home, atomic_write, channel_parts, mint, thread_of
 from .port import _front
 from .lifecycle import CLOSED, main_snapshot
@@ -608,6 +609,43 @@ def thread_body(thread: dict) -> dict:
 FACES = {s: list(emotes.for_telemetry(s).frames) for s in ("idle", "running")}
 
 
+def machines_of(home: Home, facts) -> list[dict]:
+    """The installs of this resident and which one leads: ``[{id, lead, here, gen?, seen?}]``, the leader first.
+
+    The leader is the install whose ``router`` / ``router.renewed`` fact carries the highest gen (a gen has one
+    holder). The ledger shuttle brings a peer's facts up to a couple of minutes late, so this is a read of
+    what this install has heard, not of the lease ref; ``seen`` is the newest beat heard, and it is not a
+    liveness claim (a renewal alone never recomputes the board). An install with a ledger and no router
+    fact is a follower. Empty when no router fact has been heard.
+    """
+    newest: dict[str, tuple[int, object]] = {}
+    for f in kind_facts(facts, "router", "router.renewed"):
+        if f.kind not in {"router", "router.renewed"}:
+            continue
+        who = f.data.get("install")
+        try:
+            gen = int(f.data["gen"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        if who and (who not in newest or (gen, f.at) >= (newest[who][0], newest[who][1].at)):
+            newest[who] = (gen, f)
+    if not newest:
+        return []
+    lead = max(newest, key=lambda who: newest[who][0])
+    here = home.install_id()
+    ids = set(newest) | {here}
+    folder = home.root / "ledger" / "facts"
+    if folder.is_dir():
+        ids |= {p.name for p in folder.iterdir() if p.is_dir()}
+    rows = []
+    for who in ids:
+        row: dict = {"id": who, "lead": who == lead, "here": who == here}
+        if who in newest:
+            row["gen"], row["seen"] = newest[who][0], _iso(newest[who][1].at)
+        rows.append(row)
+    return sorted(rows, key=lambda r: (not r["lead"], r["id"]))
+
+
 def compute(home: Home, facts, config, tools: dict, live: dict, person: str | None = None,
             typed: dict | None = None) -> dict[str, dict]:
     """Every part by name. The index is hashes, counts and short rows; fat rows ride in their own part.
@@ -653,6 +691,8 @@ def compute(home: Home, facts, config, tools: dict, live: dict, person: str | No
     index = {"v": 1, **{k: v for k, v in snap.items() if k not in {"at", "log"}},
              "threads": [index_thread(t, counts.get(t["id"])) for t in threads],
              "wishes": counts, **_as(home, person), "parts": hashes, "faces": FACES}
+    if machines := machines_of(home, facts):
+        index["machines"] = machines
     parts["index"] = index
     return parts
 
