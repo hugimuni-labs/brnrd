@@ -4,6 +4,8 @@ import sys
 import threading
 import subprocess
 
+import pytest
+
 from brr.loom.runtime import config, loom, usage
 from brr.loom.runtime.home import Home
 from brr.loom.runtime.ledger import read_facts
@@ -88,3 +90,45 @@ def test_loop_refreshes_all_resolved_usage_shells_every_ten_minutes(tmp_path, mo
     monkeypatch.setattr(loom, '_pause', pause)
     loom.run(tmp_path, stop=stop)
     assert calls == [(at, shell) for at in (100., 700., 1300.) for shell in sorted(expected)]
+
+
+@pytest.mark.parametrize("setting", [
+    'lease_remote = "https://example.invalid/self.git"',
+    'lease_mode = "strict"',
+    'router_ttl = 180',
+    'forge_token = "command: gh auth token"',
+])
+def test_lease_config_change_fences_before_next_input_or_route(tmp_path, monkeypatch, setting):
+    from brr.loom.runtime.connector import Inputs
+    from brr.daemon2.leases import LocalLeaseAuthority
+    from brr.loom.runtime.config import loom_clock
+
+    write_thread(tmp_path, 'brnrd', 'Brnrd', 'quit-now')
+    path = tmp_path / 'loom/config.toml'
+    good = path.read_text()
+    stop = threading.Event()
+    real_step = loom.tick_once
+    monkeypatch.setattr(usage, 'shells', lambda home: ())
+    polls, routes, execs = [], [], []
+    monkeypatch.setattr(Inputs, 'step', lambda self: polls.append(path.read_text()))
+
+    def step(home, bodies, adapter, core, router):
+        real_step(home, bodies, adapter, core, router)
+        routes.append(router.lease)
+        if len(routes) == 2:
+            assert router.armed()
+            path.write_text(good + '\n' + setting + '\n')
+        if len(routes) > 2:
+            stop.set()
+
+    def execute(*args):
+        authority = LocalLeaseAuthority(tmp_path / 'ledger/leases', clock=loom_clock)
+        assert not authority.authorize(routes[-1])
+        execs.append(args)
+
+    monkeypatch.setattr(loom, 'tick_once', step)
+    monkeypatch.setattr(loom.os, 'execv', execute)
+    loom.run(tmp_path, stop=stop, tick=.001)
+    assert len(routes) == 2
+    assert polls == [good]
+    assert execs == [(sys.executable, [sys.executable, *sys.orig_argv[1:]])]
