@@ -28,7 +28,10 @@ def _git(cwd, *args):
 
 class Forge:
     def __init__(self, verdict):
-        self.verdict_of, self.asked = verdict, []
+        self.verdict_of, self.asked, self.unchecked = verdict, [], set()
+
+    def ran(self, url, sha):
+        return sha not in self.unchecked
 
     def gates(self, url, pull):
         return None
@@ -137,6 +140,31 @@ def test_a_loom_the_shim_started_re_execs_through_the_shim(world, monkeypatch):
     monkeypatch.setattr(sys, "orig_argv", ["/old/bin/python", "-m", "brr", "runtime", "loom", "--home", "/h"])
     _run(world.root, lambda: world.execs)
     assert world.execs[0] == (str(entry.shim()), [str(entry.shim()), "runtime", "loom", "--home", "/h"])
+
+
+def _receipt(world, n=1):
+    """Commits the receipt workflow pushes on main after a release: no check ever runs on them."""
+    for i in range(n):
+        (world.upstream / "README.md").write_text(f"receipt {i}\n")
+        _git(world.upstream, "add", "-A")
+        _git(world.upstream, "commit", "-qm", f"receipt: {i} commits on main")
+        world.forge.unchecked.add(_git(world.upstream, "rev-parse", "HEAD"))
+    _git(world.upstream, "push", "-q", "origin", "main")
+
+
+def test_an_unchecked_tip_moves_the_loom_to_the_green_merge_below_it(world):
+    _receipt(world, 2)
+    _run(world.root, lambda: world.execs)
+    assert _git(world.source, "rev-parse", "HEAD") == world.tip
+    assert world.forge.asked[-1] == world.tip
+
+
+def test_only_unchecked_commits_ahead_offer_no_move(world):
+    _git(world.source, "pull", "-q", "--ff-only", "origin", "main")
+    _receipt(world)
+    source = update.DevSource(world.source, world.forge)
+    assert source.poll() is None
+    assert world.forge.asked == []
 
 
 def test_a_red_tip_waits_without_a_fact(world):

@@ -10,7 +10,8 @@ bodies seldom pause at once; the start that
 follows writes ``loom.moved``. It never resets: a HEAD main does not contain,
 a branch other than main or a tree with uncommitted changes is refused, and
 the refusal is the ``update`` step's ``loom.degraded``. Red or pending checks
-wait without a fact; a red one is said once in loom.log. A check counts only
+wait without a fact; a red one is said once in loom.log. A tip no check ever runs on (the
+receipt line's bot push) is stepped over to its first parent that has some. A check counts only
 when the tip's pull request had to pass it (``GitHubChecks.gates``): a deploy
 is not a gate. ``stable`` is the release channel (product-shape move 3), not
 built here: it logs once and stays put. ``auto``, the default, is
@@ -42,6 +43,8 @@ PASSED = {"success", "neutral", "skipped"}
 #: Seconds a ``since`` judgment with no run started since reads pending: GitHub
 #: registers a rerun's check runs a few seconds after ``gh run rerun`` returns.
 RERUN_GRACE = 120
+#: How many unchecked commits on main's tip ``poll`` steps over: the receipt line's push after a release is one.
+UNCHECKED = 5
 
 
 def _moment(text) -> datetime | None:
@@ -122,6 +125,13 @@ class GitHubChecks:
 
     def _runs(self, repo: str, sha: str) -> list[dict]:
         return self._get(repo, f"commits/{sha}/check-runs?per_page=100").get("check_runs") or []
+
+    def ran(self, url: str, sha: str) -> bool:
+        """Whether any check ran on ``sha``. A push made with a workflow's own token starts none: receipt-line.yml's
+        README commit after every release sat on main's tip with no runs, read pending for ever, and held every
+        following loom until the next merge (0.7.1, 2026-11-10: #2679 merged 15:37Z, unloaded at 16:15Z)."""
+        repo = slug(url)
+        return repo is None or bool(self._runs(repo, sha))
 
     def gates(self, url: str, pull: int | None) -> set[str] | None:
         """The checks pull request ``pull`` had to pass: those that ran on its head, not skipped.
@@ -221,15 +231,26 @@ class DevSource:
         if not self._ancestor(head, tip):
             raise Refused(f"checkout {self.root} at {head[:8]} has diverged from main "
                           f"{tip[:8]}: not touched")
-        subject = self._git("log", "-1", "--format=%s", tip)
-        state, red = self.forge.judge(url, tip, self.forge.gates(url, pull_of(subject)))
+        # A tip no check ran on and no pull request gated is never judged: the move goes as far as its first parent
+        # that is (``GitHubChecks.ran``). A merge whose runs are not registered yet still waits, as pending.
+        target = tip
+        subject = self._git("log", "-1", "--format=%s", target)
+        for _ in range(UNCHECKED):
+            if pull_of(subject) is not None or self.forge.ran(url, target):
+                break
+            parent = self._git("rev-parse", f"{target}^1")
+            if parent == head or not self._ancestor(head, parent):
+                return None
+            target = parent
+            subject = self._git("log", "-1", "--format=%s", target)
+        state, red = self.forge.judge(url, target, self.forge.gates(url, pull_of(subject)))
         if state == "red":
-            return Held(tip, head, red)
+            return Held(target, head, red)
         if state != "green":
             return None
         if why := self.refusal():
             raise Refused(why)
-        return Offer(head, tip)
+        return Offer(head, target)
 
     def apply(self, offer: Offer) -> bool:
         """On the loop, at an idle tick: fast-forward; false when HEAD moved since the poll."""
