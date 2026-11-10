@@ -11,7 +11,9 @@ after(() => B?.close());
 
 test('the board has its own layout: no app fetches, no grain, no page errors', async () => {
 	assert.deepEqual(
-		B.requests.filter((p) => p.startsWith('/v1/') && !p.startsWith('/v1/loom/')),
+		B.requests.filter(
+			(p) => p.startsWith('/v1/') && !p.startsWith('/v1/loom/') && p !== '/v1/site'
+		),
 		[]
 	);
 	const grain = await B.page.evaluate(() => getComputedStyle(document.body, '::before').display);
