@@ -2,7 +2,7 @@
 # Install the brnrd command onto PATH. POSIX sh: macOS /bin/sh and Debian dash.
 # Safe to run twice. BRNRD_INSTALL_DRY_RUN=1 prints the commands and does not
 # run them. Probes still run, so a second run prints upgrade rather than install.
-# Both paths end with the loom installed as a login service and its status.
+# Both paths install the command; setup pairs the doors and starts the loom.
 # --dev (or BRNRD_INSTALL_DEV=1) installs a checkout of main that the loom
 # follows instead of the PyPI release: sh -s -- --dev when piped.
 # The uv bootstrap is not a pipe. POSIX sh has no pipefail, and sh exits 0
@@ -232,17 +232,6 @@ dev_checkout() {
   run_named "git -C ${DEV_DIR} pull --ff-only origin main" git -C "$DEV_DIR" pull --ff-only origin main
 }
 
-brnrd_named() {
-  name="brnrd $*"
-  if [ "$dry" -eq 1 ]; then
-    show "$name"
-    return 0
-  fi
-  if ! "${bindir}/brnrd" "$@" </dev/null; then
-    fail "Failed to run ${name}; run it by hand."
-  fi
-}
-
 install_dev() {
   git --version >/dev/null 2>&1 || fail "git is missing (on macOS: xcode-select --install); install it and run this again."
   if ! command -v uv >/dev/null 2>&1; then
@@ -252,9 +241,6 @@ install_dev() {
   uvbin=$(command -v uv || echo uv)
   run_named "uv tool install --editable ${DEV_DIR}" "$uvbin" tool install --editable "$DEV_DIR"
   uv_path "$uvbin"
-  brnrd_named loom install --dev --dry-run
-  brnrd_named loom install --dev
-  brnrd_named loom status
 }
 
 preflight
@@ -280,10 +266,4 @@ else
 fi
 
 show_version
-# Whichever installer ran, show_version proved brnrd is on PATH.
-if [ "$dry" -eq 0 ]; then
-  bindir=$(dirname "$(command -v brnrd)")
-fi
-brnrd_named loom install
-brnrd_named loom status
 show "Next: brnrd setup"
