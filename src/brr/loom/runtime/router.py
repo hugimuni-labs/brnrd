@@ -760,7 +760,7 @@ class Router:
                         tell("speech-refused",
                              "was refused: that is not a known person's direct chat", fresh)
                         continue
-                    body = f"{_header(state, fact, facts)}\n\n{body}"
+                    body = f"{_header(state, fact, facts, home=self.home)}\n\n{body}"
                     from .firstword import pending
                     person = person_dm(self.home, str(to)).removeprefix("person:")
                     interview = pending(facts, person)
@@ -797,7 +797,7 @@ class Router:
 LOOM_HEADER = "⌁ loom: an automatic notice, not the resident"
 
 
-def _header(state, letter: Fact, facts: list[Fact] | None = None) -> str:
+def _header(state, letter: Fact, facts: list[Fact] | None = None, *, home: Home | None = None) -> str:
     """The face the body decided, its thread, and the fact the loom last proposed on.
 
     No decided face is the resting one; strand ids stay in the ledger. Faces
@@ -817,7 +817,20 @@ def _header(state, letter: Fact, facts: list[Fact] | None = None) -> str:
     decided = faces(facts).get(thread, {})
     face = decided["face"] if decided.get("strand") == strand else REST_FACE
     said = voice(facts, strand, gen, thread)
-    return f"{face} ⌁ [ {thread} ]" + (f" · {said}" if said else "")
+    machine = ""
+    if home is not None:
+        here = home.install_id()
+        known = {here} | {str(f.data["install"]) for f in facts
+                          if f.kind in {"router", "router.renewed", "loom.started"}
+                          and f.data.get("install")}
+        folder = home.root / "ledger" / "facts"
+        if folder.is_dir():
+            known.update(p.name for p in folder.iterdir() if p.is_dir())
+        if len(known) > 1:
+            # Identify this transport's sender, never the cached lease holder
+            # or the install that originally drafted a shuttled letter.
+            machine = f" · {load_config(home.root).name or here}"
+    return f"{face} ⌁ [ {thread}{machine} ]" + (f" · {said}" if said else "")
 
 
 def _answers_event(state, letter: Fact) -> str | None:

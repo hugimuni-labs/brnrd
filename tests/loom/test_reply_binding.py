@@ -222,6 +222,29 @@ def test_chat_header_is_the_face_and_thread_even_after_release(home):
     assert _header(state, Fact(kind="letter", by="loom:aaaa")) == "b·_·d ⌁"
 
 
+@pytest.mark.parametrize("named", [False, True])
+@pytest.mark.parametrize("peer", ["folder", "router"])
+def test_chat_header_names_sending_machine_with_a_known_peer(home, named, peer):
+    key = draft(home, "first", sent=False)
+    if named:
+        from brr.loom.runtime.config import set_value
+        set_value(home.root, "name", "Desk")
+    if peer == "folder":
+        (home.root / "ledger/facts/bbbb").mkdir(parents=True)
+    else:
+        # A stale remote leader row must not supply the sending identity.
+        append(home, Fact(kind="router", by="loom:bbbb", id="peer-router", data={
+            "install": "bbbb", "gen": 999}))
+    router = Router(home)
+    facts = router.begin_tick(read_facts(home))
+    assert router.armed()
+    router.speak_out(facts)
+    sent = json.loads((home.root / "loom/channel-fake.jsonl").read_text())
+    assert sent["key"] == key
+    machine = "Desk" if named else "aaaa"
+    assert sent["text"] == f"b·_·d ⌁ [ first · {machine} ]\n\nThe first answer\nMore detail"
+
+
 @pytest.mark.parametrize("destination,expected", [(CHANNEL, "incoming"), ("channel:other/42", None),
                                                   ("channel:mine/43", None)])
 def test_send_binds_native_reply_only_in_its_source_channel(home, monkeypatch, destination, expected):
