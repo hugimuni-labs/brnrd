@@ -637,9 +637,15 @@ def machines_of(home: Home, facts) -> list[dict]:
     folder = home.root / "ledger" / "facts"
     if folder.is_dir():
         ids |= {p.name for p in folder.iterdir() if p.is_dir()}
+    from .config import load_config
+    from .installs import display_name
+    names = {f.data["install"]: f.data["name"] for f in kind_facts(facts, "machines.name")
+             if f.data.get("install") and f.data.get("name")}
+    names[here] = display_name(load_config(home.root))
     rows = []
     for who in ids:
-        row: dict = {"id": who, "lead": who == lead, "here": who == here}
+        row: dict = {"id": who, "name": names.get(who, "Other computer"),
+                     "lead": who == lead, "here": who == here}
         if who in newest:
             row["gen"], row["seen"] = newest[who][0], _iso(newest[who][1].at)
         rows.append(row)

@@ -348,6 +348,14 @@ class Router:
         return facts
 
     def begin_tick(self, facts: list[Fact]) -> list[Fact]:
+        from .installs import display_name
+        name = display_name(self.config)
+        names = [f for f in kind_facts(facts, "machines.name")
+                 if f.data.get("install") == self.home.install_id()]
+        if not names or names[-1].data.get("name") != name:
+            facts = self._keep(facts, "machines.name", {
+                "install": self.home.install_id(), "name": name,
+            }, "machines.name:" + mint(12))
         if self.gate is not None:
             facts = self._gate_tick(facts)
             self.shuttle.sync(holding=self.gate_lease is not None)
@@ -829,7 +837,8 @@ def _header(state, letter: Fact, facts: list[Fact] | None = None, *, home: Home 
         if len(known) > 1:
             # Identify this transport's sender, never the cached lease holder
             # or the install that originally drafted a shuttled letter.
-            machine = f" · {load_config(home.root).name or here}"
+            from .installs import display_name
+            machine = f" · {display_name(load_config(home.root))}"
     return f"{face} ⌁ [ {thread}{machine} ]" + (f" · {said}" if said else "")
 
 

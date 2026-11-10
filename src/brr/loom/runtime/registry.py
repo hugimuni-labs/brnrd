@@ -98,6 +98,7 @@ REGISTRY = (
     _kind("loom.pruned",       "loom",    "install ran bytes",                                "loom",        "machine"),
     _kind("lease.fenced",      "loom",    "install gen why",                                  "loom",        "global"),
     _kind("lease.handed",      "loom",    "install gen prefer to",                            "loom",        "global",  once=True),
+    _kind("machines.name",     "loom",    "install name",                                    "loom",        "global"),
     _kind("machines.prefer",   "loom",    "install from",                                     "person",      "global"),
     _kind("machines.pin",      "loom",    "thread install? from",                             "person",      "global"),
     _kind("self.healed",       "loom",    "thread commit",                                    "loom",        "global",  once=True),

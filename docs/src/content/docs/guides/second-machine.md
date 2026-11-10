@@ -109,3 +109,13 @@ second machine:
   connects the same chat channel without pairing a new one;
 - whether a brnrd cloud login on the second machine needs anything beyond
   logging in to the same account.
+
+## Machine names
+
+With two machines, reply headers name the sending computer and the board names
+the leader. A single-machine install keeps these labels hidden. No setup question
+is needed: the default is the macOS Computer Name, or the hostname on other systems.
+To choose an alias on that computer, run `brnrd runtime machines name "My laptop"`.
+An empty alias restores the default. Names travel with each machine's ledger;
+a peer running an older version appears as “Other computer” until it announces a name.
+Machine IDs remain the keys for priority and pin commands.

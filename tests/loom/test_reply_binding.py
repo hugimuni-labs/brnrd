@@ -224,7 +224,8 @@ def test_chat_header_is_the_face_and_thread_even_after_release(home):
 
 @pytest.mark.parametrize("named", [False, True])
 @pytest.mark.parametrize("peer", ["folder", "router"])
-def test_chat_header_names_sending_machine_with_a_known_peer(home, named, peer):
+def test_chat_header_names_sending_machine_with_a_known_peer(home, monkeypatch, named, peer):
+    monkeypatch.setattr("brr.loom.runtime.installs.computer_name", lambda: "MacBook-Air")
     key = draft(home, "first", sent=False)
     if named:
         from brr.loom.runtime.config import set_value
@@ -241,7 +242,7 @@ def test_chat_header_names_sending_machine_with_a_known_peer(home, named, peer):
     router.speak_out(facts)
     sent = json.loads((home.root / "loom/channel-fake.jsonl").read_text())
     assert sent["key"] == key
-    machine = "Desk" if named else "aaaa"
+    machine = "Desk" if named else "MacBook-Air"
     assert sent["text"] == f"b·_·d ⌁ [ first · {machine} ]\n\nThe first answer\nMore detail"
 
 

@@ -116,7 +116,14 @@ export type Live = {
 export type Gauge = { window: string; left_pct: number; resets_at?: string };
 export type Fuel = { shell: string; gauges: Gauge[]; error?: string };
 
-export type Machine = { id: string; lead: boolean; here: boolean; gen?: number; seen?: string };
+export type Machine = {
+	id: string;
+	name?: string;
+	lead: boolean;
+	here: boolean;
+	gen?: number;
+	seen?: string;
+};
 
 export type Index = {
 	v: number;

@@ -23,6 +23,7 @@ import shutil
 import socket
 import subprocess
 from pathlib import Path
+from functools import lru_cache
 
 from .gitlease import LEASES, LEDGERS
 from .home import Home
@@ -62,6 +63,27 @@ def machine_id() -> str:
                 pass
         _MACHINE = found or "host:" + socket.gethostname()
     return _MACHINE
+
+
+def display_name(config) -> str:
+    """Human name for this install; no enrollment question or opaque id."""
+    if name := (config.name or "").strip():
+        return name
+    return computer_name()
+
+
+@lru_cache(maxsize=1)
+def computer_name() -> str:
+    """Read the OS name once per process; config aliases remain live."""
+    if platform.system() == "Darwin":
+        try:
+            result = subprocess.run(["scutil", "--get", "ComputerName"],
+                                    capture_output=True, text=True, timeout=2)
+            if result.returncode == 0 and result.stdout.strip():
+                return result.stdout.strip()
+        except (OSError, subprocess.SubprocessError):
+            pass
+    return socket.gethostname() or "This computer"
 
 
 def here(home: Home) -> str:

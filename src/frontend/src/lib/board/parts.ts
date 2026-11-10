@@ -67,7 +67,8 @@ export function headerFuel(fuel: Fuel[] | undefined): string {
 // The leading machine, and on hover every machine this install has heard of. `seen` is the newest router beat
 // that reached this install, not liveness: a peer's facts come through the shuttle a couple of minutes late.
 export function leadName(machines: Machine[] | undefined): string {
-	return (machines ?? []).find((m) => m.lead)?.id ?? '';
+	if (!machines || machines.length < 2) return '';
+	return machines.find((m) => m.lead)?.name || 'Other computer';
 }
 
 export function machinesTitle(machines: Machine[] | undefined): string {
@@ -75,7 +76,7 @@ export function machinesTitle(machines: Machine[] | undefined): string {
 		.map((m) => {
 			const beat = m.seen ? `, beat ${m.seen.slice(11, 19)}Z` : '';
 			const gen = m.gen !== undefined ? ` gen ${m.gen}` : '';
-			return `${m.id}${m.here ? ' (the loom serving this page)' : ''}: ${m.lead ? 'leads' : 'follows'}${gen}${beat}`;
+			return `${m.name || 'Other computer'}${m.here ? ' (the loom serving this page)' : ''}: ${m.lead ? 'leads' : 'follows'}${gen}${beat}`;
 		})
 		.join('\n');
 }
