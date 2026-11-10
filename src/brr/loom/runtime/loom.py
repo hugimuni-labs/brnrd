@@ -2540,6 +2540,19 @@ def _converge_forge_token(home: Home) -> None:
     _log(home, f"converge:forge_token: {data}")
 
 
+def _reexec(bodies, inputs) -> None:
+    inputs.close()
+    _shutdown(bodies)
+    from .entry import reexec_argv
+    argv = reexec_argv() or [sys.executable, *sys.orig_argv[1:]]
+    os.execv(argv[0], argv)
+
+
+def _lease_settings(config):
+    # These values are captured by gate_for and Router at construction.
+    return (config.lease_remote, config.lease_mode, config.router_ttl, config.forge_token)
+
+
 def _read_usage(home, usage) -> None:
     for shell in usage.shells(home):
         usage.reading(home, shell)
@@ -2582,6 +2595,7 @@ def run(root: Path | str, *, adapter: str = "fake", core: str = "haiku",
         next_usage = 0
         from .router import Router
         router = Router(home, config)
+        lease_settings = _lease_settings(config)
         from .installs import refusal
         if why := refusal(home, router.gate):
             # A shared install id writes one ledger folder from two machines;
@@ -2636,6 +2650,13 @@ def run(root: Path | str, *, adapter: str = "fake", core: str = "haiku",
                 _log(home, str(exc))
                 notice(home, read_facts(home), "config-error", str(home.root), str(exc),
                        "fix loom/config.toml; the loop is using its last valid config")
+            if _lease_settings(config) != lease_settings:
+                # Setup may enroll this already-running standalone loom into
+                # a shared self. Never start its new relay on the old authority.
+                router._fence_local()
+                _log(home, "lease settings changed; re-executing loom before inputs")
+                _reexec(bodies, inputs)
+                return
             with tick_config(home.root, config):
                 router.config = config
                 if time.monotonic() >= next_usage:
@@ -2673,11 +2694,7 @@ def run(root: Path | str, *, adapter: str = "fake", core: str = "haiku",
                 next_source, source_moved = time.monotonic() + SOURCE_EVERY, _source_fingerprint() != fingerprint
             if updater.moved is not None or source_moved:
                 _log(home, "runtime source changed; re-executing loom")
-                inputs.close()
-                _shutdown(bodies)
-                from .entry import reexec_argv
-                argv = reexec_argv() or [sys.executable, *sys.orig_argv[1:]]
-                os.execv(argv[0], argv)
+                _reexec(bodies, inputs)
                 return
             if _pause(stop, tick):
                 break
