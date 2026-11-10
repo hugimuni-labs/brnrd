@@ -337,11 +337,7 @@ def pair(home, kind, name, person, *, timeout=180, out=print, qr=None, env=None,
 
 
 def first_letter(home, person, *, timeout=600, out=print, running=None, sleep=time.sleep):
-    """Wait until a letter from ``person`` is shown to a body: the proof the chat reaches brnrd.
-
-    Returns the strand that was shown it. Pairing proves the bot can talk;
-    only a body reading the next letter proves the loom hears that chat.
-    """
+    """Wait for a delivered reply to a new letter from ``person``; return its strand."""
     from .firstword import first_word
     from .ledger import read_facts
     from .service import _lock_held
@@ -349,6 +345,8 @@ def first_letter(home, person, *, timeout=600, out=print, running=None, sleep=ti
     before = {f.id for f in read_facts(home) if f.kind == 'letter'}
     running = running or (lambda: _lock_held(home.root))
     told = landed = False
+    reading = {}
+    failed = None
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         facts = read_facts(home)
@@ -367,14 +365,43 @@ def first_letter(home, person, *, timeout=600, out=print, running=None, sleep=ti
                 out(f"  {style.dot()} your house rules were not written ({exc}); brnrd setup writes them next time")
         for fact in facts:
             if fact.kind == 'shown' and new & set(fact.data.get('ids') or ()):
-                strand = fact.data.get('strand')
-                out(f"  {style.check()} brnrd is reading it now ({strand}); the answer comes in that chat")
+                strand = fact.data['strand']
+                reading[strand] = fact.data['gen']
+        replies = {f.id: f.data.get('from') for f in facts if f.kind == 'letter'
+                   and f.data.get('from') in reading and f.data.get('re') in new}
+        for fact in facts:
+            if (fact.kind == 'speech' and fact.data.get('state') == 'sent'
+                    and fact.data.get('key') in replies):
+                strand = replies[fact.data['key']]
+                out(f"  {style.check()} brnrd answered in that chat ({strand})")
                 return strand
+        for fact in facts:
+            if (fact.kind == 'body.exited' and fact.data.get('code', 0) != 0
+                    and fact.data.get('strand') in reading
+                    and fact.data.get('gen') == reading[fact.data['strand']]):
+                failed = fact
+                attempt = next((f for f in facts if f.kind == 'attempt.ended'
+                                and f.data.get('strand') == fact.data['strand']
+                                and f.data.get('gen') == fact.data['gen']), None)
+                # The exit and its evidence are separate writes; wait for both.
+                if attempt is not None:
+                    tail = attempt.data.get('evidence', {}).get('tail', '')
+                    raise TimeoutError(f"brnrd could not answer: body {fact.data['strand']} exited "
+                                       f"{fact.data['code']}. {tail}\n"
+                                       "Check `brnrd loom status`; if it says not logged in, "
+                                       "run claude, then /login. Run brnrd setup and write again.")
         if not landed and not told and not running():
             out(f"  {style.dot()} brnrd isn't running here yet: start it with `brnrd loom install`, "
                 "and your message will go through.")
             told = True
         sleep(.5)
+    if failed is not None:
+        raise TimeoutError(f"brnrd could not answer: body {failed.data['strand']} exited "
+                           f"{failed.data['code']}; exit details did not arrive. "
+                           "Check `brnrd loom status`, run brnrd setup and write again.")
+    if reading:
+        raise TimeoutError('brnrd read your message, but no reply was delivered yet; '
+                           'see `brnrd loom status`.')
     if landed:
         raise TimeoutError('Your message reached brnrd, but nothing has started reading it yet; '
                            'see `brnrd loom status`.')
@@ -788,7 +815,7 @@ FUEL_TIMEOUT = 3.0
 
 
 def _read_fuel(root, shells, read, timeout=FUEL_TIMEOUT):
-    """Every shell's fuel read at once, ``{shell: windows | None | SLOW}``:
+    """Every shell's fuel read at once, ``{shell: windows | reason | SLOW}``:
     the menu waits for the slowest up to ``timeout``, never their sum. A
     reader still out is SLOW; its daemon thread never holds setup's exit."""
     import threading
@@ -796,9 +823,18 @@ def _read_fuel(root, shells, read, timeout=FUEL_TIMEOUT):
     for shell in shells:
         def one(shell=shell):
             try:
-                found[shell] = read(root, shell)
-            except Exception:
-                found[shell] = None
+                windows = read(root, shell)
+                if not windows:
+                    try:
+                        payload = json.loads((root / 'loom/usage' / f'{shell}.json').read_text())
+                        reason = payload.get('error') or "couldn't check its fuel"
+                    except (OSError, ValueError, TypeError):
+                        reason = "couldn't check its fuel"
+                    found[shell] = reason
+                else:
+                    found[shell] = windows
+            except Exception as exc:
+                found[shell] = str(exc) or "couldn't check its fuel"
         thread = threading.Thread(target=one, daemon=True)
         thread.start()
         threads.append(thread)
@@ -836,6 +872,9 @@ def _choose_body(home):
     if installed:
         print(f"    {style.dim('· checking ' + ', '.join(installed) + ' …')}", flush=True)
     readings = _read_fuel(home.root, installed, _windows)
+    # A failed read cannot keep the default ahead of a harness that answered.
+    installed.sort(key=lambda shell: not isinstance(readings[shell], list))
+    known = [*installed, *(shell for shell in known if shell not in installed)]
     found, fueled = [], []
     for shell in known:
         if not shutil.which(shell):
@@ -844,8 +883,11 @@ def _choose_body(home):
         windows = readings.get(shell)
         if windows is SLOW:
             fuel, windows = style.dim("found, couldn't check its fuel"), None
-        elif windows is None:
-            fuel = style.dim('found, fuel unknown')
+        elif not isinstance(windows, list):
+            reason = str(windows or "couldn't check its fuel")
+            if shell == 'claude':
+                reason += "; if it isn't signed in: run claude, then /login"
+            fuel, windows = style.dim(reason), None
         else:
             fuel = ' · '.join(f"{w['name']} {w['left_pct']:g}%" for w in windows) + ' left'
             if any(w['left_pct'] <= floor for w in windows):
@@ -860,7 +902,8 @@ def _choose_body(home):
         return
     # Enter keeps the order, the one already set first, else the first with fuel; the ones off stay off.
     keep = [i for i, shell in enumerate(found) if shell not in off]
-    if not current or parse_body(current)[0] not in found:
+    if (not current or parse_body(current)[0] not in found
+            or not isinstance(readings.get(parse_body(current)[0]), list)):
         first = next((i for i in keep if fueled[i]), keep[0] if keep else 0)
         keep = [first, *(i for i in keep if i != first)]
     picked = keep or [0]
@@ -957,7 +1000,7 @@ def main(argv=None):
     parser.add_argument('--person')
     parser.add_argument('--timeout', type=float, default=180)
     parser.add_argument('--wait', type=float, default=600,
-                        help='seconds to wait for your first message to reach brnrd; 0 skips')
+                        help='seconds to wait for brnrd to answer your first message; 0 skips')
     args = parser.parse_args(argv)
     # Setup creates a home; the read-only resolver normally requires one.
     target = args.home or os.environ.get("BRNRD_HOME") or Path.home() / "brnrd"

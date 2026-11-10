@@ -547,44 +547,44 @@ def test_a_running_loom_hears_a_channel_paired_after_it_started(tmp_path):
         inputs.close()
 
 
-def test_setup_is_done_when_the_first_letter_reaches_a_body(tmp_path):
-    import threading
-    import time
-    from brr.daemon2.facts import Fact
+def test_setup_is_done_when_the_first_reply_is_delivered(tmp_path):
     from brr.loom.runtime.ledger import append, read_facts
+    from brr.loom.runtime.port import fact_from_port
+    from brr.loom.runtime.router import Router
     home = home_at(tmp_path)
     inbox = home.thread_dir('inbox')
     inbox.mkdir(parents=True)
     (inbox / 'README.md').write_text('---\nid: inbox\nstatus: open\ntense: plan\n---\n# Inbox\n')
     (tmp_path / 'self/people/ada').mkdir(parents=True)
     (tmp_path / 'self/people/ada/channels.toml').write_text('channels = ["desk:42"]\n')
-    (tmp_path / 'loom/config.toml').write_text('connectors = ["desk=fake"]\n')
-    said, result = [], {}
-    def wait():
-        try:
-            result['strand'] = setup_channel.first_letter(home, 'ada', timeout=30, out=said.append,
-                                                          running=lambda: True, sleep=lambda s: time.sleep(.02))
-        except Exception as exc:
-            result['error'] = exc
+    set_value(tmp_path, 'connectors', ['desk=fake'])
+    said, phases = [], iter(range(3))
     inputs = connector.Inputs(home)
-    waiter = threading.Thread(target=wait)
-    waiter.start()
+    def advance(_):
+        phase = next(phases)  # A premature return skips the final delivery.
+        if phase == 0:
+            state = Path(connector.environment(home, 'desk')['BRNRD_STATE'])
+            (state / 'in/hello.md').write_text(_front(dict(kind='letter', id='hello',
+                                                   to='42', **{'from': '42'}), 'hi'))
+            inputs.step()
+        elif phase == 1:
+            letter, = [f for f in read_facts(home) if f.kind == 'letter']
+            append(home, fact_from_port(dict(kind='shown', id='s-1/shown', strand='s-1',
+                                             gen='1', ids=letter.data['id']), 's-1', 1))
+            _deliver_setup_reply(home, letter.data['id'], deliver=False)
+        else:
+            assert not any('answered in that chat' in line for line in said)
+            router = Router(home)
+            router.speak_out(router.begin_tick(read_facts(home)))
     try:
         inputs.step()
-        state = Path(connector.environment(home, 'desk')['BRNRD_STATE'])
-        (state / 'in/hello.md').write_text(_front(dict(kind='letter', id='hello',
-                                           to='42', **{'from': '42'}), 'hello brnrd'))
-        inputs.step()
-        letter, = [f for f in read_facts(home) if f.kind == 'letter']
-        assert waiter.is_alive()  # landed is not done: no body has read it
-        append(home, Fact(kind='shown', by='strand:s-1', id='shown:s-1:1',
-                          data={'strand': 's-1', 'gen': 1, 'ids': [letter.data['id']]}))
-        waiter.join(30)
+        assert setup_channel.first_letter(home, 'ada', timeout=10, out=said.append,
+                                          running=lambda: True, sleep=advance) == 's-1'
     finally:
         inputs.close()
-    assert result == {'strand': 's-1'}
+    assert list(phases) == []
     words = '\n'.join(said)
-    assert 'brnrd got your message' in words and 'brnrd is reading it now (s-1)' in words
+    assert 'brnrd got your message' in words and 'brnrd answered in that chat (s-1)' in words
 
 
 def test_setup_says_when_nothing_is_running_to_hear_the_first_letter(tmp_path):
@@ -947,15 +947,21 @@ def test_the_first_word_lands_the_house_rules_and_the_first_reply_offers_the_int
     assert guards.load(self_dir) == ([], [])  # a fresh self: nothing to refuse with
     said, result = [], {}
 
+    ready = threading.Event()
+    def pause(_):
+        ready.set()
+        time.sleep(.02)
+
     def wait():
         try:
             result['strand'] = setup_channel.first_letter(home, 'ada', timeout=30, out=said.append,
-                                                          running=lambda: True, sleep=lambda s: time.sleep(.02))
+                                                          running=lambda: True, sleep=pause)
         except Exception as exc:
             result['error'] = exc
     inputs = connector.Inputs(home)
     waiter = threading.Thread(target=wait)
     waiter.start()
+    assert ready.wait(10)
     try:
         inputs.step()
         state = Path(connector.environment(home, 'desk')['BRNRD_STATE'])
@@ -965,8 +971,11 @@ def test_the_first_word_lands_the_house_rules_and_the_first_reply_offers_the_int
         deadline = time.monotonic() + 30
         while not any('house rules' in line for line in said) and time.monotonic() < deadline:
             time.sleep(.05)
-        append(home, Fact(kind='shown', by='strand:s-1', id='shown:s-1:1',
-                          data={'strand': 's-1', 'gen': 1, 'ids': [letter.data['id']]}))
+        from brr.loom.runtime.port import fact_from_port
+        append(home, fact_from_port(dict(kind='shown', id='s-1/shown', strand='s-1',
+                                         gen='1', ids=letter.data['id']), 's-1', 1))
+        assert waiter.is_alive()
+        _deliver_setup_reply(home, letter.data['id'])
         waiter.join(30)
     finally:
         inputs.close()
@@ -1002,5 +1011,105 @@ def test_the_first_word_lands_the_house_rules_and_the_first_reply_offers_the_int
         facts = router.begin_tick(read_facts(home))
         router.speak_out(facts)
     sent = [json.loads(row)['text'] for row in (tmp_path / 'loom/channel-fake.jsonl').read_text().splitlines()]
-    assert len(sent) == 2, sent
-    assert sent[0].count(INTERVIEW) == 1 and INTERVIEW not in sent[1]
+    assert len(sent) == 3, sent
+    assert sent[0].count(INTERVIEW) == 1
+    assert all(INTERVIEW not in text for text in sent[1:])
+
+
+def _deliver_setup_reply(home, re, strand='s-1', ident='answer', deliver=True):
+    """Use the port parser and real router/connector speech writer."""
+    from brr.daemon2.facts import Fact
+    from brr.loom.runtime.ledger import append, read_facts
+    from brr.loom.runtime.port import fact_from_port
+    from brr.loom.runtime.router import Router
+    append(home, Fact(kind='router', by='loom:aaaa', id='router:setup', data={'gen': 1}))
+    append(home, Fact(kind='lease', by='loom:aaaa', id=f'lease:{strand}:1', data={
+        'strand': strand, 'thread': 'inbox', 'gen': 1, 'router_gen': 1}))
+    from brr.loom.runtime.loom import _stamp_router
+    reply = fact_from_port(dict(kind='letter', id=f'{strand}/{ident}',
+                                to='channel:desk/42', re=re, body='hello'), strand, 1)
+    _stamp_router(reply, read_facts(home))
+    append(home, reply)
+    if deliver:
+        router = Router(home)
+        router.speak_out(router.begin_tick(read_facts(home)))
+
+
+@pytest.mark.parametrize('answering', [True, False])
+@pytest.mark.parametrize('collector_error', [None, 'credentials missing'])
+def test_failed_fuel_read_explains_sign_in_and_cannot_keep_the_default(
+        tmp_path, monkeypatch, capsys, no_harness_on_path, answering, collector_error):
+    import io
+    from brr.loom.runtime.adapters import default_body, prefer
+    from brr.loom.runtime import usage
+    home = home_at(tmp_path)
+    prefer(home, 'default', 'claude')
+    monkeypatch.setattr(setup_channel.shutil, 'which', lambda name: f'/bin/{name}')
+    monkeypatch.setattr('brr.loom.runtime.service._defaults', no_harness_on_path)
+    def refresh(path, script, after=0):
+        # Collector protocol: failed reads are empty windows plus an error.
+        shell = path.stem
+        payload = ({'windows': [{'name': 'session', 'left_pct': 80}]} if answering and shell == 'codex'
+                   else {'windows': [], **({'error': collector_error} if collector_error else {})})
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(payload))
+    monkeypatch.setattr(usage, '_refresh', refresh)
+    monkeypatch.setattr('sys.stdin', io.StringIO('\n'))
+    monkeypatch.setattr(setup_channel, '_choose_doors', lambda *_: [])
+    assert setup_channel.main(['channel', '--home', str(tmp_path)]) == 0
+    words = capsys.readouterr().out
+    reason = collector_error or "couldn't check its fuel"
+    assert f"claude: {reason}; if it isn't signed in: run claude, then /login" in words
+    assert 'installed, not signed in:' not in words
+    assert ':  left' not in words
+    assert default_body(home) == ('codex' if answering else 'claude')
+    if not answering:
+        assert f'codex: {reason}' in words
+
+
+def test_first_letter_reports_the_real_failed_attempt_tail(tmp_path):
+    from types import SimpleNamespace
+    from brr.loom.runtime.ledger import append, read_facts
+    from brr.loom.runtime.port import fact_from_port
+    from brr.loom.runtime.loom import _hand_record, _end_attempt
+    home = home_at(tmp_path)
+    inbox = home.thread_dir('inbox')
+    inbox.mkdir(parents=True)
+    (inbox / 'README.md').write_text('---\nid: inbox\nstatus: open\ntense: plan\n---\n# Inbox\n')
+    (tmp_path / 'self/people/ada').mkdir(parents=True)
+    (tmp_path / 'self/people/ada/channels.toml').write_text('channels = ["desk:42"]\n')
+    set_value(tmp_path, 'connectors', ['desk=fake'])
+    said, phases = [], iter(range(4))
+    inputs = connector.Inputs(home)
+    def advance(_):
+        phase = next(phases)
+        if phase == 0:
+            state = Path(connector.environment(home, 'desk')['BRNRD_STATE'])
+            (state / 'in/hello.md').write_text(_front(dict(kind='letter', id='hello',
+                                                   to='42', **{'from': '42'}), 'hi'))
+            inputs.step()
+        elif phase == 1:
+            letter, = [f for f in read_facts(home) if f.kind == 'letter']
+            append(home, fact_from_port(dict(kind='shown', id='s-1/shown', strand='s-1',
+                                             gen='1', ids=letter.data['id']), 's-1', 1))
+            # A delivered reply from another strand is not this body's answer.
+            _deliver_setup_reply(home, letter.data['id'], strand='s-other')
+        elif phase == 2:
+            x = SimpleNamespace(home=home, facts=read_facts(home), o=SimpleNamespace(strand='s-1', gen=1),
+                                c=SimpleNamespace(why='', failure='exit 1', pid=1, thread='inbox'),
+                                values=dict(strand='s-1', gen=1, code=1))
+            _hand_record(x, SimpleNamespace(deadline=None), SimpleNamespace(records='body.exited'))
+        else:
+            port = home.room('s-1') / 'port'
+            port.mkdir(parents=True)
+            (port / 'body.log').write_text('Not logged in · Please run /login')
+            _end_attempt(home, read_facts(home), 's-1', 'inbox', 1, 1, [], 'failed')
+    try:
+        inputs.step()
+        with pytest.raises(TimeoutError, match='exited 1.*Not logged in.*Please run /login') as exc:
+            setup_channel.first_letter(home, 'ada', timeout=10, out=said.append,
+                                       running=lambda: True, sleep=advance)
+    finally:
+        inputs.close()
+    assert 'run claude, then /login' in str(exc.value)
+    assert not any('answered in that chat' in line for line in said)
