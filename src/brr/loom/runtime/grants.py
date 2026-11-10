@@ -72,6 +72,9 @@ def names(text: str, target: str) -> bool:
     if not target:
         return False
     forms = {target, target.lstrip("#")} if target.startswith("#") else {target}
+    # People write a release without its v: "Publish 0.7.0" names the tag v0.7.0.
+    if re.fullmatch(r"v\d+(?:\.\d+)+", target):
+        forms.add(target[1:])
     # A sentence's full stop ends a word; a dot before more of a name does not.
     return any(re.search(rf"(?<![\w/.-]){'#?' if f.isdigit() else ''}{re.escape(f)}(?![\w/-]|\.[\w/])", text)
                for f in forms)
