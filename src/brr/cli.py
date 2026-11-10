@@ -1573,7 +1573,7 @@ def main(argv: list[str] | None = None) -> None:
         if (
             len(raw) >= 2
             and raw[0] == "loom"
-            and raw[1] in {"install", "uninstall", "start", "stop", "status", "logs", "config", "where", "-h", "--help", "help"}
+            and raw[1] in {"install", "uninstall", "start", "stop", "restart", "status", "logs", "config", "where", "-h", "--help", "help"}
         ) or raw == ["loom"]:
             from .loom.runtime.service import main as loom_service
             code = loom_service(raw[1:])

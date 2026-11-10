@@ -1,4 +1,4 @@
-"""``brnrd loom install|start|stop|status|uninstall|logs``.
+"""``brnrd loom install|start|stop|restart|status|uninstall|logs``.
 
 The daemon's service with another label and another command. The home's
 absolute path is frozen into the unit at install. ``body`` in
@@ -635,32 +635,77 @@ def _start(*, run, agents_home, sleep, pid_alive, poll_timeout, system) -> int:
             return 0
         print(_NOT_RUNNING)
         return 1
-    alive = _alive(pid_alive)
-
-    def confirm(*, run, sleep, timeout, label, alive=alive):
-        return _confirm_macos(run=run, sleep=sleep, timeout=timeout, label=label, alive=alive)
-
-    result = macos.start_loaded_service(
-        run=_run(run),
-        sleep=_sleep(sleep),
-        poll_timeout=poll,
-        home=_agents(agents_home),
-        label=LABEL,
-        confirm=confirm,
+    path = macos.plist_path(home=_agents(agents_home), label=LABEL)
+    if not path.is_file():
+        print("loom service is not installed; run `brnrd loom install`")
+        return 1
+    result = _mac_query(run)
+    if result.returncode == 0:
+        fields = _fields(result.stdout or "")
+        pid = _parse_pid(fields.get("pid"))
+        if fields.get("state") == "running" and pid and _alive(pid_alive)(pid):
+            print(f"pid: {pid}")
+            return 0
+    elif result.returncode != 113:  # launchd's service-not-found status
+        return _mac_error(result)
+    # Clear a loaded but stopped job, and wait out launchd's teardown
+    # before bootstrap. Never bootstrap over a job that is still loaded.
+    code = _stop(run=run, agents_home=agents_home, system=system, sleep=sleep)
+    if code:
+        return code
+    error = macos._bootstrap_after_bootout(
+        path, run=_run(run), sleep=_sleep(sleep), retry_command="`brnrd loom start`",
     )
-    if result.started and result.pid:
-        print(f"pid: {result.pid}")
+    if error:
+        print(error)
+        return 1
+    result = _run(run)(["launchctl", "kickstart", macos._gui_service(LABEL)],
+                       check=False, capture_output=True, text=True)
+    if result.returncode:
+        return _mac_error(result)
+    pid = _confirm_macos(run=_run(run), sleep=_sleep(sleep), timeout=poll,
+                         label=LABEL, alive=_alive(pid_alive))
+    if pid:
+        print(f"pid: {pid}")
         return 0
-    print(result.error or _NOT_RUNNING)
+    print(_NOT_RUNNING)
     return 1
 
 
-def _stop(*, run, agents_home, system) -> int:
+def _mac_query(run):
+    return _run(run)(["launchctl", "print", macos._gui_service(LABEL)],
+                     check=False, capture_output=True, text=True)
+
+
+def _mac_error(result) -> int:
+    print((result.stderr or result.stdout or "launchctl failed").strip())
+    return result.returncode
+
+
+def _stop(*, run, agents_home, system, sleep=None) -> int:
     system = _platform(system)
     if system == "Linux":
         return linux.stop_service(unit=UNIT, run=run)
+    result = _mac_query(run)
+    if result.returncode == 113:
+        return 0
+    if result.returncode:
+        return _mac_error(result)
     result = macos.stop_loaded_service(run=_run(run), label=LABEL)
-    return result.returncode
+    if result.returncode and result.returncode != 113:
+        return _mac_error(result)
+    elapsed = 0.0
+    while True:
+        result = _mac_query(run)
+        if result.returncode == 113:
+            return 0
+        if result.returncode:
+            return _mac_error(result)
+        if elapsed >= macos.BOOTOUT_SETTLE_TIMEOUT:
+            print("loom service is still loaded after bootout; try `brnrd loom stop` again")
+            return 1
+        _sleep(sleep)(0.2)
+        elapsed += 0.2
 
 
 def _status(*, run, agents_home, system, pid_alive) -> int:
@@ -790,7 +835,7 @@ def _uninstall(*, run, agents_home, system) -> int:
 
 
 LOOM_USAGE = (
-    "usage: brnrd loom install [--home PATH] [--no-start] [--dry-run] [--dev] | uninstall | start | stop | status | logs | where | config [edit] | check\n"
+    "usage: brnrd loom install [--home PATH] [--no-start] [--dry-run] [--dev] | uninstall | start | stop | restart | status | logs | where | config [edit] | check\n"
     "\n"
     "The loom is the service brnrd's resident runs on. A body's own verbs\n"
     "(send, wish, ask, settle, send-self, ...) are `brnrd runtime --help`."
@@ -821,7 +866,7 @@ def main(
         poll_timeout=poll_timeout,
         system=system,
     )
-    if verb in {"start", "stop", "status", "uninstall"}:
+    if verb in {"start", "stop", "restart", "status", "uninstall"}:
         argparse.ArgumentParser(prog=f"brnrd loom {verb}").parse_args(rest)
     if verb == "config":
         return _config(rest)
@@ -831,8 +876,11 @@ def main(
         return _install(rest, **shared)
     if verb == "start":
         return _start(**shared)
+    if verb == "restart":
+        code = _stop(run=run, agents_home=agents_home, system=system, sleep=sleep)
+        return code if code else _start(**shared)
     if verb == "stop":
-        return _stop(run=run, agents_home=agents_home, system=system)
+        return _stop(run=run, agents_home=agents_home, system=system, sleep=sleep)
     if verb == "status":
         return _status(run=run, agents_home=agents_home, system=system, pid_alive=pid_alive)
     if verb == "logs":

@@ -68,6 +68,8 @@ class _Mac:
     def run(self, cmd, **_kwargs):
         recorded = list(cmd)
         self.calls.append(recorded)
+        if len(recorded) >= 2 and recorded[1] == "bootout":
+            self.job_up = False
         if len(recorded) >= 2 and recorded[1] == "kickstart":
             self.job_up = True
         if len(recorded) >= 2 and recorded[1] == "print":
@@ -481,7 +483,7 @@ def test_macos_bootstrap_failure_is_failure(tmp_path, capsys):
     assert "4242" not in output
 
 
-@pytest.mark.parametrize("verb", ["stop", "start", "status", "uninstall"])
+@pytest.mark.parametrize("verb", ["stop", "start", "restart", "status", "uninstall"])
 def test_service_verbs_reject_extra_arguments(verb):
     calls = []
     with pytest.raises(SystemExit) as raised:
@@ -995,3 +997,124 @@ def test_status_warns_on_incompatible_config_and_stop_still_works(tmp_path, caps
     assert service.main(['stop'], run=mac.run, agents_home=tmp_path / 'agents', system='Darwin') == 0
     assert any(call[1:2] == ['bootout'] for call in mac.calls)
     assert path.read_text() == config_text
+
+
+class _Transitions(_Mac):
+    """Model launchd's loaded/running distinction, including delayed bootout."""
+
+    def __init__(self, *, loaded=False, running=False, delay=0, failure=None):
+        super().__init__()
+        self.loaded = loaded
+        self.job_up = running
+        self.delay = delay
+        self.stopping = False
+        self.failure = failure
+
+    def run(self, cmd, **kwargs):
+        self.calls.append(list(cmd))
+        verb = cmd[1]
+        if verb == self.failure:
+            return subprocess.CompletedProcess(cmd, 5, '', f'{verb}: permission denied')
+        if verb == 'print':
+            if self.stopping:
+                if self.delay:
+                    self.delay -= 1
+                else:
+                    self.loaded = self.job_up = False
+            if not self.loaded:
+                return _gone(cmd)
+            return _ok(cmd, f'state = {"running" if self.job_up else "waiting"}\npid = {self.pid if self.job_up else 0}\n')
+        if verb == 'bootout':
+            self.stopping = True
+        elif verb == 'bootstrap':
+            assert not self.loaded, 'bootstrap landed during teardown'
+            self.stopping = False
+            self.loaded = True
+        elif verb == 'kickstart':
+            assert self.loaded
+            self.job_up = True
+        return _ok(cmd)
+
+
+def _transition_args(tmp_path, box):
+    path = macos.plist_path(home=tmp_path, label=service.LABEL)
+    path.parent.mkdir(parents=True)
+    path.write_text('installed')
+    return dict(run=box.run, agents_home=tmp_path, sleep=box.sleep,
+                pid_alive=box.pid_alive, poll_timeout=0, system='Darwin')
+
+
+@pytest.mark.parametrize('loaded,running', [(False, False), (True, False), (True, True)])
+def test_macos_start_stop_restart_converge_through_service_argv(tmp_path, loaded, running):
+    box = _Transitions(loaded=loaded, running=running, delay=2)
+    args = _transition_args(tmp_path, box)
+    assert service.main(['start'], **args) == 0
+    if running:
+        assert [c[1] for c in box.calls] == ['print']
+    assert box.job_up
+    box.calls.clear()
+    assert service.main(['start'], **args) == 0
+    assert [c[1] for c in box.calls] == ['print']
+    assert service.main(['restart'], **args) == 0
+    verbs = [c[1] for c in box.calls]
+    assert verbs.index('bootout') < verbs.index('bootstrap') < verbs.index('kickstart')
+    assert box.job_up
+    assert service.main(['stop'], **args) == 0
+    assert not box.loaded
+    box.calls.clear()
+    assert service.main(['stop'], **args) == 0
+    assert [c[1] for c in box.calls] == ['print']
+
+
+@pytest.mark.parametrize('verb', ['print', 'bootout', 'bootstrap', 'kickstart'])
+def test_macos_restart_preserves_manager_failure_and_stops_the_transition(tmp_path, capsys, verb):
+    box = _Transitions(loaded=True, running=True, failure=verb)
+    args = _transition_args(tmp_path, box)
+    assert service.main(['restart'], **args) != 0
+    assert f'{verb}: permission denied' in capsys.readouterr().out
+    assert box.calls[-1][1] == verb
+
+
+def test_macos_start_never_bootstraps_while_bootout_is_pending(tmp_path, capsys):
+    box = _Transitions(loaded=True, delay=1000)
+    args = _transition_args(tmp_path, box)
+    assert service.main(['start'], **args) == 1
+    assert 'still loaded after bootout' in capsys.readouterr().out
+    assert not any(c[1] == 'bootstrap' for c in box.calls)
+
+
+def test_macos_start_requires_a_live_pid_after_kickstart(tmp_path, capsys):
+    box = _Transitions()
+    box.alive = False
+    args = _transition_args(tmp_path, box)
+    assert service.main(['start'], **args) == 1
+    assert 'pid: 4242' not in capsys.readouterr().out
+
+
+def test_cli_restart_routes_to_stop_then_start(tmp_path, machine):
+    manager = machine('Darwin')
+    home = tmp_path / 'home'
+    _body(home)
+    assert _brnrd('loom', 'install', '--home', str(home), '--dev') == 0
+    manager.calls.clear()
+    assert _brnrd('loom', 'restart') == 0
+    verbs = [c[1] for c in manager.calls]
+    assert verbs.index('bootout') < verbs.index('bootstrap') < verbs.index('kickstart')
+
+
+@pytest.mark.parametrize('stop_code', [0, 5])
+def test_linux_restart_stops_before_start_and_preserves_stop_failure(tmp_path, monkeypatch, stop_code):
+    monkeypatch.setenv('XDG_CONFIG_HOME', str(tmp_path / 'config'))
+    monkeypatch.setattr(linux, 'supported', lambda: True)
+    box = _Linux()
+
+    def run(cmd, **kwargs):
+        result = box.run(cmd, **kwargs)
+        if 'stop' in cmd:
+            result.returncode = stop_code
+        return result
+
+    assert service.main(['restart'], system='Linux', run=run, sleep=box.sleep,
+                        pid_alive=box.pid_alive) == stop_code
+    changes = [c[2] for c in box.calls if c[2] in {'stop', 'start'}]
+    assert changes == (['stop', 'start'] if stop_code == 0 else ['stop'])
