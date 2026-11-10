@@ -50,6 +50,7 @@ def fake_service(monkeypatch):
 
 @pytest.mark.parametrize('wait', ['0', '600'])
 @pytest.mark.parametrize('installed,running,changed,dev,verb', [
+    ('other', True, True, False, None),
     (False, False, True, False, 'install'),
     (False, False, True, True, 'install'),
     (True, False, True, False, 'start'),
@@ -58,9 +59,10 @@ def fake_service(monkeypatch):
     (True, True, False, False, 'start'),
 ])
 def test_setup_runs_service_before_say_hello(tmp_path, monkeypatch, fake_service,
-                                            installed, running, changed, dev, verb, wait):
+                                            installed, running, changed, dev, verb, wait, capsys):
     from brr.loom.runtime import service
-    monkeypatch.setattr(service, '_installed_home', lambda *a: tmp_path if installed else None)
+    installed_home = tmp_path / 'other' if installed == 'other' else tmp_path if installed else None
+    monkeypatch.setattr(service, '_installed_home', lambda *a: installed_home)
     monkeypatch.setattr(service, '_lock_held', lambda *a: running)
     monkeypatch.setattr(service, '_brr_source', lambda: tmp_path if dev else None)
     monkeypatch.setattr(setup_channel, '_choose_body', lambda *a: None)
@@ -86,11 +88,15 @@ def test_setup_runs_service_before_say_hello(tmp_path, monkeypatch, fake_service
         return 0
     monkeypatch.setattr(service, 'main', run)
     def first(*a, **kw):
-        assert fake_service == [expected]
+        assert fake_service == ([expected] if verb else [])
         assert steps[-1].startswith('Say hello')
     monkeypatch.setattr(setup_channel, 'first_letter', first)
     assert setup_channel.main(['--home', str(tmp_path), '--kind', 'web', '--person', 'ada', '--wait', wait]) == 0
-    assert fake_service == [expected]
+    assert fake_service == ([expected] if verb else [])
+    if installed == 'other':
+        out = capsys.readouterr().out
+        assert f'brnrd already runs here for {installed_home}' in out
+        assert f'brnrd loom install --home {tmp_path}' in out
 
 
 def home_at(tmp_path):

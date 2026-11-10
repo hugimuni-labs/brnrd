@@ -930,7 +930,11 @@ def _run_loom(home, before):
     installed = service._installed_home(None, None)
     running = service._lock_held(home.root)
     changed = before != _loom_settings(home)
-    if installed is None or installed.resolve() != home.root.resolve():
+    if installed is not None and installed.resolve() != home.root.resolve():
+        print(f'  brnrd already runs here for {installed}; '
+              f'`brnrd loom install --home {home.root}` switches it to this one')
+        return
+    if installed is None:
         command = ['install', '--home', str(home.root)]
         # An editable install is the installer's --dev path. The updater's
         # auto policy follows main whenever the package lives in a checkout.
