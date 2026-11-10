@@ -18,7 +18,7 @@ export function cut(part, q, most = 200) {
 	return { ...part, letters: part.letters.slice(start, end), more: start > 0 };
 }
 
-export function partsServer(dir, port = 0, consent = null) {
+export function partsServer(dir, port = 0, consent = null, site = null) {
 	const sent = [],
 		answers = [],
 		streams = new Set(),
@@ -71,6 +71,11 @@ export function partsServer(dir, port = 0, consent = null) {
 	};
 	const server = createServer((req, res) => {
 		const url = new URL(req.url, 'http://x');
+		if (url.pathname === '/v1/site' && site) {
+			res.writeHead(200, { 'content-type': 'application/json' });
+			res.end(JSON.stringify(site));
+			return;
+		}
 		const path = url.pathname.replace(/^\/v1\/loom\//, '');
 		if (req.method === 'POST' && path === 'letters') {
 			let body = '';

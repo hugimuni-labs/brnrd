@@ -12,9 +12,10 @@ export async function open({
 	parts = fixture(),
 	viewport = { width: 1440, height: 900 },
 	consent = null,
+	site = null,
 	ready = '.brd .column.threadcol'
 } = {}) {
-	const loom = await partsServer(parts, 0, consent);
+	const loom = await partsServer(parts, 0, consent, site);
 	process.env.BRNRD_DEV_TARGET = `http://127.0.0.1:${loom.port}`;
 	const vite = await createServer({
 		root,

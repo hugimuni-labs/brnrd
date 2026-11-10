@@ -1,5 +1,7 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
+	import { browser } from '$app/environment';
+	import { site, loadSite, cloudOnly } from '$lib/site';
 	import { page } from '$app/state';
 	import './layout.css';
 	import { markBooted } from '$lib/boot';
@@ -32,6 +34,7 @@
 	let flicker = $state(false);
 
 	onMount(() => {
+		void loadSite();
 		const reduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 		// No curtain under reduced motion, so nothing is waiting on one. None either on a page that holds a board in its
 		// cache (lib/board/cache.ts): that is a restart, and the 1.2 s would stand between him and where he was.
@@ -83,4 +86,13 @@
 		<span class={`boot-glitch ${flicker ? 'is-flicker' : ''}`}>{FRAMES[frameIndex]}</span>
 	</div>
 {/if}
-{@render children()}
+{#if $site?.deployment === 'loopback' && cloudOnly(currentPath)}
+	<main data-cloud-page>
+		<p>This page lives on brnrd.dev</p>
+		<a href={`https://brnrd.dev${page.url.pathname}${page.url.search}${page.url.hash}`}
+			>Open this page on brnrd.dev</a
+		>
+	</main>
+{:else if !browser || $site !== undefined || !cloudOnly(currentPath)}
+	{@render children()}
+{/if}
