@@ -884,8 +884,9 @@ def _choose_body(home):
         if windows is SLOW:
             fuel, windows = style.dim("found, couldn't check its fuel"), None
         elif not isinstance(windows, list):
-            reason = ('installed, not signed in: run claude, then /login' if shell == 'claude'
-                      else str(windows or "couldn't check its fuel"))
+            reason = str(windows or "couldn't check its fuel")
+            if shell == 'claude':
+                reason += "; if it isn't signed in: run claude, then /login"
             fuel, windows = style.dim(reason), None
         else:
             fuel = ' · '.join(f"{w['name']} {w['left_pct']:g}%" for w in windows) + ' left'

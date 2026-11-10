@@ -973,8 +973,9 @@ def _deliver_setup_reply(home, re, strand='s-1', ident='answer', deliver=True):
 
 
 @pytest.mark.parametrize('answering', [True, False])
+@pytest.mark.parametrize('collector_error', [None, 'credentials missing'])
 def test_failed_fuel_read_explains_sign_in_and_cannot_keep_the_default(
-        tmp_path, monkeypatch, capsys, no_harness_on_path, answering):
+        tmp_path, monkeypatch, capsys, no_harness_on_path, answering, collector_error):
     import io
     from brr.loom.runtime.adapters import default_body, prefer
     from brr.loom.runtime import usage
@@ -986,7 +987,7 @@ def test_failed_fuel_read_explains_sign_in_and_cannot_keep_the_default(
         # Collector protocol: failed reads are empty windows plus an error.
         shell = path.stem
         payload = ({'windows': [{'name': 'session', 'left_pct': 80}]} if answering and shell == 'codex'
-                   else {'windows': [], 'error': 'credentials missing'})
+                   else {'windows': [], **({'error': collector_error} if collector_error else {})})
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(json.dumps(payload))
     monkeypatch.setattr(usage, '_refresh', refresh)
@@ -994,11 +995,13 @@ def test_failed_fuel_read_explains_sign_in_and_cannot_keep_the_default(
     monkeypatch.setattr(setup_channel, '_choose_doors', lambda *_: [])
     assert setup_channel.main(['channel', '--home', str(tmp_path)]) == 0
     words = capsys.readouterr().out
-    assert 'installed, not signed in: run claude, then /login' in words
+    reason = collector_error or "couldn't check its fuel"
+    assert f"claude: {reason}; if it isn't signed in: run claude, then /login" in words
+    assert 'installed, not signed in:' not in words
     assert ':  left' not in words
     assert default_body(home) == ('codex' if answering else 'claude')
     if not answering:
-        assert 'codex: credentials missing' in words
+        assert f'codex: {reason}' in words
 
 
 def test_first_letter_reports_the_real_failed_attempt_tail(tmp_path):
