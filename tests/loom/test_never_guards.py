@@ -55,6 +55,11 @@ OWNER = {"person:arseni"}
     ("rm rooms/a", "rooms/a", True),
     ("rm rooms/a/b", "rooms/a", False),
     ("v0.9.10 is out", "v0.9.1", False),
+    ("Publish 0.7.0 then 🥳", "v0.7.0", True),
+    ("publish v0.7.0", "v0.7.0", True),
+    ("publish 0.7.01", "v0.7.0", False),
+    ("publish 10.7.0", "v0.7.0", False),
+    ("release 0.7", "v0.7.0", False),
 ])
 def test_a_target_is_named_as_a_word(text, target, named):
     assert names(text, target) is named
