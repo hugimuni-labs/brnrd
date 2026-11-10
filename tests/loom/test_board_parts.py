@@ -13,7 +13,7 @@ from brr.loom.runtime.board import Parts, Tools, digest, serve, window
 from brr.loom.runtime.config import load_config
 from brr.loom.runtime.home import Home
 from brr.daemon2.facts import Fact
-from brr.loom.runtime.ledger import append, inject_letter
+from brr.loom.runtime.ledger import append, inject_letter, read_facts
 
 from _step import write_thread
 
@@ -621,3 +621,54 @@ def test_the_index_names_the_leading_machine_and_the_others(parts):
     assert [(r["id"], r["lead"], r["here"]) for r in rows] == [
         (me, True, True), ("beef", False, False), ("old1", False, False)]
     assert rows[0]["gen"] == 4 and "gen" not in rows[1] and rows[2]["gen"] == 3
+
+
+def test_loopback_site_reports_the_build_even_before_parts(parts, tmp_path):
+    build = tmp_path / "build"
+    build.mkdir()
+    server = serve(parts, 0, lambda: build)
+    port = server.server_address[1]
+    try:
+        status, _, body = get(port, "/v1/site")
+        assert status == 200
+        assert json.loads(body) == {"deployment": "loopback", "tree": None, "features": []}
+        (build / "_app").mkdir()
+        stamp = build / "_app/version.json"
+        for tree in ("123456789abc", "new-build"):
+            stamp.write_text(json.dumps({"version": tree}))
+            assert json.loads(get(port, "/v1/site")[2])["tree"] == tree
+        stamp.unlink()
+        assert json.loads(get(port, "/v1/site")[2])["tree"] is None
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+@pytest.mark.parametrize("port", ["bad-port", -1, 65536, "taken"])
+def test_board_port_failure_is_a_degraded_condition(parts, port):
+    import socket
+    from brr.loom.runtime.loom import _serve_board
+    from brr.loom.runtime.health import Health, degraded_line
+
+    with socket.socket() as taken:
+        taken.bind(("127.0.0.1", 0))
+        taken.listen()
+        chosen = taken.getsockname()[1] if port == "taken" else port
+        health = Health(parts.home, [], lambda *_: None)
+        health.guard("board", _serve_board, parts, chosen, backoff=False)
+        facts = read_facts(parts.home)
+        failed = next(f for f in facts if f.kind == "loom.degraded")
+        assert failed.data["step"] == "board"
+        assert f"board port {chosen}:" in failed.data["error"]
+        assert "board since" in degraded_line(facts)
+        assert failed.data["error"] in degraded_line(facts)
+        server = None
+        def retry():
+            nonlocal server
+            server = _serve_board(parts, 0)
+        health.guard("board", retry, backoff=False)
+        try:
+            assert any(f.kind == "loom.recovered" for f in read_facts(parts.home))
+        finally:
+            server.shutdown()
+            server.server_close()

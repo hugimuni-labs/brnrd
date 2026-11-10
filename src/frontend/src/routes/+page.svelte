@@ -1,16 +1,7 @@
 <script lang="ts">
-	// The resident dashboard — the main UI, in one place. The page body moved
-	// to `$lib/Dashboard.svelte` on 2026-08-31 so `/daily` could wear the same
-	// interface instead of growing a second, half-shaped one beside it
-	// (maintainer: "have on the daily the whole main user interface, the
-	// visual, like exactly as it is"). This route is the URL and nothing else;
-	// its render is the component's default (`liveView="field"`), which is the
-	// exact shape this file held before the extraction.
-	//
-	// 2026-10-19: `/` is the loom's home board when the loom has published a
-	// snapshot, and this same dashboard otherwise (`$lib/LoomHome.svelte`
-	// decides). The dashboard with the command deck stays at /bridge.
 	import LoomHome from '$lib/LoomHome.svelte';
+	import { browser } from '$app/environment';
+	import { site, loadSite } from '$lib/site';
 	import { HOME_DESCRIPTION, HOME_TITLE, SOCIAL_IMAGE } from '$lib/seo';
 	import { onMount } from 'svelte';
 	import Board from '$lib/board/ui/Board.svelte';
@@ -19,22 +10,9 @@
 	import { BASE, getJSON } from '$lib/board/parts';
 	import { cached, forget, restore, type Held } from '$lib/board/cache';
 
-	// 2026-10-27 (web-main): `/` becomes the board. 2026-10-28: on brnrd.dev too, for a signed-in person whose loom
-	// pushes its parts (/v1/loom/* in the cloud). It is shown only when /v1/loom/index answers a board: signed out
-	// (401), no parts pushed (404), or a dev server on localhost with no loom behind it keeps the page below.
-	// localStorage `board` = 0 skips the board.
-	// 2026-10-29: until that is decided the page draws the landing, so the prerendered body carries it (h1, install
-	// line) instead of nothing; a signed-in reader sees it for one probe (accepted, inbox xaj18). Signed out (401) it
-	// stays mounted: the old route through LoomHome and Dashboard repainted it after two "reaching" waits.
-	// The page below is mounted only once decided: it fetches /v1/dashboard/* (404s on a loopback loom).
-	// The board then drops the app's body chrome (layout.css grain).
-	// 2026-10-29 (w-g98svlo7bhrb): signed in with no board, /v1/loom/consent decides. A loom never asked shows the
-	// prompt, a no shows a plain page, a yes waits for the first push; none of them is the old app. Only an account
-	// with no loom (state `none`), or a server without the route (a loopback loom, a dev server), keeps the page below.
-	// 2026-11-06 (w-kkghfg2vo6do, his 10361): the phone drops the tab on every switch to Telegram. The last page's parts
-	// are in the browser's cache (lib/board/cache.ts): when it holds a board, the board paints from it before the probe
-	// answers, and the board's first read of the index is the probe itself. The probe still decides: a 401 or no board
-	// forgets the cache and the page goes where it always went. `holding` keeps the landing off that first frame.
+	// One bundle, two doors. /v1/site declares the loopback: it always draws the board, whose own loading state
+	// handles missing parts. Cloud and older backends retain the index/sign-in/consent flow. The last page's cached
+	// parts paint independently of the declaration; a cloud 401 still forgets them.
 	type Step = 'ask' | 'declined' | 'waiting';
 	let mode = $state<'?' | 'anon' | 'board' | 'home' | Step>('?');
 	let holding = $state(cached());
@@ -109,12 +87,14 @@
 	onMount(() => {
 		const flag = localStorage.getItem('board');
 		gone = false;
-		const probe =
-			flag === '0'
-				? Promise.resolve(null)
+		const deployment = loadSite();
+		const probe = deployment.then((s) =>
+			flag === '0' && s?.deployment !== 'loopback'
+				? null
 				: fetch(`${BASE}/index`, { cache: 'no-store' })
 						.then((r) => (r.status === 401 ? 'anon' : r.ok ? r.json() : null))
-						.catch(() => null);
+						.catch(() => null)
+		);
 		// The last page's parts, when the browser holds them (a few ms to read). Whichever answers first paints the
 		// board: the cache alone (the probe becomes the board's first index read), or the probe with the cache primed
 		// behind it, so the thread parts are fetched only where their hash moved. The parts, not the index, are the
@@ -129,8 +109,18 @@
 			mode = 'board';
 			document.documentElement.classList.add('board');
 		});
+		deployment.then(async (s) => {
+			if (s?.deployment !== 'loopback') return;
+			const h = await fromCache;
+			if (gone || mode === 'board') return;
+			held = h;
+			pending = probe;
+			mode = 'board';
+			document.documentElement.classList.add('board');
+		});
 		probe.then(async (j) => {
-			if (gone) return;
+			const s = await deployment;
+			if (gone || s?.deployment === 'loopback') return;
 			if (isBoard(j)) {
 				const h = await fromCache;
 				if (gone || mode === 'board') return;
@@ -169,7 +159,7 @@
 	<meta name="twitter:image" content={SOCIAL_IMAGE} />
 </svelte:head>
 
-{#if mode === 'anon' || (mode === '?' && !holding)}
+{#if mode === 'anon' || (mode === '?' && !holding && (!browser || $site !== undefined) && $site?.deployment !== 'loopback')}
 	<div data-landing class="contents"><Landing live={mode === 'anon'} /></div>
 {:else if mode === 'board'}
 	<Board {get} {held} />

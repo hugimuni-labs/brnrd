@@ -132,3 +132,34 @@ def test_lease_config_change_fences_before_next_input_or_route(tmp_path, monkeyp
     assert len(routes) == 2
     assert polls == [good]
     assert execs == [(sys.executable, [sys.executable, *sys.orig_argv[1:]])]
+
+
+def test_taken_board_port_reaches_the_boundary_without_stopping_the_loop(tmp_path, monkeypatch):
+    import socket
+    from brr.loom.runtime.board import Parts
+    from brr.loom.runtime.health import degraded_line
+
+    write_thread(tmp_path, 'brnrd', 'Brnrd', 'quit-now')
+    stop = threading.Event()
+    ticks = []
+    monkeypatch.setattr(usage, 'shells', lambda home: ())
+    monkeypatch.setattr(Parts, 'run', lambda self: None)
+    monkeypatch.setenv('BRNRD_FRONTEND_DIR', str(tmp_path / 'no-build'))
+
+    def step(*args):
+        ticks.append(True)
+        stop.set()
+
+    monkeypatch.setattr(loom, 'tick_once', step)
+    with socket.socket() as taken:
+        taken.bind(('127.0.0.1', 0))
+        taken.listen()
+        port = taken.getsockname()[1]
+        path = tmp_path / 'loom/config.toml'
+        path.write_text(path.read_text() + f'\nboard_port = "{port}"\n')
+        loom.run(tmp_path, stop=stop, tick=.001)
+    facts = read_facts(Home(tmp_path))
+    line = degraded_line(facts)
+    assert ticks == [True]
+    assert 'board since' in line and f'board port {port}:' in line
+    assert 'Address already in use' in line

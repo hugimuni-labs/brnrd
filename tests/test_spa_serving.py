@@ -18,6 +18,7 @@ to the app, so it outlived the platform whose config prompted it.
 from __future__ import annotations
 
 import re
+import json
 from pathlib import Path
 
 import pytest
@@ -444,3 +445,24 @@ def test_the_image_tells_the_app_where_the_installer_is():
     copied = re.search(r"COPY docs/public/install\.sh (\S+)", dockerfile)
     assert copied, "the image no longer copies docs/public/install.sh"
     assert declared.group(1) == copied.group(1)
+
+
+def test_site_is_public_and_reports_the_served_build(tmp_path):
+    build = tmp_path / "build"
+    build.mkdir()
+    app = create_app(Settings(database_url="sqlite://", telegram_auto_webhook=False, frontend_dir=str(build)))
+    with TestClient(app) as client:
+        assert client.get("/v1/site").json() == {
+            "deployment": "cloud", "tree": None,
+            "features": ["account", "consent", "dashboard", "settings"],
+        }
+        (build / "_app").mkdir()
+        stamp = build / "_app/version.json"
+        for tree in ("123456789abc", "new-build"):
+            stamp.write_text(json.dumps({"version": tree}))
+            response = client.get("/v1/site")
+            assert response.status_code == 200
+            assert response.json()["tree"] == tree
+            assert response.headers["cache-control"] == "no-cache"
+        stamp.write_text("broken")
+        assert client.get("/v1/site").json()["tree"] is None

@@ -144,6 +144,8 @@ def degraded_line(facts, install: str | None = None, now: float | None = None) -
     for step, (fact, back) in sorted(standing.items(), key=lambda kv: str(kv[1][0].data.get("since"))):
         data = fact.data
         kind = cause(str(data.get("error", "")), str(data.get("where") or ""))
+        if step == "board":  # the body needs the port and bind error, not only the exception's type
+            kind = str(data.get("error", ""))
         dips = int(data.get("dips") or 1)
         first = str(data.get("episode") or data.get("since", ""))[11:16]
         since = str(data.get("since", ""))[11:16]

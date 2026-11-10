@@ -3,7 +3,9 @@
 	// below. Data is the loom's parts (design §D1), live over SSE; the order moves at most once per 10 s and holds while
 	// the sheet is open or the pointer is on a thread column (order.ts arrange).
 	import { onMount, tick as flushed, untrack } from 'svelte';
-	import { updated } from '$app/state';
+	import { page, updated } from '$app/state';
+	import { version } from '$app/environment';
+	import { site } from '$lib/site';
 	import './board.css';
 	import { arrange, bst, byThread, SETTLED, TOPICS, sortThreads, wanted } from '../order.ts';
 	import { headerFuel, leadName, machinesTitle } from '../parts.ts';
@@ -219,6 +221,20 @@
 	<Composer />
 	<footer>
 		← strands · you → / oldest → newest ↓ in every column / tap a heading to grow the plan / tap a
-		letter to link it across columns / the input writes to the inbox as you
+		letter to link it across columns / the input writes to the inbox as you / <span
+			data-page-version>{version.slice(0, 8)}</span
+		>
+		{#if $site?.tree && $site.tree !== version}
+			/
+			<!-- eslint-disable svelte/no-navigation-without-resolve -- reload this document, including its query -->
+			<a
+				href={page.url.href}
+				onclick={(e) => {
+					e.preventDefault();
+					window.location.reload();
+				}}>newer page on the server, reload</a
+			>
+			<!-- eslint-enable svelte/no-navigation-without-resolve -->
+		{/if}
 	</footer>
 </div>

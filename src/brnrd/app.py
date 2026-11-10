@@ -7,6 +7,7 @@ from pathlib import Path
 
 from brr import __version__
 from fastapi import FastAPI
+from fastapi.responses import JSONResponse
 from starlette.staticfiles import StaticFiles
 
 from .config import Settings, get_settings, record_telegram_derived_bot_username, telegram_username_is_valid
@@ -187,6 +188,16 @@ def create_app(
     @app.get("/healthz")
     def healthz() -> dict:
         return {"status": "ok", "service": "brnrd"}
+
+    from brr.loom.runtime.site import frontend_tree
+
+    @app.get("/v1/site")
+    def site():
+        return JSONResponse({
+            "deployment": "cloud",
+            "tree": frontend_tree(frontend_dir),
+            "features": ["account", "consent", "dashboard", "settings"],
+        }, headers={"Cache-Control": "no-cache"})
 
     installer = resolve_installer(settings.installer_path)
     if installer is not None:

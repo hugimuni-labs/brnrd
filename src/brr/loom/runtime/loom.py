@@ -2558,6 +2558,14 @@ def _read_usage(home, usage) -> None:
         usage.reading(home, shell)
 
 
+def _serve_board(board, port):
+    from .board import serve
+    try:
+        return serve(board, int(port))
+    except (OSError, ValueError, OverflowError) as exc:
+        raise RuntimeError(f"board port {port}: {exc}") from exc
+
+
 def run(root: Path | str, *, adapter: str = "fake", core: str = "haiku",
         tick: float = 0.2, stop=None, install: str | None = None) -> None:
     if tick <= 0:
@@ -2609,6 +2617,7 @@ def run(root: Path | str, *, adapter: str = "fake", core: str = "haiku",
         health = Health(home, read_facts(home), _log)
         from .snapshot import Publisher
         publisher = Publisher(home, _log, functools.partial(health.guard, backoff=False))
+        board_port = None
         spa = None
         pusher = None
         # The board's parts feed the loopback (board_port) and the cloud (its gate); both read at start.
@@ -2619,15 +2628,17 @@ def run(root: Path | str, *, adapter: str = "fake", core: str = "haiku",
             threading.Thread(target=board.run, name="board", daemon=True).start()
             pusher = Pusher(board)
         if config.board_port:  # read at start: a port change waits for the next re-exec
-            from .board import serve
             from .spabuild import SpaBuild
             frontend = Path(__file__).resolve().parents[3] / "frontend"
             if (frontend / "package.json").is_file() and not os.environ.get("BRNRD_FRONTEND_DIR"):
                 spa = SpaBuild(frontend, lambda text: _log(home, text))
-            try:
-                shell = serve(board, int(config.board_port))
-            except (OSError, ValueError) as exc:  # a taken port or not a number: the loop runs on without a board
-                _log(home, f"board: port {config.board_port}: {exc}")
+            board_port = config.board_port
+
+            def start_board():
+                nonlocal shell
+                shell = _serve_board(board, board_port)
+
+            health.guard("board", start_board)
         from .mirror import Mirror
         mirror = Mirror(home, _log)
         from .library import Keeper
@@ -2684,6 +2695,8 @@ def run(root: Path | str, *, adapter: str = "fake", core: str = "haiku",
                 health.guard("cpu", cpu.step, backoff=False)
                 health.guard("memory", memory.step, backoff=False)
                 health.guard("reap", reaper.step, backoff=False)
+                if board_port and shell is None:
+                    health.guard("board", start_board)
                 if spa is not None:  # the board's build follows the checkout; a failed one stays degraded
                     health.guard("spa", spa.step, backoff=False)
                 # Only at an idle tick, and the re-exec follows in this same pass.

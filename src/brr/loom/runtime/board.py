@@ -1140,6 +1140,9 @@ def handler(parts: Parts, port: int, spa=spa_root):
                 self.send_error(HTTPStatus.FORBIDDEN, "host")
                 return
             url = urlsplit(self.path)
+            if url.path == "/v1/site":
+                from .site import frontend_tree
+                return self._json({"deployment": "loopback", "tree": frontend_tree(spa()), "features": []})
             query = {k: v[0] for k, v in parse_qs(url.query).items()}
             path = url.path.removeprefix("/v1/loom/")
             with parts.changed:
