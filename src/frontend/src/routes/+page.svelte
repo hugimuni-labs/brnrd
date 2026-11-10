@@ -1,6 +1,5 @@
 <script lang="ts">
 	import LoomHome from '$lib/LoomHome.svelte';
-	import { browser } from '$app/environment';
 	import { site, loadSite } from '$lib/site';
 	import { HOME_DESCRIPTION, HOME_TITLE, SOCIAL_IMAGE } from '$lib/seo';
 	import { onMount } from 'svelte';
@@ -88,13 +87,15 @@
 		const flag = localStorage.getItem('board');
 		gone = false;
 		const deployment = loadSite();
-		const probe = deployment.then((s) =>
-			flag === '0' && s?.deployment !== 'loopback'
-				? null
-				: fetch(`${BASE}/index`, { cache: 'no-store' })
-						.then((r) => (r.status === 401 ? 'anon' : r.ok ? r.json() : null))
-						.catch(() => null)
-		);
+		// in parallel with /v1/site: waiting for it would put a second round trip before a signed-in phone's board
+		const readIndex = () =>
+			fetch(`${BASE}/index`, { cache: 'no-store' })
+				.then((r) => (r.status === 401 ? 'anon' : r.ok ? r.json() : null))
+				.catch(() => null);
+		const probe =
+			flag === '0'
+				? deployment.then((s) => (s?.deployment === 'loopback' ? readIndex() : null))
+				: readIndex();
 		// The last page's parts, when the browser holds them (a few ms to read). Whichever answers first paints the
 		// board: the cache alone (the probe becomes the board's first index read), or the probe with the cache primed
 		// behind it, so the thread parts are fetched only where their hash moved. The parts, not the index, are the
@@ -159,7 +160,7 @@
 	<meta name="twitter:image" content={SOCIAL_IMAGE} />
 </svelte:head>
 
-{#if mode === 'anon' || (mode === '?' && !holding && (!browser || $site !== undefined) && $site?.deployment !== 'loopback')}
+{#if mode === 'anon' || (mode === '?' && !holding && $site?.deployment !== 'loopback')}
 	<div data-landing class="contents"><Landing live={mode === 'anon'} /></div>
 {:else if mode === 'board'}
 	<Board {get} {held} />
