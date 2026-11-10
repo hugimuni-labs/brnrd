@@ -161,17 +161,14 @@ DEV_TOOLS = {
 }
 
 
-# The release path ends where --dev does: the loom installed and running.
-RELEASE_TAIL = ["brnrd --version", "brnrd loom install", "brnrd loom status"]
+# Installation leaves service startup to setup.
+RELEASE_TAIL = ["brnrd --version"]
 
 
 def _dev_tail(clone: Path) -> list[str]:
     return [
         f"uv tool install --editable {clone}",
         "uv tool update-shell",
-        "brnrd loom install --dev --dry-run",
-        "brnrd loom install --dev",
-        "brnrd loom status",
     ]
 
 
@@ -261,7 +258,7 @@ def test_a_failed_probe_exits_nonzero_with_one_sentence(tmp_path, shell):
 
 
 @pytest.mark.parametrize("shell", SHELLS)
-def test_dev_clones_main_then_installs_it_editable_and_starts_the_loom(tmp_path, shell):
+def test_dev_clones_main_then_installs_it_editable(tmp_path, shell):
     result = _run(tmp_path, DEV_TOOLS, shell, args=("--dev",))
     clone = tmp_path / "home" / ".brnrd" / "src"
     assert result.stderr == ""

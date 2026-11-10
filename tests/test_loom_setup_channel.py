@@ -36,6 +36,63 @@ def no_gh_login(monkeypatch):
     monkeypatch.setattr(setup_channel, '_gh_login', lambda: (None, 'needs gh signed in'))
 
 
+@pytest.fixture(autouse=True)
+def fake_service(monkeypatch):
+    """Setup must never touch the machine's real login service."""
+    from brr.loom.runtime import service
+    calls = []
+    monkeypatch.setattr(service, 'main', lambda argv: calls.append(argv) or 0)
+    monkeypatch.setattr(service, '_installed_home', lambda *a: None)
+    monkeypatch.setattr(service, '_lock_held', lambda *a: False)
+    monkeypatch.setattr(service, '_brr_source', lambda: None)
+    return calls
+
+
+@pytest.mark.parametrize('wait', ['0', '600'])
+@pytest.mark.parametrize('installed,running,changed,dev,verb', [
+    (False, False, True, False, 'install'),
+    (False, False, True, True, 'install'),
+    (True, False, True, False, 'start'),
+    (True, True, True, False, 'restart'),
+    (True, True, 'cloud', False, 'restart'),
+    (True, True, False, False, 'start'),
+])
+def test_setup_runs_service_before_say_hello(tmp_path, monkeypatch, fake_service,
+                                            installed, running, changed, dev, verb, wait):
+    from brr.loom.runtime import service
+    monkeypatch.setattr(service, '_installed_home', lambda *a: tmp_path if installed else None)
+    monkeypatch.setattr(service, '_lock_held', lambda *a: running)
+    monkeypatch.setattr(service, '_brr_source', lambda: tmp_path if dev else None)
+    monkeypatch.setattr(setup_channel, '_choose_body', lambda *a: None)
+    def pair(home, *a, **kw):
+        if changed == 'cloud':
+            gates = home.root / 'loom/gates'
+            gates.mkdir(parents=True, exist_ok=True)
+            (gates / 'cloud.json').write_text(json.dumps({'brnrd_url': 'https://example.test', 'token': 'fake'}))
+        elif changed:
+            from brr.loom.runtime.config import seed_config
+            seed_config(home.root)
+            set_value(home.root, 'board_port', '8765')
+        return 'desk:42'
+    monkeypatch.setattr(setup_channel, 'pair', pair)
+    expected = [verb]
+    if verb == 'install':
+        expected += ['--home', str(tmp_path)] + (['--dev'] if dev else [])
+    steps = []
+    monkeypatch.setattr(setup_channel, '_step', lambda text: steps.append(text))
+    def run(argv):
+        assert not any(step.startswith('Say hello') for step in steps)
+        fake_service.append(argv)
+        return 0
+    monkeypatch.setattr(service, 'main', run)
+    def first(*a, **kw):
+        assert fake_service == [expected]
+        assert steps[-1].startswith('Say hello')
+    monkeypatch.setattr(setup_channel, 'first_letter', first)
+    assert setup_channel.main(['--home', str(tmp_path), '--kind', 'web', '--person', 'ada', '--wait', wait]) == 0
+    assert fake_service == [expected]
+
+
 def home_at(tmp_path):
     (tmp_path / 'loom').mkdir()
     return Home(tmp_path, 'aaaa')

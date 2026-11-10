@@ -918,6 +918,32 @@ def _status(home):
     return 0
 
 
+def _loom_settings(home):
+    from .gates import state_dir
+    config = load_config(home.root)
+    return config, state_dir(home.root, config)
+
+
+def _run_loom(home, before):
+    """Pair first, then let the existing service verbs serve the new doors."""
+    from . import service
+    installed = service._installed_home(None, None)
+    running = service._lock_held(home.root)
+    changed = before != _loom_settings(home)
+    if installed is None or installed.resolve() != home.root.resolve():
+        command = ['install', '--home', str(home.root)]
+        # An editable install is the installer's --dev path. The updater's
+        # auto policy follows main whenever the package lives in a checkout.
+        if service._brr_source() is not None:
+            command.append('--dev')
+    else:
+        command = ['restart' if running and changed else 'start']
+    if service.main(command):
+        raise ValueError('brnrd could not start; run `brnrd loom status` to see why')
+    _ok('restarted brnrd so the page opens' if command == ['restart']
+        else 'brnrd is running')
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(prog='brnrd setup')
     parser.add_argument('step', nargs='?', choices=['channel'])
@@ -941,6 +967,7 @@ def main(argv=None):
     if args.step is None and not args.kind and _status(home) is not None:
         return 0
     try:
+        before = _loom_settings(home)
         _choose_body(home)
         doors = [args.kind] if args.kind else _choose_doors(home, kinds)
         if not doors:
@@ -981,6 +1008,8 @@ def main(argv=None):
             paired, missed = _walk_doors(home, doors, kinds, connect)
         if missed:
             print(f"  {style.dot()} brnrd setup channel connects the rest later.")
+        if any(paired):
+            _run_loom(home, before)
         if any(paired) and args.wait > 0:
             _step('Say hello: send brnrd any message in ' + ('one of your chats' if len(links) > 1 else 'that chat'))
             for where, link in links:
