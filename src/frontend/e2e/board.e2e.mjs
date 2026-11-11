@@ -32,7 +32,7 @@ test('columns stand inbox, seated, your call, mine, waiting, no body, quiet, the
 	);
 	assert.deepEqual(
 		cols.map((c) => c.id),
-		['inbox', 'topics', 'alpha', 'bravo', 'charlie', 'echo', 'delta', 'foxtrot', '~settled']
+		['inbox', 'alpha', 'bravo', 'charlie', 'echo', 'delta', 'foxtrot', '~settled']
 	);
 	assert.deepEqual(
 		cols.filter((c) => c.stall).map((c) => c.id),
@@ -51,47 +51,47 @@ test('columns stand inbox, seated, your call, mine, waiting, no body, quiet, the
 	assert.equal(await B.page.locator('[data-column="bravo"] .badge').innerText(), 'verdict');
 });
 
-test('the topics column sits after the inbox; a press unfolds the newest quote', async () => {
-	const cols = await B.page.$$eval('#board > .column', (cs) => cs.map((c) => c.dataset.column));
-	assert.equal(cols[1], 'topics');
-	const row = B.page.locator('[data-column="topics"] [data-topic="board"]');
-	assert.match(await row.innerText(), /board/);
-	assert.equal(await row.locator('.from-body').count(), 0);
+test('topics has its own path; a quote opens and back returns to the board', async () => {
+	const page = B.page;
+	assert.equal(await page.locator('#board [data-column="topics"]').count(), 0);
+	await page.getByRole('link', { name: 'topics', exact: true }).click();
+	await page.waitForURL('**/topics');
+	const row = page.locator('[data-topic="board"]');
+	await row.waitFor();
+	assert.equal(await page.locator('#board').count(), 0);
 	await row.click();
 	assert.match(await row.locator('.from-body').innerText(), /Chose four states/);
+	await page.getByRole('link', { name: '← board', exact: true }).click();
+	await page.waitForURL(B.base);
+	await page.locator('[data-column="alpha"]').waitFor();
+	await page.goto(new URL('topics', B.base).href);
+	await page.locator('[data-topic="board"]').waitFor();
+	assert.deepEqual(B.errors, []);
+	await page.getByRole('link', { name: '← board', exact: true }).click();
+	await page.waitForURL(B.base);
+	await page.locator('[data-column="alpha"]').waitFor();
 });
 
-test('a thread column shows the person letters behind its wishes, collapsed', async () => {
-	const lines = await B.page.$$eval('[data-column="alpha"] .from-line', (es) =>
-		es.map((e) => ({
-			id: e.dataset.from,
-			open: e.classList.contains('open'),
-			text: e.textContent.replace(/\s+/g, ' ').trim()
-		}))
-	);
-	assert.ok(lines.length >= 1, JSON.stringify(lines));
-	assert.match(lines[0].text, /ada/);
-	assert.equal(lines[0].open, false);
-	await B.page.click(`[data-column="alpha"] .from-line[data-from="${lines[0].id}"]`);
-	assert.equal(
-		await B.page.$eval(`[data-column="alpha"] .from-line[data-from="${lines[0].id}"]`, (e) =>
-			e.classList.contains('open')
-		),
-		true
-	);
-	assert.ok(
-		await B.page.$eval(
-			`[data-column="alpha"] .from-line[data-from="${lines[0].id}"] .from-body`,
-			(e) => e.textContent.includes('please make alpha')
-		)
-	);
-	await B.page.click(`[data-column="alpha"] .from-line[data-from="${lines[0].id}"]`);
-	assert.equal(
-		await B.page.$eval(`[data-column="alpha"] .from-line[data-from="${lines[0].id}"]`, (e) =>
-			e.classList.contains('open')
-		),
-		false
-	);
+test('person source bars are hidden while their letters remain in the inbox and sheet', async () => {
+	const B = await open();
+	try {
+		const page = B.page;
+		assert.equal(await page.locator('.threadcol .from-line').count(), 0);
+		const modelHasSource = await page.evaluate(() =>
+			window.__board.model.byId.has('letter:mine:100')
+		);
+		assert.equal(modelHasSource, true);
+		await page.locator('[data-column="inbox"] .heading').click();
+		const source = page.locator('[data-column="inbox"] [data-letter="letter:mine:100"]');
+		assert.match(await source.innerText(), /please make alpha/);
+		await page.evaluate(() => window.__board.openBead('letter:mine:100'));
+		await page.locator('#bead.on').waitFor();
+		assert.match(await page.locator('#bead').innerText(), /please make alpha/);
+		await page.keyboard.press('Escape');
+		await page.locator('[data-column="inbox"] .heading').click();
+	} finally {
+		await B.close();
+	}
 });
 
 test('a new letter patches beads; the part is not fetched whole again', async () => {
