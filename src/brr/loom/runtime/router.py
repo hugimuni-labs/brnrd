@@ -348,6 +348,14 @@ class Router:
         return facts
 
     def begin_tick(self, facts: list[Fact]) -> list[Fact]:
+        from .installs import display_name
+        name = display_name(self.config)
+        names = [f for f in kind_facts(facts, "machines.name")
+                 if f.data.get("install") == self.home.install_id()]
+        if not names or names[-1].data.get("name") != name:
+            facts = self._keep(facts, "machines.name", {
+                "install": self.home.install_id(), "name": name,
+            }, "machines.name:" + mint(12))
         if self.gate is not None:
             facts = self._gate_tick(facts)
             self.shuttle.sync(holding=self.gate_lease is not None)
@@ -760,7 +768,7 @@ class Router:
                         tell("speech-refused",
                              "was refused: that is not a known person's direct chat", fresh)
                         continue
-                    body = f"{_header(state, fact, facts)}\n\n{body}"
+                    body = f"{_header(state, fact, facts, home=self.home)}\n\n{body}"
                     from .firstword import pending
                     person = person_dm(self.home, str(to)).removeprefix("person:")
                     interview = pending(facts, person)
@@ -797,7 +805,7 @@ class Router:
 LOOM_HEADER = "⌁ loom: an automatic notice, not the resident"
 
 
-def _header(state, letter: Fact, facts: list[Fact] | None = None) -> str:
+def _header(state, letter: Fact, facts: list[Fact] | None = None, *, home: Home | None = None) -> str:
     """The face the body decided, its thread, and the fact the loom last proposed on.
 
     No decided face is the resting one; strand ids stay in the ledger. Faces
@@ -817,7 +825,21 @@ def _header(state, letter: Fact, facts: list[Fact] | None = None) -> str:
     decided = faces(facts).get(thread, {})
     face = decided["face"] if decided.get("strand") == strand else REST_FACE
     said = voice(facts, strand, gen, thread)
-    return f"{face} ⌁ [ {thread} ]" + (f" · {said}" if said else "")
+    machine = ""
+    if home is not None:
+        here = home.install_id()
+        known = {here} | {str(f.data["install"]) for f in facts
+                          if f.kind in {"router", "router.renewed", "loom.started"}
+                          and f.data.get("install")}
+        folder = home.root / "ledger" / "facts"
+        if folder.is_dir():
+            known.update(p.name for p in folder.iterdir() if p.is_dir())
+        if len(known) > 1:
+            # Identify this transport's sender, never the cached lease holder
+            # or the install that originally drafted a shuttled letter.
+            from .installs import display_name
+            machine = f" · {display_name(load_config(home.root))}"
+    return f"{face} ⌁ [ {thread}{machine} ]" + (f" · {said}" if said else "")
 
 
 def _answers_event(state, letter: Fact) -> str | None:

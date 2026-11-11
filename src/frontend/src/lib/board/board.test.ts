@@ -822,15 +822,23 @@ test('colour is the thread: a strand letter takes its thread, his letters the ne
 
 test('the header names the leading machine and lists every machine on hover', () => {
 	const m = [
-		{ id: 'ae66', lead: true, here: false, gen: 12, seen: '2026-11-08T22:17:00+00:00' },
-		{ id: '46a2', lead: false, here: true }
+		{
+			id: 'ae66',
+			name: 'iMac',
+			lead: true,
+			here: false,
+			gen: 12,
+			seen: '2026-11-08T22:17:00+00:00'
+		},
+		{ id: '46a2', name: 'MacBook Air', lead: false, here: true }
 	];
-	equal(leadName(m), 'ae66');
+	equal(leadName(m), 'iMac');
+	equal(leadName(m.slice(0, 1)), '');
 	equal(leadName([]), '');
 	equal(leadName(undefined), '');
 	equal(
 		machinesTitle(m),
-		'ae66: leads gen 12, beat 22:17:00Z\n46a2 (the loom serving this page): follows'
+		'iMac: leads gen 12, beat 22:17:00Z\nMacBook Air (the loom serving this page): follows'
 	);
 	equal(machinesTitle(undefined), '');
 });

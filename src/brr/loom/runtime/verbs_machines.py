@@ -28,6 +28,8 @@ def _machines(argv: list[str]) -> int:
     parser.add_argument("--home")
     parser.add_argument("--install", default=None)
     sub = parser.add_subparsers(dest="verb", required=True)
+    name = sub.add_parser("name", help="name this computer (empty alias restores its computer name)")
+    name.add_argument("alias")
     prefer = sub.add_parser("prefer", help="hand the inbox lease, and the connectors, to this install")
     prefer.add_argument("to", metavar="INSTALL")
     priority = sub.add_parser("priority", help="persist the install that leads whenever it is available")
@@ -58,6 +60,12 @@ def _machines(argv: list[str]) -> int:
         from .installs import enable_leases
         enable_leases(root, args.url)
         sys.stdout.write("lease_remote is set; strict mode, ttl 180 s. Restart the loom before joining another machine.\n")
+        return 0
+    if args.verb == "name":
+        from .config import load_config, set_value
+        from .installs import display_name
+        set_value(root, "name", args.alias.strip())
+        sys.stdout.write(f"This computer is {display_name(load_config(root))}\n")
         return 0
     to = None
     if args.verb != "unpin":
