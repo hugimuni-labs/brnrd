@@ -6,7 +6,7 @@ from brr.daemon2.facts import Fact
 from brr.loom.runtime import waits
 from brr.loom.runtime.ledger import append
 from brr.loom.runtime.config import set_value
-from brr.loom.runtime.ledger import read_facts
+from brr.loom.runtime.ledger import read_facts, shared_reader
 from brr.loom.runtime.loom import notice_id
 from test_wishes import command, heard, ledger, view  # noqa: F401  (ledger is a fixture)
 
@@ -19,7 +19,7 @@ def at(read, **span):
 
 
 def ticked(home, now, pace):
-    facts = read_facts(home)
+    facts = shared_reader(home).now(home)
     before = {f.id for f in facts}
     waits.observe_waits(home, facts, True, {}, now, pace=pace)
     return [f for f in read_facts(home) if f.kind == "letter" and f.id not in before]
