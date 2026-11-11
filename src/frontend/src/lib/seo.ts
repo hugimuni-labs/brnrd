@@ -22,7 +22,7 @@ const INDEXABLE_PREFIXES = ['/learn/', '/log/'];
 // only the paths above), but that are still shared as standalone links and
 // need a correct canonical + og:url so an unfurler resolves them to
 // themselves rather than rendering with no canonical at all.
-const CANONICAL_ONLY_PATHS = new Set(['/sub-processors', '/beta-hosted-execution']);
+const CANONICAL_ONLY_PATHS = new Set(['/sub-processors', '/beta-hosted-execution', '/booth']);
 
 export function normalizePathname(pathname: string): string {
 	if (!pathname || pathname === '/') return '/';
