@@ -16,6 +16,8 @@ export type Timeline = {
 	chain: (Bead & { edge: string | null })[];
 	// what came out of it, by time
 	out: Bead[];
+	// Wishes said in this letter/reply chain, or naming this letter as a result.
+	wishes: Wish[];
 };
 
 const STRAND = /^s-[a-z0-9]{4}-[a-z0-9]{6}$/;
@@ -63,7 +65,22 @@ export function timeline(beads: Beads, model: Model | null, id: string): Timelin
 				? 'unconfirmed'
 				: 'loom';
 	const out = children(beads, id).map((c) => bead(beads, c));
-	return { me, root, chain, out };
+	// A reply's parent is its re, not the wish its exchange belongs to. Follow only replies:
+	// a strand/thread/link ancestor is provenance, not evidence that this letter said a wish.
+	const exchange = new Set<string>();
+	if (me.kind === 'letter') {
+		let cur: string | null | undefined = id;
+		while (cur && !exchange.has(cur)) {
+			exchange.add(cur);
+			cur = model?.byId.get(cur)?.re || (beads[cur]?.[1] === 're' ? beads[cur][0] : null);
+		}
+	}
+	const wishes = (model?.wishes || []).filter(
+		(w) =>
+			w.says?.some((s) => exchange.has(s.id)) ||
+			(me.kind === 'letter' && w.results?.some((r) => r.ref === id))
+	);
+	return { me, root, chain, out, wishes };
 }
 
 // The composer's ref check: an &token names a bead when the beads hold it whole, as a thread name, or as the tail of
@@ -158,7 +175,8 @@ export type Trace =
 	| { t: 'stamp'; at: string; k: string; by?: string; ref?: string; line?: string }
 	| { t: 'result'; at: string; ref: string; line?: string }
 	| { t: 'verdict'; at: string; as: string; ref?: string }
-	| { t: 'bead'; at: string; bead: Bead };
+	| { t: 'bead'; at: string; bead: Bead }
+	| { t: 'answered'; at: string; ref: string; line: string };
 export function trace(w: Wish | undefined, T: Timeline): Trace[] {
 	const rows: Trace[] = [],
 		shown = new Set<string>();
@@ -177,6 +195,11 @@ export function trace(w: Wish | undefined, T: Timeline): Trace[] {
 		}
 		if (w.verdict)
 			rows.push({ t: 'verdict', at: w.verdict.at || '', as: w.verdict.as, ref: w.verdict.ref });
+	}
+	for (const wish of T.wishes) {
+		const result = wish.results?.find((r) => r.ref === T.me.id);
+		if (result)
+			rows.push({ t: 'answered', at: result.at || T.me.at || '', ref: wish.wish, line: wish.line });
 	}
 	for (const b of T.out) rows.push({ t: 'bead', at: b.at || '', bead: b });
 	return rows.sort((a, b) => (a.at < b.at ? -1 : a.at > b.at ? 1 : 0));
