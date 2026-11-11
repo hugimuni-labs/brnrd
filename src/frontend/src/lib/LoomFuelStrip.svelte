@@ -31,7 +31,7 @@
 			{@const binding = barGauge(shell.gauges)}
 			<button
 				type="button"
-				class="min-w-0 flex-1 basis-36 border border-stone-800 bg-stone-900/30 px-2.5 py-1.5 text-left font-mono"
+				class="min-w-max flex-1 basis-auto border border-stone-800 bg-stone-900/30 px-2.5 py-1.5 text-left font-mono"
 				style:border-color={open === shell.shell ? STATUS_BURNING : low ? STATUS_SPENT : undefined}
 				aria-expanded={open === shell.shell}
 				aria-label={`${shell.shell} ${binding?.window ?? 'fuel'}`}
