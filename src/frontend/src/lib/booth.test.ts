@@ -12,11 +12,10 @@ import { cloudOnly } from './site.ts';
 
 const here = dirname(fileURLToPath(import.meta.url));
 let variant = 0;
-async function renderRoute(meet = '', hours = '', video = '') {
+async function renderRoute(meet = '', hours = '', video = '', configured = false) {
 	const source = readFileSync(join(here, '../routes/booth/+page.svelte'), 'utf8')
-		.replace(
-			"const BOOTH = { meet: '', hours: '' };",
-			`const BOOTH = ${JSON.stringify({ meet, hours })};`
+		.replace(/const BOOTH = \{[\s\S]*?\};/, (match) =>
+			configured ? match : `const BOOTH = ${JSON.stringify({ meet, hours })};`
 		)
 		.replace("const VIDEO_URL = '';", `const VIDEO_URL = ${JSON.stringify(video)};`);
 	const compiled = compile(source, { generate: 'server', runes: true, name: 'BoothPage' });
@@ -78,4 +77,12 @@ test('demo needs both room and hours; optional trailer renders only when set', a
 	ok(!body.includes('Room link and hours here shortly'));
 	ok(body.includes('<video'));
 	ok(body.includes('src="https://example.com/trailer.mp4"'));
+});
+
+test('configured booth renders the supplied session details', async () => {
+	const { body } = await renderRoute('', '', '', true);
+	ok(body.includes('href="https://meet.google.com/meet/ifp-ymqz-gaq"'));
+	ok(body.includes('Today, 15:00–15:30 (Lisbon time)'));
+	ok(!body.includes('Room link and hours here shortly'));
+	ok(!body.includes('<video'));
 });

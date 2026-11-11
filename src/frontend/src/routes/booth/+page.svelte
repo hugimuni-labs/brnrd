@@ -4,7 +4,10 @@
 	import { SOCIAL_IMAGE } from '$lib/seo';
 	import { resolve } from '$app/paths';
 
-	const BOOTH = { meet: '', hours: '' };
+	const BOOTH = {
+		meet: 'https://meet.google.com/meet/ifp-ymqz-gaq',
+		hours: 'Today, 15:00–15:30 (Lisbon time)'
+	};
 	const VIDEO_URL = '';
 	const title = 'The brnrd booth, virtual today';
 	const description = 'The Web Summit venue is closed because of the storm, so the booth is here.';
