@@ -5,7 +5,6 @@ import type { Letter, Thread } from './types.ts';
 import { INBOX } from './sides.ts';
 
 export const SETTLED = '~settled';
-export const TOPICS = 'topics';
 const RANK: Record<string, number> = {
 	seated: 0,
 	'your-call': 1,
@@ -54,7 +53,6 @@ export function wanted(sorted: Thread[], open: Set<string>): string[] {
 	const settled = sorted.filter((t) => bst(t) === 'settled');
 	return [
 		INBOX,
-		TOPICS,
 		...sorted.filter((t) => bst(t) !== 'settled').map((t) => t.id),
 		...(settled.length ? [SETTLED] : []),
 		...settled.filter((t) => open.has(t.id)).map((t) => t.id)

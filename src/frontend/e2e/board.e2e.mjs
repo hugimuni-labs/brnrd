@@ -32,7 +32,7 @@ test('columns stand inbox, seated, your call, mine, waiting, no body, quiet, the
 	);
 	assert.deepEqual(
 		cols.map((c) => c.id),
-		['inbox', 'topics', 'alpha', 'bravo', 'charlie', 'echo', 'delta', 'foxtrot', '~settled']
+		['inbox', 'alpha', 'bravo', 'charlie', 'echo', 'delta', 'foxtrot', '~settled']
 	);
 	assert.deepEqual(
 		cols.filter((c) => c.stall).map((c) => c.id),
@@ -51,14 +51,25 @@ test('columns stand inbox, seated, your call, mine, waiting, no body, quiet, the
 	assert.equal(await B.page.locator('[data-column="bravo"] .badge').innerText(), 'verdict');
 });
 
-test('the topics column sits after the inbox; a press unfolds the newest quote', async () => {
-	const cols = await B.page.$$eval('#board > .column', (cs) => cs.map((c) => c.dataset.column));
-	assert.equal(cols[1], 'topics');
-	const row = B.page.locator('[data-column="topics"] [data-topic="board"]');
-	assert.match(await row.innerText(), /board/);
-	assert.equal(await row.locator('.from-body').count(), 0);
+test('topics has its own path; a quote opens and back returns to the board', async () => {
+	const page = B.page;
+	assert.equal(await page.locator('#board [data-column="topics"]').count(), 0);
+	await page.getByRole('link', { name: 'topics', exact: true }).click();
+	await page.waitForURL('**/topics');
+	const row = page.locator('[data-topic="board"]');
+	await row.waitFor();
+	assert.equal(await page.locator('#board').count(), 0);
 	await row.click();
 	assert.match(await row.locator('.from-body').innerText(), /Chose four states/);
+	await page.getByRole('link', { name: '← board', exact: true }).click();
+	await page.waitForURL(B.base);
+	await page.locator('[data-column="alpha"]').waitFor();
+	await page.goto(new URL('topics', B.base).href);
+	await page.locator('[data-topic="board"]').waitFor();
+	assert.deepEqual(B.errors, []);
+	await page.getByRole('link', { name: '← board', exact: true }).click();
+	await page.waitForURL(B.base);
+	await page.locator('[data-column="alpha"]').waitFor();
 });
 
 test('a thread column shows the person letters behind its wishes, collapsed', async () => {
