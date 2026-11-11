@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import { PLACE, readPlace } from '../place.ts';
+	let { message }: { message: string } = $props();
 
 	// The failed boundary has unmounted Board (including its place saver) before this runs.
 	// Retry only once per tab: bad data unrelated to the saved place must not make a reload loop.
@@ -20,5 +21,6 @@
 
 <div role="alert" data-board-error>
 	<p>The board could not be drawn. Please reload to try again.</p>
+	<code>{message}</code>
 	<button type="button" onclick={() => location.reload()}>Reload</button>
 </div>

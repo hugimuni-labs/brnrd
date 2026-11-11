@@ -15,6 +15,7 @@
 	// parts paint independently of the declaration; a cloud 401 still forgets them.
 	let { view = 'board' }: { view?: 'board' | 'topics' } = $props();
 	type Step = 'ask' | 'declined' | 'waiting';
+	let renderError = $state('');
 	let mode = $state<'?' | 'anon' | 'board' | 'home' | Step>('?');
 	let holding = $state(cached());
 	let held = $state<Held | null>(null);
@@ -165,9 +166,14 @@
 {#if mode === 'anon' || (mode === '?' && !holding && $site?.deployment !== 'loopback')}
 	<div data-landing class="contents"><Landing live={mode === 'anon'} /></div>
 {:else if mode === 'board'}
-	<svelte:boundary>
+	<svelte:boundary
+		onerror={(error) => {
+			console.error('[board render]', error);
+			renderError = error instanceof Error ? error.message : String(error);
+		}}
+	>
 		<Board {get} {held} {view} />
-		{#snippet failed()}<BoardRecovery />{/snippet}
+		{#snippet failed()}<BoardRecovery message={renderError} />{/snippet}
 	</svelte:boundary>
 {:else if mode === 'ask' || mode === 'declined' || mode === 'waiting'}
 	<BoardConsent step={mode} {lastSeen} {slow} {busy} {failed} {answer} />

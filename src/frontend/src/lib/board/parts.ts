@@ -115,7 +115,7 @@ export function assemble(index: Index, threads: Map<string, ThreadPart>, loose?:
 		wishes,
 		tools,
 		live,
-		fuel: index.fuel || [],
+		fuel: [...new Map((index.fuel || []).map((s) => [s.shell, s])).values()],
 		machines: index.machines || [],
 		faces: index.faces,
 		person: index.person,

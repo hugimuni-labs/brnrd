@@ -67,24 +67,25 @@ for (const browserType of [chromium, webkit]) {
 for (const browserType of [chromium, webkit]) {
 	test(`${browserType.name()}: render recovery clears a poisoned place once`, async () => {
 		const B = await open({ browserType });
+		const logged = [];
+		B.page.on('console', (m) => {
+			if (m.type() === 'error' && m.text().startsWith('[board render]')) logged.push(m.text());
+		});
 		try {
-			// A repeated citation is only rendered when the topic row is open.
+			// An invalid result timestamp throws only inside the open ledger; inbox cards stay hidden.
 			const parts = fixture();
-			parts.topics[0].cites.push(parts.topics[0].cites[0]);
+			parts['thread/alpha'].wishes[0].results = [{ ref: 'bad-time', at: 42 }];
 			B.loom.set(reindex(parts));
 			await B.page.addInitScript((wish) => {
 				localStorage.setItem('board.letterview', '["inbox"]');
 				if (!sessionStorage.getItem('board.recovered'))
-					localStorage.setItem(
-						'board.place',
-						JSON.stringify({ open: ['topic:board'], bead: wish })
-					);
+					localStorage.setItem('board.place', JSON.stringify({ open: [`w:alpha|${wish}`] }));
 			}, wish);
-			await B.page.goto(B.base + 'topics');
+			await B.page.reload();
 			await B.page.waitForFunction(
 				() =>
 					sessionStorage.getItem('board.recovered') === '1' &&
-					!!document.querySelector('.brd .topics'),
+					!!document.querySelector('.brd .column.threadcol'),
 				null,
 				{ timeout: 20000 }
 			);
@@ -96,10 +97,10 @@ for (const browserType of [chromium, webkit]) {
 			await B.page.goto(B.base);
 			await B.page.waitForSelector('.brd .column.threadcol');
 			await B.page.locator('#say').fill('keep this draft through a render failure');
-			parts.index.fuel.push({ ...parts.index.fuel[0] });
+			parts['thread/alpha'].wishes[0].stamps = null;
 			B.loom.set(reindex(parts));
 			await B.page.evaluate(() => window.__board.load());
-			await B.page.waitForSelector('[data-board-error]');
+			await B.page.waitForSelector('[data-board-error]', { timeout: 20000 });
 			assert.equal(
 				await B.page.evaluate(() => JSON.parse(sessionStorage.getItem('board.draft')).body),
 				'keep this draft through a render failure'
@@ -109,10 +110,34 @@ for (const browserType of [chromium, webkit]) {
 				if (r.isNavigationRequest() && r.frame() === B.page.mainFrame()) loads++;
 			});
 			await B.page.reload();
-			await B.page.waitForSelector('[data-board-error]');
+			await B.page.waitForSelector('[data-board-error]', { timeout: 20000 });
 			await B.page.waitForTimeout(300);
 			assert.equal(loads, 1);
 			assert.equal(await B.page.getByRole('button', { name: 'Reload', exact: true }).count(), 1);
+			assert.ok(logged.length > 0, 'the boundary logs its original error');
+			assert.ok(
+				B.errors.some((e) => e.includes('[board-render-error]')),
+				'the harness counts a rendered fallback'
+			);
+			assert.ok((await B.page.locator('[data-board-error] code').textContent()).length > 0);
+		} finally {
+			await B.close();
+		}
+	});
+}
+
+for (const browserType of [chromium, webkit]) {
+	test(`${browserType.name()}: repeated topic citations and fuel shells render`, async () => {
+		const parts = fixture();
+		parts.topics[0].cites.push(parts.topics[0].cites[0]);
+		parts.index.fuel.push({ ...parts.index.fuel[0] });
+		const B = await open({ parts: reindex(parts), browserType });
+		try {
+			await B.page.goto(B.base + 'topics');
+			await B.page.locator('[data-topic="board"]').click();
+			assert.equal(await B.page.locator('[data-topic="board"] .topic-cites button').count(), 2);
+			assert.equal(await B.page.locator('#fuel [data-shell="claude"]').count(), 1);
+			assert.deepEqual(B.errors, []);
 		} finally {
 			await B.close();
 		}
