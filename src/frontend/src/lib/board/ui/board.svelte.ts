@@ -8,7 +8,7 @@ import { normalize, panelIds, resolveRef, timeline, type Timeline } from '../bea
 import { armedVerdict, correctDraft, verdictLetter } from '../calls.ts';
 import { refTokens } from '../text.ts';
 import { unechoed } from '../ledger.ts';
-import { remembering, type Held } from '../cache.ts';
+import { forget, remembering, type Held } from '../cache.ts';
 import { EMPTY, PLACE, paneScroll, readPlace, type Place } from '../place.ts';
 
 const KEY = Symbol('board');
@@ -65,10 +65,19 @@ export class Board {
 			this.place = readPlace(localStorage.getItem(PLACE));
 			// the last page's parts: the board paints now, and load() syncs it against the index
 			if (held) {
-				this.store.prime(held);
-				this.model = this.store.model();
-				this.beads = this.store.beads;
-				this.land();
+				try {
+					this.store.prime(held);
+					this.model = this.store.model();
+					this.beads = this.store.beads;
+					this.land();
+				} catch {
+					// A torn or older cached part must not prevent mounting and the first network sync.
+					// Discard the hashes as well, or sync would treat the broken parts as current.
+					this.store = new Store(remembering(get));
+					this.model = null;
+					this.beads = null;
+					void forget();
+				}
 			}
 			// eslint-disable-next-line svelte/prefer-svelte-reactivity -- a local, not state
 			const q = new URLSearchParams(location.search).get('typed_by');
