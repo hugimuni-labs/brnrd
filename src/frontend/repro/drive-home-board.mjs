@@ -51,6 +51,13 @@ const VIEWPORTS = {
 
 /** `loom` is a snapshot, or null for the 404 a fresh account gets. */
 async function routePage(page, { loom, repos = fixtures.repos }, letters) {
+	// This driver exercises the older cloud snapshot surface. Stub the newer
+	// deployment/index/consent probe too, so a running local loom cannot choose
+	// the parts board instead of the snapshot supplied below.
+	await page.route('**/v1/site', (route) =>
+		route.fulfill({ json: { deployment: 'cloud', tree: null, features: [] } })
+	);
+	await page.route('**/v1/loom/**', (route) => route.fulfill({ status: 404, json: {} }));
 	await page.route('**/v1/dashboard/**', async (route) => {
 		const request = route.request();
 		const path = new URL(request.url()).pathname;
@@ -299,11 +306,12 @@ async function main() {
 					.evaluateAll((els) => els.map((el) => `${el.dataset.shell}:${el.dataset.low}`));
 				assert.deepEqual(low, ['claude:true', 'codex:true'], `both shells low (${low})`);
 				const stripText = await text(strip);
-				// The reset phrase left the marks so a gauge's width stays fixed.
+				// Reset words have a fixed slot beside the dial; the week stays visible.
 				// The week number stays beside the 5h bar, including a week on pace
 				// (claude's 61%, codex's 40%). Opening a shell still names each reset.
 				assert.ok(
-					/dry/i.test(stripText) &&
+					/resets in/.test(stripText) &&
+						/dry/i.test(stripText) &&
 						/low/i.test(stripText) &&
 						/week 61%/.test(stripText) &&
 						/week 40%/.test(stripText),
