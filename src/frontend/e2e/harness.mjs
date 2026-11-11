@@ -10,6 +10,7 @@ const root = fileURLToPath(new URL('..', import.meta.url));
 
 export async function open({
 	parts = fixture(),
+	browserType = chromium,
 	viewport = { width: 1440, height: 900 },
 	consent = null,
 	site = null,
@@ -24,7 +25,7 @@ export async function open({
 	});
 	await vite.listen();
 	const base = `http://127.0.0.1:${vite.httpServer.address().port}/`;
-	const browser = await chromium.launch();
+	const browser = await browserType.launch();
 	const page = await browser.newPage({ viewport });
 	const errors = [],
 		requests = [];
