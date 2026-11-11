@@ -97,7 +97,13 @@ export function assemble(index: Index, threads: Map<string, ThreadPart>, loose?:
 		live: Model['live'] = {},
 		wishes = [...(loose ?? index.unthreaded ?? [])];
 	for (const p of threads.values()) {
-		for (const l of p.letters) if (!byId.has(l.id)) byId.set(l.id, l);
+		for (const l of p.letters)
+			if (!byId.has(l.id))
+				byId.set(l.id, {
+					...l,
+					// The loom annotates a letter once per say; several spans can cite the same wish.
+					wishes: l.wishes ? [...new Map(l.wishes.map((w) => [w.wish, w])).values()] : undefined
+				});
 		wishes.push(...p.wishes);
 		Object.assign(tools, p.tools);
 		Object.assign(live, p.live);

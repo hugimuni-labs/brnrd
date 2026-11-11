@@ -91,7 +91,7 @@
 					{r.w.wish} · {r.w.origin || ''} · {r.w.state}{r.w.thread ? ' · ' + r.w.thread : ''}
 				</div>
 				<h4>asked · {(r.w.says || []).length}</h4>
-				{#each r.w.says || [] as s (s.id + s.quote)}<div class="say {s.cites}">
+				{#each r.w.says || [] as s, i (i)}<div class="say {s.cites}">
 						<q>{s.quote}</q>
 					</div>{:else}<div class="dim">none</div>{/each}
 				<h4>delivered</h4>

@@ -150,6 +150,8 @@
 		document.addEventListener('visibilitychange', hide);
 		window.addEventListener('pagehide', remember);
 		return () => {
+			// A render boundary can unmount the board before pagehide saves the draft.
+			b.keep();
 			clearInterval(faces);
 			if (saver) clearTimeout(saver);
 			if (timer) clearTimeout(timer);

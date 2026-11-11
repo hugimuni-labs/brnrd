@@ -4,6 +4,7 @@
 	import { HOME_DESCRIPTION, HOME_TITLE, SOCIAL_IMAGE } from '$lib/seo';
 	import { onMount } from 'svelte';
 	import Board from '$lib/board/ui/Board.svelte';
+	import BoardRecovery from '$lib/board/ui/BoardRecovery.svelte';
 	import Landing from '$lib/Landing.svelte';
 	import BoardConsent from '$lib/BoardConsent.svelte';
 	import { BASE, getJSON } from '$lib/board/parts';
@@ -164,7 +165,10 @@
 {#if mode === 'anon' || (mode === '?' && !holding && $site?.deployment !== 'loopback')}
 	<div data-landing class="contents"><Landing live={mode === 'anon'} /></div>
 {:else if mode === 'board'}
-	<Board {get} {held} {view} />
+	<svelte:boundary>
+		<Board {get} {held} {view} />
+		{#snippet failed()}<BoardRecovery />{/snippet}
+	</svelte:boundary>
 {:else if mode === 'ask' || mode === 'declined' || mode === 'waiting'}
 	<BoardConsent step={mode} {lastSeen} {slow} {busy} {failed} {answer} />
 {:else if mode === 'home'}
