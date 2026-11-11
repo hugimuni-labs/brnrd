@@ -1,7 +1,6 @@
 <script lang="ts">
 	// One letter in a column: a one-line head and two lines of body until a press selects it (wvut8 2). On the inbox an
-	// internal letter folds to one line until opened (or "show internal"); a person letter opens its disposition (the
-	// wishes citing it, the letters answering it) on a press.
+	// internal letter folds to one line until opened (or "show internal"); a person letter opens the same bead sheet as a resident reply; its disposition stays on a secondary button.
 	import type { Letter } from '../types.ts';
 	import { hm, hue, splitQuote } from '../text.ts';
 	import { inSide, internal, letterMark, ME, routes, sender } from '../sides.ts';
@@ -26,17 +25,19 @@
 	function press() {
 		if (shut || (internal(l) && inbox)) return b.toggle(b.open, 'l:' + l.id);
 		b.select(b.isSel(l.id, col) && !l.person ? null : l.id, col);
-		if (l.person) {
-			if (!dis) return b.toggle(b.open, 'd:' + l.id);
-			const r = routes(l, b.model!.byId, (t) => b.model!.threads.some((x) => x.id === t))[0];
-			if (r)
-				document
-					.querySelector(`[data-column="${CSS.escape(r)}"]`)
-					?.scrollIntoView({ inline: 'start' });
-			else b.open.delete('d:' + l.id);
-			return;
-		}
+
 		b.openBead(l.id);
+	}
+	// Keep the previous disposition and route action on an explicit secondary control.
+	function disposition() {
+		if (!dis) return b.toggle(b.open, 'd:' + l.id);
+		const r = routes(l, b.model!.byId, (t) => b.model!.threads.some((x) => x.id === t))[0];
+		if (r)
+			document
+				.querySelector(`[data-column="${CSS.escape(r)}"]`)
+				?.scrollIntoView({ inline: 'start' });
+		else b.open.delete('d:' + l.id);
+		return;
 	}
 </script>
 
@@ -68,6 +69,14 @@
 						b.openBead('thread:' + t);
 					}}>{t}</button
 				>{/each}{/if}
+		{#if l.person}<button
+				type="button"
+				class="disposition"
+				onclick={(e) => {
+					e.stopPropagation();
+					disposition();
+				}}>disposition</button
+			>{/if}
 		<small title="{l.at.slice(0, 19).replace('T', ' ')} UTC"
 			>{who} → {l.to || ''}{#if l.typed_by}
 				· <span class="typed">typed by {l.typed_by}</span>{/if} · {hm(l.at)}</small

@@ -1,9 +1,10 @@
 <script lang="ts">
+	// One selected id owns the whole rendered trace: switching letters rebuilds its DOM together.
 	// The bead sheet (4920): the pressed item, the chain up to its source and what came out of it, all walked in the
 	// client from the beads part (design §D3). Any bead in it re-centres it; ‹ walks back; esc closes. The stage that
 	// waits on him carries the same agree/done and correct buttons as the ledger row (10349: the sheet had none).
 	import { hm, short } from '../text.ts';
-	import { refOf, trace, type Bead, type Root } from '../bead.ts';
+	import { bead, refOf, trace, type Bead, type Root } from '../bead.ts';
 	import { stages, stageText } from '../stages.ts';
 	import { allCalls, answered, openAsks } from '../calls.ts';
 	import Chips from './Chips.svelte';
@@ -22,7 +23,11 @@
 		return T.me.line;
 	});
 	const wish = $derived(
-		T?.me.kind === 'wish' ? b.model?.wishes.find((w) => w.wish === T.me.id) : undefined
+		T?.me.kind === 'wish'
+			? b.model?.wishes.find((w) => w.wish === T.me.id)
+			: T?.wishes.length === 1
+				? T.wishes[0]
+				: undefined
 	);
 	// a wish's five stages as one rail in pip order (m435g), then its trace by time under it
 	const calls = $derived(allCalls(b.model?.threads || []));
@@ -36,7 +41,7 @@
 				)
 			: []
 	);
-	const rows = $derived(T ? trace(wish, T) : []);
+	const rows = $derived(T ? trace(T.me.kind === 'wish' ? wish : undefined, T) : []);
 	const steps = $derived((b.model?.threads || []).flatMap((t) => t.steps || []));
 	const ref = (r: string) => refOf(r, b.merged || {}, steps);
 	// a rail time drops its day when the stage before it fell on the same one
@@ -143,89 +148,103 @@
 		>
 		<button type="button" class="x" title="close (esc)" onclick={() => b.closeBead()}>×</button>
 	</div>
-	<div class="bb">
-		{#if T}
-			<div class="up">
-				<div class="src k-{T.root}">{ROOT[T.root]}</div>
-				{#each T.chain as x, i (x.id)}{@render row(x, i === 0 ? 'root' : '', x.edge, i)}{/each}
-				<div class="bd me {cls(T.me)}" class:root={!T.chain.length} data-bead={T.me.id}>
-					<i></i>
-					<div class="t"><span class="vb">{title(T.me)}</span></div>
-					<div class="x"><Chips text={body} /></div>
-				</div>
-				{#if wish}<div class="rail">
-						{#each rail as s, i (s.k)}<div
-								class="bd stage"
-								class:not={!s.on}
-								class:waitv={s.wait}
-								data-stage={s.k}
-								title={stageText(s)}
-								style:--j={T.chain.length + 1 + i}
-							>
-								<i
-									class="mk"
-									class:on={s.on}
-									class:cur={s.cur}
-									class:wait={s.wait}
-									class:x={s.mark === 'x'}
-									class:c={s.mark === 'c'}
-								></i><span class="vb"
-									>{STAGE[s.k] + (s.mark === 'x' ? ' ✕' : s.mark === 'c' ? ' ↺' : '')}</span
+	{#key b.beadId}
+		<div class="bb">
+			{#if T && T.me.id === b.beadId}
+				<div class="up">
+					<div class="src k-{T.root}">{ROOT[T.root]}</div>
+					{#each T.chain as x, i (x.id)}{@render row(x, i === 0 ? 'root' : '', x.edge, i)}{/each}
+					<div class="bd me {cls(T.me)}" class:root={!T.chain.length} data-bead={T.me.id}>
+						<i></i>
+						<div class="t"><span class="vb">{title(T.me)}</span></div>
+						<div class="x"><Chips text={body} /></div>
+					</div>
+					{#each T.wishes as w (w.wish)}
+						{@render row(
+							{ ...bead(b.merged || {}, w.wish), kind: 'wish', line: w.line },
+							'exchange',
+							null,
+							T.chain.length + 1
+						)}
+					{/each}
+					{#if wish}<div class="rail">
+							{#each rail as s, i (s.k)}<div
+									class="bd stage"
+									class:not={!s.on}
+									class:waitv={s.wait}
+									data-stage={s.k}
+									title={stageText(s)}
+									style:--j={T.chain.length + 1 + i}
 								>
-								<em
-									>{s.at
-										? when[i]
-										: s.on
-											? 'implied'
-											: s.wait
-												? asks.has(wish.wish)
-													? 'ask'
-													: 'verdict'
-												: '·'}</em
-								>
-								{#if s.wait}
-									{@const act = asks.has(wish.wish) ? 'done' : 'agree'}
-									<button
-										type="button"
-										data-act={act}
-										disabled={b.sending.has(wish.wish)}
-										onclick={(e) => (e.stopPropagation(), b.answer(wish.wish, act))}
-										>{b.sending.has(wish.wish) ? 'sending…' : act}</button
+									<i
+										class="mk"
+										class:on={s.on}
+										class:cur={s.cur}
+										class:wait={s.wait}
+										class:x={s.mark === 'x'}
+										class:c={s.mark === 'c'}
+									></i><span class="vb"
+										>{STAGE[s.k] + (s.mark === 'x' ? ' ✕' : s.mark === 'c' ? ' ↺' : '')}</span
 									>
-									<button
-										type="button"
-										data-act="correct"
-										onclick={(e) => (e.stopPropagation(), b.answer(wish.wish, 'correct'))}
-										>correct</button
+									<em
+										>{s.at
+											? when[i]
+											: s.on
+												? 'implied'
+												: s.wait
+													? asks.has(wish.wish)
+														? 'ask'
+														: 'verdict'
+													: '·'}</em
 									>
-								{/if}
-							</div>{/each}
-					</div>{/if}
-			</div>
-			<div class="down">
-				{#each rows as r, i (r.t === 'bead' ? r.bead.id : r.t + i)}
-					{#if r.t === 'bead'}{@render row(r.bead, 'out', null, T.chain.length + 6 + i)}
-					{:else}<div
-							class="bd out trace {r.t === 'verdict' ? 'k-person' : 'k-loom'}"
-							data-trace={r.t === 'stamp' ? r.k : r.t}
-							style:--j={T.chain.length + 6 + i}
-						>
-							<i></i>
-							<div class="t">
-								<span class="vb"
-									>{r.t === 'stamp'
-										? r.k
-										: r.t === 'verdict'
-											? 'verdict · ' + r.as
-											: 'result'}</span
-								>{#if r.t !== 'result'}
-									<em>· {hm(r.at)}{r.t === 'stamp' && r.by ? ' · ' + r.by : ''}</em>{/if}
-							</div>
-							{#if r.ref}<div class="x">{@render link(r.ref)}</div>{/if}
-							{#if r.t === 'stamp' && r.line}<div class="x sl">{r.line}</div>{/if}
+									{#if s.wait}
+										{@const act = asks.has(wish.wish) ? 'done' : 'agree'}
+										<button
+											type="button"
+											data-act={act}
+											disabled={b.sending.has(wish.wish)}
+											onclick={(e) => (e.stopPropagation(), b.answer(wish.wish, act))}
+											>{b.sending.has(wish.wish) ? 'sending…' : act}</button
+										>
+										<button
+											type="button"
+											data-act="correct"
+											onclick={(e) => (e.stopPropagation(), b.answer(wish.wish, 'correct'))}
+											>correct</button
+										>
+									{/if}
+								</div>{/each}
 						</div>{/if}
-				{:else}<div class="none">nothing came out of it yet</div>{/each}
-			</div>
-		{/if}
-	</div>
+				</div>
+				<div class="down">
+					{#each rows as r, i (r.t === 'bead' ? r.bead.id : r.t + i)}
+						{#if r.t === 'bead'}{@render row(r.bead, 'out', null, T.chain.length + 6 + i)}
+						{:else}<div
+								class="bd out trace {r.t === 'verdict' ? 'k-person' : 'k-loom'}"
+								data-trace={r.t === 'stamp' ? r.k : r.t}
+								style:--j={T.chain.length + 6 + i}
+							>
+								<i></i>
+								<div class="t">
+									<span class="vb"
+										>{r.t === 'stamp'
+											? r.k
+											: r.t === 'verdict'
+												? 'verdict · ' + r.as
+												: r.t === 'answered'
+													? 'this answered it'
+													: 'result'}</span
+									>{#if r.t !== 'result'}
+										<em>· {hm(r.at)}{r.t === 'stamp' && r.by ? ' · ' + r.by : ''}</em>{/if}
+								</div>
+								{#if r.ref}<div class="x">{@render link(r.ref)}</div>{/if}
+								{#if r.t === 'stamp' && r.line}<div class="x sl">{r.line}</div>{/if}
+							</div>{/if}
+					{:else}{#if !wish && !T.wishes.length}<div class="none">
+								nothing came out of it yet
+							</div>{/if}{/each}
+				</div>
+			{/if}
+		</div>
+	{/key}
 </aside>
