@@ -72,37 +72,26 @@ test('topics has its own path; a quote opens and back returns to the board', asy
 	await page.locator('[data-column="alpha"]').waitFor();
 });
 
-test('a thread column shows the person letters behind its wishes, collapsed', async () => {
-	const lines = await B.page.$$eval('[data-column="alpha"] .from-line', (es) =>
-		es.map((e) => ({
-			id: e.dataset.from,
-			open: e.classList.contains('open'),
-			text: e.textContent.replace(/\s+/g, ' ').trim()
-		}))
-	);
-	assert.ok(lines.length >= 1, JSON.stringify(lines));
-	assert.match(lines[0].text, /ada/);
-	assert.equal(lines[0].open, false);
-	await B.page.click(`[data-column="alpha"] .from-line[data-from="${lines[0].id}"]`);
-	assert.equal(
-		await B.page.$eval(`[data-column="alpha"] .from-line[data-from="${lines[0].id}"]`, (e) =>
-			e.classList.contains('open')
-		),
-		true
-	);
-	assert.ok(
-		await B.page.$eval(
-			`[data-column="alpha"] .from-line[data-from="${lines[0].id}"] .from-body`,
-			(e) => e.textContent.includes('please make alpha')
-		)
-	);
-	await B.page.click(`[data-column="alpha"] .from-line[data-from="${lines[0].id}"]`);
-	assert.equal(
-		await B.page.$eval(`[data-column="alpha"] .from-line[data-from="${lines[0].id}"]`, (e) =>
-			e.classList.contains('open')
-		),
-		false
-	);
+test('person source bars are hidden while their letters remain in the inbox and sheet', async () => {
+	const B = await open();
+	try {
+		const page = B.page;
+		assert.equal(await page.locator('.threadcol .from-line').count(), 0);
+		const modelHasSource = await page.evaluate(() =>
+			window.__board.model.byId.has('letter:mine:100')
+		);
+		assert.equal(modelHasSource, true);
+		await page.locator('[data-column="inbox"] .heading').click();
+		const source = page.locator('[data-column="inbox"] [data-letter="letter:mine:100"]');
+		assert.match(await source.innerText(), /please make alpha/);
+		await page.evaluate(() => window.__board.openBead('letter:mine:100'));
+		await page.locator('#bead.on').waitFor();
+		assert.match(await page.locator('#bead').innerText(), /please make alpha/);
+		await page.keyboard.press('Escape');
+		await page.locator('[data-column="inbox"] .heading').click();
+	} finally {
+		await B.close();
+	}
 });
 
 test('a new letter patches beads; the part is not fetched whole again', async () => {

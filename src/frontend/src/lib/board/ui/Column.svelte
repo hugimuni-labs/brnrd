@@ -16,6 +16,8 @@
 	import { board } from './board.svelte.ts';
 	import { landAt } from '../place.ts';
 	let { t, inbox = false, letters }: { t: Thread; inbox?: boolean; letters: Letter[] } = $props();
+	// The source-letter bars above each thread's wish ledger; full letters stay in chat, inbox and sheet.
+	const SHOW_PERSON_LETTERS_IN_THREAD_BARS = false;
 	const b = board();
 	const B = $derived(t.board || {});
 	const strand = $derived((t.strands || []).slice(-1)[0]);
@@ -38,6 +40,7 @@
 	const ai = $derived(steps.findIndex((s) => !s.receipt));
 	const grown = $derived(b.grown.has(t.id));
 	const from = $derived.by(() => {
+		if (!SHOW_PERSON_LETTERS_IN_THREAD_BARS) return [];
 		void b.model;
 		return fromInbox(b.store.threads.get(t.id)?.chain || {}, b.model?.byId || new Map(), t.id);
 	});
