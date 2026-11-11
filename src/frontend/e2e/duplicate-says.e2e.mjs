@@ -93,6 +93,8 @@ for (const browserType of [chromium, webkit]) {
 			assert.equal(p.bead, null);
 			assert.equal(await B.page.locator('[data-board-error]').count(), 0);
 			// Now a failure independent of open rows: the same tab must show the fallback, not reload forever.
+			await B.page.goto(B.base);
+			await B.page.waitForSelector('.brd .column.threadcol');
 			await B.page.locator('#say').fill('keep this draft through a render failure');
 			parts.index.fuel.push({ ...parts.index.fuel[0] });
 			B.loom.set(reindex(parts));
