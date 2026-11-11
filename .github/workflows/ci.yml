@@ -102,6 +102,8 @@ jobs:
   frontend:
     name: Frontend tests
     runs-on: ubuntu-latest
+    # the whole job runs in about five minutes; a hung browser test must not hold main for six hours
+    timeout-minutes: 30
     permissions:
       contents: read
     defaults:
@@ -130,8 +132,9 @@ jobs:
         run: |
           # --with-deps fetches fonts with apt; when the Ubuntu mirrors do not resolve (2026-11-11,
           # three hours), install the browser alone: the runner image already has what the shell needs.
-          npx playwright install --with-deps chromium --only-shell \
-            || npx playwright install chromium --only-shell
+          # webkit: e2e/cache-fallback.e2e.mjs runs in Safari's engine
+          npx playwright install --with-deps chromium webkit --only-shell \
+            || npx playwright install chromium webkit --only-shell
           npm run e2e
 
   launcher:

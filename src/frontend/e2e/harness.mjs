@@ -25,7 +25,14 @@ export async function open({
 	});
 	await vite.listen();
 	const base = `http://127.0.0.1:${vite.httpServer.address().port}/`;
-	const browser = await browserType.launch();
+	// a browser that is not installed must fail the test, not leave vite holding the process open:
+	// on 2026-11-11 a WebKit launch on a Chromium-only runner hung main's CI for over an hour
+	const browser = await browserType.launch().catch(async (e) => {
+		await vite.close();
+		loom.server.closeAllConnections?.();
+		loom.server.close();
+		throw e;
+	});
 	const page = await browser.newPage({ viewport });
 	const errors = [],
 		requests = [];
