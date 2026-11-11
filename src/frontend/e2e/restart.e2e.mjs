@@ -29,7 +29,7 @@ const home = () => {
 
 let B, parts;
 before(
-	async () => (B = await open({ parts: (parts = home()), viewport: { width: 1440, height: 520 } }))
+	async () => (B = await open({ parts: (parts = home()), viewport: { width: 1800, height: 520 } }))
 );
 after(() => B?.close());
 
@@ -42,9 +42,20 @@ test('the board remembers its parts, and where he stands a second after he moves
 	await B.page.locator(`.brd [data-pip="${BRAVO}"]`).first().click();
 	await B.page.waitForSelector(`#bead.on .bd.me[data-bead="${BRAVO}"]`);
 	await col().evaluate((p) => (p.scrollTop = 100));
-	await B.page.$eval('#board', (m) => (m.scrollLeft = 400));
 	await B.page.locator('[data-column="alpha"] .heading .state').click();
 	await B.page.waitForSelector('[data-column="alpha"] .band.ex');
+	// With Topics on its own page, Alpha sits behind the sticky inbox at x=400. Grow it first:
+	// Playwright scrolls a covered heading into view before clicking, changing the place we want to save.
+	await B.page.$eval('#board', (m) => (m.scrollLeft = 400));
+	assert.equal(await B.page.$eval('#board', (m) => m.scrollLeft), 400);
+	// The wider viewport leaves Charlie fully visible beside the sticky inbox and the open sheet.
+	const visible = await B.page.locator('[data-column="charlie"]').boundingBox();
+	const inbox = await B.page.locator('[data-column="inbox"]').boundingBox();
+	const board = await B.page.locator('#board').boundingBox();
+	assert.ok(visible.x >= inbox.x + inbox.width);
+	assert.ok(visible.x + visible.width <= board.x + board.width);
+	await B.page.locator('[data-column="charlie"] .heading .state').click();
+	assert.equal(await B.page.$eval('#board', (m) => m.scrollLeft), 400);
 	await B.page.waitForTimeout(1300);
 	const p = await place();
 	assert.equal(p.bead, BRAVO);
