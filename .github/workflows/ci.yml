@@ -128,7 +128,10 @@ jobs:
       # The board over synthetic parts (e2e/fixture.mjs): vite dev + headless chromium.
       - name: Board e2e
         run: |
-          npx playwright install --with-deps chromium --only-shell
+          # --with-deps fetches fonts with apt; when the Ubuntu mirrors do not resolve (2026-11-11,
+          # three hours), install the browser alone: the runner image already has what the shell needs.
+          npx playwright install --with-deps chromium --only-shell \
+            || npx playwright install chromium --only-shell
           npm run e2e
 
   launcher:
