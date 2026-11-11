@@ -3,13 +3,11 @@
 	// below. Data is the loom's parts (design §D1), live over SSE; the order moves at most once per 10 s and holds while
 	// the sheet is open or the pointer is on a thread column (order.ts arrange).
 	import { onMount, tick as flushed, untrack } from 'svelte';
-	import { resolve } from '$app/paths';
-	import { beforeNavigate } from '$app/navigation';
 	import { page, updated } from '$app/state';
 	import { version } from '$app/environment';
 	import { site } from '$lib/site';
 	import './board.css';
-	import { arrange, bst, byThread, SETTLED, sortThreads, wanted } from '../order.ts';
+	import { arrange, bst, byThread, SETTLED, TOPICS, sortThreads, wanted } from '../order.ts';
 	import { headerFuel, leadName, machinesTitle } from '../parts.ts';
 	import { barGauge } from '../../loomSnapshot.ts';
 	import FuelMarks from '../../FuelMarks.svelte';
@@ -26,15 +24,8 @@
 	import { Board, provide } from './board.svelte.ts';
 	import type { Held } from '../cache.ts';
 	// `held`: the last page's parts from the browser's cache (cache.ts), so the board paints before the network answers
-	let {
-		get,
-		held = null,
-		view = 'board'
-	}: {
-		get?: (path: string) => Promise<unknown>;
-		held?: Held | null;
-		view?: 'board' | 'topics';
-	} = $props();
+	let { get, held = null }: { get?: (path: string) => Promise<unknown>; held?: Held | null } =
+		$props();
 	const b = provide(untrack(() => new Board(get, held)));
 
 	const by = $derived(byThread(b.letters));
@@ -114,15 +105,7 @@
 	// press; the board's horizontal scroll comes back once the columns stand.
 	let main: HTMLElement | undefined = $state();
 	let saver: ReturnType<typeof setTimeout> | null = null;
-	const remember = () => {
-		if (view === 'board') {
-			b.savePlace();
-			b.keep();
-		}
-	};
-	beforeNavigate(remember);
 	const save = () => {
-		if (view !== 'board') return;
 		if (saver) clearTimeout(saver);
 		saver = setTimeout(() => ((saver = null), b.savePlace()), 1000);
 	};
@@ -146,27 +129,20 @@
 		b.load();
 		const faces = setInterval(() => tick++, 400);
 		const off = b.connect();
-		const hide = () => document.hidden && remember();
+		const hide = () => document.hidden && b.savePlace();
 		document.addEventListener('visibilitychange', hide);
-		window.addEventListener('pagehide', remember);
+		window.addEventListener('pagehide', b.savePlace);
 		return () => {
 			clearInterval(faces);
-			if (saver) clearTimeout(saver);
-			if (timer) clearTimeout(timer);
 			off();
 			document.removeEventListener('visibilitychange', hide);
-			window.removeEventListener('pagehide', remember);
+			window.removeEventListener('pagehide', b.savePlace);
 		};
 	});
 </script>
 
 <div class="brd" class:sheet={!!b.beadId}>
 	<header>
-		{#if view === 'board'}
-			<a class="topics-link" href={resolve('/topics')}>topics</a>
-		{:else}
-			<a class="topics-link" href={resolve('/')}>← board</a>
-		{/if}
 		<b>fuel</b>
 		<span id="fuel" title={headerFuel(b.model?.fuel)}>
 			{#each b.model?.fuel ?? [] as shell (shell.shell)}
@@ -202,56 +178,52 @@
 			><input type="checkbox" bind:checked={b.showAll} onchange={() => b.persist()} /> show internal</label
 		>
 	</header>
-	{#if view === 'board'}
-		<nav id="rail" aria-label="strands">
-			{#each rail as r (r.s.id)}<!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
-				<span
-					data-thread={r.t.id}
-					data-strand={r.s.id}
-					class:flash={flash.has(r.s.id)}
-					style:--h={hue(r.t.id)}
-					onclick={() => b.openBead(r.s.id)}
-					>{#if r.t.board?.state === 'seated'}<b class="pulse"></b>{/if}<i data-state={r.s.state}
-						>{face(b.model?.faces, r.s.state, tick)}</i
-					>
-					{r.t.id} · {r.s.id.slice(-6)} · {waitOf(r.t, r.s.state)}{#if r.lv}<em
-							data-since={r.lv.since}
-							>{` · ${r.lv.verb} ${dur(secs(r.lv.since, new Date(b.now).toISOString()))}`}</em
-						>{#if r.lv.open[0]}{` · ${what(r.lv.open[0]).slice(0, 40)}`}{/if}{/if}</span
-				>{/each}{#each railLog as x, i (i)}<span class="log">{x}</span>{/each}
-		</nav>
-		<nav id="tabs" aria-label="columns">
-			{#each order as id (id)}<a
-					href="#{id}"
-					style:--h={hue(id)}
-					onclick={(e) => (
-						e.preventDefault(),
-						document
-							.querySelector(`[data-column="${CSS.escape(id)}"]`)
-							?.scrollIntoView({ inline: 'start', behavior: 'smooth' })
-					)}>{id === SETTLED ? 'settled' : id}</a
-				>{/each}
-		</nav>
-		<main id="board" bind:this={main} onscrollcapture={save}>
-			{#if !b.model}<div class="empty">{b.error || 'loading the board'}</div>{/if}
-			{#each order as id (id)}
-				{#if id === INBOX}<Column t={inbox} inbox letters={b.letters} />
-				{:else if id === SETTLED}<Stack {settled} {by} />
-				{:else if byId.get(id)}<Column t={byId.get(id)!} letters={by.get(id) || []} />{/if}
-			{/each}
-		</main>
-		<Links />
-	{:else}
-		<main class="topics-page"><Topics /></main>
-	{/if}
+	<nav id="rail" aria-label="strands">
+		{#each rail as r (r.s.id)}<!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
+			<span
+				data-thread={r.t.id}
+				data-strand={r.s.id}
+				class:flash={flash.has(r.s.id)}
+				style:--h={hue(r.t.id)}
+				onclick={() => b.openBead(r.s.id)}
+				>{#if r.t.board?.state === 'seated'}<b class="pulse"></b>{/if}<i data-state={r.s.state}
+					>{face(b.model?.faces, r.s.state, tick)}</i
+				>
+				{r.t.id} · {r.s.id.slice(-6)} · {waitOf(r.t, r.s.state)}{#if r.lv}<em
+						data-since={r.lv.since}
+						>{` · ${r.lv.verb} ${dur(secs(r.lv.since, new Date(b.now).toISOString()))}`}</em
+					>{#if r.lv.open[0]}{` · ${what(r.lv.open[0]).slice(0, 40)}`}{/if}{/if}</span
+			>{/each}{#each railLog as x, i (i)}<span class="log">{x}</span>{/each}
+	</nav>
+	<nav id="tabs" aria-label="columns">
+		{#each order as id (id)}<a
+				href="#{id}"
+				style:--h={hue(id)}
+				onclick={(e) => (
+					e.preventDefault(),
+					document
+						.querySelector(`[data-column="${CSS.escape(id)}"]`)
+						?.scrollIntoView({ inline: 'start', behavior: 'smooth' })
+				)}>{id === SETTLED ? 'settled' : id}</a
+			>{/each}
+	</nav>
+	<main id="board" bind:this={main} onscrollcapture={save}>
+		{#if !b.model}<div class="empty">{b.error || 'loading the board'}</div>{/if}
+		{#each order as id (id)}
+			{#if id === INBOX}<Column t={inbox} inbox letters={b.letters} />
+			{:else if id === TOPICS}<Topics />
+			{:else if id === SETTLED}<Stack {settled} {by} />
+			{:else if byId.get(id)}<Column t={byId.get(id)!} letters={by.get(id) || []} />{/if}
+		{/each}
+	</main>
+	<Links />
 	<BeadSheet />
-	{#if view === 'board'}<Composer />{/if}
+	<Composer />
 	<footer>
-		{#if view === 'board'}← strands · you → / oldest → newest ↓ in every column / tap a heading to
-			grow the plan / tap a letter to link it across columns / the input writes to the inbox as you
-			/
-		{:else}topics · tap a page to unfold its newest entry /
-		{/if} <span data-page-version>{version.slice(0, 8)}</span>
+		← strands · you → / oldest → newest ↓ in every column / tap a heading to grow the plan / tap a
+		letter to link it across columns / the input writes to the inbox as you / <span
+			data-page-version>{version.slice(0, 8)}</span
+		>
 		{#if $site?.tree && $site.tree !== version}
 			/
 			<!-- eslint-disable svelte/no-navigation-without-resolve -- reload this document, including its query -->
