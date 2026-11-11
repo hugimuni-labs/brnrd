@@ -7,7 +7,6 @@
 	import { markBooted } from '$lib/boot';
 	import { cached } from '$lib/board/cache';
 	import { outbound } from '$lib/outbound';
-	import favicon from '$lib/assets/favicon.svg';
 	import { canonicalUrl, hasCanonicalMeta, isIndexablePath, normalizePathname } from '$lib/seo';
 
 	let { children } = $props();
@@ -67,7 +66,6 @@
 <svelte:document onclickcapture={(e) => outbound(e)} />
 
 <svelte:head>
-	<link rel="icon" href={favicon} />
 	{#if canonicalMeta}
 		<link rel="canonical" href={canonical} />
 		<meta property="og:url" content={canonical} />

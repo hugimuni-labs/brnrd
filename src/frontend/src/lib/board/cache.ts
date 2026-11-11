@@ -18,7 +18,13 @@ export type Held = {
 	beads: Beads | null;
 };
 
-const store = () => (typeof caches === 'undefined' ? null : caches.open(NAME).catch(() => null));
+const store = async () => {
+	try {
+		return typeof caches === 'undefined' ? null : await caches.open(NAME);
+	} catch {
+		return null;
+	}
+};
 
 export const cached = () =>
 	typeof localStorage !== 'undefined' && localStorage.getItem(FLAG) === '1';
