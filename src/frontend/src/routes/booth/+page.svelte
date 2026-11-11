@@ -6,7 +6,7 @@
 
 	const BOOTH = {
 		meet: 'https://meet.google.com/meet/ifp-ymqz-gaq',
-		hours: 'Today, 15:00–15:30 (Lisbon time)'
+		hours: 'Today, 15:00–16:00 (Lisbon time)'
 	};
 	const VIDEO_URL = '';
 	const title = 'The brnrd booth, virtual today';

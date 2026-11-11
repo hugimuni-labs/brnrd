@@ -82,7 +82,7 @@ test('demo needs both room and hours; optional trailer renders only when set', a
 test('configured booth renders the supplied session details', async () => {
 	const { body } = await renderRoute('', '', '', true);
 	ok(body.includes('href="https://meet.google.com/meet/ifp-ymqz-gaq"'));
-	ok(body.includes('Today, 15:00–15:30 (Lisbon time)'));
+	ok(body.includes('Today, 15:00–16:00 (Lisbon time)'));
 	ok(!body.includes('Room link and hours here shortly'));
 	ok(!body.includes('<video'));
 });
