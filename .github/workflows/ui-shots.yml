@@ -36,7 +36,9 @@ jobs:
       - name: Install browser and PR dependencies
         run: |
           npm ci
-          npx playwright install --with-deps chromium
+          # the apt half fails when the Ubuntu mirrors do not resolve; base and head are shot in this
+          # same run, so missing fonts cannot make a false difference
+          npx playwright install --with-deps chromium || npx playwright install chromium
       - name: Find and prepare merge-base
         id: base
         env:

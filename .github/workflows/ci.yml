@@ -102,6 +102,8 @@ jobs:
   frontend:
     name: Frontend tests
     runs-on: ubuntu-latest
+    # the whole job runs in about five minutes; a hung browser test must not hold main for six hours
+    timeout-minutes: 30
     permissions:
       contents: read
     defaults:
@@ -128,7 +130,11 @@ jobs:
       # The board over synthetic parts (e2e/fixture.mjs): vite dev + headless chromium.
       - name: Board e2e
         run: |
-          npx playwright install --with-deps chromium --only-shell
+          # --with-deps fetches fonts with apt; when the Ubuntu mirrors do not resolve (2026-11-11,
+          # three hours), install the browser alone: the runner image already has what the shell needs.
+          # webkit: e2e/cache-fallback.e2e.mjs runs in Safari's engine
+          npx playwright install --with-deps chromium webkit --only-shell \
+            || npx playwright install chromium webkit --only-shell
           npm run e2e
 
   launcher:
