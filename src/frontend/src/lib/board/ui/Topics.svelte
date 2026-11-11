@@ -1,5 +1,5 @@
 <script lang="ts">
-	// The topics column: one row per topics/<slug>.md, newest-entry first. Press unfolds the newest quote;
+	// The topics page: one row per topics/<slug>.md, newest-entry first. Press unfolds the newest quote;
 	// a selected letter that cites the page marks the row.
 	import { hue, short } from '../text.ts';
 	import { board } from './board.svelte.ts';
@@ -7,7 +7,7 @@
 	const rows = $derived(b.model?.topics || []);
 </script>
 
-<section class="column topics" data-column="topics" data-b="quiet" style:--h={hue('topics')}>
+<section class="topics" style:--h={hue('topics')}>
 	<div class="heading">
 		<h2>topics</h2>
 		<div class="state">{rows.length} pages · newest entry first</div>
