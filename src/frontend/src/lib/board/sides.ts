@@ -8,8 +8,13 @@ export const INBOX = 'inbox';
 export const internal = (l: Letter): boolean =>
 	!l.person && !String(l.to || '').startsWith('channel:');
 
-export const sender = (l: Letter): string =>
-	l.notice ? 'loom' : l.person ? l.from.replace('person:', '') : l.from.split('/')[0];
+export const personLabel = (id: string, names: Record<string, string> = {}): string => {
+	const match = /^(?:person:|p-)(.*)$/.exec(id);
+	return match ? names[match[1]] || match[1] : id.split('/')[0];
+};
+
+export const sender = (l: Letter, names?: Record<string, string>): string =>
+	l.notice ? 'loom' : personLabel(l.from, names);
 
 // once per threads array (a model is new on every sync): every card on the board asks it
 const own = new WeakMap<Thread[], Map<string, Set<string>>>();

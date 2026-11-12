@@ -85,3 +85,11 @@ def _private_jack_clock(monkeypatch):
     clock = types.ModuleType("time")
     clock.__dict__.update(time.__dict__)
     monkeypatch.setattr(jack, "time", clock)
+
+
+@pytest.fixture(autouse=True)
+def isolate_person_names():
+    from brr.loom.runtime import person_names
+    person_names._CACHE.clear()
+    yield
+    person_names._CACHE.clear()

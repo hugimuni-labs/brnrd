@@ -127,6 +127,7 @@ export function assemble(index: Index, threads: Map<string, ThreadPart>, loose?:
 		machines: index.machines || [],
 		faces: index.faces,
 		person: index.person,
+		person_names: index.person_names,
 		via: index.via,
 		topics: []
 	};

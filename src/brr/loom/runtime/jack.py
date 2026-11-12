@@ -466,7 +466,10 @@ def _people(room: Path, parsed: Boundary, at: str) -> str:
     It never blocks a stop by itself: the body decides whether something happened."""
     from . import people
     state = _state(room)
-    lines, key, kept = people.tally(room / "self", parsed, state.get("people") or {})
+    from .home import home_of_room
+    repo = home_of_room(room).root / "self"
+    lines, key, kept = people.tally(room / "self", parsed, state.get("people") or {},
+                                    names_repo=repo if (repo / ".git").exists() else None)
     news = key != state.get("people_said")
     _set_state(room, people=kept, **({"people_said": key} if at == "post" else {}))
     if at == "stop" or (at == "post" and news):

@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import os
 import sys
+
+from .person_names import names as person_names
 from .refusals import Parser
 
 
@@ -27,7 +29,8 @@ def cmd_asks(args) -> int:
         sys.stdout.write(table(calibrate(read_facts(home), args.days), args.days))
         return 0
     sys.stdout.write(asks(read_facts(home), main_snapshot(home), args.thread, args.all,
-                          install=home.install_id()))
+                          install=home.install_id(),
+                          person_names=person_names(home.root / "self")))
     return 0
 
 

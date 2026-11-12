@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { personLabel } from '../sides.ts';
 	// A thread's ledger (4920): who owes the next move decides the section (waits on you, in hand, settled), one row per
 	// wish with its pips, assumed wishes nested under the said wish they read from, Plan steps under the wish they cite.
 	import type { Letter, Thread } from '../types.ts';
@@ -108,7 +109,7 @@
 				{#each lettersOf(r) as l (l.id)}<!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
 					<div class="lrow" class:quiet={l.chatter} onclick={() => b.openBead(l.id)}>
 						<b
-							>{l.notice ? 'loom' : l.from.replace('person:', '').split('/')[0]} → {String(
+							>{l.notice ? 'loom' : personLabel(l.from, b.model?.person_names)} → {String(
 								l.to || ''
 							).replace(/^thread:/, '')}</b
 						>
