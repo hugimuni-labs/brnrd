@@ -310,14 +310,15 @@ class LedgerView(list):
         return result
 
     def project(self, name, inputs, build):
+        from .wishes import WISH_KINDS
+
         dependencies = {
             'senders': ('lease',),
             'reply-channels': ('source', 'letter'),
             'attachments': ('source', 'blob', 'letter'),
             'reply-context': ('source', 'letter'),
             'letters-by-sender': ('letter',),
-            'wishes': ('wish', 'wish.read', 'wish.result', 'wish.verdict', 'wish.left', 'wish.top', 'wish.pick',
-                       'letter', 'lease'),
+            'wishes': WISH_KINDS,
         }
         if name == 'body-state':
             revision = len(self.by_body[inputs[:2]])

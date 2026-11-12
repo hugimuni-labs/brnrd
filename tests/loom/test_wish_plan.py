@@ -1,6 +1,8 @@
 """A thread's plan is its wishes; a reply to a person letter is told when it steered none."""
 from types import SimpleNamespace
 
+import pytest
+
 from brr.loom.runtime import snapshot
 from brr.loom.runtime.asks import asks
 from brr.loom.runtime.config import load_config
@@ -13,6 +15,43 @@ from test_wake import cli, commit, write_thread
 from test_wishes import command, heard, ledger  # noqa: F401  (fixture)
 
 STRAND = "s-aaaa-test"
+
+
+@pytest.mark.parametrize("caller", ["told", "plan"])
+def test_only_a_loom_start_delivers_a_cached_merged_wish(ledger, monkeypatch, caller):
+    from brr.daemon2.facts import Fact
+    from brr.loom.runtime import receipts
+    from brr.loom.runtime.ledger import LedgerView
+    from brr.loom.runtime.loom import _plan
+    from brr.loom.runtime.selfrepo import git
+    from brr.loom.runtime.wishes import told
+
+    home, seat = ledger
+    source = home.root / "source"
+    source.mkdir()
+    git(source, "init")
+    git(source, "commit", "--allow-empty", "-m", "Ship the switch (#7)")
+    merged = git(source, "rev-parse", "HEAD").stdout.strip()
+    monkeypatch.setattr(receipts, "source_root", lambda: source)
+    ident = heard(home, seat, "Ship the switch")
+    command(home, seat, "wish", ident, "--result", "pr:7", "--line", "Switch merged")
+    facts = LedgerView(read_facts(home))
+
+    def read():
+        return told(facts)[ident].state if caller == "told" else _plan(home, "work", facts)
+
+    before = read()
+    if caller == "told":
+        assert before == "granting"
+    else:
+        assert "plan 0/1" in before
+    count = len(facts)
+    facts.append(Fact(kind="loom.started", by="loom:aaaa", data={"commit": merged}))
+    assert len(facts) == count + 1
+    assert [f.kind for f in facts.delta] == ["loom.started"]
+    assert not facts.reset
+    assert read() == ("delivered" if caller == "told" else "plan 1/1")
+    assert told(facts)[ident].results[0]["held"] == merged
 
 
 def boundary(home):
