@@ -30,7 +30,7 @@
 					{#if row.quote}<div class="from-body">{row.quote}</div>{/if}
 					{#if (row.cites || []).length}
 						<div class="topic-cites">
-							{#each row.cites || [] as id (id)}<button
+							{#each row.cites || [] as id, i (i)}<button
 									type="button"
 									class="ref"
 									onclick={(e) => {

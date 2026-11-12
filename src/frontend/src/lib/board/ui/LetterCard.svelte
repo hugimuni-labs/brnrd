@@ -98,7 +98,7 @@
 		{#if dis}
 			<div class="dissect">
 				<h4>disposition · {(l.wishes || []).length} wishes{l.chatter ? ' · chatter' : ''}</h4>
-				{#each l.wishes || [] as w (w.wish)}<div class="row" style:--t={hue(w.thread || 'inbox')}>
+				{#each l.wishes || [] as w, i (i)}<div class="row" style:--t={hue(w.thread || 'inbox')}>
 						<b>{w.wish}</b> · {w.state}{w.thread ? ' · ' + w.thread : ''}<br />{w.line}
 					</div>{:else}<div class="dim warn">none: no wish say or chatter cites it</div>{/each}
 				<h4>letters answering it · {(l.answers || []).length}</h4>

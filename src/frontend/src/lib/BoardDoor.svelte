@@ -4,6 +4,7 @@
 	import { HOME_DESCRIPTION, HOME_TITLE, SOCIAL_IMAGE } from '$lib/seo';
 	import { onMount } from 'svelte';
 	import Board from '$lib/board/ui/Board.svelte';
+	import BoardRecovery from '$lib/board/ui/BoardRecovery.svelte';
 	import Landing from '$lib/Landing.svelte';
 	import BoardConsent from '$lib/BoardConsent.svelte';
 	import { BASE, getJSON } from '$lib/board/parts';
@@ -14,6 +15,7 @@
 	// parts paint independently of the declaration; a cloud 401 still forgets them.
 	let { view = 'board' }: { view?: 'board' | 'topics' } = $props();
 	type Step = 'ask' | 'declined' | 'waiting';
+	let renderError = $state('');
 	let mode = $state<'?' | 'anon' | 'board' | 'home' | Step>('?');
 	let holding = $state(cached());
 	let held = $state<Held | null>(null);
@@ -164,7 +166,15 @@
 {#if mode === 'anon' || (mode === '?' && !holding && $site?.deployment !== 'loopback')}
 	<div data-landing class="contents"><Landing live={mode === 'anon'} /></div>
 {:else if mode === 'board'}
-	<Board {get} {held} {view} />
+	<svelte:boundary
+		onerror={(error) => {
+			console.error('[board render]', error);
+			renderError = error instanceof Error ? error.message : String(error);
+		}}
+	>
+		<Board {get} {held} {view} />
+		{#snippet failed()}<BoardRecovery message={renderError} />{/snippet}
+	</svelte:boundary>
 {:else if mode === 'ask' || mode === 'declined' || mode === 'waiting'}
 	<BoardConsent step={mode} {lastSeen} {slow} {busy} {failed} {answer} />
 {:else if mode === 'home'}

@@ -15,7 +15,7 @@
 	const isLinked = $derived(b.linked.has(w.wish));
 	const says = $derived(w.says || []);
 	const ls = $derived(
-		(w.letters || [])
+		[...new Set(w.letters || [])]
 			.map((id) => b.model?.byId.get(id))
 			.filter((l): l is Letter => !!l)
 			.sort(byAt)
@@ -62,7 +62,7 @@
 	{#if on}
 		<div class="insp">
 			<h4>says · {says.length}</h4>
-			{#each says as s (s.id + s.quote)}<div class="say {s.cites}"><q>{s.quote}</q></div>{:else}<div
+			{#each says as s, i (i)}<div class="say {s.cites}"><q>{s.quote}</q></div>{:else}<div
 					class="dim"
 				>
 					none

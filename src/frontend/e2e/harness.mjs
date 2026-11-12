@@ -37,6 +37,27 @@ export async function open({
 	const errors = [],
 		requests = [];
 	page.on('pageerror', (e) => errors.push(e.message));
+	page.on('console', (m) => {
+		if (m.type() === 'error' && m.text().startsWith('[board-render-error]')) errors.push(m.text());
+	});
+	// A Svelte boundary catches render exceptions before window.onerror. Count its fallback too,
+	// including a transient fallback that immediately retries, so B.errors assertions stay meaningful.
+	await page.addInitScript(() => {
+		const seen = new WeakSet();
+		const record = (node) => {
+			if (!(node instanceof Element)) return;
+			const found = [...node.querySelectorAll('[data-board-error]')];
+			if (node.matches('[data-board-error]')) found.push(node);
+			for (const e of found) {
+				if (seen.has(e)) continue;
+				seen.add(e);
+				console.error('[board-render-error]', e.textContent);
+			}
+		};
+		new MutationObserver((records) => {
+			for (const r of records) for (const node of r.addedNodes) record(node);
+		}).observe(document, { childList: true, subtree: true });
+	});
 	page.on('request', (r) => requests.push(new URL(r.url()).pathname));
 	try {
 		await page.goto(base);
