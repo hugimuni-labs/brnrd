@@ -366,7 +366,7 @@ def letters_of(facts, typed: dict | None = None, told: dict | None = None) -> tu
                                     if k in {"kind", "ref", "line", "delivered", "at"}} for r in w.results],
                           verdict={k: _iso(v) if k == "at" else v for k, v in w.verdict.items()
                                    if k in {"as", "evidence", "ref", "at"}} if w.verdict else None))
-        for ident, *_ in map(_say, w.says):
+        for ident in dict.fromkeys(s["id"] for s in says):
             answered.setdefault(ident, []).append(entry)
     # Chatter: letters a reply or note cites as wanting nothing (send --chatter).
     chattered: dict[str, list] = {}

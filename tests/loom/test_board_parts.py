@@ -132,6 +132,26 @@ def test_a_wish_ships_in_its_thread_part_and_the_index_keeps_counts(parts):
     assert len(index["faces"]["running"]) > 1
 
 
+def test_letter_has_one_annotation_per_wish_with_multiple_says(parts):
+    root = parts.home.root
+    letter = inject_letter(root, to="thread:web", body="make it fast and clear")
+    other = inject_letter(root, to="thread:web", body="fast too")
+    for ident, says in (
+        ("w-fast", [[letter, 0, 12], [letter, 17, 5], [other, 0, 4]]),
+        ("w-clear", [[letter, 17, 5]]),
+    ):
+        append(parts.home, Fact(kind="wish", by="person:ada", id=ident, data={
+            "wish": ident, "says": says, "from": "person", "line": ident, "thread": "web"}))
+    assert parts.step()
+    part = parts.parts["thread/web"]
+    letters = {row["id"]: row for row in part["letters"]}
+    assert [w["wish"] for w in letters[letter]["wishes"]] == ["w-fast", "w-clear"]
+    assert [w["wish"] for w in letters[other]["wishes"]] == ["w-fast"]
+    fast = next(w for w in part["wishes"] if w["wish"] == "w-fast")
+    assert [(s["id"], s["quote"]) for s in fast["says"]] == [
+        (letter, "make it fast"), (letter, "clear"), (other, "fast")]
+
+
 def test_window_cuts_to_the_newest_and_reaches_back_to_a_target():
     part = {"id": "t", "letters": [{"id": f"l{i}"} for i in range(10)]}
     cut = window(part, most=3)
