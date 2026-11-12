@@ -302,15 +302,13 @@ def roots(facts, main: dict) -> dict[str, int]:
     beads = Beads(facts, main)
     return dict(Counter(beads.chain(i)[1] for i in beads.letters))
 
-def render_bead(found: dict | None, person_names: dict[str, str] | None = None) -> str:
+def render_bead(found: dict | None) -> str:
     if found is None:
         return "no such item\n"
     lines = [f"{found['kind']} {found['id']}"]
     for key, value in found.items():
         if key in {"kind", "id"} or value in (None, "", [], {}):
             continue
-        if key == "from" and isinstance(value, str):
-            value = person_label(value, person_names)
         if key == "body":
             value = " ".join(str(value).split())[:160]
         elif isinstance(value, list):

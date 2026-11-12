@@ -41,7 +41,7 @@ def cmd_graph(args) -> int:
         from .lifecycle import main_snapshot
         home = _home(args)
         found = bead(read_facts(home), main_snapshot(home), args.bead)
-        sys.stdout.write(render_bead(found, person_names(home.root / "self")))
+        sys.stdout.write(render_bead(found))
         return 0 if found else 1
     sys.stdout.write(render_graph(graph(read_facts(_home(args))),
                                   "strand" if args.strands else "thread", args.only))

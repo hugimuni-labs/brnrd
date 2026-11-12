@@ -37,9 +37,3 @@ def label(identity: str, resolved: dict[str, str] | None = None) -> str:
             slug = identity[len(prefix):]
             return (resolved or {}).get(slug, slug)
     return identity
-
-
-def sender_lines(text: str, resolved: dict[str, str]) -> str:
-    """Only generated boundary author slots; body text and reply addresses are literal."""
-    return re.sub(r"(?m)^(- \S+ · from )((?:person:|p-)\S+)( · reply )",
-                  lambda m: m[1] + label(m[2], resolved) + m[3], text)

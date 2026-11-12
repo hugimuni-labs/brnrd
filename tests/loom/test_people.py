@@ -150,7 +150,7 @@ def test_name_cache_reads_only_main_and_falls_back_to_slug(tmp_path, monkeypatch
     assert person_names.label("person:arseni", person_names.names(repo)) == "arseni"
 
 
-def test_jack_labels_owed_without_changing_parser_identity_or_reply(tmp_path):
+def test_jack_keeps_owed_identity_and_labels_only_people_tally(tmp_path):
     room = _room(tmp_path)
     page = room / "self/people/arseni/README.md"
     page.write_text("# Arseni Human Name\n")
@@ -158,7 +158,10 @@ def test_jack_labels_owed_without_changing_parser_identity_or_reply(tmp_path):
     _git(room / "self", "commit", "-qm", "name")
     _write(room, [_letter("p-arseni/name", body="literal person:arseni")])
     text = execute("start", room, "")
-    assert "from Arseni Human Name · reply" in text
+    assert "from person:arseni · reply" in text
+    _write(room, [_letter("p-arseni/name")], shown={"p-arseni/name"})
+    said = _said(execute("post", room, json.dumps({"tool_name": "Bash"})))
+    assert "people: 1 letter from Arseni Human Name this gen;" in said
     assert "literal person:arseni" in text
     assert parse_boundary((room / "port/in/boundary.md").read_text()).letters[0].sender == "person:arseni"
     assert parse_boundary((room / "port/in/boundary.md").read_text()).letters[0].reply in text

@@ -194,7 +194,7 @@ def test_wake_carries_the_self_and_skips_hearth(tmp_path: Path) -> None:
     assert "unique-note-9c1 is the whole note" in out
     assert "owed-body-line-one\nowed-body-line-two" in out
     assert "p-arseni/ab12" in out
-    assert "from arseni · reply -" in out
+    assert "from person:arseni · reply -" in out
     assert "loom part goes here verbatim" in out
     # First line of the file, which for a README is the frontmatter marker.
     assert "threads/inbox/README.md · # Letters with no thread yet · " in out
@@ -745,7 +745,7 @@ def test_the_seed_wakes_a_fixture_home_with_the_live_selfs_tail(tmp_path: Path) 
         "## Loom\n"
         "loom part goes here verbatim\n"
         "## Occasion\n"
-        "### p-arseni/ab12 from arseni · reply -\n"
+        "### p-arseni/ab12 from person:arseni · reply -\n"
         "letter-body-42\n"
     )
 
@@ -775,7 +775,7 @@ def test_runtime_wake_labels_from_main_even_when_room_has_another_name(tmp_path)
     assert selfrepo.run_wake(clone, "w-1", owed, stdout=out) == 0
     text = out.getvalue()
     assert "### Arseni Human Name\n" in text
-    assert "from Arseni Human Name · reply person:arseni" in text
+    assert "from person:arseni · reply person:arseni" in text
     assert "literal person:arseni" in text
     assert "whole page: people/arseni/page.md" in text
     owed.write_text("[]")
