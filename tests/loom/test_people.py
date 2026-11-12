@@ -118,3 +118,47 @@ def test_the_fact_alone_never_blocks_a_stop(tmp_path):
     state.write_text(json.dumps({"people": {"gen": 1, "seen": {"arseni": ["p-arseni/a1"]}, "dates": {}}}))
     (room / "port" / "wait").write_text("1\n")  # the stop's poll, bounded as test_jack's is
     assert "people:" not in execute("stop", room, "{}")
+
+
+def test_name_cache_reads_only_main_and_falls_back_to_slug(tmp_path, monkeypatch):
+    from brr.loom.runtime import person_names, lifecycle
+    room = _room(tmp_path)
+    repo = room / "self"
+    page = repo / "people" / "arseni" / "README.md"
+    page.write_text("# Arseni Human Name\n")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-qm", "name")
+    calls = []
+    git = lifecycle.git
+    monkeypatch.setattr(lifecycle, "git", lambda *a: (calls.append(a), git(*a))[1])
+    assert person_names.label("person:arseni", person_names.names(repo)) == "Arseni Human Name"
+    count = len(calls)
+    assert person_names.names(repo) == {"arseni": "Arseni Human Name"}
+    assert len(calls) == count
+    _git(repo, "checkout", "-qb", "room-edit")
+    page.write_text("# Unlanded Name\n")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-qm", "unlanded")
+    assert person_names.names(repo)["arseni"] == "Arseni Human Name"
+    assert person_names.label("person:missing", person_names.names(repo)) == "missing"
+    assert person_names.label("p-missing") == "missing"
+    assert person_names.label("thread:arseni", person_names.names(repo)) == "thread:arseni"
+    _git(repo, "checkout", "main")
+    page.write_text("No title\n")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-qm", "remove title")
+    assert person_names.label("person:arseni", person_names.names(repo)) == "arseni"
+
+
+def test_jack_labels_owed_without_changing_parser_identity_or_reply(tmp_path):
+    room = _room(tmp_path)
+    page = room / "self/people/arseni/README.md"
+    page.write_text("# Arseni Human Name\n")
+    _git(room / "self", "add", "-A")
+    _git(room / "self", "commit", "-qm", "name")
+    _write(room, [_letter("p-arseni/name", body="literal person:arseni")])
+    text = execute("start", room, "")
+    assert "from Arseni Human Name · reply" in text
+    assert "literal person:arseni" in text
+    assert parse_boundary((room / "port/in/boundary.md").read_text()).letters[0].sender == "person:arseni"
+    assert parse_boundary((room / "port/in/boundary.md").read_text()).letters[0].reply in text

@@ -596,6 +596,8 @@ def footer(who: _Caller) -> str:
     """Whose the pull request is: the resident, the person its wishes came from,
     the install, the thread and its wishes, read from the ledger."""
     from .wishes import told
+    from .person_names import names, label
+    resolved = names(who.home.root / "self")
     found = [w for w in told(who.facts).values() if w.thread == who.thread and w.sender == "person"]
     found.sort(key=lambda w: w.born)
     letters = {str(f.data.get("id", f.id)): f for f in who.facts if f.kind == "letter"}
@@ -604,7 +606,7 @@ def footer(who: _Caller) -> str:
         for say in wish.says:
             letter = letters.get(say.letter)
             sender = str((letter.data if letter else {}).get("from") or "")
-            name = sender.removeprefix("person:")
+            name = label(sender, resolved)
             if sender.startswith("person:") and name not in people:
                 people.append(name)
     parts = ["Opened by resident brnrd" + (f" for {', '.join(people)}" if people else ""),

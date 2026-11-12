@@ -466,7 +466,10 @@ def _people(room: Path, parsed: Boundary, at: str) -> str:
     It never blocks a stop by itself: the body decides whether something happened."""
     from . import people
     state = _state(room)
-    lines, key, kept = people.tally(room / "self", parsed, state.get("people") or {})
+    from .home import home_of_room
+    repo = home_of_room(room).root / "self"
+    lines, key, kept = people.tally(room / "self", parsed, state.get("people") or {},
+                                    names_repo=repo if (repo / ".git").exists() else None)
     news = key != state.get("people_said")
     _set_state(room, people=kept, **({"people_said": key} if at == "post" else {}))
     if at == "stop" or (at == "post" and news):
@@ -714,6 +717,32 @@ def _first_word(room: Path, stdin_text: str = "", *, refuse: bool = False) -> tu
 
 
 def execute(event: str, room: Path, stdin_text: str) -> str:
+    # Parse and account with literal identities, then label only the emitted presentation.
+    output = _execute(event, room, stdin_text)
+    if not output:
+        return output
+    from .person_names import names, sender_lines
+    from .home import home_of_room
+    try:
+        repo = home_of_room(room).root / "self"
+        if not (repo / ".git").exists():
+            repo = room / "self"
+    except ValueError:
+        repo = room / "self"
+    resolved = names(repo)
+    try:
+        payload = json.loads(output)
+    except ValueError:
+        return sender_lines(output, resolved)
+    if isinstance(payload.get("reason"), str):
+        payload["reason"] = sender_lines(payload["reason"], resolved)
+    hook = payload.get("hookSpecificOutput", {})
+    if isinstance(hook.get("additionalContext"), str):
+        hook["additionalContext"] = sender_lines(hook["additionalContext"], resolved)
+    return json.dumps(payload)
+
+
+def _execute(event: str, room: Path, stdin_text: str) -> str:
     """Return the hook's stdout. Raise on trouble; ``run`` turns that into fail-open."""
     room = Path(room)
     if event not in {"start", "pre", "post", "stop", "subagent-stop"}:

@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { personLabel } from '../sides.ts';
 	// One selected id owns the whole rendered trace: switching letters rebuilds its DOM together.
 	// The bead sheet (4920): the pressed item, the chain up to its source and what came out of it, all walked in the
 	// client from the beads part (design §D3). Any bead in it re-centres it; ‹ walks back; esc closes. The stage that
@@ -75,9 +76,7 @@
 			? `${
 					x.from === 'loom'
 						? 'loom noticed'
-						: String(x.from || '')
-								.replace(/^person:/, '')
-								.split('/')[0] + ' wrote'
+						: personLabel(String(x.from || ''), b.model?.person_names) + ' wrote'
 				} · ${hm(x.at)}`
 			: x.kind === 'wish'
 				? `wish · ${x.id}`

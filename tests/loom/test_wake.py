@@ -14,6 +14,7 @@ from pathlib import Path
 import pytest
 
 from brr.loom.runtime import selfrepo
+from brr.loom.runtime.home import Home
 from brr.loom.runtime.selfrepo import ReadmeError, SelfError, check_readme_file, parse_readme
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -193,7 +194,7 @@ def test_wake_carries_the_self_and_skips_hearth(tmp_path: Path) -> None:
     assert "unique-note-9c1 is the whole note" in out
     assert "owed-body-line-one\nowed-body-line-two" in out
     assert "p-arseni/ab12" in out
-    assert "person:arseni" in out
+    assert "from arseni · reply -" in out
     assert "loom part goes here verbatim" in out
     # First line of the file, which for a README is the frontmatter marker.
     assert "threads/inbox/README.md · # Letters with no thread yet · " in out
@@ -242,7 +243,7 @@ def test_the_loom_briefing_wakes_after_the_stance_within_the_budget(tmp_path: Pa
     owed.write_text("[]", encoding="utf-8")
     clone = selfrepo.room(home, "seeded")
     stance = (clone / "memory" / "stance.md").read_text(encoding="utf-8")
-    brief = briefing()
+    brief = briefing(Home(home))
     assert "--wait <" in brief and "sleep or poll loop" in brief
     part = tmp_path / "part"
     part.write_text("loom part\n", encoding="utf-8")
@@ -304,7 +305,7 @@ def test_the_self_decides(tmp_path: Path) -> None:
     assert via_cli.returncode == 0, via_cli.stderr
     # The self decides its wake; the loom's briefing is the one part it adds.
     from brr.loom.runtime.briefing import section as briefing
-    assert via_cli.stdout == briefing() + "custom\n"
+    assert via_cli.stdout == briefing(Home(home)) + "custom\n"
     seed_line = "I am a placeholder."
     assert seed_line not in via_cli.stdout
 
@@ -744,7 +745,7 @@ def test_the_seed_wakes_a_fixture_home_with_the_live_selfs_tail(tmp_path: Path) 
         "## Loom\n"
         "loom part goes here verbatim\n"
         "## Occasion\n"
-        "### p-arseni/ab12 from person:arseni · reply -\n"
+        "### p-arseni/ab12 from arseni · reply -\n"
         "letter-body-42\n"
     )
 
@@ -754,3 +755,30 @@ def test_the_tree_names_a_thread_by_its_wish(tmp_path: Path) -> None:
     assert "threads/w-2/README.md · w-abc123 A new home wakes like a live one · " in tree
     # A README without a wish still shows its first line.
     assert "threads/inbox/README.md · # Letters with no thread yet · " in tree
+
+
+def test_runtime_wake_labels_from_main_even_when_room_has_another_name(tmp_path):
+    import io
+    home = tmp_path / "home"
+    assert cli(["init", "--home", str(home), "--person", "arseni"]).returncode == 0
+    repo = home / "self"
+    write_thread(repo, "w-1", "Work")
+    (repo / "people/arseni/page.md").write_text(PAGE)
+    (repo / "people/arseni/README.md").write_text("# Arseni Human Name\n")
+    commit(repo, "name")
+    clone = selfrepo.room(home, "s1")
+    (clone / "people/arseni/README.md").write_text("# Room lie\n")
+    owed = tmp_path / "owed.json"
+    owed.write_text(json.dumps([{"id": "letter-1", "from": "person:arseni", "body": "literal person:arseni",
+                                "reply_to": "person:arseni"}]))
+    out = io.StringIO()
+    assert selfrepo.run_wake(clone, "w-1", owed, stdout=out) == 0
+    text = out.getvalue()
+    assert "### Arseni Human Name\n" in text
+    assert "from Arseni Human Name · reply person:arseni" in text
+    assert "literal person:arseni" in text
+    assert "whole page: people/arseni/page.md" in text
+    owed.write_text("[]")
+    out = io.StringIO()
+    assert selfrepo.run_wake(clone, "w-1", owed, stdout=out) == 0
+    assert "Arseni Human Name: 11-03: newest-line-77" in out.getvalue()

@@ -854,3 +854,12 @@ test('the header names the leading machine and lists every machine on hover', ()
 	);
 	equal(machinesTitle(undefined), '');
 });
+
+test('person names label letters while model identities stay addresses', () => {
+	const names = { 'login-slug': 'Ada Lovelace' };
+	const l = L('person-letter', '1', { from: 'person:login-slug', person: true });
+	equal(sender(l, names), 'Ada Lovelace');
+	equal(l.from, 'person:login-slug');
+	equal(sender(l), 'login-slug');
+	equal(sender(L('legacy', '1', { from: 'p-login-slug', person: true }), names), 'Ada Lovelace');
+});

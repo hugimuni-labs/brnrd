@@ -905,6 +905,13 @@ def run_wake(room_dir: Path, thread: str, owed: Path | None = None, *,
             raise SelfError(f"{recipe} is not executable")
         argv = [str(recipe)]
     env = _env_without_pin()
+    from .person_names import names
+    from .home import home_of_room
+    try:
+        names_repo = home_of_room(clone.parent).root / "self"
+    except ValueError:
+        names_repo = clone
+    env["LOOM_PERSON_NAMES"] = json.dumps(names(names_repo))
     if loom_part is not None:
         env["LOOM_PART"] = str(loom_part)
     if repos is not None:

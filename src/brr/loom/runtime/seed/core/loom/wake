@@ -172,6 +172,15 @@ def notes_block(root: Path, thread: str) -> str:
     return "".join(chunks)
 
 
+def person_label(sender: str) -> str:
+    resolved = json.loads(os.environ.get("LOOM_PERSON_NAMES", "{}"))
+    for prefix in ("person:", "p-"):
+        if sender.startswith(prefix):
+            slug = sender[len(prefix):]
+            return resolved.get(slug, slug)
+    return sender
+
+
 def occasion(path: Path) -> str:
     if not path.is_file():
         die(f"owed.json: no such file: {path}")
@@ -190,7 +199,7 @@ def occasion(path: Path) -> str:
         ident, sender, body = item["id"], item["from"], item["body"]
         if not all(isinstance(value, str) for value in (ident, sender, body)):
             die("owed.json: id, from and body must be strings")
-        chunks.append(f"### {ident} from {sender} · reply {item.get('reply_to', '-')}\n{ensure_nl(body)}")
+        chunks.append(f"### {ident} from {person_label(sender)} · reply {item.get('reply_to', '-')}\n{ensure_nl(body)}")
         if item.get("reply_context"):
             chunks.append(ensure_nl(item["reply_context"]))
         chunks.extend(ensure_nl(line) for line in item.get("attachments", ()))
@@ -298,7 +307,7 @@ def people_block(root: Path, owed: Path) -> str:
         for name in in_hand:
             rel = f"people/{name}/page.md"
             parts = page_sections(read_exact(root / rel, rel))
-            lines = [f"### {name}"]
+            lines = [f"### {person_label('person:' + name)}"]
             for title in PAGE_LISTS:
                 lines.append(f"{title}:")
                 lines.extend(parts.get(title) or ["- (none written)"])
@@ -320,7 +329,7 @@ def people_block(root: Path, owed: Path) -> str:
             continue
         latest = (page_sections(read_exact(page, f"people/{page.parent.name}/page.md")).get("between us") or [""])[0]
         if latest:
-            rows.append(f"{page.parent.name}: {latest.lstrip('- ')}"[:400])
+            rows.append(f"{person_label('person:' + page.parent.name)}: {latest.lstrip('- ')}"[:400])
     return section("People", "".join(ensure_nl(row) for row in rows)) if rows else ""
 
 

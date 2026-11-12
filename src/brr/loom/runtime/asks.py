@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from .person_names import label as person_label
+
 from .lifecycle import CLOSED
 from .owners import unanswered_by_thread
 from .project import _destination, fold, sender_threads
@@ -65,7 +67,8 @@ def render_graph(edges: list[Edge], by: str = "thread", only: str | None = None)
     return "".join(f"{key}\n" + "\n".join(lines) + "\n" for key, lines in groups.items())
 
 
-def asks(facts, main: dict, thread: str | None = None, everything: bool = False, *, install: str) -> str:
+def asks(facts, main: dict, thread: str | None = None, everything: bool = False, *,
+         install: str, person_names: dict[str, str] | None = None) -> str:
     """Four buckets over every thread, settled ones included."""
     holder = fold(facts).holder
     told = wishes(facts)
@@ -75,7 +78,7 @@ def asks(facts, main: dict, thread: str | None = None, everything: bool = False,
     buckets = {
         "in hand": [f"{t} · {holder[t][0]} · plan {plan_word(told, t)}" for t, d in sorted(main.items())
                     if mine(t) and t in holder and d.get("status") not in CLOSED],
-        "yours": [wish_line(w) + waits_word(heads[w.id]) for w in found
+        "yours": [wish_line(w) + waits_word(person_label(heads[w.id], person_names)) for w in found
                   if mine(w.thread) and w.id in heads],
         "unanswered": [f"{t} · {i}" for t, ids in sorted(unanswered_by_thread(facts, main).items())
                        if mine(t) for i in ids],
@@ -299,13 +302,15 @@ def roots(facts, main: dict) -> dict[str, int]:
     beads = Beads(facts, main)
     return dict(Counter(beads.chain(i)[1] for i in beads.letters))
 
-def render_bead(found: dict | None) -> str:
+def render_bead(found: dict | None, person_names: dict[str, str] | None = None) -> str:
     if found is None:
         return "no such item\n"
     lines = [f"{found['kind']} {found['id']}"]
     for key, value in found.items():
         if key in {"kind", "id"} or value in (None, "", [], {}):
             continue
+        if key == "from" and isinstance(value, str):
+            value = person_label(value, person_names)
         if key == "body":
             value = " ".join(str(value).split())[:160]
         elif isinstance(value, list):

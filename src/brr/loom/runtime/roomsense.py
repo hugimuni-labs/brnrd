@@ -184,17 +184,19 @@ def live(facts, now: float | None = None) -> list[Shift]:
 _CACHE: list = [None, None]
 
 
-def room_line(facts, now: float | None = None) -> str:
+def room_line(facts, now: float | None = None, *, person_names: dict[str, str] | None = None) -> str:
     """``room: …`` for each live shift, or ""."""
     now = time.time() if now is None else now
-    key = (id(facts), len(kind_facts(facts, "source")), int(now // 60))
+    key = (id(facts), len(kind_facts(facts, "source")), int(now // 60),
+           tuple(sorted((person_names or {}).items())))
     if _CACHE[0] == key:
         return _CACHE[1]
     parts = []
     for shift in live(facts, now):
         since = datetime.fromtimestamp(shift.since.at, timezone.utc).strftime("%H:%MZ")
         drivers = " ".join(shift.drivers[:8]) + (" …" if len(shift.drivers) > 8 else "")
-        parts.append(f"{shift.person}'s channel off baseline since {since} ({', '.join(shift.measures)}; "
+        from .person_names import label
+        parts.append(f"{label('person:' + shift.person, person_names)}'s channel off baseline since {since} ({', '.join(shift.measures)}; "
                      f"up to {shift.window} letters in {WINDOW // 60}m; driven by {drivers})")
     line = ("room: " + "; ".join(parts) + "; irreversible acts they ordered ask them first, in one sentence"
             if parts else "")
