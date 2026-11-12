@@ -779,7 +779,9 @@ class Tools:
             self.live[strand] = {"open": [{"at": _iso(c["at"]), "tool": c["tool"], "arg": c["arg"],
                                            "cmd": c.get("cmd", ""), "by": c.get("by", "")} for c in live["open"]],
                                  "say": live["say"], "last_end": live["last_end"] and _iso(live["last_end"]),
-                                 "paused": bool(live["paused"])}
+                                 "paused": bool(live["paused"]),
+                                 "paused_at": _iso(min(c["stopped_at"] for c in live["paused"]))
+                                 if live["paused"] else None}
             moved = True
         for gone in set(self.tools) - set(sig):
             self.tools.pop(gone, None)

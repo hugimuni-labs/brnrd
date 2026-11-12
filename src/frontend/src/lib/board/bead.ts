@@ -4,7 +4,7 @@
 import type { Letter, Model, Step, Wish } from './types.ts';
 import { ancestors, children, type Beads } from './parts.ts';
 import { stageOf } from './stages.ts';
-import { short, stepText } from './text.ts';
+import { byAt, short, stepText } from './text.ts';
 
 export type Kind = 'letter' | 'wish' | 'strand' | 'thread' | 'gone';
 export type Root = 'person' | 'loom' | 'unconfirmed' | 'dangling';
@@ -131,7 +131,7 @@ export function fromInbox(chain: Beads, byId: Map<string, Letter>, col: string):
 			thread: other
 		});
 	}
-	rows.sort((a, c) => a.at.localeCompare(c.at) || a.id.localeCompare(c.id));
+	rows.sort(byAt);
 	return rows;
 }
 

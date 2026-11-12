@@ -19,6 +19,7 @@
 // drops into reading frames for a fixed number of display ticks, and
 // settles. No decorative loop.
 
+import { time } from './board/text.ts';
 import type { LiveRun } from './liveRuns.ts';
 
 /** One page: an attested injection, named by its carrying boundary. */
@@ -106,7 +107,7 @@ export function pagerFeed(
 	const entries = Object.entries(store).filter(
 		([runId]) => liveRunIds === undefined || liveRunIds.has(runId)
 	);
-	return entries.flatMap(([, pages]) => pages).sort((a, b) => b.at.localeCompare(a.at));
+	return entries.flatMap(([, pages]) => pages).sort((a, b) => time(b.at).localeCompare(time(a.at)));
 }
 
 /** A reading in progress: presentation state minted from one attested

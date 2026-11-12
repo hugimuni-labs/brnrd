@@ -1,4 +1,5 @@
 <script lang="ts">
+	import RenderScope from './board/ui/RenderScope.svelte';
 	import LoomHome from '$lib/LoomHome.svelte';
 	import { site, loadSite } from '$lib/site';
 	import { HOME_DESCRIPTION, HOME_TITLE, SOCIAL_IMAGE } from '$lib/seo';
@@ -168,11 +169,11 @@
 {:else if mode === 'board'}
 	<svelte:boundary
 		onerror={(error) => {
-			console.error('[board render]', error);
+			console.error('[board render]', error, error instanceof Error ? error.stack : '');
 			renderError = error instanceof Error ? error.message : String(error);
 		}}
 	>
-		<Board {get} {held} {view} />
+		<RenderScope name="Board"><Board {get} {held} {view} /></RenderScope>
 		{#snippet failed()}<BoardRecovery message={renderError} />{/snippet}
 	</svelte:boundary>
 {:else if mode === 'ask' || mode === 'declined' || mode === 'waiting'}

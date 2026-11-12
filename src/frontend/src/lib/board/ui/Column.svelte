@@ -1,4 +1,5 @@
 <script lang="ts">
+	import RenderScope from './RenderScope.svelte';
 	// One column. The inbox: heading, the call stack, every letter. A thread (6lozd 3, 4958) has no mode: its ledger pinned
 	// on top (a press on the heading grows it over the column), the history with its tapes, the now-line while a body runs.
 	import { tick } from 'svelte';
@@ -174,7 +175,7 @@
 			</div>{/if}
 	</div>
 	{#if inbox}
-		<Calls calls={B.calls || []} />
+		<RenderScope name="Calls"><Calls calls={B.calls || []} /></RenderScope>
 	{:else}
 		{#if from.length}<div class="from">
 				{#each from as row (row.id)}
@@ -194,23 +195,21 @@
 				{/each}
 			</div>{/if}
 		<div class="band" class:ex={grown}>
-			<div class="wishpane"><Ledger {t} {letters} /></div>
+			<div class="wishpane"><RenderScope name="Ledger"><Ledger {t} {letters} /></RenderScope></div>
 		</div>
 	{/if}
 	<div class="messages" bind:this={pane} {onscroll}>
 		{#if more}<div class="empty older">{b.loading.has(t.id) ? 'loading…' : '▴ older'}</div>{/if}
 		{#if W}<div class="wishpane">
-				{#each W.cards as w (w.wish)}<WishCard {w} />{:else}<div class="empty">
-						no wishes
-					</div>{/each}
+				{#each W.cards as w (w.wish)}<RenderScope name="WishCard"><WishCard {w} /></RenderScope
+					>{:else}<div class="empty">no wishes</div>{/each}
 			</div>{/if}
 		<div class="chat">
 			{#each rows as r (r.id)}
-				{#if 'fold' in r}<Tape f={r} />{:else if 'body' in r}<LetterCard
-						l={r}
-						col={t.id}
-						{inbox}
-					/>{/if}
+				{#if 'fold' in r}<RenderScope name="Tape"><Tape f={r} /></RenderScope
+					>{:else if 'body' in r}<RenderScope name="LetterCard"
+						><LetterCard l={r} col={t.id} {inbox} /></RenderScope
+					>{/if}
 			{:else}<div class="empty">no letters</div>{/each}
 		</div>
 	</div>
@@ -221,7 +220,7 @@
 				>now{#if ai >= 0}<span class="stn" title={stepText(steps[ai].text)}
 						>{` · step ${ai + 1}`}</span
 					>{/if}{now.say ? ' · ' + now.say : ''}<span class="t"
-					>{` · ${now.verb} ${now.abs ? now.since.slice(11, 16) + 'Z' : dur(secs(now.since, new Date(b.now).toISOString()))}`}</span
+					>{` · ${now.verb}${!now.since ? '' : ' ' + (now.abs ? now.since.slice(11, 16) + 'Z' : dur(secs(now.since, new Date(b.now).toISOString())))}`}</span
 				></b
 			>{#if now.open[0]}<span class="oc">{` · ${what(now.open[0])}`}</span>{/if}
 		</div>

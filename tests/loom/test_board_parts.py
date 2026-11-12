@@ -692,3 +692,22 @@ def test_board_port_failure_is_a_degraded_condition(parts, port):
         finally:
             server.shutdown()
             server.server_close()
+
+
+def test_paused_tape_publishes_the_pause_time(tmp_path):
+    from brr.pause import write_paused_record
+    from brr.loom.runtime.snapshot import _iso
+
+    port = tmp_path / "rooms" / "s-aa-paused" / "port"
+    port.mkdir(parents=True)
+    (port / "tools.jsonl").write_text("")
+    write_paused_record(port, [{"stopped_at": 1002}, {"stopped_at": 1001}])
+    tools = Tools(Home(tmp_path), every=60)
+    assert tools.read()
+    live = tools.live["s-aa-paused"]
+    assert live["paused"] is True
+    assert live["paused_at"] == _iso(1001)
+    write_paused_record(port, [])
+    assert tools.read()
+    assert tools.live["s-aa-paused"]["paused"] is False
+    assert tools.live["s-aa-paused"]["paused_at"] is None

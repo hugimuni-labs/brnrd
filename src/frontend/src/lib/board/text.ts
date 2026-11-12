@@ -19,8 +19,11 @@ export function dur(s: number): string {
 
 export const secs = (a: string, b: string): number => (Date.parse(b) - Date.parse(a)) / 1000;
 export const short = (id: string): string => String(id).split('/').pop()!.split(':').pop()!;
-export const byAt = <T extends { at: string; id: string }>(a: T, b: T): number =>
-	a.at.localeCompare(b.at) || a.id.localeCompare(b.id);
+// Cached parts can predate the current wire shape. Missing time stays unknown, never 'now'.
+export const time = (at: unknown): string => (typeof at === 'string' ? at : '');
+export const dated = <T extends { at?: unknown }>(row: T): boolean => !!time(row.at);
+export const byAt = <T extends { at?: unknown; id: string }>(a: T, b: T): number =>
+	time(a.at).localeCompare(time(b.at)) || a.id.localeCompare(b.id);
 
 // A Plan row's text without its markdown links and backticks.
 export const stepText = (t: string): string =>

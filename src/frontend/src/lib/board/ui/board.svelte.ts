@@ -6,7 +6,7 @@ import { BASE, getJSON, Store, type Beads } from '../parts.ts';
 import type { Letter, Model } from '../types.ts';
 import { normalize, panelIds, resolveRef, timeline, type Timeline } from '../bead.ts';
 import { armedVerdict, correctDraft, verdictLetter } from '../calls.ts';
-import { refTokens } from '../text.ts';
+import { byAt, dated, refTokens } from '../text.ts';
 import { unechoed } from '../ledger.ts';
 import { forget, remembering, type Held } from '../cache.ts';
 import { EMPTY, PLACE, paneScroll, readPlace, type Place } from '../place.ts';
@@ -98,9 +98,7 @@ export class Board {
 	letters = $derived.by(() => {
 		const m = this.model;
 		if (!m) return [];
-		return [...m.letters, ...unechoed(this.pending, m.letters)].sort(
-			(a, b) => a.at.localeCompare(b.at) || a.id.localeCompare(b.id)
-		);
+		return [...m.letters, ...unechoed(this.pending, m.letters)].filter(dated).sort(byAt);
 	});
 
 	async load() {
