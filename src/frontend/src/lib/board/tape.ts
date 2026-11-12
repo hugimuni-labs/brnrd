@@ -2,7 +2,7 @@
 // a live block that ticks. The block sits at the open call's start (or the last end): letters after it reached the
 // body at no tool boundary yet.
 import type { Letter, Live, Strand, Thread, ToolCall } from './types.ts';
-import { secs } from './text.ts';
+import { byAt, secs } from './text.ts';
 
 export type LiveLine = {
 	verb: string;
@@ -23,7 +23,13 @@ export function liveOf(s: Strand, live: Record<string, Live>): LiveLine | null {
 	if (!v) return null;
 	const working = s.state === 'working';
 	if (v.paused)
-		return { verb: 'paused since', since: v.paused_at!, abs: true, open: v.open, say: v.say };
+		return {
+			verb: v.paused_at ? 'paused since' : 'paused',
+			since: v.paused_at || '',
+			abs: true,
+			open: v.open,
+			say: v.say
+		};
 	if (v.open.length)
 		return {
 			verb: working ? 'running' : 'cut off',
@@ -53,7 +59,7 @@ export function withTools(
 		const lv = liveOf(s, live);
 		if (lv) out.push({ id: `live:${s.id}`, live: lv, strand: s.id, at: lv.since });
 	}
-	out.sort((a, b) => a.at.localeCompare(b.at) || a.id.localeCompare(b.id));
+	out.sort(byAt);
 	const folded: Row[] = [];
 	for (const l of out) {
 		const f = folded[folded.length - 1];

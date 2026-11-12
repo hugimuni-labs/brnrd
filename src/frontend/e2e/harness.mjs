@@ -1,6 +1,9 @@
 // One board per test file: the synthetic parts (fixture.mjs) behind parts-server, vite dev proxying /v1 to it, and a
 // headless chromium on `/` (localhost, so the board mounts). Timing here is not a measure: §D7 is measured on a build.
 import { createServer } from 'vite';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { chromium } from 'playwright';
 import { fileURLToPath } from 'node:url';
 import { fixture } from './fixture.mjs';
@@ -14,7 +17,8 @@ export async function open({
 	viewport = { width: 1440, height: 900 },
 	consent = null,
 	site = null,
-	ready = '.brd .column.threadcol'
+	ready = '.brd .column.threadcol',
+	persistent = false
 } = {}) {
 	const loom = await partsServer(parts, 0, consent, site);
 	process.env.BRNRD_DEV_TARGET = `http://127.0.0.1:${loom.port}`;
@@ -27,13 +31,23 @@ export async function open({
 	const base = `http://127.0.0.1:${vite.httpServer.address().port}/`;
 	// a browser that is not installed must fail the test, not leave vite holding the process open:
 	// on 2026-11-11 a WebKit launch on a Chromium-only runner hung main's CI for over an hour
-	const browser = await browserType.launch().catch(async (e) => {
+	// WebKit's ephemeral contexts discard Cache API entries on navigation; restoration needs a profile.
+	const profile = persistent ? await mkdtemp(join(tmpdir(), 'board-e2e-')) : null;
+	const launch = profile
+		? browserType.launchPersistentContext(profile, { viewport })
+		: browserType.launch();
+	const browser = await launch.catch(async (e) => {
 		await vite.close();
 		loom.server.closeAllConnections?.();
 		loom.server.close();
+		if (profile) await rm(profile, { recursive: true, force: true });
 		throw e;
 	});
-	const page = await browser.newPage({ viewport });
+	const page = profile ? await browser.newPage() : await browser.newPage({ viewport });
+	const closeBrowser = async () => {
+		await browser.close();
+		if (profile) await rm(profile, { recursive: true, force: true });
+	};
 	const errors = [],
 		requests = [];
 	page.on('pageerror', (e) => errors.push(e.message));
@@ -64,7 +78,7 @@ export async function open({
 		await page.waitForSelector(ready, { timeout: 60_000 });
 	} catch (e) {
 		// a page that never got ready must not leave its browser and servers holding the test process open
-		await browser.close();
+		await closeBrowser();
 		await vite.close();
 		loom.server.closeAllConnections?.();
 		loom.server.close();
@@ -78,7 +92,7 @@ export async function open({
 		base,
 		browser,
 		async close() {
-			await browser.close();
+			await closeBrowser();
 			await vite.close();
 			loom.server.closeAllConnections?.();
 			loom.server.close();

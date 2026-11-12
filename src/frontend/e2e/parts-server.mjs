@@ -69,7 +69,14 @@ export function partsServer(dir, port = 0, consent = null, site = null) {
 		noteDelta(parts);
 		for (const res of streams) ping(res);
 	};
-	const server = createServer((req, res) => {
+	// Hold the real server response: WebKit interception clears Cache API storage.
+	let indexGate = Promise.resolve();
+	const holdIndex = () => {
+		let release;
+		indexGate = new Promise((resolve) => (release = resolve));
+		return release;
+	};
+	const server = createServer(async (req, res) => {
 		const url = new URL(req.url, 'http://x');
 		if (url.pathname === '/v1/site' && site) {
 			res.writeHead(200, { 'content-type': 'application/json' });
@@ -77,6 +84,7 @@ export function partsServer(dir, port = 0, consent = null, site = null) {
 			return;
 		}
 		const path = url.pathname.replace(/^\/v1\/loom\//, '');
+		if (path === 'index') await indexGate;
 		if (req.method === 'POST' && path === 'letters') {
 			let body = '';
 			req.on('data', (c) => (body += c));
@@ -151,7 +159,7 @@ export function partsServer(dir, port = 0, consent = null, site = null) {
 	});
 	return new Promise((ok) =>
 		server.listen(port, '127.0.0.1', () =>
-			ok({ server, sent, answers, set, port: server.address().port })
+			ok({ server, sent, answers, set, holdIndex, port: server.address().port })
 		)
 	);
 }

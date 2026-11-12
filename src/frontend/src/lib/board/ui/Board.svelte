@@ -1,4 +1,5 @@
 <script lang="ts">
+	import RenderScope from './RenderScope.svelte';
 	// The board (design §C): every thread as a column, the inbox pinned left, the bead sheet on the right, the composer
 	// below. Data is the loom's parts (design §D1), live over SSE; the order moves at most once per 10 s and holds while
 	// the sheet is open or the pointer is on a thread column (order.ts arrange).
@@ -218,7 +219,7 @@
 					>
 					{r.t.id} · {r.s.id.slice(-6)} · {waitOf(r.t, r.s.state)}{#if r.lv}<em
 							data-since={r.lv.since}
-							>{` · ${r.lv.verb} ${dur(secs(r.lv.since, new Date(b.now).toISOString()))}`}</em
+							>{` · ${r.lv.verb}${r.lv.since ? ' ' + dur(secs(r.lv.since, new Date(b.now).toISOString())) : ''}`}</em
 						>{#if r.lv.open[0]}{` · ${what(r.lv.open[0]).slice(0, 40)}`}{/if}{/if}</span
 				>{/each}{#each railLog as x, i (i)}<span class="log">{x}</span>{/each}
 		</nav>
@@ -237,17 +238,21 @@
 		<main id="board" bind:this={main} onscrollcapture={save}>
 			{#if !b.model}<div class="empty">{b.error || 'loading the board'}</div>{/if}
 			{#each order as id (id)}
-				{#if id === INBOX}<Column t={inbox} inbox letters={b.letters} />
-				{:else if id === SETTLED}<Stack {settled} {by} />
-				{:else if byId.get(id)}<Column t={byId.get(id)!} letters={by.get(id) || []} />{/if}
+				{#if id === INBOX}<RenderScope name="Column"
+						><Column t={inbox} inbox letters={b.letters} /></RenderScope
+					>
+				{:else if id === SETTLED}<RenderScope name="Stack"><Stack {settled} {by} /></RenderScope>
+				{:else if byId.get(id)}<RenderScope name="Column"
+						><Column t={byId.get(id)!} letters={by.get(id) || []} /></RenderScope
+					>{/if}
 			{/each}
 		</main>
-		<Links />
+		<RenderScope name="Links"><Links /></RenderScope>
 	{:else}
-		<main class="topics-page"><Topics /></main>
+		<main class="topics-page"><RenderScope name="Topics"><Topics /></RenderScope></main>
 	{/if}
-	<BeadSheet />
-	{#if view === 'board'}<Composer />{/if}
+	<RenderScope name="BeadSheet"><BeadSheet /></RenderScope>
+	{#if view === 'board'}<RenderScope name="Composer"><Composer /></RenderScope>{/if}
 	<footer>
 		{#if view === 'board'}← strands · you → / oldest → newest ↓ in every column / tap a heading to
 			grow the plan / tap a letter to link it across columns / the input writes to the inbox as you

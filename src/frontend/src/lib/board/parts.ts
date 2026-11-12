@@ -14,7 +14,7 @@ import type {
 	Topic,
 	Wish
 } from './types.ts';
-import { byAt } from './text.ts';
+import { byAt, dated, time } from './text.ts';
 import type { Held } from './cache.ts';
 
 export const BASE = '/v1/loom';
@@ -98,15 +98,23 @@ export function assemble(index: Index, threads: Map<string, ThreadPart>, loose?:
 		wishes = [...(loose ?? index.unthreaded ?? [])];
 	for (const p of threads.values()) {
 		for (const l of p.letters)
-			if (!byId.has(l.id))
+			if (dated(l) && !byId.has(l.id))
 				byId.set(l.id, {
 					...l,
 					// The loom annotates a letter once per say; several spans can cite the same wish.
 					wishes: l.wishes ? [...new Map(l.wishes.map((w) => [w.wish, w])).values()] : undefined
 				});
 		wishes.push(...p.wishes);
-		Object.assign(tools, p.tools);
-		Object.assign(live, p.live);
+		// Drop undated calls rather than inventing an ordering or a duration for them.
+		for (const [id, calls] of Object.entries(p.tools || {})) tools[id] = calls.filter(dated);
+		for (const [id, v] of Object.entries(p.live || {}))
+			live[id] = {
+				...v,
+				open: (v.open || []).filter(dated),
+				last_end: time(v.last_end) || undefined,
+				paused: v.paused,
+				paused_at: time(v.paused_at) || undefined
+			};
 	}
 	return {
 		threads: index.threads.map((t) => join(t, threads.get(t.id))),
