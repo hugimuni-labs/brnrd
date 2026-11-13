@@ -165,8 +165,17 @@ def _preferences(home):
     from .config import ConfigError, read_values
     path = home.root / "loom" / "preferences.toml"
     found = read_values(path)
-    known = "model.default, model.inbox, model.<thread>, bodies.order, spend.burn, spend.keep"
+    known = "model.default, model.inbox, model.<thread>, bodies.order, spend.burn, spend.keep, quota.<role>"
     for key, value in found.items():
+        if key.startswith("quota.") and _ROLE.fullmatch(key[6:]):
+            if not isinstance(value, list) or not all(isinstance(v, str) for v in value):
+                raise ConfigError(f"{path}: {key} is a list of bodies, e.g. [\"codex\"]")
+            try:
+                for body in value:
+                    parse_body(body)
+            except ValueError as exc:
+                raise ConfigError(f"{path}: {key}: {exc}") from exc
+            continue
         if key == "bodies.order":
             if not (isinstance(value, list) and all(isinstance(v, str) and _ROLE.fullmatch(v) for v in value)):
                 raise ConfigError(f"{path}: bodies.order is a list of shells, e.g. [\"claude\", \"codex\"]")
@@ -227,6 +236,30 @@ def fall_down(home, choice: tuple[str, str], usable) -> tuple[str, str]:
         if shell != choice[0] and usable(shell):
             return shell, ""
     return choice
+
+
+def quota_choice(home, thread: str, source: str) -> tuple[str, str] | None:
+    """An explicitly permitted, installed target with a fresh healthy gauge.
+
+    Empty role lists override the default. Birth and spend preferences grant
+    no authority here; unknown or failed collectors never authorize a move.
+    """
+    from .config import load_config
+    from .usage import collector_failed, reading
+    found = _preferences(home)[1]
+    roles = [thread, "inbox", "default"] if thread == home.main_thread() else [thread, "default"]
+    targets = next((found[f"quota.{role}"] for role in roles if f"quota.{role}" in found), [])
+    installed = set(installed_shells(home))
+    floor = load_config(home.root).hold_floor_pct
+    for target in targets:
+        shell, core = parse_body(target)
+        if shell == source or shell not in installed:
+            continue
+        gauge = reading(home, shell)
+        if (gauge and not collector_failed(gauge) and gauge.get("windows")
+                and all(w["left_pct"] > floor for w in gauge["windows"])):
+            return shell, core
+    return None
 
 
 def preferred_body(home, thread: str) -> str:

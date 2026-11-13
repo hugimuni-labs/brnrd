@@ -1577,11 +1577,12 @@ def _observe_body(home, facts, strand, thread, gen, bodies, *, choice=None, forc
     fenced = (_lease_lost(home, facts) or handed) and pin is None
     default = choice or ("fake", "haiku")
     shell, core = lease.get("shell", default[0]), lease.get("core", default[1])
+    # A park consumes no fuel; retain the post-exit reading through its TTL.
     if isinstance(facts, LedgerView):
-        after = max(facts.latest_at.get((kind, strand), 0) for kind in ("body.exited", "body.parked"))
+        after = facts.latest_at.get(("body.exited", strand), 0)
     else:
         after = max((datetime.fromisoformat(f.at).timestamp() for f in facts
-                     if f.data.get("strand") == strand and f.kind in {"body.exited", "body.parked"}), default=0)
+                     if f.data.get("strand") == strand and f.kind == "body.exited"), default=0)
     # A live body asleep in its own stop hook is parked too: the jack waits
     # for fuel there rather than lose the conversation (jack.py, _poll).
     held = state.name == "running" and alive and not fenced and _held_dry(room)
@@ -1610,6 +1611,26 @@ def _observe_body(home, facts, strand, thread, gen, bodies, *, choice=None, forc
     if empty:
         from .usage import dry_until
         until = dry_until(home, shell) or now + 900
+    # A park must exist before automatic continuation is considered. The
+    # durable decision survives a crash before end/release or the next lease.
+    if state.name == "parked" and not (woken or force or closed or fenced or away):
+        from .adapters import quota_choice
+        target = quota_choice(home, thread, shell) if empty else None
+        if target:
+            park = fact_for(facts, "body.parked", strand, gen)
+            data = dict(thread=thread, strand=strand, gen=gen,
+                        from_shell=shell, from_core=core, to_shell=target[0], to_core=target[1],
+                        window=empty["name"], left_pct=empty["left_pct"],
+                        until=until, park=park.id)
+            facts.append(_record(home, "body.moved", data, f"body.moved:{strand}:{gen}"))
+            woken = target
+    move = fact_for(facts, "body.moved", strand, gen)
+    if move and woken == (move.data["to_shell"], move.data["to_core"]):
+        notice(home, facts, "quota-move", move.id,
+               f"Thread {thread}: {body_label(shell, core)} exhausted {move.data['window']} fuel "
+               f"({move.data['left_pct']:g}% left); continuing on {body_label(*woken)}.",
+               "A fresh body boots from the thread README and owed letters; model preferences stay as chosen.",
+               thread=thread, passive=True)
     pid = int(start.data.get("pid") or 0) if start else 0
     proven = None
     # A stop on record with the body still alive is a signal that was never
@@ -1811,6 +1832,7 @@ def _wake_choice(facts, thread):
     """
     last = max((i for i, f in enumerate(facts) if f.kind == "lease" and f.data.get("thread") == thread),
                default=-1)
+    # A person's manual wake always wins over an automatic decision.
     for f in reversed(facts[last + 1:]):
         if f.kind == "letter.disposed" and f.by.startswith("loom:"):
             for d in f.data.get("dispositions", ()):
@@ -1820,7 +1842,8 @@ def _wake_choice(facts, thread):
                         return parse_body(d["body"])
                     except ValueError:
                         continue
-    return None
+    return next(((f.data["to_shell"], f.data["to_core"]) for f in reversed(facts[last + 1:])
+                 if f.kind == "body.moved" and f.data.get("thread") == thread), None)
 
 
 def _person_dms(home, facts, thread):
