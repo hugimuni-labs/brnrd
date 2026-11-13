@@ -103,6 +103,8 @@ class MemoryBody:
                 assert not o.closed and not o.fenced
                 self.add("body.started", pid=123, shell="fake", core="echo")
                 self.alive = True
+            elif name == "move":
+                self.add("body.moved")
             elif name == "park":
                 self.add("body.parked", until=o.until, shell="fake", core="echo")
             elif name == "pending":
@@ -184,7 +186,7 @@ def test_seeded_sequences_check_ledger_prefixes_and_reach_every_row():
             o = Observation(body.strand, body.gen, body.alive, closed, gauge, body.now,
                             proven=rng.choice([True, False]), until=body.now + 3,
                             stop_grace=1, failure=failure, woken=woken, fenced=fenced, held=held, away=away,
-                            pressed=pressed)
+                            pressed=pressed, target="other/core" if seed % 2 == 0 and state == "parked" and gauge == "empty" and not woken else "")
             body.step(o, crash_at_end=not body.alive and rng.random() < 0.2,
                       crash_at_exit=not body.alive and rng.random() < 0.2)
     assert coverage == set(range(len(TABLE))), {i: TABLE[i] for i in set(range(len(TABLE))) - coverage}
@@ -194,7 +196,7 @@ def test_table_rendering_matches_checked_in_page():
     from pathlib import Path
     page = Path(__file__).resolve().parents[2] / "src/brr/loom/runtime/bodies.md"
     assert render_table() == page.read_text().strip()
-    assert len(TABLE) == 27
+    assert len(TABLE) == 28
 
 
 def test_an_unlisted_pair_logs_and_raises(caplog):

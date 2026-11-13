@@ -1611,26 +1611,14 @@ def _observe_body(home, facts, strand, thread, gen, bodies, *, choice=None, forc
     if empty:
         from .usage import dry_until
         until = dry_until(home, shell) or now + 900
-    # A park must exist before automatic continuation is considered. The
-    # durable decision survives a crash before end/release or the next lease.
+    # Only an existing, still-empty park may choose an automatic target.
+    target = None
     if state.name == "parked" and not (woken or force or closed or fenced or away):
         from .adapters import quota_choice
         target = quota_choice(home, thread, shell) if empty else None
-        if target:
-            park = fact_for(facts, "body.parked", strand, gen)
-            data = dict(thread=thread, strand=strand, gen=gen,
-                        from_shell=shell, from_core=core, to_shell=target[0], to_core=target[1],
-                        window=empty["name"], left_pct=empty["left_pct"],
-                        until=until, park=park.id)
-            facts.append(_record(home, "body.moved", data, f"body.moved:{strand}:{gen}"))
-            woken = target
     move = fact_for(facts, "body.moved", strand, gen)
     if move and woken == (move.data["to_shell"], move.data["to_core"]):
-        notice(home, facts, "quota-move", move.id,
-               f"Thread {thread}: {body_label(shell, core)} exhausted {move.data['window']} fuel "
-               f"({move.data['left_pct']:g}% left); continuing on {body_label(*woken)}.",
-               "A fresh body boots from the thread README and owed letters; model preferences stay as chosen.",
-               thread=thread, passive=True)
+        _quota_move_notice(home, facts, move)
     pid = int(start.data.get("pid") or 0) if start else 0
     proven = None
     # A stop on record with the body still alive is a signal that was never
@@ -1650,12 +1638,12 @@ def _observe_body(home, facts, strand, thread, gen, bodies, *, choice=None, forc
     context = SimpleNamespace(thread=thread, shell=shell, core=core, pid=pid, empty=empty, fuel=fuel,
                               why=(closing_commit(home, thread)[1] or f"thread {thread} settled") if closed
                               else _HANDED if handed else _FENCED if fenced else _AWAY.format(pin) if away else "",
-                              failure="", repos=lease.get("repos"), pressure=str(squeeze or ""))
+                              failure="", repos=lease.get("repos"), pressure=str(squeeze or ""), target=target)
     o = Observation(strand, gen, alive, closed, "refreshing" if gauge is None else "empty" if empty
                     else "ok" if gauge["windows"] else "unknown",
                     now, proven, until=until, force=force, stop_grace=config.stop_grace,
                     woken="/".join(woken) if woken else "", fenced=fenced, held=held, away=away,
-                    handed=handed, pressed=squeeze is not None)
+                    handed=handed, pressed=squeeze is not None, target=body_label(*target) if target else "")
     row = TABLE[row_for(facts, o)]
     if row.next == "parked" and not fenced:
         park = fact_for(facts, "body.parked", strand, gen)
@@ -2176,6 +2164,28 @@ def _hand_record(x, command, step):
     x.facts.append(_record(x.home, kind.kind, data, ident))
 
 
+def _quota_move_notice(home, facts, move):
+    d = move.data
+    notice(home, facts, "quota-move", move.id,
+           f"Thread {d['thread']}: {body_label(d['from_shell'], d['from_core'])} "
+           f"exhausted {d['window']} fuel ({d['left_pct']:g}% left); "
+           f"continuing on {body_label(d['to_shell'], d['to_core'])}.",
+           "A fresh body boots from the thread README and owed letters; model preferences stay as chosen.",
+           thread=d["thread"], passive=True)
+
+
+def _hand_move(x, command, step):
+    park = fact_for(x.facts, "body.parked", x.o.strand, x.o.gen)
+    data = dict(thread=x.c.thread, strand=x.o.strand, gen=x.o.gen,
+                from_shell=x.c.shell, from_core=x.c.core,
+                to_shell=x.c.target[0], to_core=x.c.target[1],
+                window=x.c.empty["name"], left_pct=x.c.empty["left_pct"],
+                until=x.o.until, park=park.id)
+    move = _record(x.home, step.records, data, f"body.moved:{x.o.strand}:{x.o.gen}")
+    x.facts.append(move)
+    _quota_move_notice(x.home, x.facts, move)
+
+
 def _hand_started(x, command, step):
     c = x.c
     x.values["lstart"] = _ps_field(x.proc.pid, "lstart") or ""
@@ -2274,7 +2284,7 @@ def _hand_release(x, command, step):
 
 
 HANDS = {
-    "prepare": _hand_prepare, "show": _hand_show, "spawn": _hand_spawn, "started": _hand_started,
+    "move": _hand_move, "prepare": _hand_prepare, "show": _hand_show, "spawn": _hand_spawn, "started": _hand_started,
     "record": _hand_record, "signal": _hand_signal, "let_go": _hand_let_go, "collect": _hand_collect, "drain": _hand_drain,
     "end": _hand_end, "drained": _hand_drained, "release": _hand_release,
 }

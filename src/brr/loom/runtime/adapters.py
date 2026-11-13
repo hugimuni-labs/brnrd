@@ -157,7 +157,7 @@ _ROLE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*")
 
 
 def _preferences(home):
-    """``loom/preferences.toml``: model keys, ``bodies.order``, ``spend.burn``, ``spend.keep``.
+    """``loom/preferences.toml``: model keys, ``bodies.order``, ``spend.burn``, ``spend.keep``, ``quota.<role>``.
 
     ``spend.keep`` inside ``spend.burn`` is a ``ConfigError``: the keep shell is
     not a handoff target, so the file cannot name it as both.
@@ -249,6 +249,8 @@ def quota_choice(home, thread: str, source: str) -> tuple[str, str] | None:
     found = _preferences(home)[1]
     roles = [thread, "inbox", "default"] if thread == home.main_thread() else [thread, "default"]
     targets = next((found[f"quota.{role}"] for role in roles if f"quota.{role}" in found), [])
+    if not targets:
+        return None
     installed = set(installed_shells(home))
     floor = load_config(home.root).hold_floor_pct
     for target in targets:

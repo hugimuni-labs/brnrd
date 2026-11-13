@@ -81,8 +81,8 @@ def test_intrinsically_oversized_letter_keeps_input_failure_path(tmp_path):
     assert not loom.errors
 
 
-@pytest.mark.parametrize("move_allowed", [False, True])
-def test_quota_failure_refreshes_gauge_keeps_ask_and_parks(tmp_path, monkeypatch, move_allowed):
+@pytest.mark.parametrize("move_allowed, crash_after_move", [(False, False), (True, False), (True, True)])
+def test_quota_failure_refreshes_gauge_keeps_ask_and_parks(tmp_path, monkeypatch, move_allowed, crash_after_move):
     import json
     import sys
     import time
@@ -133,6 +133,14 @@ def test_quota_failure_refreshes_gauge_keeps_ask_and_parks(tmp_path, monkeypatch
         preferences.write_text('bodies.order = ["quota", "backup"]\n')
     ident = inject_letter(root, to='thread:work', body='Please answer')
     loom = Loom(root)
+    from brr.loom.runtime import loom as runtime
+    real_end = runtime._hand_end
+    if crash_after_move:
+        def stop_after_decision(x, command, step):
+            if any(f.kind == "body.moved" and f.data.get("strand") == x.o.strand for f in x.facts):
+                return False
+            return real_end(x, command, step)
+        monkeypatch.setitem(runtime.HANDS, "end", stop_after_decision)
     loom.start()
     try:
         wait_until(lambda: any(f.kind == 'body.parked' for f in loom.facts()), 15, loom.dump)
@@ -151,6 +159,12 @@ def test_quota_failure_refreshes_gauge_keeps_ask_and_parks(tmp_path, monkeypatch
             preferences.write_text(preferences.read_text() + 'quota.work = ["backup"]\n')
             from brr.loom.runtime.adapters import quota_choice
             assert quota_choice(loom.home, "work", "quota") == ("backup", "")
+            if crash_after_move:
+                wait_until(lambda: any(f.kind == "body.moved" for f in loom.facts()), 15, loom.dump)
+                loom.halt()
+                monkeypatch.setitem(runtime.HANDS, "end", real_end)
+                loom = Loom(root)
+                loom.start()
             wait_until(lambda: letter_owners(loom.facts(), main_snapshot(loom.home))[ident].done,
                        20, loom.dump)
             facts = loom.facts()
