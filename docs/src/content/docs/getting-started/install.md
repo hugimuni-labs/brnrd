@@ -99,6 +99,12 @@ anything; `--no-start` writes the service and leaves it for the next login.
 `uninstall` do what they say. `brnrd setup` pairs a channel such as Telegram,
 so letters reach you away from the terminal.
 
+If multiple distinct `brnrd` executables are on `PATH`, the CLI warns on
+stderr with the invoked entry, imported Python package, and executable paths
+in search order. Symlinks to the same executable count once. The warning
+does not run, remove or rewrite other installations; use the paths to check
+which installation your shell is selecting before upgrading.
+
 To upgrade, run `uv tool upgrade brnrd` (or the route you installed with). The
 running loom sees its files change and re-execs itself; its bodies resume from
 the letters they held.

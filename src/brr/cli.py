@@ -1527,6 +1527,9 @@ def _drop_inherited_git_pin() -> None:
 
 
 def main(argv: list[str] | None = None) -> None:
+    from .install_diagnostics import warn_multiple_installations
+
+    warn_multiple_installations()
     _drop_inherited_git_pin()
     import sys
 
