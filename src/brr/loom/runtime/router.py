@@ -456,6 +456,9 @@ class Router:
         if not threads and not holding:
             return facts
         armed = self.armed if holding else (lambda: True)
+        from .loom import _commands
+        for thread in threads:
+            _commands(home, facts, thread, default, authorize=armed)
         facts = _closures(home, facts, threads)
         from .lifecycle import CLOSED, landed_reader
         pending = []
@@ -474,7 +477,8 @@ class Router:
                 if thread in state.holder:
                     continue
             letters = [f for f in letters_for(facts, main_snapshot(home), thread) if not f.data.get("notice")]
-            if not letters:
+            from .loom import _wake_choice
+            if not letters and not _wake_choice(facts, thread):
                 continue
             if not armed():
                 break
@@ -488,24 +492,18 @@ class Router:
                               "words for a person go to the reply address on their letter; "
                               "to run the thread here, empty its `for:`")
                 continue
-            from .adapters import RepoSeatError, _entries, at_birth, fall_down, repos as seat_repos, seat_text
+            from .adapters import RepoSeatError, fall_down, repos as seat_repos, seat_text
             from .repos import AuthorError, require_body_author
             try:
                 text = seat_text(home, thread)
-                from .loom import _person_dms, _wake_choice, _wake_letter
-                seated = at_birth(home, thread, default, text)
-                # A body chosen in brnrd.dev's composer is a wake, but only for a
-                # letter that landed while no strand held the thread.
-                freed = max((i for i, f in enumerate(facts) if f.kind == "released"
-                             and f.data.get("thread") == thread), default=-1)
-                for letter, channel in _person_dms(home, facts, thread):
-                    if letter.data.get("wake") and facts.index(letter) > freed:
-                        _wake_letter(home, facts, thread, seated, letter, channel, parked=False)
-                woken = _wake_choice(facts, thread)
-                choice = woken or seated
-                if not woken and not any(key == "body" for key, _ in _entries(text)):
-                    # A preferred body that cannot run now gives way to the next on the person's list.
-                    choice = fall_down(home, choice, lambda shell: _can_run(home, shell))
+                from .adapters import resolve_body
+                shell, core, source = resolve_body(home, facts, thread, default, text)
+                choice = (shell, core)
+                if source not in {"wake word", "quota recovery", "this thread's seat pin"}:
+                    fallen = fall_down(home, choice, lambda shell: _can_run(home, shell))
+                    if fallen != choice:
+                        source = f"body order after {source}"
+                    choice = fallen
                 declared = seat_repos(text, home)
                 require_body_author(home)
             except (ValueError, OSError) as exc:
@@ -533,7 +531,7 @@ class Router:
             data = {
                 "thread": thread, "strand": strand, "gen": gen,
                 "install": install, "router_gen": self.lease.gen if holding else _newest_router(facts),
-                "shell": choice[0], "core": choice[1], "repos": declared,
+                "shell": choice[0], "core": choice[1], "repos": declared, "body_source": source,
             }
             if pinned_to(facts, thread) == install:
                 # Counts whatever router leads: only the pinned install grants it.

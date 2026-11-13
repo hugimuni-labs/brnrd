@@ -42,7 +42,7 @@ TABLE = (
     Row(("wanted",), "fenced", "wanted", ()),
     Row(("parked",), "fenced", "parked", ()),
     Row(("parked",), "quota move", "ended", ("move", "end_reincarnated") + CLEANUP),
-    Row(("parked",), "woken on another body", "ended", ("end_reincarnated",) + CLEANUP),
+    Row(STARTABLE, "woken on another body", "ended", ("end_reincarnated",) + CLEANUP),
     Row(("wanted",), "memory pressed", "wanted", ("pending",)),
     Row(("parked",), "memory pressed", "parked", ()),
     Row(("parked",), "gauge unknown, before until", "parked", ()),
@@ -254,9 +254,11 @@ def render_table() -> str:
 def exit_cause(facts: list[Fact], o: Observation, *, owed: bool) -> str:
     """First-match cause over the post-drain ledger and the same observations."""
     from .project import fold
+    if o.woken:
+        return "reincarnated"
     if fact_for(facts, "body.stopped", o.strand, o.gen):
         return "stopped"
-    if fact_for(fold(facts).accepted, "reincarnate", o.strand, o.gen) or o.woken:
+    if fact_for(fold(facts).accepted, "reincarnate", o.strand, o.gen):
         return "reincarnated"
     if o.closed:
         return "settled"

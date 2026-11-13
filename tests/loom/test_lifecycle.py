@@ -382,7 +382,7 @@ def test_wake_naming_no_enabled_body_is_refused_with_the_list(tmp_path, monkeypa
         wait_until(lambda: any(m["re"] == "telegram:42:nope" for m in home.sent), 10, loom.dump)
         refused = next(m for m in home.sent if m["re"] == "telegram:42:nope")
         assert "No body 'codex' here; bodies are claude, spare. Nothing was started." in refused["body"]
-        assert "wake spare/<core>: spare session 70%" in refused["body"]
+        assert "wake spare: spare session 70%" in refused["body"]
         time.sleep(0.5)
         assert not _started(loom)
         assert _leases(loom) == [(1, "claude", "echo")]
