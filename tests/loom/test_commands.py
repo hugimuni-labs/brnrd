@@ -263,3 +263,32 @@ def test_repeated_real_core_failures_share_one_dm_and_increase_hold(tmp_path, mo
         loom.halt()
         kill_bodies(loom)
     assert not loom.errors
+
+
+def test_router_retries_command_after_authority_refusal_without_new_input(tmp_path, monkeypatch):
+    from brr.loom.runtime import router as routing
+    from brr.loom.runtime.ledger import LedgerView
+
+    home = _home(tmp_path, monkeypatch)
+    loom = Loom(home.root)
+    ident = _Composer(loom.home).says("fenced-command", "second", "wake claude/opus")
+    from connector_support import directories
+    from brr.loom.runtime.connector import drain
+    drain(loom.home, "relay", directories(loom.home)[0])
+    facts = LedgerView(loom.facts())
+    assert any(f.id == ident for f in facts)
+    router = routing.Router(loom.home)
+    monkeypatch.setattr(routing, "_routable", lambda *args: ["second"])
+
+    # Authority expires between the initial router check and the command write.
+    # Later checks stay fenced, so neither tick starts a process in this test.
+    checks = iter([True, False])
+    monkeypatch.setattr(router, "armed", lambda: next(checks, False))
+    router.route(facts, {}, ("spare", "y"))
+    assert not any(f.id == f"letter.disposed:{ident}" for f in facts)
+
+    # No ledger refresh or new letter: the same revision must be retried.
+    checks = iter([True, True])
+    router.route(facts, {}, ("spare", "y"))
+    disposition = next(f for f in facts if f.id == f"letter.disposed:{ident}")
+    assert disposition.data["dispositions"][0]["body"] == "claude/opus"

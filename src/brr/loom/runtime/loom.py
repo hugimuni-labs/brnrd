@@ -1784,6 +1784,7 @@ WAKE = re.compile(r"/?(?:wake|reincarnate)(?:\s+([A-Za-z0-9][A-Za-z0-9._-]*)(?:/
 def _commands(home, facts, thread, default, *, parked=False, held=False, authorize=None):
     """Consume direct-chat controls before any state-specific routing."""
     from .adapters import at_birth
+    cache_revision = None
     if isinstance(facts, LedgerView):
         inputs = (facts.person_inputs.get(thread, 0), facts.person_inputs.get("*", 0))
         if not any(inputs):
@@ -1792,12 +1793,22 @@ def _commands(home, facts, thread, default, *, parked=False, held=False, authori
         key = ("command-scan", thread)
         if facts.cache.get(key) == revision:
             return []
-        facts.cache[key] = revision
+        cache_revision = (key, revision)
     elif not any(str(f.data.get("from", "")).startswith(("person:", "p-")) for f in kind_facts(facts, "letter")):
         return []
     dms = list(_person_dms(home, facts, thread))
     if not dms:
+        if cache_revision is not None:
+            facts.cache[cache_revision[0]] = cache_revision[1]
         return []
+    refused = False
+
+    def authorized():
+        nonlocal refused
+        allowed = authorize()
+        refused = refused or not allowed
+        return allowed
+
     leased = next(((f.data["shell"], f.data["core"]) for f in reversed(facts)
                    if f.kind == "lease" and f.data.get("thread") == thread), None)
     if leased is None:
@@ -1816,9 +1827,12 @@ def _commands(home, facts, thread, default, *, parked=False, held=False, authori
                 continue
             if not holder and facts.index(letter) < freed:
                 continue
-        named = _wake_letter(home, facts, thread, leased, letter, channel, parked=parked, held=held, authorize=authorize)
+        named = _wake_letter(home, facts, thread, leased, letter, channel, parked=parked, held=held, authorize=authorized if authorize is not None else None)
         if named is not None:
             consumed.append(named)
+    # A fenced pass must leave the same input eligible for the next router tick.
+    if cache_revision is not None and not refused:
+        facts.cache[cache_revision[0]] = cache_revision[1]
     return consumed
 
 
