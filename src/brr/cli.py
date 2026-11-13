@@ -1527,10 +1527,19 @@ def _drop_inherited_git_pin() -> None:
 
 
 def main(argv: list[str] | None = None) -> None:
+    from .install_diagnostics import warn_multiple_installations
+
     _drop_inherited_git_pin()
     import sys
 
     raw = list(sys.argv[1:] if argv is None else argv)
+    # Keep launcher and hook traffic quiet; this diagnostic is for operators.
+    if (not raw or raw in (["--help"], ["-h"])
+            or raw[:1] == ["setup"]
+            or (raw[:1] == ["loom"] and raw[1:2] in (
+                ["--help"], ["-h"], ["status"], ["install"], ["uninstall"],
+                ["start"], ["stop"], ["restart"], ["logs"]))):
+        warn_multiple_installations()
     # `brnrd do [verbs…] -- <command> [args…]` — split the passthrough command
     # out of argv before argparse ever sees it, rather than fighting
     # argparse's own (subparser-inconsistent) `--` handling with

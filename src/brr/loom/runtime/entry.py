@@ -44,7 +44,7 @@ def script() -> str:
         '    echo "brnrd: $python is missing; run brnrd loom install" >&2\n'
         "    exit 127\n"
         "}\n"
-        'exec "$python" -m brr "$@"\n'
+        'BRNRD_CLI_ENTRY="$0" exec "$python" -m brr "$@"\n'
     )
 
 
