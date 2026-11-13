@@ -33,7 +33,10 @@ def alternative(tmp_path):
     return entry
 
 
-@pytest.mark.parametrize('args', [('--help',), ('loom', '--help'), ('runtime', '--help')])
+@pytest.mark.parametrize('args', [('--help',), ('loom', '--help'),
+                                 ('setup', '--help'), ('loom', 'status', '--help'),
+                                 ('loom', 'start', '--help'), ('loom', 'stop', '--help'),
+                                 ('loom', 'restart', '--help')])
 def test_cli_names_invoked_package_and_alternatives(installed, tmp_path, args):
     old = alternative(tmp_path)
     before = {p: (p.read_bytes(), p.stat().st_mode) for p in (installed, old)}
@@ -72,15 +75,16 @@ def test_distinct_install_with_alias_is_reported_once(installed, tmp_path):
     assert f'    {old}\n' not in result.stderr
 
 
-def test_module_runtime_fast_path_warns(installed, tmp_path):
+@pytest.mark.parametrize('module', [False, True])
+def test_runtime_help_with_multiple_installations_is_quiet(installed, tmp_path, module):
     old = alternative(tmp_path)
     env = dict(os.environ, PATH=os.pathsep.join(map(str, [installed.parent, old.parent])),
                PYTHONPATH=str(Path(brr.__file__).parent.parent))
-    result = subprocess.run([sys.executable, '-m', 'brr', 'runtime', '--help'],
+    command = [sys.executable, '-m', 'brr'] if module else [str(installed)]
+    result = subprocess.run([*command, 'runtime', '--help'],
                             env=env, text=True, capture_output=True)
     assert result.returncode == 0, result.stderr
-    assert result.stderr.count('warning: multiple brnrd installations') == 1
-    assert f'invoked entry: {sys.executable} -m brr' in result.stderr
+    assert result.stderr == ''
 
 
 def test_loom_shim_preserves_invoked_entry(installed, tmp_path, monkeypatch):
@@ -93,7 +97,7 @@ def test_loom_shim_preserves_invoked_entry(installed, tmp_path, monkeypatch):
     entry.point(prefix)
     entry.write_shim()
     old = alternative(tmp_path)
-    result = run_cli(entry.shim(), [entry.shim().parent, old.parent], 'runtime', '--help')
+    result = run_cli(entry.shim(), [entry.shim().parent, old.parent], '--help')
     assert result.returncode == 0, result.stderr
     assert f'invoked entry: {entry.shim()}' in result.stderr
     assert result.stderr.count('warning: multiple brnrd installations') == 1
@@ -108,3 +112,10 @@ def test_empty_and_relative_path_entries_use_current_directory(installed, tmp_pa
     assert result.returncode == 0, result.stderr
     assert 'warning: multiple brnrd installations' in result.stderr
     assert str(old) in result.stderr
+
+
+def test_hook_help_with_multiple_installations_is_quiet(installed, tmp_path):
+    old = alternative(tmp_path)
+    result = run_cli(installed, [installed.parent, old.parent], 'hook', '--help')
+    assert result.returncode == 0, result.stderr
+    assert result.stderr == ''

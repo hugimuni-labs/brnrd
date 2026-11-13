@@ -100,8 +100,11 @@ anything; `--no-start` writes the service and leaves it for the next login.
 so letters reach you away from the terminal.
 
 If multiple distinct `brnrd` executables are on `PATH`, the CLI warns on
-stderr with the invoked entry, imported Python package, and executable paths
-in search order. Symlinks to the same executable count once. The warning
+stderr for person-facing commands: plain `--help`, setup (including bare
+`brnrd`), and the loom service commands (including status). Runtime, launcher and hook
+calls stay quiet. The warning names the invoked entry, imported Python
+package, and executable paths in search order. Symlinks to the same executable
+count once. The warning
 does not run, remove or rewrite other installations; use the paths to check
 which installation your shell is selecting before upgrading.
 

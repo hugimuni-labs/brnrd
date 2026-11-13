@@ -10,9 +10,6 @@ if __name__ == "__main__":
     # ``brnrd runtime <verb>``: what the loom's launchers run through
     # ~/.brnrd/bin/brnrd, dispatched before the daemon CLI is imported.
     if sys.argv[1:2] == ["runtime"]:
-        from .install_diagnostics import warn_multiple_installations
-
-        warn_multiple_installations()
         from .loom.runtime.__main__ import main as runtime
 
         sys.exit(runtime(sys.argv[2:]))
