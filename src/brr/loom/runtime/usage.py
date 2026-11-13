@@ -128,9 +128,12 @@ def check_stuck() -> None:
             f"{name} for {age:.0f}s" for name, age in stuck))
 
 
-def reading(home, shell: str, after: float = 0, *, fresh=False):
+def reading(home, shell: str, after: float = 0, *, fresh=False, cached_only=False):
     """None while refreshing; an empty reading means the gauge is unknown,
-    as does a refresh still running past ``STUCK_AFTER``."""
+    as does a refresh still running past ``STUCK_AFTER``.
+
+    ``cached_only`` never starts a collector; stale or absent fuel is None.
+    """
     path = (home.root / "loom/usage" / f"{shell}.json").resolve()
     try:
         script = resolve(home, shell) / "usage"
@@ -150,6 +153,8 @@ def reading(home, shell: str, after: float = 0, *, fresh=False):
             return reading
     except (OSError, ValueError, KeyError, TypeError):
         pass
+    if cached_only:
+        return None
     if _stuck(path) is not None:
         # Unknown, not pending; no second refresh joins the blocked one.
         return {"windows": []}

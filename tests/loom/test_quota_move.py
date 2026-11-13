@@ -9,7 +9,8 @@ from brr.loom.runtime.loom import _wake_choice
 
 
 @pytest.mark.parametrize("override, expected", [
-    ('', ('codex', '')),
+    ('', None),
+    ('quota.inbox = ["codex"]\n', ('codex', '')),
     ('quota.inbox = []\n', None),
     ('quota.inbox = []\nquota.inbox-seat = ["codex/selected"]\n', ('codex', 'selected')),
 ])
@@ -19,7 +20,7 @@ def test_role_permission_overrides_default(tmp_path, monkeypatch, override, expe
     (tmp_path / 'loom').mkdir()
     (tmp_path / 'loom/preferences.toml').write_text('quota.default = ["codex"]\n' + override)
     monkeypatch.setattr(adapters, 'installed_shells', lambda home: ['claude', 'codex'])
-    monkeypatch.setattr(usage, 'reading', lambda *args: {'windows': [{'left_pct': 75}]})
+    monkeypatch.setattr(usage, 'reading', lambda *args, **kwargs: {'windows': [{'left_pct': 75}]})
     assert adapters.quota_choice(home, 'inbox-seat', 'claude') == expected
 
 
@@ -30,7 +31,7 @@ def test_unknown_failed_or_dry_target_is_not_permission_to_move(tmp_path, monkey
     (tmp_path / 'loom').mkdir()
     (tmp_path / 'loom/preferences.toml').write_text('quota.default = ["codex"]\n')
     monkeypatch.setattr(adapters, 'installed_shells', lambda home: ['claude', 'codex'])
-    monkeypatch.setattr(usage, 'reading', lambda *args: gauge)
+    monkeypatch.setattr(usage, 'reading', lambda *args, **kwargs: gauge)
     assert adapters.quota_choice(Home(tmp_path), 'work', 'claude') is None
 
 
@@ -58,3 +59,85 @@ def test_durable_move_routes_after_crash_and_manual_wake_wins():
     assert _wake_choice([lease, move], 'work') == ('codex', '')
     assert _wake_choice([lease, wake, move], 'work') == ('claude', 'opus')
     assert _wake_choice([lease, move, lease], 'work') is None
+
+
+@pytest.mark.parametrize('permission, expected', [
+    ('', None), ('quota.work = []\n', None),
+    ('quota.work = ["codex"]\n', ('codex', '')),
+])
+def test_pinned_seat_needs_its_own_permission(tmp_path, monkeypatch, permission, expected):
+    home = Home(tmp_path)
+    (tmp_path / 'loom').mkdir()
+    (tmp_path / 'loom/preferences.toml').write_text('quota.default = ["codex"]\n' + permission)
+    seat = home.thread_dir('work') / 'seat'
+    seat.parent.mkdir(parents=True)
+    seat.write_text('body: claude/opus\n')
+    monkeypatch.setattr(adapters, 'installed_shells', lambda home: ['claude', 'codex'])
+    monkeypatch.setattr(usage, 'reading', lambda *args, **kwargs: {'windows': [{'left_pct': 75}]})
+    assert adapters.quota_choice(home, 'work', 'claude') == expected
+
+
+@pytest.mark.parametrize('order, expected', [
+    ('["claude"]', None), ('["claude", "codex"]', ('codex', '')),
+])
+def test_installed_target_must_also_be_enabled(tmp_path, monkeypatch, order, expected):
+    import shutil
+    (tmp_path / 'loom').mkdir()
+    (tmp_path / 'loom/preferences.toml').write_text(
+        f'bodies.order = {order}\nquota.default = ["codex"]\n')
+    monkeypatch.setattr(shutil, 'which', lambda shell: f'/fake/{shell}')
+    monkeypatch.setattr(usage, 'reading', lambda *args, **kwargs: {'windows': [{'left_pct': 75}]})
+    assert adapters.quota_choice(Home(tmp_path), 'work', 'claude') == expected
+
+
+def test_preferences_cache_observes_edits_and_removal(tmp_path, monkeypatch):
+    from brr.loom.runtime import config
+    home = Home(tmp_path)
+    path = tmp_path / 'loom/preferences.toml'
+    path.parent.mkdir()
+    path.write_text('quota.default = ["codex"]\n')
+    real_read = config.read_values
+    reads = []
+    def read(path):
+        reads.append(path)
+        return real_read(path)
+    monkeypatch.setattr(config, 'read_values', read)
+    for _ in range(5):
+        assert adapters._preferences(home)[1]['quota.default'] == ['codex']
+    assert reads == [path]
+    path.write_text('quota.default = []\n')
+    assert adapters._preferences(home)[1]['quota.default'] == []
+    path.unlink()
+    assert adapters._preferences(home)[1] == {}
+    assert reads == [path, path, path]
+
+
+def test_target_choice_never_starts_a_collector(tmp_path, monkeypatch):
+    import json
+    import time
+    home = Home(tmp_path)
+    (tmp_path / 'loom').mkdir()
+    (tmp_path / 'loom/preferences.toml').write_text('quota.default = ["codex"]\n')
+    monkeypatch.setattr(adapters, 'installed_shells', lambda home: ['claude', 'codex'])
+    def unexpected(*args, **kwargs):
+        pytest.fail('quota target inspection must not launch a collector')
+    monkeypatch.setattr(usage.threading, 'Thread', unexpected)
+    path = tmp_path / 'loom/usage/codex.json'
+    path.parent.mkdir()
+    assert adapters.quota_choice(home, 'work', 'claude') is None
+    value = {'at': time.time(), 'windows': [{'name': 'session', 'left_pct': 75}]}
+    path.write_text(json.dumps(value))
+    assert adapters.quota_choice(home, 'work', 'claude') == ('codex', '')
+    value['at'] -= usage.CACHE_TTL + 1
+    path.write_text(json.dumps(value))
+    assert adapters.quota_choice(home, 'work', 'claude') is None
+    assert path.resolve() not in usage._REFRESHING
+
+
+def test_source_shell_is_skipped_even_with_another_core(tmp_path, monkeypatch):
+    (tmp_path / 'loom').mkdir()
+    (tmp_path / 'loom/preferences.toml').write_text(
+        'quota.default = ["claude/sonnet", "codex"]\n')
+    monkeypatch.setattr(adapters, 'installed_shells', lambda home: ['claude', 'codex'])
+    monkeypatch.setattr(usage, 'reading', lambda *args, **kwargs: {'windows': [{'left_pct': 75}]})
+    assert adapters.quota_choice(Home(tmp_path), 'work', 'claude') == ('codex', '')

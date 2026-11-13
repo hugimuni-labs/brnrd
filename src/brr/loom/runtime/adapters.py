@@ -1,6 +1,7 @@
 """A shell is a folder; a home's folder wins over the bundled one."""
 
 import os
+from functools import lru_cache
 from pathlib import Path
 import re
 
@@ -162,8 +163,19 @@ def _preferences(home):
     ``spend.keep`` inside ``spend.burn`` is a ``ConfigError``: the keep shell is
     not a handoff target, so the file cannot name it as both.
     """
-    from .config import ConfigError, read_values
     path = home.root / "loom" / "preferences.toml"
+    try:
+        stat = path.stat()
+        stamp = (stat.st_ino, stat.st_mtime_ns, stat.st_ctime_ns, stat.st_size)
+    except FileNotFoundError:
+        stamp = None
+    return _checked_preferences(path, stamp)
+
+
+@lru_cache(maxsize=64)
+def _checked_preferences(path: Path, stamp):
+    """Reparse and validate only when the preferences file changes."""
+    from .config import ConfigError, read_values
     found = read_values(path)
     known = "model.default, model.inbox, model.<thread>, bodies.order, spend.burn, spend.keep, quota.<role>"
     for key, value in found.items():
@@ -241,13 +253,19 @@ def fall_down(home, choice: tuple[str, str], usable) -> tuple[str, str]:
 def quota_choice(home, thread: str, source: str) -> tuple[str, str] | None:
     """An explicitly permitted, installed target with a fresh healthy gauge.
 
-    Empty role lists override the default. Birth and spend preferences grant
+    Inbox and body-pinned seats never inherit the default permission.
+    Empty role lists disable moves. Birth and spend preferences grant
     no authority here; unknown or failed collectors never authorize a move.
     """
     from .config import load_config
     from .usage import collector_failed, reading
     found = _preferences(home)[1]
-    roles = [thread, "inbox", "default"] if thread == home.main_thread() else [thread, "default"]
+    roles = [thread]
+    if thread == home.main_thread():
+        roles.append("inbox")
+    elif (f"quota.{thread}" not in found and found.get("quota.default")
+          and not any(key == "body" for key, _ in _entries(seat_text(home, thread)))):
+        roles.append("default")
     targets = next((found[f"quota.{role}"] for role in roles if f"quota.{role}" in found), [])
     if not targets:
         return None
@@ -257,7 +275,7 @@ def quota_choice(home, thread: str, source: str) -> tuple[str, str] | None:
         shell, core = parse_body(target)
         if shell == source or shell not in installed:
             continue
-        gauge = reading(home, shell)
+        gauge = reading(home, shell, cached_only=True)
         if (gauge and not collector_failed(gauge) and gauge.get("windows")
                 and all(w["left_pct"] > floor for w in gauge["windows"])):
             return shell, core

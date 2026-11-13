@@ -14,8 +14,10 @@ quota.pitch-deck = []
 quota.batch = ["codex", "claude/sonnet"]
 ```
 
-A thread's `quota.<thread>` overrides `quota.inbox` for the inbox seat, then
-`quota.default`. An empty list disables moves for that role. Missing permissions
+The inbox seat follows only its own `quota.<thread>` or `quota.inbox` key.
+A seat with a pinned `body:` follows only its own `quota.<thread>` key.
+Neither inherits `quota.default`; other threads use their own key, then the
+default. An empty list disables moves for that role. Missing permissions
 disable them everywhere. Existing `model.*`, `bodies.order`, and `spend.*`
 preferences do not grant permission to move parked work. For Claude-only lead
 work, leave quota permission unset or use an empty list for those threads.
@@ -23,7 +25,8 @@ work, leave quota permission unset or use an empty list for those threads.
 The target must be a different shell, enabled in `bodies.order`, installed on
 this machine, and have a fresh successful quota reading with every window above
 `hold_floor_pct`. Unknown, stale, failed, or exhausted targets leave the thread
-parked. A source that has refilled retries its original shell.
+parked. A target equal to the source shell is skipped, even with a different core.
+A source that has refilled retries its original shell.
 
 Continuation starts a fresh body from the landed thread README and owed letters.
 It does not convert a live model session or change the thread's model preference.

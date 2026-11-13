@@ -85,3 +85,11 @@ def _private_jack_clock(monkeypatch):
     clock = types.ModuleType("time")
     clock.__dict__.update(time.__dict__)
     monkeypatch.setattr(jack, "time", clock)
+
+
+@pytest.fixture(autouse=True)
+def isolate_preferences_cache():
+    from brr.loom.runtime.adapters import _checked_preferences
+    _checked_preferences.cache_clear()
+    yield
+    _checked_preferences.cache_clear()

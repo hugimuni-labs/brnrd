@@ -154,6 +154,27 @@ def test_quota_failure_refreshes_gauge_keeps_ask_and_parks(tmp_path, monkeypatch
         assert json.loads(cache.read_text())['windows'][0]['left_pct'] == 0
         assert not any(f.id.startswith(('loom/bounce-', 'loom/failed-message-')) for f in facts)
         assert not any(f.kind == "body.moved" for f in facts)
+        if not move_allowed:
+            # No quota preferences: post-exit exhaustion still parks the same
+            # generation, and a fresh refill retries its original shell.
+            loom.halt()
+            from brr.loom.runtime.bodies import TABLE, row_for
+            observation, context = runtime._observe_body(
+                loom.home, facts, parked.data['strand'], 'work', parked.data['gen'], {})
+            assert observation.gauge == 'empty'
+            assert not observation.target
+            assert context.shell == 'quota'
+            assert TABLE[row_for(facts, observation)].next == 'parked'
+            value = json.loads(cache.read_text())
+            value['at'] = time.time()
+            value['windows'][0]['left_pct'] = 75
+            cache.write_text(json.dumps(value))
+            observation, context = runtime._observe_body(
+                loom.home, facts, parked.data['strand'], 'work', parked.data['gen'], {})
+            assert observation.gauge == 'ok'
+            assert not observation.target
+            assert context.shell == 'quota'
+            assert TABLE[row_for(facts, observation)].next == 'running'
         if move_allowed:
             # Permission arrives after the real failure/park, without a restart.
             preferences.write_text(preferences.read_text() + 'quota.work = ["backup"]\n')
