@@ -162,6 +162,7 @@ class LedgerView(list):
         self.positions = {}
         self.by_kind = defaultdict(list)
         self.raw_letters = {}
+        self.person_inputs = defaultdict(int)
         self.named_letters = {}
         self.letters_by_source = defaultdict(set)
         self.letters_by_reply = defaultdict(set)
@@ -193,6 +194,9 @@ class LedgerView(list):
         super().append(fact)
         self.by_id[fact.id] = fact
         self.by_kind[fact.kind].append(fact)
+        if fact.kind in {"letter", "source"} and str(fact.data.get("from", "")).startswith(("person:", "p-")):
+            target = str(fact.data.get("to", ""))
+            self.person_inputs[target.removeprefix("thread:") if target.startswith("thread:") else "*"] += 1
         self.by_body[(fact.data.get('strand'), fact.data.get('gen'))].append(fact)
         strand = fact.data.get('strand')
         self.by_strand[strand].append(fact)

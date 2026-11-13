@@ -1360,7 +1360,7 @@ def _end_attempt(home, facts, strand, thread, gen, code, letters, cause, failure
     from brr.runner_failures import AUTH_ERROR, classify_failure
     failure_kind = classify_failure(detail=tail) if cause == "failed" else ""
     from .body_limits import limit_evidence
-    limit = limit_evidence(facts, strand, gen, tail) if cause == "failed" and failure_origin != "home" else {}
+    limit = limit_evidence(facts, strand, gen, tail, home=home) if cause == "failed" and failure_origin != "home" else {}
     shown = fold(facts).shown.get(strand, set())
     # Failed preparation is an attempted start even if no wake reached a body.
     ids = sorted(shown | {f.id for f in letters})
@@ -1784,6 +1784,17 @@ WAKE = re.compile(r"/?(?:wake|reincarnate)(?:\s+([A-Za-z0-9][A-Za-z0-9._-]*)(?:/
 def _commands(home, facts, thread, default, *, parked=False, held=False, authorize=None):
     """Consume direct-chat controls before any state-specific routing."""
     from .adapters import at_birth
+    if isinstance(facts, LedgerView):
+        inputs = (facts.person_inputs.get(thread, 0), facts.person_inputs.get("*", 0))
+        if not any(inputs):
+            return []
+        revision = (*inputs, parked, held)
+        key = ("command-scan", thread)
+        if facts.cache.get(key) == revision:
+            return []
+        facts.cache[key] = revision
+    elif not any(str(f.data.get("from", "")).startswith(("person:", "p-")) for f in kind_facts(facts, "letter")):
+        return []
     dms = list(_person_dms(home, facts, thread))
     if not dms:
         return []
@@ -1937,6 +1948,19 @@ def _wake_choice(facts, thread):
     Read from the ledger, so a crash between the wake and the next lease
     still converges: the parked gen ends, and the router leases this body.
     """
+    if isinstance(facts, LedgerView):
+        key = ("wake-choice", thread)
+        revision = tuple(len(facts.by_kind[k]) for k in ("lease", "letter.disposed", "body.moved"))
+        prior = facts.cache.get(key)
+        if prior is not None and prior[0] == revision:
+            return prior[1]
+        result = _uncached_wake_choice(facts, thread)
+        facts.cache[key] = (revision, result)
+        return result
+    return _uncached_wake_choice(facts, thread)
+
+
+def _uncached_wake_choice(facts, thread):
     last = max((i for i, f in enumerate(facts) if f.kind == "lease" and f.data.get("thread") == thread),
                default=-1)
     # A person's manual wake always wins over an automatic decision.
@@ -2293,10 +2317,13 @@ def _quota_move_notice(home, facts, move):
     can = f"To go back after reset: wake {body_label(d['from_shell'], d['from_core'])}."
     notice(home, facts, "quota-move", move.id, what, can, thread=d["thread"], passive=True)
     # The person waiting in a direct chat must see the same recovery receipt.
+    from .body_limits import dry_core
+    limit = dry_core(facts, d["from_shell"], d["from_core"])
+    spell = f"core:{d['from_shell']}:{d['from_core']}:{limit['spell']}" if limit and limit.get("spell") else move.id
     channels = set()
     for letter, channel in list(_person_dms(home, facts, d["thread"])):
         if channel not in channels:
-            notice(home, facts, "quota-move", f"{move.id}:{channel}", what, can,
+            notice(home, facts, "quota-move", f"{spell}:{channel}", what, can,
                    about=letter, channel=channel, passive=True)
             channels.add(channel)
 

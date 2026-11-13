@@ -57,6 +57,11 @@ Every lease records `body_source`: wake word, seat pin, the exact `model.*`
 preference, config body, runtime default, or quota recovery. Failed and switched
 notices expose that source. Quota failure evidence in `attempt.ended` records
 shell, core and reset estimate; it survives restart. The provider's stated local
-clock reset is used when present; an unknown reset holds the core for 15 minutes
-before probing again. Transport failures keep the existing one retry; explicit
-authentication failures notify immediately.
+clock reset is used when present. Unknown resets start with a 15-minute hold
+and double on consecutive refusals of that core, up to one week and capped at
+a known weekly reset when available. A successful answer ends its dry spell.
+The waiting direct chat receives one recovery message per core dry spell,
+while the thread records each move. Quiet running ticks use per-thread person
+input indexes and revision caches rather than walking old letters or wake history.
+Transport failures keep the existing one retry; explicit authentication failures
+notify immediately.
