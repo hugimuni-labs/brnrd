@@ -322,6 +322,9 @@ def test_parked_body_starts_when_its_gauge_refills_before_until(tmp_path, monkey
 def test_letter_during_park_is_told_and_wake_starts_the_leased_body(tmp_path, monkeypatch):
     starts = tmp_path / "home/starts"
     home = _parked_home(tmp_path, monkeypatch, run=_claude_starts(starts))
+    from brr.loom.runtime import adapters, usage
+    monkeypatch.setattr(adapters, "installed_shells", lambda home: ["claude", "spare"])
+    monkeypatch.setattr(usage, "CACHE_TTL", 30)
     loom = Loom(home.root)
     loom.start()
     try:
@@ -332,7 +335,7 @@ def test_letter_during_park_is_told_and_wake_starts_the_leased_body(tmp_path, mo
         told = next(m for m in home.sent if m["re"] == "telegram:42:again")
         assert "Claude's session limit is reached" in told["body"]
         assert "Reply wake to retry now" in told["body"]
-        assert "shell" not in told["body"]
+        assert "Reply continue on spare to carry on there now." in told["body"]
         assert "codex" not in told["body"]  # a shell with no gauge is not enabled
         time.sleep(0.3)
         assert [m["re"] for m in home.sent] == ["telegram:42:park", "telegram:42:again"]
@@ -437,10 +440,13 @@ def _held_dry(home, loom):
 
 def test_body_held_dry_in_its_stop_hook_tells_the_person_of_each_letter(tmp_path, monkeypatch):
     home = _parked_home(tmp_path, monkeypatch, run=_held_body(tmp_path / "home/turns"), left="100")
+    from brr.loom.runtime import adapters, usage
+    monkeypatch.setattr(adapters, "installed_shells", lambda home: ["claude", "spare"])
     loom = Loom(home.root)
     loom.start()
     try:
         log, before = _held_dry(home, loom)
+        monkeypatch.setattr(usage, "CACHE_TTL", 30)
         wait_until(lambda: (home.root / "loom/usage/spare.json").is_file(), 10, loom.dump)
         home.person.says("again", "are you there?")
         wait_until(lambda: any(m["re"] == "telegram:42:again" for m in home.sent), 10, loom.dump)
@@ -448,7 +454,7 @@ def test_body_held_dry_in_its_stop_hook_tells_the_person_of_each_letter(tmp_path
         assert "Claude's session limit is reached" in told["body"]
         assert "I'll keep your message" in told["body"]
         assert "Reply wake to retry now" in told["body"]
-        assert "shell" not in told["body"]
+        assert "Reply continue on spare to carry on there now." in told["body"]
         home.person.says("more", "still?")
         wait_until(lambda: any(m["re"] == "telegram:42:more" for m in home.sent), 10, loom.dump)
         time.sleep(0.5)
@@ -553,7 +559,7 @@ def test_printed_continue_reply_moves_the_thread(tmp_path, monkeypatch):
         reply = re.search(r"Reply (continue on [A-Za-z0-9._-]+) to carry on there now.", text)
         assert reply, text
         assert not any(word in text.lower() for word in ("body", "shell", "park"))
-        home.person.says("continue", reply[1])
+        home.person.says("continue", reply[1].capitalize() + ".")
         wait_until(lambda: _start_lines(home.starts), 10, loom.dump)
         assert _leases(loom) == [(1, "claude", "echo"), (2, "spare", "")]
         owed = {str(l.data["id"]) for l in mail(home.root, loom.facts(), "inbox")}

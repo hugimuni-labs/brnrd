@@ -160,3 +160,9 @@ def test_continue_only_offers_installed_healthy_targets(tmp_path, monkeypatch, i
     monkeypatch.setattr(usage, "reading", cached)
     assert _continue_targets(Home(tmp_path), [], "work", ("claude", "opus")) == (
         [("codex", "")] if offered else [])
+
+
+@pytest.mark.parametrize("text", ["Continue on Codex.", "continue on codex please", " continue on Codex!  "])
+def test_conversational_continue_punctuation(text):
+    from brr.loom.runtime.loom import CONTINUE
+    assert CONTINUE.fullmatch(text.strip())[1].lower() == "codex"

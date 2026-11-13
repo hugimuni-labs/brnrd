@@ -1742,7 +1742,7 @@ def _continue_targets(home, facts, thread, leased):
     return targets
 
 
-CONTINUE = re.compile(r"continue on ([A-Za-z0-9][A-Za-z0-9._-]*)", re.IGNORECASE)
+CONTINUE = re.compile(r"continue on ([A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9_-])?)(?:\s+please)?[.!?]*", re.IGNORECASE)
 
 
 WAKE = re.compile(r"/?wake(?:\s+([A-Za-z0-9][A-Za-z0-9._-]*)(?:/(\S+))?)?", re.IGNORECASE)
