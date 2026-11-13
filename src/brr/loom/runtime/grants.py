@@ -53,16 +53,26 @@ class Grant:
     person: str
 
 
+_OWNERS: dict[Path, tuple[str, frozenset[str]]] = {}
+
+
 def owners(self_repo: Path) -> set[str]:
     """``person:<name>`` for each ``people/<name>/agreement.md`` on the self's main."""
-    from .guards import _git
     from .lifecycle import main_tip
+    from .guards import _git
     self_repo = Path(self_repo)
     if not (self_repo / ".git").exists():
         return set()
-    listing = _git(self_repo, "ls-tree", "-r", "--name-only", main_tip(self_repo), "people/")
-    return {f"person:{path.split('/')[1]}" for path in listing.stdout.splitlines()
-            if re.fullmatch(r"people/[^/]+/agreement\.md", path)}
+    tip = main_tip(self_repo)
+    prior = _OWNERS.get(self_repo)
+    if prior is not None and prior[0] == tip:
+        return set(prior[1])
+    listing = _git(self_repo, "ls-tree", "-r", "--name-only", tip, "people/")
+    found = frozenset(f"person:{path.split('/')[1]}" for path in listing.stdout.splitlines()
+                      if re.fullmatch(r"people/[^/]+/agreement\.md", path))
+    if listing.returncode == 0:
+        _OWNERS[self_repo] = (tip, found)
+    return set(found)
 
 
 def names(text: str, target: str) -> bool:

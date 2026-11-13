@@ -1997,8 +1997,8 @@ def _render_boundary(home, facts, strand, gen, context):
 
 def park_reminders(facts, thread):
     from .waits import live
-    from .wishes import wishes
-    return "\n".join(read["wait"]["reminder"] for wish, read in live(wishes(facts))
+    from .wishes import told
+    return "\n".join(read["wait"]["reminder"] for wish, read in live(told(facts))
                      if wish.thread == thread and read.get("wait", {}).get("reminder"))
 
 

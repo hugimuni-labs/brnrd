@@ -1,5 +1,6 @@
 """A park names what it waits on; the loom checks it every tick and wakes the thread once."""
 import json
+import pytest
 from datetime import datetime, timedelta, timezone
 
 from brr.daemon2.facts import Fact
@@ -10,6 +11,82 @@ from brr.loom.runtime.wishes import wishes
 from test_wishes import command, heard, ledger, view  # noqa: F401  (ledger is a fixture)
 
 REPO = "hugimuni-labs/brnrd"
+
+
+def test_indexed_observer_skips_unchanged_and_resolved_parks(ledger, monkeypatch):
+    from brr.loom.runtime.ledger import LedgerView
+    home, seat = ledger
+    ident = heard(home, seat, "Wait for the forge")
+    read = park(home, seat, ident, "--wait", f"pr:{REPO}#7")
+    facts = LedgerView(read_facts(home))
+    calls, real = [], waits.outcome
+
+    def outcome(*args):
+        calls.append(args[0].id)
+        return real(*args)
+
+    monkeypatch.setattr(waits, "outcome", outcome)
+    now = datetime.now(timezone.utc)
+    waits.observe_waits(home, facts, True, now=now)
+    assert calls == [ident]
+    calls.clear()
+    waits.observe_waits(home, facts, True, now=now + timedelta(seconds=1))
+    assert calls == []
+    forge = {f"pr:{REPO}#7": {"state": "open"}}
+    waits.observe_waits(home, facts, True, forge, now)
+    assert calls == [ident]
+    calls.clear()
+    forge[f"pr:{REPO}#7"]["state"] = "closed"
+    waits.observe_waits(home, facts, True, forge, now)
+    assert calls == [ident]
+    # A repair replaces the view: the already written notice is still sufficient.
+    facts = LedgerView(read_facts(home))
+    calls.clear()
+    waits.observe_waits(home, facts, True, forge, now + timedelta(days=8))
+    assert calls == []
+    assert notice_id("wait", waits.subject(view(home, ident), read)) in facts.by_id
+
+
+def test_indexed_observer_checks_files_and_deadlines_at_the_next_tick(ledger, tmp_path):
+    from brr.loom.runtime.ledger import LedgerView
+    home, seat = ledger
+    clock, file = heard(home, seat, "Clock"), heard(home, seat, "File")
+    now = datetime.now(timezone.utc).replace(microsecond=0)
+    due = now + timedelta(minutes=10)
+    path = tmp_path / "finished"
+    park(home, seat, clock, "--wait", "at:" + waits._iso(due))
+    park(home, seat, file, "--wait", f"file:{path}")
+    facts = LedgerView(read_facts(home))
+    waits.observe_waits(home, facts, True, now=now)
+    before = {f.id for f in read_facts(home)}
+    path.write_text("")
+    waits.observe_waits(home, facts, True, now=due - timedelta(seconds=1))
+    assert {f.id for f in read_facts(home)} == before
+    path.write_text("0\n")
+    waits.observe_waits(home, facts, True, now=due)
+    letters = [f for f in read_facts(home) if f.id not in before and f.kind == "letter"]
+    assert len(letters) == 2
+
+
+def test_indexed_observer_retries_a_failed_notice_on_the_next_tick(ledger, monkeypatch):
+    from brr.loom.runtime import loom
+    from brr.loom.runtime.ledger import LedgerView
+    home, seat = ledger
+    ident = heard(home, seat, "Await the merge")
+    park(home, seat, ident, "--wait", f"pr:{REPO}#7")
+    facts = LedgerView(read_facts(home))
+    real = loom.notice
+
+    def broken(*args, **kwargs):
+        raise OSError("disk unavailable")
+
+    monkeypatch.setattr(loom, "notice", broken)
+    forge = {f"pr:{REPO}#7": {"state": "closed"}}
+    with pytest.raises(OSError):
+        waits.observe_waits(home, facts, True, forge)
+    monkeypatch.setattr(loom, "notice", real)
+    waits.observe_waits(home, facts, True, forge)
+    assert any("wait on " + ident in f.data.get("body", "") for f in read_facts(home))
 
 
 def later(**span):
