@@ -122,6 +122,9 @@ keeps the conversation and prepared worktree. Quality escalation does not
 silently opt into paid relay compute.
 
 Quota is part of the live run posture and is shown to the resident before work
-starts. Automatic fallback is deliberately narrow: classified local
-quota/auth/provider failures may retry on another local Runner in the same or a
-cheaper class. Paid relay remains behind explicit consent.
+starts. When a subscription runs out, continuation on another subscription is
+off by default: the person can reply to the quota notice to allow one move, or
+explicitly permit automatic moves in their quota preferences. See
+[quota continuation](https://github.com/hugimuni-labs/brnrd/blob/main/docs/quota-continuation.md)
+for permissions, target requirements, and the ledger receipt. Paid relay remains
+behind explicit consent.

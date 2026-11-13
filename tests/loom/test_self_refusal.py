@@ -81,14 +81,15 @@ def test_intrinsically_oversized_letter_keeps_input_failure_path(tmp_path):
     assert not loom.errors
 
 
-def test_quota_failure_refreshes_gauge_keeps_ask_and_parks(tmp_path):
+@pytest.mark.parametrize("move_allowed, crash_after_move", [(False, False), (True, False), (True, True)])
+def test_quota_failure_refreshes_gauge_keeps_ask_and_parks(tmp_path, monkeypatch, move_allowed, crash_after_move):
     import json
     import sys
     import time
     from datetime import datetime, timezone
     from brr.loom.runtime import usage
     root = tmp_path / 'home'
-    write_thread(root, 'work', 'Quota proof', '', wait='0')
+    write_thread(root, 'work', 'Quota proof', 'answer-fast', wait='0')
     seat = root / 'self/threads/work/seat'
     seat.write_text('body: quota/proof\n')
     git(root / 'self', 'add', 'threads')
@@ -111,8 +112,35 @@ def test_quota_failure_refreshes_gauge_keeps_ask_and_parks(tmp_path):
     cache.write_text(json.dumps({'at': time.time(), 'windows': [
         {'name': 'session', 'left_pct': 4, 'resets_at': reset}]}))
     cache.with_suffix('.lock').write_text(str(time.time()))
+    if move_allowed:
+        import os
+        import shutil
+        from pathlib import Path
+        backup = root / "loom/bodies/backup"
+        backup.mkdir(parents=True)
+        bundled = Path(usage.__file__).parent / "bodies/fake"
+        for name in ("run", "jack"):
+            shutil.copy2(bundled / name, backup / name)
+        executable = tmp_path / "backup"
+        executable.write_text("#!/bin/sh\nexit 0\n")
+        executable.chmod(0o755)
+        monkeypatch.setenv("PATH", f"{tmp_path}{os.pathsep}{os.environ['PATH']}")
+        (backup / "usage").write_text(f"#!{sys.executable}\nimport json\nprint(json.dumps({{'windows': [{{'name': 'session', 'left_pct': 90, 'resets_at': {reset!r}}}]}}))\n")
+        (backup / "usage").chmod(0o755)
+        (cache.parent / "backup.json").write_text(json.dumps({"at": time.time(), "windows": [
+            {"name": "session", "left_pct": 90, "resets_at": reset}]}))
+        preferences = root / "loom/preferences.toml"
+        preferences.write_text('bodies.order = ["quota", "backup"]\n')
     ident = inject_letter(root, to='thread:work', body='Please answer')
     loom = Loom(root)
+    from brr.loom.runtime import loom as runtime
+    real_end = runtime._hand_end
+    if crash_after_move:
+        def stop_after_decision(x, command, step):
+            if any(f.kind == "body.moved" and f.data.get("strand") == x.o.strand for f in x.facts):
+                return False
+            return real_end(x, command, step)
+        monkeypatch.setitem(runtime.HANDS, "end", stop_after_decision)
     loom.start()
     try:
         wait_until(lambda: any(f.kind == 'body.parked' for f in loom.facts()), 15, loom.dump)
@@ -125,6 +153,53 @@ def test_quota_failure_refreshes_gauge_keeps_ask_and_parks(tmp_path):
         assert parked.data['until'] == usage.dry_until(loom.home, 'quota')
         assert json.loads(cache.read_text())['windows'][0]['left_pct'] == 0
         assert not any(f.id.startswith(('loom/bounce-', 'loom/failed-message-')) for f in facts)
+        assert not any(f.kind == "body.moved" for f in facts)
+        if not move_allowed:
+            # No quota preferences: post-exit exhaustion still parks the same
+            # generation, and a fresh refill retries its original shell.
+            loom.halt()
+            from brr.loom.runtime.bodies import TABLE, row_for
+            observation, context = runtime._observe_body(
+                loom.home, facts, parked.data['strand'], 'work', parked.data['gen'], {})
+            assert observation.gauge == 'empty'
+            assert not observation.target
+            assert context.shell == 'quota'
+            assert TABLE[row_for(facts, observation)].next == 'parked'
+            value = json.loads(cache.read_text())
+            value['at'] = time.time()
+            value['windows'][0]['left_pct'] = 75
+            cache.write_text(json.dumps(value))
+            observation, context = runtime._observe_body(
+                loom.home, facts, parked.data['strand'], 'work', parked.data['gen'], {})
+            assert observation.gauge == 'ok'
+            assert not observation.target
+            assert context.shell == 'quota'
+            assert TABLE[row_for(facts, observation)].next == 'running'
+        if move_allowed:
+            # Permission arrives after the real failure/park, without a restart.
+            preferences.write_text(preferences.read_text() + 'quota.work = ["backup"]\n')
+            from brr.loom.runtime.adapters import quota_choice
+            assert quota_choice(loom.home, "work", "quota") == ("backup", "")
+            if crash_after_move:
+                wait_until(lambda: any(f.kind == "body.moved" for f in loom.facts()), 15, loom.dump)
+                loom.halt()
+                monkeypatch.setitem(runtime.HANDS, "end", real_end)
+                loom = Loom(root)
+                loom.start()
+            wait_until(lambda: letter_owners(loom.facts(), main_snapshot(loom.home))[ident].done,
+                       20, loom.dump)
+            facts = loom.facts()
+            moves = [f for f in facts if f.kind == "body.moved"]
+            assert len(moves) == 1
+            move = moves[0]
+            assert move.data == dict(thread="work", strand=parked.data["strand"], gen=parked.data["gen"],
+                                     from_shell="quota", from_core="proof", to_shell="backup", to_core="",
+                                     window="session", left_pct=0, until=parked.data["until"], park=parked.id)
+            successor = next(f for f in facts if f.kind == "lease" and f.data.get("shell") == "backup")
+            assert successor.data["strand"] != parked.data["strand"] or successor.data["gen"] != parked.data["gen"]
+            assert any(f.kind == "body.started" and f.data["strand"] == successor.data["strand"] for f in facts)
+            assert any(f.kind == "letter" and "continuing on backup" in str(f.data.get("body")) for f in facts)
+
     finally:
         loom.halt()
         kill_bodies(loom)

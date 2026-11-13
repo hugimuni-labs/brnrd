@@ -65,6 +65,7 @@ REGISTRY = (
     _kind("body.started",      "body",    "strand gen pid shell core readme lstart",          "loom",        "machine", once=True),
     _kind("body.leaving",      "body",    "strand gen deadline",                              "loom",        "machine"),
     _kind("body.stayed",       "body",    "strand gen",                                       "loom",        "machine"),
+    _kind("body.moved",        "body",    "thread strand gen from_shell from_core to_shell to_core window left_pct until park", "loom", "global", once=True),
     _kind("body.stopped",      "body",    "strand gen pid why",                               "loom",        "machine", once=True),
     _kind("body.unidentified", "body",    "strand gen pid why",                               "loom",        "machine"),
     _kind("body.exited",       "body",    "strand gen code why? failure_origin? failure_letters?",                             "loom",        "global",  once=True),

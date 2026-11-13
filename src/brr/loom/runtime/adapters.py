@@ -1,6 +1,7 @@
 """A shell is a folder; a home's folder wins over the bundled one."""
 
 import os
+from functools import lru_cache
 from pathlib import Path
 import re
 
@@ -157,16 +158,36 @@ _ROLE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*")
 
 
 def _preferences(home):
-    """``loom/preferences.toml``: model keys, ``bodies.order``, ``spend.burn``, ``spend.keep``.
+    """``loom/preferences.toml``: model keys, ``bodies.order``, ``spend.burn``, ``spend.keep``, ``quota.<role>``.
 
     ``spend.keep`` inside ``spend.burn`` is a ``ConfigError``: the keep shell is
     not a handoff target, so the file cannot name it as both.
     """
-    from .config import ConfigError, read_values
     path = home.root / "loom" / "preferences.toml"
+    try:
+        stat = path.stat()
+        stamp = (stat.st_ino, stat.st_mtime_ns, stat.st_ctime_ns, stat.st_size)
+    except FileNotFoundError:
+        stamp = None
+    return _checked_preferences(path, stamp)
+
+
+@lru_cache(maxsize=64)
+def _checked_preferences(path: Path, stamp):
+    """Reparse and validate only when the preferences file changes."""
+    from .config import ConfigError, read_values
     found = read_values(path)
-    known = "model.default, model.inbox, model.<thread>, bodies.order, spend.burn, spend.keep"
+    known = "model.default, model.inbox, model.<thread>, bodies.order, spend.burn, spend.keep, quota.<role>"
     for key, value in found.items():
+        if key.startswith("quota.") and _ROLE.fullmatch(key[6:]):
+            if not isinstance(value, list) or not all(isinstance(v, str) for v in value):
+                raise ConfigError(f"{path}: {key} is a list of bodies, e.g. [\"codex\"]")
+            try:
+                for body in value:
+                    parse_body(body)
+            except ValueError as exc:
+                raise ConfigError(f"{path}: {key}: {exc}") from exc
+            continue
         if key == "bodies.order":
             if not (isinstance(value, list) and all(isinstance(v, str) and _ROLE.fullmatch(v) for v in value)):
                 raise ConfigError(f"{path}: bodies.order is a list of shells, e.g. [\"claude\", \"codex\"]")
@@ -227,6 +248,38 @@ def fall_down(home, choice: tuple[str, str], usable) -> tuple[str, str]:
         if shell != choice[0] and usable(shell):
             return shell, ""
     return choice
+
+
+def quota_choice(home, thread: str, source: str) -> tuple[str, str] | None:
+    """An explicitly permitted, installed target with a fresh healthy gauge.
+
+    Inbox and body-pinned seats never inherit the default permission.
+    Empty role lists disable moves. Birth and spend preferences grant
+    no authority here; unknown or failed collectors never authorize a move.
+    """
+    from .config import load_config
+    from .usage import collector_failed, reading
+    found = _preferences(home)[1]
+    roles = [thread]
+    if thread == home.main_thread():
+        roles.append("inbox")
+    elif (f"quota.{thread}" not in found and found.get("quota.default")
+          and not any(key == "body" for key, _ in _entries(seat_text(home, thread)))):
+        roles.append("default")
+    targets = next((found[f"quota.{role}"] for role in roles if f"quota.{role}" in found), [])
+    if not targets:
+        return None
+    installed = set(installed_shells(home))
+    floor = load_config(home.root).hold_floor_pct
+    for target in targets:
+        shell, core = parse_body(target)
+        if shell == source or shell not in installed:
+            continue
+        gauge = reading(home, shell, cached_only=True)
+        if (gauge and not collector_failed(gauge) and gauge.get("windows")
+                and all(w["left_pct"] > floor for w in gauge["windows"])):
+            return shell, core
+    return None
 
 
 def preferred_body(home, thread: str) -> str:

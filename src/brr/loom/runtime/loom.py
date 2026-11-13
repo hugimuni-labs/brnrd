@@ -1577,11 +1577,12 @@ def _observe_body(home, facts, strand, thread, gen, bodies, *, choice=None, forc
     fenced = (_lease_lost(home, facts) or handed) and pin is None
     default = choice or ("fake", "haiku")
     shell, core = lease.get("shell", default[0]), lease.get("core", default[1])
+    # A park consumes no fuel; retain the post-exit reading through its TTL.
     if isinstance(facts, LedgerView):
-        after = max(facts.latest_at.get((kind, strand), 0) for kind in ("body.exited", "body.parked"))
+        after = facts.latest_at.get(("body.exited", strand), 0)
     else:
         after = max((datetime.fromisoformat(f.at).timestamp() for f in facts
-                     if f.data.get("strand") == strand and f.kind in {"body.exited", "body.parked"}), default=0)
+                     if f.data.get("strand") == strand and f.kind == "body.exited"), default=0)
     # A live body asleep in its own stop hook is parked too: the jack waits
     # for fuel there rather than lose the conversation (jack.py, _poll).
     held = state.name == "running" and alive and not fenced and _held_dry(room)
@@ -1610,6 +1611,14 @@ def _observe_body(home, facts, strand, thread, gen, bodies, *, choice=None, forc
     if empty:
         from .usage import dry_until
         until = dry_until(home, shell) or now + 900
+    # Only an existing, still-empty park may choose an automatic target.
+    target = None
+    if state.name == "parked" and not (woken or force or closed or fenced or away):
+        from .adapters import quota_choice
+        target = quota_choice(home, thread, shell) if empty else None
+    move = fact_for(facts, "body.moved", strand, gen)
+    if move and woken == (move.data["to_shell"], move.data["to_core"]):
+        _quota_move_notice(home, facts, move)
     pid = int(start.data.get("pid") or 0) if start else 0
     proven = None
     # A stop on record with the body still alive is a signal that was never
@@ -1629,12 +1638,12 @@ def _observe_body(home, facts, strand, thread, gen, bodies, *, choice=None, forc
     context = SimpleNamespace(thread=thread, shell=shell, core=core, pid=pid, empty=empty, fuel=fuel,
                               why=(closing_commit(home, thread)[1] or f"thread {thread} settled") if closed
                               else _HANDED if handed else _FENCED if fenced else _AWAY.format(pin) if away else "",
-                              failure="", repos=lease.get("repos"), pressure=str(squeeze or ""))
+                              failure="", repos=lease.get("repos"), pressure=str(squeeze or ""), target=target)
     o = Observation(strand, gen, alive, closed, "refreshing" if gauge is None else "empty" if empty
                     else "ok" if gauge["windows"] else "unknown",
                     now, proven, until=until, force=force, stop_grace=config.stop_grace,
                     woken="/".join(woken) if woken else "", fenced=fenced, held=held, away=away,
-                    handed=handed, pressed=squeeze is not None)
+                    handed=handed, pressed=squeeze is not None, target=body_label(*target) if target else "")
     row = TABLE[row_for(facts, o)]
     if row.next == "parked" and not fenced:
         park = fact_for(facts, "body.parked", strand, gen)
@@ -1699,15 +1708,41 @@ def _park_notice(home, facts, thread, leased, park, letters, *, held=False):
     The loom's park and a body's dry hold in its stop hook say the same words.
     """
     window, left, when = park
-    what = (f"Out of {leased[0]} {window} fuel ({left:g}% left) "
-            f"until about {datetime.fromtimestamp(when).astimezone():%H:%M}. "
-            f"Your letter is kept on thread {thread} and is answered when it refills.")
-    lines = _wake_lines(home, facts, thread, leased, park, held=held)
-    can = (("Reply wake to go on now; the turn may fail on fuel." if held else "Reply wake to start it now.")
-           if len(lines) == 1 else "Reply with one of:\n" + "\n".join(lines))
+    name = _subscription_name(leased[0])
+    what = (f"{name}'s {window} limit is reached until about "
+            f"{datetime.fromtimestamp(when).astimezone():%H:%M}. "
+            "I'll keep your message and carry on when it resets.")
+    choices = _continue_targets(home, facts, thread, leased)
+    can = " ".join(f"Reply continue on {_subscription_name(shell)} to carry on there now."
+                   for shell, _core in choices)
+    can = (can + " " if can else "") + "Reply wake to retry now; the limit may still prevent it."
     for letter, channel in letters:
         notice(home, facts, "parked", letter.id, what, can,
                about=letter, channel=channel, passive=True)
+
+
+def _subscription_name(shell):
+    return {"claude": "Claude", "codex": "Codex", "grok": "Grok", "vibe": "Vibe"}.get(shell, shell)
+
+
+def _continue_targets(home, facts, thread, leased):
+    """Installed alternatives with fresh quota; inspection never starts a probe."""
+    from .adapters import installed_shells
+    from .config import load_config
+    from .usage import collector_failed, reading
+    floor = load_config(home.root).hold_floor_pct
+    targets = []
+    for shell in installed_shells(home):
+        if shell == leased[0]:
+            continue
+        gauge = reading(home, shell, cached_only=True)
+        if (gauge and not collector_failed(gauge) and gauge.get("windows")
+                and all(w["left_pct"] > floor for w in gauge["windows"])):
+            targets.append((shell, _core_for(home, facts, thread, shell, leased) or ""))
+    return targets
+
+
+CONTINUE = re.compile(r"continue on ([A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9_-])?)(?:\s+please)?[.!?]*", re.IGNORECASE)
 
 
 WAKE = re.compile(r"/?wake(?:\s+([A-Za-z0-9][A-Za-z0-9._-]*)(?:/(\S+))?)?", re.IGNORECASE)
@@ -1720,11 +1755,19 @@ def _wake_letter(home, facts, thread, leased, letter, channel, *, parked=True, h
     chose; that letter's text stays owed, so its disposition has its own id.
     """
     chosen = letter.data.get("wake")
-    said = WAKE.fullmatch(f"wake {chosen}" if chosen else str(letter.data.get("body", "")).strip())
+    text = str(letter.data.get("body", "")).strip()
+    continuation = CONTINUE.fullmatch(text) if not chosen else None
+    said = WAKE.fullmatch(f"wake {chosen}" if chosen else text)
     ident = f"{letter.id}#wake" if chosen else letter.id
-    if not said or any(f.id == f"letter.disposed:{ident}" for f in facts):
+    if not (said or continuation) or any(f.id == f"letter.disposed:{ident}" for f in facts):
         return None
-    named = _wake_body(home, facts, thread, leased, said)
+    if continuation:
+        shell = continuation[1].lower()
+        named = next((target for target in _continue_targets(home, facts, thread, leased)
+                      if target[0] == shell),
+                     f"{_subscription_name(shell)} isn't available with a healthy limit right now.")
+    else:
+        named = _wake_body(home, facts, thread, leased, said)
     disposition = {"id": ident, "outcome": "done"}
     if isinstance(named, str):
         notice(home, facts, "wake-refused", letter.id, f"{named} Nothing was started.",
@@ -1811,6 +1854,7 @@ def _wake_choice(facts, thread):
     """
     last = max((i for i, f in enumerate(facts) if f.kind == "lease" and f.data.get("thread") == thread),
                default=-1)
+    # A person's manual wake always wins over an automatic decision.
     for f in reversed(facts[last + 1:]):
         if f.kind == "letter.disposed" and f.by.startswith("loom:"):
             for d in f.data.get("dispositions", ()):
@@ -1820,7 +1864,8 @@ def _wake_choice(facts, thread):
                         return parse_body(d["body"])
                     except ValueError:
                         continue
-    return None
+    return next(((f.data["to_shell"], f.data["to_core"]) for f in reversed(facts[last + 1:])
+                 if f.kind == "body.moved" and f.data.get("thread") == thread), None)
 
 
 def _person_dms(home, facts, thread):
@@ -2153,6 +2198,28 @@ def _hand_record(x, command, step):
     x.facts.append(_record(x.home, kind.kind, data, ident))
 
 
+def _quota_move_notice(home, facts, move):
+    d = move.data
+    notice(home, facts, "quota-move", move.id,
+           f"Thread {d['thread']}: {body_label(d['from_shell'], d['from_core'])} "
+           f"exhausted {d['window']} fuel ({d['left_pct']:g}% left); "
+           f"continuing on {body_label(d['to_shell'], d['to_core'])}.",
+           "A fresh body boots from the thread README and owed letters; model preferences stay as chosen.",
+           thread=d["thread"], passive=True)
+
+
+def _hand_move(x, command, step):
+    park = fact_for(x.facts, "body.parked", x.o.strand, x.o.gen)
+    data = dict(thread=x.c.thread, strand=x.o.strand, gen=x.o.gen,
+                from_shell=x.c.shell, from_core=x.c.core,
+                to_shell=x.c.target[0], to_core=x.c.target[1],
+                window=x.c.empty["name"], left_pct=x.c.empty["left_pct"],
+                until=x.o.until, park=park.id)
+    move = _record(x.home, step.records, data, f"body.moved:{x.o.strand}:{x.o.gen}")
+    x.facts.append(move)
+    _quota_move_notice(x.home, x.facts, move)
+
+
 def _hand_started(x, command, step):
     c = x.c
     x.values["lstart"] = _ps_field(x.proc.pid, "lstart") or ""
@@ -2251,7 +2318,7 @@ def _hand_release(x, command, step):
 
 
 HANDS = {
-    "prepare": _hand_prepare, "show": _hand_show, "spawn": _hand_spawn, "started": _hand_started,
+    "move": _hand_move, "prepare": _hand_prepare, "show": _hand_show, "spawn": _hand_spawn, "started": _hand_started,
     "record": _hand_record, "signal": _hand_signal, "let_go": _hand_let_go, "collect": _hand_collect, "drain": _hand_drain,
     "end": _hand_end, "drained": _hand_drained, "release": _hand_release,
 }
