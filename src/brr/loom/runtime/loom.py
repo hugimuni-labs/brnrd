@@ -1708,15 +1708,41 @@ def _park_notice(home, facts, thread, leased, park, letters, *, held=False):
     The loom's park and a body's dry hold in its stop hook say the same words.
     """
     window, left, when = park
-    what = (f"Out of {leased[0]} {window} fuel ({left:g}% left) "
-            f"until about {datetime.fromtimestamp(when).astimezone():%H:%M}. "
-            f"Your letter is kept on thread {thread} and is answered when it refills.")
-    lines = _wake_lines(home, facts, thread, leased, park, held=held)
-    can = (("Reply wake to go on now; the turn may fail on fuel." if held else "Reply wake to start it now.")
-           if len(lines) == 1 else "Reply with one of:\n" + "\n".join(lines))
+    name = _subscription_name(leased[0])
+    what = (f"{name}'s {window} limit is reached until about "
+            f"{datetime.fromtimestamp(when).astimezone():%H:%M}. "
+            "I'll keep your message and carry on when it resets.")
+    choices = _continue_targets(home, facts, thread, leased)
+    can = " ".join(f"Reply continue on {_subscription_name(shell)} to carry on there now."
+                   for shell, _core in choices)
+    can = (can + " " if can else "") + "Reply wake to retry now; the limit may still prevent it."
     for letter, channel in letters:
         notice(home, facts, "parked", letter.id, what, can,
                about=letter, channel=channel, passive=True)
+
+
+def _subscription_name(shell):
+    return {"claude": "Claude", "codex": "Codex", "grok": "Grok", "vibe": "Vibe"}.get(shell, shell)
+
+
+def _continue_targets(home, facts, thread, leased):
+    """Installed alternatives with fresh quota; inspection never starts a probe."""
+    from .adapters import installed_shells
+    from .config import load_config
+    from .usage import collector_failed, reading
+    floor = load_config(home.root).hold_floor_pct
+    targets = []
+    for shell in installed_shells(home):
+        if shell == leased[0]:
+            continue
+        gauge = reading(home, shell, cached_only=True)
+        if (gauge and not collector_failed(gauge) and gauge.get("windows")
+                and all(w["left_pct"] > floor for w in gauge["windows"])):
+            targets.append((shell, _core_for(home, facts, thread, shell, leased) or ""))
+    return targets
+
+
+CONTINUE = re.compile(r"continue on ([A-Za-z0-9][A-Za-z0-9._-]*)", re.IGNORECASE)
 
 
 WAKE = re.compile(r"/?wake(?:\s+([A-Za-z0-9][A-Za-z0-9._-]*)(?:/(\S+))?)?", re.IGNORECASE)
@@ -1729,11 +1755,19 @@ def _wake_letter(home, facts, thread, leased, letter, channel, *, parked=True, h
     chose; that letter's text stays owed, so its disposition has its own id.
     """
     chosen = letter.data.get("wake")
-    said = WAKE.fullmatch(f"wake {chosen}" if chosen else str(letter.data.get("body", "")).strip())
+    text = str(letter.data.get("body", "")).strip()
+    continuation = CONTINUE.fullmatch(text) if not chosen else None
+    said = WAKE.fullmatch(f"wake {chosen}" if chosen else text)
     ident = f"{letter.id}#wake" if chosen else letter.id
-    if not said or any(f.id == f"letter.disposed:{ident}" for f in facts):
+    if not (said or continuation) or any(f.id == f"letter.disposed:{ident}" for f in facts):
         return None
-    named = _wake_body(home, facts, thread, leased, said)
+    if continuation:
+        shell = continuation[1].lower()
+        named = next((target for target in _continue_targets(home, facts, thread, leased)
+                      if target[0] == shell),
+                     f"{_subscription_name(shell)} isn't available with a healthy limit right now.")
+    else:
+        named = _wake_body(home, facts, thread, leased, said)
     disposition = {"id": ident, "outcome": "done"}
     if isinstance(named, str):
         notice(home, facts, "wake-refused", letter.id, f"{named} Nothing was started.",

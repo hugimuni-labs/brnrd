@@ -141,3 +141,22 @@ def test_source_shell_is_skipped_even_with_another_core(tmp_path, monkeypatch):
     monkeypatch.setattr(adapters, 'installed_shells', lambda home: ['claude', 'codex'])
     monkeypatch.setattr(usage, 'reading', lambda *args, **kwargs: {'windows': [{'left_pct': 75}]})
     assert adapters.quota_choice(Home(tmp_path), 'work', 'claude') == ('codex', '')
+
+
+@pytest.mark.parametrize("installed, gauge, offered", [
+    ([], {"windows": [{"left_pct": 70}]}, False),
+    (["codex"], None, False),
+    (["codex"], {"windows": []}, False),
+    (["codex"], {"windows": [{"left_pct": 0}]}, False),
+    (["codex"], {"error": "failed", "windows": [{"left_pct": 70}]}, False),
+    (["codex"], {"windows": [{"left_pct": 70}]}, True),
+])
+def test_continue_only_offers_installed_healthy_targets(tmp_path, monkeypatch, installed, gauge, offered):
+    from brr.loom.runtime.loom import _continue_targets
+    monkeypatch.setattr(adapters, "installed_shells", lambda home: installed)
+    def cached(home, shell, *, cached_only):
+        assert cached_only
+        return gauge
+    monkeypatch.setattr(usage, "reading", cached)
+    assert _continue_targets(Home(tmp_path), [], "work", ("claude", "opus")) == (
+        [("codex", "")] if offered else [])

@@ -278,8 +278,8 @@ def test_person_is_told_once_when_fuel_parks_their_letter(tmp_path, monkeypatch)
     try:
         wait_until(lambda: len(sent) == 1, 10, loom.dump)
         assert sent[0]["to"] == "telegram:42"
-        assert (f"Out of claude session fuel (2% left) until about {home.local_time}. "
-                "Your letter is kept on thread inbox and is answered when it refills.") in sent[0]["body"]
+        assert (f"Claude's session limit is reached until about {home.local_time}. "
+                "I'll keep your message and carry on when it resets.") in sent[0]["body"]
         assert sent[0]["re"] == "telegram:42:park"
         wait_until(lambda: any(f.kind == "body.parked" for f in loom.facts()), 5, loom.dump)
         time.sleep(0.3)  # several more parked ticks
@@ -330,9 +330,9 @@ def test_letter_during_park_is_told_and_wake_starts_the_leased_body(tmp_path, mo
         home.person.says("again", "are you there?")
         wait_until(lambda: any(m["re"] == "telegram:42:again" for m in home.sent), 10, loom.dump)
         told = next(m for m in home.sent if m["re"] == "telegram:42:again")
-        assert "Out of claude session fuel (2% left)" in told["body"]
-        assert "Reply with one of:\nwake: retry claude/echo (session 2%, resets " in told["body"]
-        assert "\nwake spare/<core>: spare session 70%" in told["body"]
+        assert "Claude's session limit is reached" in told["body"]
+        assert "Reply wake to retry now" in told["body"]
+        assert "shell" not in told["body"]
         assert "codex" not in told["body"]  # a shell with no gauge is not enabled
         time.sleep(0.3)
         assert [m["re"] for m in home.sent] == ["telegram:42:park", "telegram:42:again"]
@@ -445,16 +445,15 @@ def test_body_held_dry_in_its_stop_hook_tells_the_person_of_each_letter(tmp_path
         home.person.says("again", "are you there?")
         wait_until(lambda: any(m["re"] == "telegram:42:again" for m in home.sent), 10, loom.dump)
         told = next(m for m in home.sent if m["re"] == "telegram:42:again")
-        assert "Out of claude session fuel (2% left)" in told["body"]
-        assert "Your letter is kept on thread inbox" in told["body"]
-        assert ("Reply with one of:\nwake: go on with claude/echo now, the turn may fail on fuel "
-                "(session 2%, resets ") in told["body"]
-        assert "\nwake spare/<core>: spare session 70%" in told["body"]
+        assert "Claude's session limit is reached" in told["body"]
+        assert "I'll keep your message" in told["body"]
+        assert "Reply wake to retry now" in told["body"]
+        assert "shell" not in told["body"]
         home.person.says("more", "still?")
         wait_until(lambda: any(m["re"] == "telegram:42:more" for m in home.sent), 10, loom.dump)
         time.sleep(0.5)
         # One notice a letter; the first letter was answered before the hold, so none for it.
-        assert [m["re"] for m in home.sent if "Out of claude" in m["body"]] == ["telegram:42:again", "telegram:42:more"]
+        assert [m["re"] for m in home.sent if "Claude's session limit" in m["body"]] == ["telegram:42:again", "telegram:42:more"]
         assert log.read_text().splitlines()[before:] == []  # no turn taken without fuel
         home.person.says("wake", "wake")
         wait_until(lambda: log.read_text().splitlines()[before:], 10, loom.dump)
@@ -531,6 +530,35 @@ def test_a_preferred_body_missing_here_gives_way_to_the_next_on_the_list(tmp_pat
         wait_until(lambda: _start_lines(starts), 10, loom.dump)
         assert starts.read_text() == "codex\n"
         assert _leases(loom) == [(1, "codex", "")]
+    finally:
+        loom.halt()
+        kill_bodies(loom)
+    assert not loom.errors
+
+
+def test_printed_continue_reply_moves_the_thread(tmp_path, monkeypatch):
+    import re
+    from brr.loom.runtime import adapters, usage
+    home = _parked_home(tmp_path, monkeypatch)
+    monkeypatch.setattr(usage, "CACHE_TTL", 30)
+    monkeypatch.setattr(adapters, "installed_shells", lambda home: ["claude", "spare"])
+    loom = Loom(home.root)
+    loom.start()
+    try:
+        wait_until(lambda: any(f.kind == "body.parked" for f in loom.facts()), 10, loom.dump)
+        wait_until(lambda: (home.root / "loom/usage/spare.json").is_file(), 10, loom.dump)
+        home.person.says("options", "how can we continue?")
+        wait_until(lambda: any(m["re"] == "telegram:42:options" for m in home.sent), 10, loom.dump)
+        text = next(m["body"] for m in home.sent if m["re"] == "telegram:42:options")
+        reply = re.search(r"Reply (continue on [A-Za-z0-9._-]+) to carry on there now.", text)
+        assert reply, text
+        assert not any(word in text.lower() for word in ("body", "shell", "park"))
+        home.person.says("continue", reply[1])
+        wait_until(lambda: _start_lines(home.starts), 10, loom.dump)
+        assert _leases(loom) == [(1, "claude", "echo"), (2, "spare", "")]
+        owed = {str(l.data["id"]) for l in mail(home.root, loom.facts(), "inbox")}
+        assert "letter:relay:telegram:42:park" in owed
+        assert "letter:relay:telegram:42:continue" not in owed
     finally:
         loom.halt()
         kill_bodies(loom)
