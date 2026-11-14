@@ -25,7 +25,12 @@ from .publish import PublishError, push_command, remote_command
 from .selfrepo import git
 
 EVERY = 30
+FETCH_EVERY = 600
 _TIMEOUT = 120
+
+
+class RemoteMoved(PublishError):
+    """The next attempt must fetch and reconcile remote main."""
 
 
 def pending(self_dir: Path, *, refresh: bool = False) -> tuple[str, str] | None:
@@ -72,7 +77,7 @@ def push(self_dir: Path, url: str, sha: str, forge_token: str) -> None:
         text = proc.stderr.strip() or proc.stdout.strip() or "push failed"
         low = text.lower()
         if "non-fast-forward" in low or "fetch first" in low or "[rejected]" in low:
-            raise PublishError("remote diverged from self main; mirror paused")
+            raise RemoteMoved("remote diverged from self main; mirror paused")
         raise PublishError(text[-400:])
     git(self_dir, "update-ref", "refs/remotes/origin/main", sha)
 
@@ -121,6 +126,7 @@ class Mirror:
     def __init__(self, home, log):
         self.home, self.log = home, log
         self.checked: float | None = None
+        self.fetched = time.monotonic()
         self.worker: threading.Thread | None = None
         self.failing: tuple[Exception, object] | None = None
         self.private: bool | None = None
@@ -142,7 +148,8 @@ class Mirror:
         self_dir = self.home.root / "self"
         if not (self_dir / ".git").exists():
             return
-        found = pending(self_dir, refresh=True)
+        refresh = now - self.fetched >= FETCH_EVERY
+        found = pending(self_dir, refresh=refresh)
         if found is None:
             return
         url, _sha = found
@@ -163,11 +170,20 @@ class Mirror:
         if not self.private:
             return
         self.worker = threading.Thread(target=self._push, name="loom-mirror", daemon=True,
-                                       args=(self_dir, url, config.forge_token))
+                                       args=(self_dir, url, _sha, config.forge_token, refresh))
         self.worker.start()
 
-    def _push(self, self_dir: Path, url: str, forge_token: str) -> None:
+    def _push(self, self_dir: Path, url: str, sha: str, forge_token: str,
+              refresh: bool) -> None:
         try:
+            if not refresh:
+                try:
+                    push(self_dir, url, sha, forge_token)
+                    self.failing = None
+                    return
+                except RemoteMoved:
+                    pass
+            self.fetched = time.monotonic()
             sha = reconcile(self_dir, url, forge_token)
             if sha != git(self_dir, "rev-parse", "refs/remotes/origin/main").stdout.strip():
                 push(self_dir, url, sha, forge_token)

@@ -65,6 +65,8 @@ def test_tick_reconciles_remote_main(tmp_path, mode, monkeypatch):
     logs = []
     m = mirror.Mirror(home, lambda *args: logs.append(args))
     cfg = SimpleNamespace(forge_token="tok")
+    if mode == "behind":
+        m.fetched -= mirror.FETCH_EVERY
     m.step(cfg)
     assert m.worker is not None
     m.worker.join(timeout=10)
@@ -202,3 +204,33 @@ def test_is_private_reads_a_rate_limited_403_as_no_answer(monkeypatch):
                                 (403, {}, False), (404, {}, False), (500, {}, None)]:
         monkeypatch.setattr(mirror.urllib.request, "urlopen", answer(code, **headers))
         assert mirror.is_private(url, "x") is want, (code, headers)
+
+
+def test_idle_ticks_do_not_fetch_until_slow_pace(tmp_path, monkeypatch):
+    home, s, bare = _setup(tmp_path)
+    now = [1000.0]
+    monkeypatch.setattr(mirror.time, "monotonic", lambda: now[0])
+    calls = []
+    original = mirror.reconcile
+
+    def reconcile(*args):
+        calls.append(args)
+        return original(*args)
+
+    monkeypatch.setattr(mirror, "reconcile", reconcile)
+    m = mirror.Mirror(home, lambda *a: None)
+    cfg = SimpleNamespace(forge_token="tok")
+    for elapsed in range(0, mirror.FETCH_EVERY, mirror.EVERY):
+        now[0] = 1000.0 + elapsed
+        m.step(cfg)
+        assert m.worker is None
+    assert calls == []
+    now[0] = 1000.0 + mirror.FETCH_EVERY
+    m.step(cfg)
+    m.worker.join(timeout=10)
+    assert not m.worker.is_alive()
+    assert m.failing is None
+    assert len(calls) == 1
+    now[0] += mirror.EVERY
+    m.step(cfg)
+    assert len(calls) == 1
