@@ -105,17 +105,11 @@ To start the local loom board and get its URL:
 brnrd setup channel --kind web --wait 0
 ```
 
-Setup resolves the home just like `brnrd loom where`: `--home`, then
-`BRNRD_HOME`, then the installed service's home, then the only home found,
-otherwise `~/brnrd`. Several homes require `--home PATH`. It may prompt for
-an AI and pairing choices. The web connector enables `board_port`, choosing
-an available loopback port (4777 first), and prints the `http://127.0.0.1:…`
-link. Open that link in your browser. Setup installs/starts the loom or
-restarts it when the board setting changed; `--wait 0` skips waiting for your
-first message. The page stays available while the loom runs. If another home
-already owns the service, setup prints the explicit install command needed
-to switch it. A source checkout needs a built frontend; the loom builds it
-in the background, so the page may take a moment to become available.
+Setup enables the loopback page, prints its URL and starts or restarts the loom.
+It picks `--home`, then `BRNRD_HOME`, the installed service's home, the only
+home found or `~/brnrd`; several homes require `--home PATH`.
+A source checkout needs a built frontend; the loom builds it in the background,
+so the page may take a moment to become available.
 
 This is the loom board, separate from the older daemon's dashboard.
 
