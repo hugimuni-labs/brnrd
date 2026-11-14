@@ -8,11 +8,14 @@ import hashlib
 import json
 import re
 import subprocess
+import time
+from functools import lru_cache
+from pathlib import Path
 
 from brr.daemon2.facts import Fact
 from .adapters import resolve
 from .config import load_config
-from .ledger import append, read_facts
+from .ledger import append, shared_reader
 
 
 class OwnershipError(ValueError):
@@ -20,10 +23,47 @@ class OwnershipError(ValueError):
 
 
 def claims(home):
-    return [f.data for f in read_facts(home) if f.kind == 'connector.declared']
+    return [f.data for f in shared_reader(home).refresh(home).by_kind['connector.declared']]
+
+
+def _stamp(path):
+    try:
+        st = path.stat()
+        return st.st_ino, st.st_mtime_ns, st.st_ctime_ns, st.st_size
+    except FileNotFoundError:
+        return None
+
+
+def binding_key(home, name, kind):
+    folder = resolve(home, kind, 'connectors')
+    state = home.root / 'loom/connectors' / name / 'state'
+    # Adapter helpers can affect identity too. Never walk inbox/drop files.
+    paths = [home.root / 'loom/config.toml', folder, state / 'token']
+    paths.extend(sorted(p for p in folder.iterdir() if p.is_file()))
+    return tuple((str(p), _stamp(p)) for p in paths)
 
 
 def binding(home, name, kind):
+    # A slow refresh also covers credentials resolved through an external
+    # secret provider, whose backing store has no local file stamp.
+    result = _binding(str(home.root), home.install_id(), name, kind,
+                      binding_key(home, name, kind), int(time.monotonic() // 60))
+    if isinstance(result, str):
+        raise OwnershipError(result)
+    return dict(result)
+
+
+@lru_cache(maxsize=128)
+def _binding(root, install, name, kind, stamps, epoch):
+    try:
+        return _read_binding(root, install, name, kind)
+    except OwnershipError as exc:
+        return str(exc)
+
+
+def _read_binding(root, install, name, kind):
+    from .home import Home
+    home = Home(Path(root), install)
     from .connector import environment
     folder = resolve(home, kind, 'connectors')
     path = folder / 'scope'
@@ -56,6 +96,26 @@ def conflict(data, rows):
     if identity and any(r.get('identity') == identity and r != data for r in rows):
         return f"{data['name']}: this transport is already declared on another channel or machine; copied credentials cannot enroll it again"
     return None
+
+
+def migrate_if_due(home):
+    """Startup, local changes and a slow repair pace, including on followers."""
+    from .connector import instances
+    names = instances(home)
+    key = (_stamp(home.root / 'loom/config.toml'),
+           tuple((name, kind, binding_key(home, name, kind)) for name, kind in names.items()))
+    why = _migration(str(home.root), home.install_id(), key, int(time.monotonic() // 60))
+    if why:
+        raise OwnershipError(why)
+
+
+@lru_cache(maxsize=64)
+def _migration(root, install, key, epoch):
+    from .home import Home
+    try:
+        migrate(Home(Path(root), install))
+    except OwnershipError as exc:
+        return str(exc)
 
 
 def migrate(home):
@@ -93,13 +153,21 @@ def problem(home, name):
     kind = instances(home).get(name)
     if kind is None:
         return f'{name}: connector is not enabled locally'
+    view = shared_reader(home).refresh(home)
+    rows = view.by_kind['connector.declared']
+    key = ('connector-ownership', home.install_id(), name)
+    signature = (kind, binding_key(home, name, kind),
+                 int(time.monotonic() // 60), len(rows))
+    prior = view.cache.get(key)
+    if prior is not None and prior[0] == signature:
+        return prior[1]
     try:
         data = binding(home, name, kind)
+        declarations = [f.data for f in rows]
+        why = conflict(data, declarations)
+        if why is None and data not in declarations:
+            why = f'{name}: no shared connector declaration; run brnrd runtime machines connectors migrate'
     except OwnershipError as exc:
-        return str(exc)
-    rows = claims(home)
-    if why := conflict(data, rows):
-        return why
-    if data not in rows:
-        return f'{name}: no shared connector declaration; run brnrd runtime machines connectors migrate'
-    return None
+        why = str(exc)
+    view.cache[key] = (signature, why)
+    return why

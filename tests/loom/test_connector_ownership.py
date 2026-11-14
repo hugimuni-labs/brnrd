@@ -100,3 +100,95 @@ def test_cli_migration_and_status_read_back_declarations(tmp_path, capsys):
     assert _machines(args + ['status']) == 0
     assert json.loads(capsys.readouterr().out) == migrated
     assert migrated == [dict(name='relay', kind='relay', scope='global', owner=None)]
+
+
+def test_loop_ticks_reuse_identity_and_index_declarations(tmp_path, monkeypatch):
+    from brr.loom.runtime.ledger import LedgerView, shared_reader
+    home = machine(tmp_path, 'aaaa', ('telegram', 'relay'))
+    # Unrelated history must never be iterated by connector checks.
+    class IndexedOnly(LedgerView):
+        def __iter__(self):
+            raise AssertionError('full declaration scan')
+    reader = shared_reader(home)
+    reader.ordered = IndexedOnly()
+    calls = []
+    run = ownership.subprocess.run
+    def identity(*args, **kwargs):
+        calls.append(args)
+        return run(*args, **kwargs)
+    monkeypatch.setattr(ownership.subprocess, 'run', identity)
+    # Fixed monotonic time proves 100 loop ticks within the slow pace.
+    monkeypatch.setattr(ownership.time, 'monotonic', lambda: 100.0)
+    migrations = []
+    migrate = ownership.migrate
+    def observed(home):
+        migrations.append(1)
+        return migrate(home)
+    monkeypatch.setattr(ownership, 'migrate', observed)
+    for _ in range(100):
+        ownership.migrate_if_due(home)
+        assert ownership.problem(home, 'telegram') is None
+        assert ownership.problem(home, 'relay') is None
+    assert len(calls) == len(migrations) == 1
+    token = tmp_path / 'loom/connectors/telegram/state/token'
+    token.write_text('654321:new_secret')
+    assert ownership.problem(home, 'telegram')
+    assert len(calls) == 2
+
+
+def test_slow_migration_and_adapter_changes_refresh(tmp_path, monkeypatch):
+    home = machine(tmp_path, 'aaaa', ('relay',))
+    clock = [100.0]
+    monkeypatch.setattr(ownership.time, 'monotonic', lambda: clock[0])
+    calls = []
+    migrate = ownership.migrate
+    def observed(home):
+        calls.append(1)
+        return migrate(home)
+    monkeypatch.setattr(ownership, 'migrate', observed)
+    ownership.migrate_if_due(home)
+    ownership.migrate_if_due(home)
+    assert len(calls) == 1
+    clock[0] += 60
+    ownership.migrate_if_due(home)
+    assert len(calls) == 2
+    folder = tmp_path / 'loom/connectors/relay'
+    folder.mkdir(parents=True)
+    (folder / 'carries').write_text('')
+    (folder / 'scope').write_text('machine')
+    with pytest.raises(ownership.OwnershipError, match='conflicting'):
+        ownership.migrate_if_due(home)
+
+
+def test_process_loop_paces_migration_with_telegram_and_relay(tmp_path, monkeypatch):
+    import threading
+    from brr.loom.runtime import loom, router, usage
+    home = machine(tmp_path, 'aaaa', ('telegram', 'relay'))
+    stop = threading.Event()
+    calls, ticks = [], []
+    run = ownership.subprocess.run
+    def identity(*args, **kwargs):
+        if args[0][0].endswith('/identity'):
+            calls.append(1)
+        return run(*args, **kwargs)
+    monkeypatch.setattr(ownership.subprocess, 'run', identity)
+    monkeypatch.setattr(usage, 'shells', lambda home: ())
+    monkeypatch.setattr(router.Router, 'armed', lambda self: False)
+    monkeypatch.setattr(loom, '_pause', lambda *args: False)
+    monkeypatch.setattr(loom, '_converge_forge_token', lambda home: None)
+    monkeypatch.setattr(ownership.time, 'monotonic', lambda: 100.0)
+    scans = []
+    claims = ownership.claims
+    def observed(home):
+        scans.append(1)
+        return claims(home)
+    monkeypatch.setattr(ownership, 'claims', observed)
+    def tick(home, *args, **kwargs):
+        ticks.append(1)
+        assert ownership.problem(home, 'telegram') is None
+        if len(ticks) == 100:
+            stop.set()
+    monkeypatch.setattr(loom, 'tick_once', tick)
+    loom.run(tmp_path, install='aaaa', stop=stop, tick=.2)
+    assert len(ticks) == 100
+    assert len(calls) == len(scans) == 1

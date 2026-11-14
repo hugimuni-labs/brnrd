@@ -93,3 +93,13 @@ def isolate_preferences_cache():
     _checked_preferences.cache_clear()
     yield
     _checked_preferences.cache_clear()
+
+
+@pytest.fixture(autouse=True)
+def isolate_connector_ownership_cache():
+    from brr.loom.runtime.connector_ownership import _binding, _migration
+    _binding.cache_clear()
+    _migration.cache_clear()
+    yield
+    _binding.cache_clear()
+    _migration.cache_clear()
