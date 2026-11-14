@@ -31,10 +31,8 @@ def allowed(home, name, authorize=None):
 
     Shared callers must supply the router's live shared and local fence;
     a projected leader or a local lease alone cannot stand in for it.
-    Check it after resolving local identity too, which may take time.
+    Check it after resolving cached local ownership, which may refresh.
     """
-    if authorize is not None and not authorize():
-        return False
     if problem(home, name):
         return False
     if authorize is None:
