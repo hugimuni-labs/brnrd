@@ -62,6 +62,7 @@ _CORE_REFUSAL_PATTERNS = (
 )
 
 _QUOTA_PATTERNS = (
+    r"\breached your [\w -]+ limit\b",
     r"\bsession limit\b",
     r"\brate limit\b",
     r"\bquota\b",

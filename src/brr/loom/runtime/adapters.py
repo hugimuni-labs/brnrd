@@ -451,16 +451,30 @@ def prefer(home, role: str, body: str | None) -> None:
     atomic_write(path, "\n".join(lines) + "\n" if lines else "")
 
 
-def at_birth(home, thread: str, default: tuple[str, str],
-             text: str | None = None) -> tuple[str, str]:
+def resolve_body(home, facts, thread: str, default=("fake", "haiku"), text=None):
+    """One precedence rule, with a readable receipt of the winning setting."""
     from .config import load_config
+    from .loom import _wake_choice
+    woken = _wake_choice(facts, thread)
+    if woken:
+        last = max((i for i, f in enumerate(facts) if f.kind == "lease" and f.data.get("thread") == thread), default=-1)
+        manual = any(f.kind == "letter.disposed" and any(d.get("thread") == thread and d.get("body")
+                     for d in f.data.get("dispositions", ())) for f in facts[last + 1:])
+        return *woken, "wake word" if manual else "quota recovery"
     if text is None:
         text = seat_text(home, thread)
-    choice = None
-    for key, value in _entries(text):
-        if key == "body":
-            choice = value
-    choice = choice or preferred_body(home, thread) or load_config(home.root).body
-    if not choice:
-        return default
-    return parse_body(choice)
+    pinned = next((value for key, value in reversed(list(_entries(text))) if key == "body"), None)
+    if pinned:
+        return *parse_body(pinned), "this thread's seat pin"
+    found = _preferences(home)[1]
+    roles = [thread, "inbox"] if thread == home.main_thread() else [thread]
+    for role in [*roles, "default"]:
+        if found.get(f"model.{role}"):
+            return *parse_body(found[f"model.{role}"]), f"preferences model.{role}"
+    configured = load_config(home.root).body
+    return (*parse_body(configured), "config body") if configured else (*default, "runtime default")
+
+
+def at_birth(home, thread: str, default: tuple[str, str],
+             text: str | None = None) -> tuple[str, str]:
+    return resolve_body(home, [], thread, default, text)[:2]

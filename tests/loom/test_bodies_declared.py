@@ -339,6 +339,7 @@ def test_reclosed_body_probes_once_per_deadline_and_stopping_holds(tmp_path, mon
     from types import SimpleNamespace
     from brr.loom.runtime import loom as runtime, config, lifecycle, usage
 
+    monkeypatch.setattr(runtime, "_commands", lambda *args, **kwargs: [])
     clock, closed, proofs, signals, boundaries = [1], [True], [], [], []
     home = SimpleNamespace(root=tmp_path, room=lambda strand: tmp_path / strand, install_id=lambda: "aaaa")
     monkeypatch.setattr(runtime.time, "time", lambda: clock[0])
