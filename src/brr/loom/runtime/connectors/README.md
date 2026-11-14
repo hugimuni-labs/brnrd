@@ -12,6 +12,14 @@ retry with `brnrd runtime machines connectors status` / `migrate`. Secrets stay
 local. Competing owners remain conflicts rather than last-writer transfers.
 This declaration does not implement server relay enrollment or rescue mode.
 
+Ordinary shared input, drop admission, output and presence use the same owner
+check and the router's live shared/local fence. A local lease alone is not
+enough. Owner or authority loss retains complete drops and pending drafts;
+it closes pollers and suppresses queued presence, including working-off.
+An output blocked before invoking transport records a local aborted intention
+so that recovery can retry safely. A transport attempt without a receipt stays
+uncertain and is never blindly retried.
+
 An optional executable `presence` receives a JSON array on stdin. Each operation
 is `{"verb":"seen","letter":{...}}` or
 `{"verb":"working","on":true|false,"letter":{...}}`. The letter carries its
