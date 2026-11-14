@@ -208,7 +208,8 @@ def test_router_keeps_unavailable_draft_pending_and_sends_after_repair(pair, wir
 
 
 @pytest.mark.parametrize('loss', ['lease', 'ownership'])
-def test_loss_immediately_before_transport_keeps_safe_retry(pair, wires, monkeypatch, loss):
+@pytest.mark.parametrize('outcome', ['sent', 'maybe-sent'])
+def test_loss_immediately_before_transport_keeps_safe_retry(pair, wires, monkeypatch, loss, outcome):
     a, _ = pair
     router = Router(a)
     router.begin_tick(read_facts(a))
@@ -232,6 +233,16 @@ def test_loss_immediately_before_transport_keeps_safe_retry(pair, wires, monkeyp
     monkeypatch.setattr(module.tempfile, 'TemporaryDirectory', original)
     router.granting = True
     token.write_text(credential)
+    if outcome == 'maybe-sent':
+        run = subprocess.run
+        def lose_receipt(args, **kw):
+            result = run(args, **kw)
+            if Path(args[0]).name == 'out':
+                raise TimeoutError('accepted, receipt lost')
+            return result
+        monkeypatch.setattr(subprocess, 'run', lose_receipt)
     assert speak(a, router.lease, 'retry', 'yes', channel='channel:telegram/42',
-                 authorize=router.armed)[0] == 'sent'
+                 authorize=router.armed)[0] == outcome
+    assert speak(a, router.lease, 'retry', 'yes', channel='channel:telegram/42',
+                 authorize=router.armed)[0] == outcome
     assert len(wires[1]) == 1
