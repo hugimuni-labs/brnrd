@@ -19,6 +19,31 @@ class OwnershipError(ValueError):
     pass
 
 
+class Unavailable(OwnershipError):
+    """No effect was attempted; keep the original drop or draft for recovery."""
+
+
+def allowed(home, name, authorize=None):
+    """One predicate at every client effect/admission boundary.
+
+    Shared callers must supply the router's live shared and local fence;
+    a projected leader or a local lease alone cannot stand in for it.
+    Check it after resolving local identity too, which may take time.
+    """
+    if authorize is not None and not authorize():
+        return False
+    if problem(home, name):
+        return False
+    if authorize is None:
+        return not load_config(home.root).lease_remote
+    return bool(authorize())
+
+
+def require(home, name, authorize=None):
+    if not allowed(home, name, authorize):
+        raise Unavailable(f'{name}: connector ownership or current lease authority is unavailable')
+
+
 def claims(home):
     return [f.data for f in read_facts(home) if f.kind == 'connector.declared']
 

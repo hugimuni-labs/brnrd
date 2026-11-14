@@ -2814,7 +2814,7 @@ def run(root: Path | str, *, adapter: str = "fake", core: str = "haiku",
             stop.wait()
             return
         from .connector import Inputs
-        inputs = Inputs(home)
+        inputs = Inputs(home, authorize=router.armed)
         router.presence = inputs.presence
         health = Health(home, read_facts(home), _log)
         from .snapshot import Publisher

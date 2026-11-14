@@ -718,6 +718,15 @@ class Router:
             # every historical fact (including already delivered letters).
             if not self.armed() or self.lease is None:
                 return facts
+            from .connector_ownership import allowed, problem
+            instance = str(to).removeprefix('channel:').split('/', 1)[0]
+            if not allowed(self.home, instance, self.armed):
+                notice(self.home, facts, 'connector-unavailable', key,
+                       f'your draft {key} to {to} is waiting: ' +
+                       (problem(self.home, instance) or 'current lease authority is unavailable'),
+                       'restore connector ownership and lease authority; the draft remains pending',
+                       thread=threads.get(fact.by.removeprefix('strand:')), passive=True)
+                continue
             raw = fact.data.get("router_gen")
             try:
                 grant = int(raw)
@@ -778,6 +787,7 @@ class Router:
                         context["re"] = event_id
                 status, speech, unsure = speak(
                     self.home, self.lease, key, body, channel=str(to), context=context,
+                    authorize=self.armed,
                 )
             except Exception as exc:
                 why = f"was refused: {type(exc).__name__}: {exc}"
