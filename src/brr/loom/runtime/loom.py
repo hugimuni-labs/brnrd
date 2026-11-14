@@ -417,7 +417,7 @@ def _oversized_letters(clone, thread, owed, part, repos, recipe=None):
     return large if ok else ()
 
 
-def _failed_words(thread: str, body: str, tail: str) -> str:
+def _failed_words(thread: str, body: str, tail: str, attempts: int = 2) -> str:
     """What a person reads when a body could not take their letter."""
     first = next((line.strip() for line in body.splitlines() if line.strip()), "")
     quoted = first if len(first) <= 80 else first[:79].rstrip() + "…"
@@ -425,8 +425,9 @@ def _failed_words(thread: str, body: str, tail: str) -> str:
     for prefix in ("SelfError: ", "wake exited 3: "):
         why = why.removeprefix(prefix)
     why = why if len(why) <= 400 else why[:399] + "…"
+    tried = "two bodies tried and neither started" if attempts == 2 else "the body could not start"
     return (f"I could not take your letter on thread {thread} (\u201c{quoted}\u201d); "
-            f"two bodies tried and neither started.\nWhy: {why}")
+            f"{tried}.\nWhy: {why}")
 
 
 def notice(home: Home, facts: list[Fact], kind: str, subject: str, what: str, can: str, *,
@@ -1333,6 +1334,14 @@ def _reads(room, start):
         return None
 
 
+def _body_origin(facts, strand, gen):
+    lease = fact_for(facts, "lease", strand, gen)
+    if not lease:
+        return ""
+    d = lease.data
+    return f" On {body_label(d['shell'], d['core'])}, from {d.get('body_source', 'lease')}."
+
+
 def _end_attempt(home, facts, strand, thread, gen, code, letters, cause, failure="",
                  failure_origin="", failure_letters=(), repair_thread=None,
                  await_repair=True):
@@ -1348,6 +1357,10 @@ def _end_attempt(home, facts, strand, thread, gen, code, letters, cause, failure
             tail = log.read().decode(errors="replace")
     except OSError:
         tail = failure
+    from brr.runner_failures import AUTH_ERROR, classify_failure
+    failure_kind = classify_failure(detail=tail) if cause == "failed" else ""
+    from .body_limits import limit_evidence
+    limit = limit_evidence(facts, strand, gen, tail, home=home) if cause == "failed" and failure_origin != "home" else {}
     shown = fold(facts).shown.get(strand, set())
     # Failed preparation is an attempted start even if no wake reached a body.
     ids = sorted(shown | {f.id for f in letters})
@@ -1407,13 +1420,16 @@ def _end_attempt(home, facts, strand, thread, gen, code, letters, cause, failure
         if cause == "failed" and failure_origin == "home" and ident not in failure_letters:
             dispositions.append({"id": ident, "outcome": "retry", "reason": "home-caused failure"})
             continue
+        if limit:
+            dispositions.append({"id": ident, "outcome": "retry", "reason": "core limit; wait or permitted move"})
+            continue
         if cause != "failed":
             dispositions.append({"id": ident, "outcome": "retry", "reason": cause})
             continue
         failures = sum(f.kind == "attempt.ended" and f.data.get("cause") == "failed"
                        and any(d.get("id") == ident and d.get("reason") != "home-caused failure"
                                for d in f.data.get("dispositions", ())) for f in facts)
-        if author.startswith(("p-", "person:")) and failures == 0:
+        if author.startswith(("p-", "person:")) and failures == 0 and failure_kind != AUTH_ERROR:
             dispositions.append({"id": ident, "outcome": "retry", "reason": "first failed attempt"})
             continue
         if author.startswith(("p-", "person:")):
@@ -1422,7 +1438,7 @@ def _end_attempt(home, facts, strand, thread, gen, code, letters, cause, failure
             person = "person:" + author.removeprefix("p-").removeprefix("person:")
             if channel and person_dm(home, channel) == person:
                 successor = notice(home, facts, "failed-message", ident,
-                                   _failed_words(thread, str(letter.data.get("body", "")), tail),
+                                   _failed_words(thread, str(letter.data.get("body", "")), tail, 1 if failure_kind == AUTH_ERROR else 2) + _body_origin(facts, strand, gen),
                                    "Send it again, or leave it.", about=letter, channel=channel,
                                    source_strand=strand, draft_only=True)
                 if isinstance(successor, Fact):
@@ -1459,7 +1475,7 @@ def _end_attempt(home, facts, strand, thread, gen, code, letters, cause, failure
     facts.append(_record(home, "attempt.ended", {
         "thread": thread, "strand": strand, "gen": gen, "ids": ids,
         "cause": cause, "code": code, "dispositions": dispositions,
-        "evidence": {"tail": tail, "readme_changed": changed, "fuel": tank,
+        "evidence": {"tail": tail, "readme_changed": changed, "fuel": tank, **limit,
                      **({"home_failure": True} if cause == "failed" and failure_origin == "home" else {}),
                      **({"self_revision": retry_revision} if retry_revision else {}),
                      **({"reads": reads} if reads else {}),
@@ -1577,31 +1593,38 @@ def _observe_body(home, facts, strand, thread, gen, bodies, *, choice=None, forc
     fenced = (_lease_lost(home, facts) or handed) and pin is None
     default = choice or ("fake", "haiku")
     shell, core = lease.get("shell", default[0]), lease.get("core", default[1])
+    # A park consumes no fuel; retain the post-exit reading through its TTL.
     if isinstance(facts, LedgerView):
-        after = max(facts.latest_at.get((kind, strand), 0) for kind in ("body.exited", "body.parked"))
+        after = facts.latest_at.get(("body.exited", strand), 0)
     else:
         after = max((datetime.fromisoformat(f.at).timestamp() for f in facts
-                     if f.data.get("strand") == strand and f.kind in {"body.exited", "body.parked"}), default=0)
+                     if f.data.get("strand") == strand and f.kind == "body.exited"), default=0)
     # A live body asleep in its own stop hook is parked too: the jack waits
     # for fuel there rather than lose the conversation (jack.py, _poll).
     held = state.name == "running" and alive and not fenced and _held_dry(room)
     dms = list(_person_dms(home, facts, thread)) if state.name == "parked" or held else []
     # A person's "wake" on their own DM is `threads --force`, said in a word;
     # "wake <shell>[/<core>]" ends this park so the next gen runs on that body.
-    told = set()
-    for letter, channel in dms:
-        named = _wake_letter(home, facts, thread, (shell, core), letter, channel, held=held)
-        if named is None:
-            continue
-        told.add(letter.id)
-        if named == (shell, core) and held:
+    commands = _commands(home, facts, thread, (shell, core), parked=state.name == "parked", held=held) if not (closed or fenced or away) else []
+    same = any(named == (shell, core) for named in commands)
+    if same and held:
+        atomic_write(room / "port/in/hold", "release\n")
+    force = force or same and not held
+    handled = fold(facts).handled if commands else set()
+    dms = [(letter, channel) for letter, channel in dms if letter.id not in handled]
+    woken = _wake_choice(facts, thread)
+    restart = False
+    if woken == (shell, core):
+        last = max((i for i, f in enumerate(facts) if f.kind == "lease" and f.data.get("thread") == thread), default=-1)
+        restart = any(d.get("restart") and d.get("thread") == thread for f in facts[last + 1:]
+                      if f.kind == "letter.disposed" for d in f.data.get("dispositions", ()))
+    if woken == (shell, core) and not restart:
+        if held:
             atomic_write(room / "port/in/hold", "release\n")
-        force = force or named == (shell, core) and not held
-    dms = [(letter, channel) for letter, channel in dms if letter.id not in told]
-    # Read at a park, a hold, or the exit a hold's wake caused; never on
-    # every tick of a running body (the scan walks the ledger).
-    woken = (_wake_choice(facts, thread) if state.name == "parked" or held
-             or state.name == "running" and not alive else None)
+        force = force or not held
+        woken = None
+    if woken and alive and not held:
+        closed = True
     # A parked body reads the gauge like any other: a refill is seen when it
     # happens, and the park's `until` only guards a gauge that reads nothing.
     gauge = {"windows": []} if force else reading(home, shell, 0 if alive else after)
@@ -1610,6 +1633,22 @@ def _observe_body(home, facts, strand, thread, gen, bodies, *, choice=None, forc
     if empty:
         from .usage import dry_until
         until = dry_until(home, shell) or now + 900
+    shell_empty = empty is not None
+    from .body_limits import dry_core
+    limit = dry_core(facts, shell, core)
+    if limit and not force:
+        empty = {"name": core or shell, "left_pct": 0}
+        until = limit["until"]
+        gauge = {"windows": [empty]}
+    # Only an existing, still-empty park may choose an automatic target.
+    target = None
+    if state.name == "parked" and not (woken or force or closed or fenced or away):
+        from .adapters import quota_choice
+        from .body_limits import next_core
+        target = (next_core(facts, shell, core) if limit and not shell_empty else None) or (quota_choice(home, thread, shell) if empty else None)
+    move = fact_for(facts, "body.moved", strand, gen)
+    if move and woken == (move.data["to_shell"], move.data["to_core"]):
+        _quota_move_notice(home, facts, move)
     pid = int(start.data.get("pid") or 0) if start else 0
     proven = None
     # A stop on record with the body still alive is a signal that was never
@@ -1627,14 +1666,14 @@ def _observe_body(home, facts, strand, thread, gen, bodies, *, choice=None, forc
     if squeeze is not None and not _worker_live(home, facts, strand):
         squeeze = None
     context = SimpleNamespace(thread=thread, shell=shell, core=core, pid=pid, empty=empty, fuel=fuel,
-                              why=(closing_commit(home, thread)[1] or f"thread {thread} settled") if closed
+                              why=("person requested another body" if woken else closing_commit(home, thread)[1] or f"thread {thread} settled") if closed
                               else _HANDED if handed else _FENCED if fenced else _AWAY.format(pin) if away else "",
-                              failure="", repos=lease.get("repos"), pressure=str(squeeze or ""))
+                              failure="", repos=lease.get("repos"), pressure=str(squeeze or ""), target=target)
     o = Observation(strand, gen, alive, closed, "refreshing" if gauge is None else "empty" if empty
                     else "ok" if gauge["windows"] else "unknown",
                     now, proven, until=until, force=force, stop_grace=config.stop_grace,
                     woken="/".join(woken) if woken else "", fenced=fenced, held=held, away=away,
-                    handed=handed, pressed=squeeze is not None)
+                    handed=handed, pressed=squeeze is not None, target=body_label(*target) if target else "")
     row = TABLE[row_for(facts, o)]
     if row.next == "parked" and not fenced:
         park = fact_for(facts, "body.parked", strand, gen)
@@ -1699,44 +1738,146 @@ def _park_notice(home, facts, thread, leased, park, letters, *, held=False):
     The loom's park and a body's dry hold in its stop hook say the same words.
     """
     window, left, when = park
-    what = (f"Out of {leased[0]} {window} fuel ({left:g}% left) "
-            f"until about {datetime.fromtimestamp(when).astimezone():%H:%M}. "
-            f"Your letter is kept on thread {thread} and is answered when it refills.")
-    lines = _wake_lines(home, facts, thread, leased, park, held=held)
-    can = (("Reply wake to go on now; the turn may fail on fuel." if held else "Reply wake to start it now.")
-           if len(lines) == 1 else "Reply with one of:\n" + "\n".join(lines))
+    name = _subscription_name(leased[0])
+    lease = next((f for f in reversed(facts) if f.kind == "lease" and f.data.get("thread") == thread), None)
+    source = lease.data.get("body_source", "lease") if lease else "lease"
+    provenance = f" On {body_label(*leased)}, from {source}."
+    what = (f"{name}'s {window} limit is reached until about "
+            f"{datetime.fromtimestamp(when).astimezone():%H:%M}. "
+            "I'll keep your message and carry on when it resets." + provenance)
+    choices = _continue_targets(home, facts, thread, leased)
+    can = " ".join(f"Reply continue on {_subscription_name(shell)} to carry on there now."
+                   for shell, _core in choices)
+    can = (can + " " if can else "") + "Reply wake to retry now; the limit may still prevent it."
     for letter, channel in letters:
         notice(home, facts, "parked", letter.id, what, can,
                about=letter, channel=channel, passive=True)
 
 
-WAKE = re.compile(r"/?wake(?:\s+([A-Za-z0-9][A-Za-z0-9._-]*)(?:/(\S+))?)?", re.IGNORECASE)
+def _subscription_name(shell):
+    return {"claude": "Claude", "codex": "Codex", "grok": "Grok", "vibe": "Vibe"}.get(shell, shell)
 
 
-def _wake_letter(home, facts, thread, leased, letter, channel, *, parked=True, held=False):
+def _continue_targets(home, facts, thread, leased):
+    """Installed alternatives with fresh quota; inspection never starts a probe."""
+    from .adapters import installed_shells
+    from .config import load_config
+    from .usage import collector_failed, reading
+    floor = load_config(home.root).hold_floor_pct
+    targets = []
+    for shell in installed_shells(home):
+        if shell == leased[0]:
+            continue
+        gauge = reading(home, shell, cached_only=True)
+        if (gauge and not collector_failed(gauge) and gauge.get("windows")
+                and all(w["left_pct"] > floor for w in gauge["windows"])):
+            targets.append((shell, _core_for(home, facts, thread, shell, leased) or ""))
+    return targets
+
+
+CONTINUE = re.compile(r"continue on ([A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9_-])?)(?:\s+please)?[.!?]*", re.IGNORECASE)
+
+
+WAKE = re.compile(r"/?(?:wake|reincarnate)(?:\s+([A-Za-z0-9][A-Za-z0-9._-]*)(?:/(\S+))?)?", re.IGNORECASE)
+
+
+def _commands(home, facts, thread, default, *, parked=False, held=False, authorize=None):
+    """Consume direct-chat controls before any state-specific routing."""
+    from .adapters import at_birth
+    cache_revision = None
+    if isinstance(facts, LedgerView):
+        inputs = (facts.person_inputs.get(thread, 0), facts.person_inputs.get("*", 0))
+        if not any(inputs):
+            return []
+        revision = (*inputs, parked, held)
+        key = ("command-scan", thread)
+        if facts.cache.get(key) == revision:
+            return []
+        cache_revision = (key, revision)
+    elif not any(str(f.data.get("from", "")).startswith(("person:", "p-")) for f in kind_facts(facts, "letter")):
+        return []
+    dms = list(_person_dms(home, facts, thread))
+    if not dms:
+        if cache_revision is not None:
+            facts.cache[cache_revision[0]] = cache_revision[1]
+        return []
+    refused = False
+
+    def authorized():
+        nonlocal refused
+        allowed = authorize()
+        refused = refused or not allowed
+        return allowed
+
+    leased = next(((f.data["shell"], f.data["core"]) for f in reversed(facts)
+                   if f.kind == "lease" and f.data.get("thread") == thread), None)
+    if leased is None:
+        try:
+            leased = at_birth(home, thread, default)
+        except (ValueError, OSError):
+            leased = default
+    consumed = []
+    holder = thread in fold(facts).holder
+    freed = max((i for i, f in enumerate(facts) if f.kind == "released" and f.data.get("thread") == thread), default=-1)
+    for letter, channel in dms:
+        # Composer choices accompany work; on a live seat they keep their
+        # established meaning. Exact text controls apply in every state.
+        if letter.data.get("wake"):
+            if holder and not (parked or held):
+                continue
+            if not holder and facts.index(letter) < freed:
+                continue
+        named = _wake_letter(home, facts, thread, leased, letter, channel, parked=parked, held=held, authorize=authorized if authorize is not None else None)
+        if named is not None:
+            consumed.append(named)
+    # A fenced pass must leave the same input eligible for the next router tick.
+    if cache_revision is not None and not refused:
+        facts.cache[cache_revision[0]] = cache_revision[1]
+    return consumed
+
+
+def _wake_letter(home, facts, thread, leased, letter, channel, *, parked=True, held=False, authorize=None):
     """Dispose of one person's wake: the body it names, its refusal words, or None.
 
     The word is the whole letter, or the body a brnrd.dev composer letter
     chose; that letter's text stays owed, so its disposition has its own id.
     """
     chosen = letter.data.get("wake")
-    said = WAKE.fullmatch(f"wake {chosen}" if chosen else str(letter.data.get("body", "")).strip())
+    text = str(letter.data.get("body", "")).strip()
+    continuation = CONTINUE.fullmatch(text) if not chosen else None
+    said = WAKE.fullmatch(f"wake {chosen}" if chosen else text)
     ident = f"{letter.id}#wake" if chosen else letter.id
-    if not said or any(f.id == f"letter.disposed:{ident}" for f in facts):
+    invalid = not (said or continuation) and bool(re.fullmatch(r"/?(?:wake|reincarnate)\s+\S+", text, re.IGNORECASE))
+    if not (said or continuation or invalid) or any(f.id == f"letter.disposed:{ident}" for f in facts):
         return None
-    named = _wake_body(home, facts, thread, leased, said)
+    if authorize is not None and not authorize():
+        return None
+    if invalid:
+        named = "Invalid body argument; use wake <shell>[/<core>]."
+    elif continuation:
+        shell = continuation[1].lower()
+        named = next((target for target in _continue_targets(home, facts, thread, leased)
+                      if target[0] == shell),
+                     f"{_subscription_name(shell)} isn't available with a healthy limit right now.")
+    else:
+        named = _wake_body(home, facts, thread, leased, said)
     disposition = {"id": ident, "outcome": "done"}
+    restart = not chosen and bool(re.match(r"/?reincarnate(?:\s|$)", text, re.IGNORECASE))
     if isinstance(named, str):
         notice(home, facts, "wake-refused", letter.id, f"{named} Nothing was started.",
                "\n".join(_wake_lines(home, facts, thread, leased, None, held=held)),
                about=letter, channel=channel, passive=True)
         disposition["reason"] = "wake: refused, " + named
-    elif held and named == leased:
+    elif held and named == leased and not restart:
         disposition["reason"] = "wake: hold released before its reset"
-    elif parked and named == leased:
+    elif parked and named == leased and not restart:
         disposition["reason"] = "wake: started before its reset"
+    elif named == leased and thread in fold(facts).holder and not restart:
+        disposition["reason"] = "wake: body already running"
     else:
         disposition.update(reason=f"wake: on {body_label(*named)}", thread=thread, body=body_label(*named))
+        if restart:
+            disposition["restart"] = True
     try:
         facts.append(_record(home, "letter.disposed", {"dispositions": [disposition]},
                              f"letter.disposed:{ident}"))
@@ -1776,7 +1917,19 @@ def _wake_body(home, facts, thread, leased, said):
         return f"No body {said[1]!r} here; bodies are {', '.join(valid)}."
     core = said[2] or _core_for(home, facts, thread, shell, leased)
     if core is None:
-        return f"No core on record for {shell}: name one, as wake {shell}/<core>."
+        core = ""  # no recorded model means the harness chooses its own default
+    from brr.runner_cores import all_cores
+    known = {e["model"] for e in all_cores().values() if e["shell"] == shell and e.get("model")}
+    known.update(f.data["core"] for f in facts if f.kind == "lease" and f.data.get("shell") == shell and f.data.get("core"))
+    if shell == leased[0]:
+        known.add(leased[1])
+    # Custom harnesses own their core vocabulary. Bundled harnesses expose
+    # their catalog and previously selected exact model IDs.
+    if shell in {"claude", "codex", "grok", "vibe"} and core and core not in known:
+        from brr.runner_cores import probe_shell_models
+        known.update(probe_shell_models(shell))
+    if shell in {"claude", "codex", "grok", "vibe"} and core and core not in known:
+        return f"No core {core!r} on {shell}; cores are {', '.join(sorted(known))}."
     return shell, core
 
 
@@ -1798,7 +1951,7 @@ def _wake_lines(home, facts, thread, leased, park, *, held=False):
     for shell in _wake_shells(home, leased[0]):
         if shell == leased[0]:
             continue
-        word = f"wake {shell}" if _core_for(home, facts, thread, shell, leased) is not None else f"wake {shell}/<core>"
+        word = f"wake {shell}"
         lines.append(f"{word}: {shell + ' ' + found[shell] if shell in found else 'fuel unknown'}")
     return lines
 
@@ -1809,8 +1962,22 @@ def _wake_choice(facts, thread):
     Read from the ledger, so a crash between the wake and the next lease
     still converges: the parked gen ends, and the router leases this body.
     """
+    if isinstance(facts, LedgerView):
+        key = ("wake-choice", thread)
+        revision = tuple(len(facts.by_kind[k]) for k in ("lease", "letter.disposed", "body.moved"))
+        prior = facts.cache.get(key)
+        if prior is not None and prior[0] == revision:
+            return prior[1]
+        result = _uncached_wake_choice(facts, thread)
+        facts.cache[key] = (revision, result)
+        return result
+    return _uncached_wake_choice(facts, thread)
+
+
+def _uncached_wake_choice(facts, thread):
     last = max((i for i, f in enumerate(facts) if f.kind == "lease" and f.data.get("thread") == thread),
                default=-1)
+    # A person's manual wake always wins over an automatic decision.
     for f in reversed(facts[last + 1:]):
         if f.kind == "letter.disposed" and f.by.startswith("loom:"):
             for d in f.data.get("dispositions", ()):
@@ -1820,7 +1987,8 @@ def _wake_choice(facts, thread):
                         return parse_body(d["body"])
                     except ValueError:
                         continue
-    return None
+    return next(((f.data["to_shell"], f.data["to_core"]) for f in reversed(facts[last + 1:])
+                 if f.kind == "body.moved" and f.data.get("thread") == thread), None)
 
 
 def _person_dms(home, facts, thread):
@@ -2153,6 +2321,40 @@ def _hand_record(x, command, step):
     x.facts.append(_record(x.home, kind.kind, data, ident))
 
 
+def _quota_move_notice(home, facts, move):
+    d = move.data
+    lease = fact_for(facts, "lease", d["strand"], d["gen"])
+    source = lease.data.get("body_source", "lease") if lease else "lease"
+    what = (f"Thread {d['thread']}: {body_label(d['from_shell'], d['from_core'])} "
+            f"(from {source}) exhausted {d['window']} fuel ({d['left_pct']:g}% left); "
+            f"continuing on {body_label(d['to_shell'], d['to_core'])}.")
+    can = f"To go back after reset: wake {body_label(d['from_shell'], d['from_core'])}."
+    notice(home, facts, "quota-move", move.id, what, can, thread=d["thread"], passive=True)
+    # The person waiting in a direct chat must see the same recovery receipt.
+    from .body_limits import dry_core
+    limit = dry_core(facts, d["from_shell"], d["from_core"])
+    spell = f"core:{d['from_shell']}:{d['from_core']}:{limit['spell']}" if limit and limit.get("spell") else move.id
+    channels = set()
+    for letter, channel in list(_person_dms(home, facts, d["thread"])):
+        if channel not in channels:
+            notice(home, facts, "quota-move", f"{spell}:{channel}", what, can,
+                   about=letter, channel=channel, passive=True)
+            channels.add(channel)
+
+
+
+def _hand_move(x, command, step):
+    park = fact_for(x.facts, "body.parked", x.o.strand, x.o.gen)
+    data = dict(thread=x.c.thread, strand=x.o.strand, gen=x.o.gen,
+                from_shell=x.c.shell, from_core=x.c.core,
+                to_shell=x.c.target[0], to_core=x.c.target[1],
+                window=x.c.empty["name"], left_pct=x.c.empty["left_pct"],
+                until=x.o.until, park=park.id)
+    move = _record(x.home, step.records, data, f"body.moved:{x.o.strand}:{x.o.gen}")
+    x.facts.append(move)
+    _quota_move_notice(x.home, x.facts, move)
+
+
 def _hand_started(x, command, step):
     c = x.c
     x.values["lstart"] = _ps_field(x.proc.pid, "lstart") or ""
@@ -2251,7 +2453,7 @@ def _hand_release(x, command, step):
 
 
 HANDS = {
-    "prepare": _hand_prepare, "show": _hand_show, "spawn": _hand_spawn, "started": _hand_started,
+    "move": _hand_move, "prepare": _hand_prepare, "show": _hand_show, "spawn": _hand_spawn, "started": _hand_started,
     "record": _hand_record, "signal": _hand_signal, "let_go": _hand_let_go, "collect": _hand_collect, "drain": _hand_drain,
     "end": _hand_end, "drained": _hand_drained, "release": _hand_release,
 }
@@ -2612,7 +2814,7 @@ def run(root: Path | str, *, adapter: str = "fake", core: str = "haiku",
             stop.wait()
             return
         from .connector import Inputs
-        inputs = Inputs(home)
+        inputs = Inputs(home, authorize=router.armed)
         router.presence = inputs.presence
         health = Health(home, read_facts(home), _log)
         from .snapshot import Publisher
@@ -2674,6 +2876,8 @@ def run(root: Path | str, *, adapter: str = "fake", core: str = "haiku",
                     health.guard("usage", _read_usage, home, usage, backoff=False)
                     next_usage = time.monotonic() + usage.REFRESH_INTERVAL
                 health.guard("gauge", usage.check_stuck, backoff=False)
+                from .connector_ownership import migrate_if_due as migrate_connectors
+                health.guard("connector-ownership", migrate_connectors, home, backoff=False)
                 # Inputs, publisher, mirror and reap pace their own retries; only the tick backs off.
                 # Connectors run only on the router lease's holder: a second
                 # install ingesting too would answer every letter twice.

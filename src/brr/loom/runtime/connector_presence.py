@@ -9,8 +9,9 @@ from .connector import environment, instances
 
 
 class Presence:
-    def __init__(self, home):
+    def __init__(self, home, authorize=None):
         self.home = home
+        self.authorize = authorize
         self.snapshot = ({}, {})
         self.lock = threading.Lock()
         self.stop = threading.Event()
@@ -76,6 +77,9 @@ class Presence:
                     continue
                 command = resolve(self.home, names[name], 'connectors') / 'presence'
                 if command.is_file():
+                    from .connector_ownership import allowed
+                    if not allowed(self.home, name, self.authorize):
+                        continue
                     subprocess.run([str(command)], input=json.dumps(operations), text=True,
                                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                                    env=environment(self.home, name), timeout=8, check=False)

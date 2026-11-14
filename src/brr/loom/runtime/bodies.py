@@ -41,7 +41,8 @@ TABLE = (
     Row(STARTABLE, "pinned away", "ended", ("end_moved",) + CLEANUP),
     Row(("wanted",), "fenced", "wanted", ()),
     Row(("parked",), "fenced", "parked", ()),
-    Row(("parked",), "woken on another body", "ended", ("end_reincarnated",) + CLEANUP),
+    Row(("parked",), "quota move", "ended", ("move", "end_reincarnated") + CLEANUP),
+    Row(STARTABLE, "woken on another body", "ended", ("end_reincarnated",) + CLEANUP),
     Row(("wanted",), "memory pressed", "wanted", ("pending",)),
     Row(("parked",), "memory pressed", "parked", ()),
     Row(("parked",), "gauge unknown, before until", "parked", ()),
@@ -86,6 +87,7 @@ COMMANDS = {step.name: step for step in (
     Step("spawn",        "spawn",    None,                False),
     Step("started",      "started",  "body.started",      False),
     Step("pending",      "record",   "body.pending",      True),
+    Step("move",         "move",     "body.moved",        True),
     Step("park",         "record",   "body.parked",       True),
     Step("leaving",      "record",   "body.leaving",      False),
     Step("stayed",       "record",   "body.stayed",       True),
@@ -125,6 +127,7 @@ class Observation:
     away: bool = False
     handed: bool = False
     pressed: bool = False
+    target: str = ""
 
 
 @dataclass(frozen=True)
@@ -195,6 +198,7 @@ OBSERVED = {
     # ends, and a running body leaves as if its thread had closed.
     "pinned away": lambda s, o: o.away,
     "failure": lambda s, o: bool(o.failure),
+    "quota move": lambda s, o: bool(o.target),
     "woken on another body": lambda s, o: bool(o.woken),
     # The memory floor holds (memory.py): nothing new starts, and an operator's force still does.
     "memory pressed": lambda s, o: o.pressed and not o.force,
@@ -250,9 +254,11 @@ def render_table() -> str:
 def exit_cause(facts: list[Fact], o: Observation, *, owed: bool) -> str:
     """First-match cause over the post-drain ledger and the same observations."""
     from .project import fold
+    if o.woken:
+        return "reincarnated"
     if fact_for(facts, "body.stopped", o.strand, o.gen):
         return "stopped"
-    if fact_for(fold(facts).accepted, "reincarnate", o.strand, o.gen) or o.woken:
+    if fact_for(fold(facts).accepted, "reincarnate", o.strand, o.gen):
         return "reincarnated"
     if o.closed:
         return "settled"

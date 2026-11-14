@@ -40,6 +40,7 @@ def _freeze(data: dict) -> dict:
 # The loom's own file, not a strand's. One writer: the router, except a
 # strand's loom still records that strand's exit and a person asks for a machine.
 _LOOM_KINDS = {
+    "connector.declared",
     "letter.presence", "lease", "released", "attention", "router", "router.renewed",
     "speech", "speech.part", "thread.closed", "attempt.ended", "port.drained", "letter.disposed", "letter.due",
     "loom.started", "home.migrated", "loom.degraded", "loom.recovered", "loom.moved", "loom.pruned", "lease.fenced", "lease.handed", "machines.prefer", "machines.pin", "machines.name", "self.healed",
@@ -162,6 +163,7 @@ class LedgerView(list):
         self.positions = {}
         self.by_kind = defaultdict(list)
         self.raw_letters = {}
+        self.person_inputs = defaultdict(int)
         self.named_letters = {}
         self.letters_by_source = defaultdict(set)
         self.letters_by_reply = defaultdict(set)
@@ -193,6 +195,9 @@ class LedgerView(list):
         super().append(fact)
         self.by_id[fact.id] = fact
         self.by_kind[fact.kind].append(fact)
+        if fact.kind in {"letter", "source"} and str(fact.data.get("from", "")).startswith(("person:", "p-")):
+            target = str(fact.data.get("to", ""))
+            self.person_inputs[target.removeprefix("thread:") if target.startswith("thread:") else "*"] += 1
         self.by_body[(fact.data.get('strand'), fact.data.get('gen'))].append(fact)
         strand = fact.data.get('strand')
         self.by_strand[strand].append(fact)

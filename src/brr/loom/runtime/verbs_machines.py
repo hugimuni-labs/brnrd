@@ -28,6 +28,8 @@ def _machines(argv: list[str]) -> int:
     parser.add_argument("--home")
     parser.add_argument("--install", default=None)
     sub = parser.add_subparsers(dest="verb", required=True)
+    connectors = sub.add_parser("connectors", help="declare local shared connectors without copying credentials")
+    connectors.add_argument("action", choices=("migrate", "status"))
     name = sub.add_parser("name", help="name this computer (empty alias restores its computer name)")
     name.add_argument("alias")
     prefer = sub.add_parser("prefer", help="hand the inbox lease, and the connectors, to this install")
@@ -56,6 +58,16 @@ def _machines(argv: list[str]) -> int:
         return 0
     root, _ = resolve_home(args.home)
     home = Home(root, install=args.install)
+    if args.verb == "connectors":
+        from .connector_ownership import OwnershipError, claims, migrate
+        try:
+            if args.action == "migrate":
+                migrate(home)
+            import json
+            sys.stdout.write(json.dumps(claims(home), indent=2) + "\n")
+        except OwnershipError as exc:
+            return refuse("machines", exc, 2)
+        return 0
     if args.verb == "enable":
         from .installs import enable_leases
         enable_leases(root, args.url)
