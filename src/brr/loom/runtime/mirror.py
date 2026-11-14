@@ -10,6 +10,7 @@ private is never pushed to: ``self`` holds people's pages.
 
 from __future__ import annotations
 
+import fcntl
 import json
 import subprocess
 import threading
@@ -20,24 +21,21 @@ from pathlib import Path
 from urllib.parse import urlsplit
 
 from .config import resolve_secret
-from .publish import PublishError, push_command
+from .publish import PublishError, push_command, remote_command
 from .selfrepo import git
 
 EVERY = 30
 _TIMEOUT = 120
 
 
-def pending(self_dir: Path) -> tuple[str, str] | None:
-    """``(origin url, main sha)`` when ``main`` has commits ``origin/main`` lacks."""
+def pending(self_dir: Path, *, refresh: bool = False) -> tuple[str, str] | None:
+    """Local mirror target; refresh also returns a target whose cached tips agree."""
     url = git(self_dir, "remote", "get-url", "origin", check=False).stdout.strip()
     head = git(self_dir, "rev-parse", "--verify", "-q", "refs/heads/main", check=False).stdout.strip()
     if not url or not head:
         return None
     seen = git(self_dir, "rev-parse", "--verify", "-q", "refs/remotes/origin/main", check=False).stdout.strip()
-    if seen == head:
-        return None
-    # Behind or diverged is not ours to force: only a fast-forward goes out.
-    if seen and git(self_dir, "merge-base", "--is-ancestor", seen, head, check=False).returncode != 0:
+    if seen == head and not refresh:
         return None
     return url, head
 
@@ -79,6 +77,44 @@ def push(self_dir: Path, url: str, sha: str, forge_token: str) -> None:
     git(self_dir, "update-ref", "refs/remotes/origin/main", sha)
 
 
+def reconcile(self_dir: Path, url: str, forge_token: str) -> str:
+    """Fetch through the token lane, then reconcile under send-self's landing lock."""
+    args, env, _, _ = remote_command(
+        url, ["fetch", "--no-tags", "--", url,
+              "+refs/heads/main:refs/remotes/origin/main"], forge_token)
+    proc = subprocess.run(["git", *args], cwd=self_dir, env=env, capture_output=True,
+                          text=True, timeout=_TIMEOUT)
+    if proc.returncode:
+        raise PublishError(proc.stderr.strip()[-400:] or "mirror fetch failed")
+    git_dir = Path(git(self_dir, "rev-parse", "--absolute-git-dir").stdout.strip())
+    with (git_dir / "loom-push.lock").open("a") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        head = git(self_dir, "rev-parse", "refs/heads/main").stdout.strip()
+        remote = git(self_dir, "rev-parse", "refs/remotes/origin/main").stdout.strip()
+        if git(self_dir, "merge-base", "--is-ancestor", remote, head,
+               check=False).returncode == 0:
+            return head
+        if (git(self_dir, "symbolic-ref", "-q", "HEAD", check=False).stdout.strip()
+                != "refs/heads/main"
+                or git(self_dir, "status", "--porcelain").stdout.strip()
+                or (git_dir / "MERGE_HEAD").exists()):
+            raise PublishError("mirror: self main is not clean; cannot merge origin/main")
+        # send-self flattens history. A complete remote snapshot already present
+        # in local history proves its content landed, even if local edits followed.
+        tree = git(self_dir, "rev-parse", f"{remote}^{{tree}}").stdout.strip()
+        landed = tree in git(self_dir, "log", "--format=%T", head).stdout.splitlines()
+        strategy = ["-s", "ours"] if landed else []
+        result = git(self_dir, "merge", "--no-ff", "--no-edit", *strategy, remote,
+                     check=False)
+        if result.returncode:
+            files = git(self_dir, "diff", "--name-only", "--diff-filter=U").stdout.splitlines()
+            if (git_dir / "MERGE_HEAD").exists():
+                git(self_dir, "merge", "--abort")
+            detail = ", ".join(files) or result.stderr.strip()[-400:]
+            raise PublishError(f"mirror: cannot merge origin/main: {detail}")
+        return git(self_dir, "rev-parse", "refs/heads/main").stdout.strip()
+
+
 class Mirror:
     """Throttled, off-loop mirror of ``self`` main; refuses a remote that is not private."""
 
@@ -106,10 +142,10 @@ class Mirror:
         self_dir = self.home.root / "self"
         if not (self_dir / ".git").exists():
             return
-        found = pending(self_dir)
+        found = pending(self_dir, refresh=True)
         if found is None:
             return
-        url, sha = found
+        url, _sha = found
         if self.private is None:
             # Self holds people's pages: ask the forge, keep an answer, never a silence.
             answer = url.startswith(("/", "file://")) or is_private(url, config.forge_token)
@@ -127,12 +163,14 @@ class Mirror:
         if not self.private:
             return
         self.worker = threading.Thread(target=self._push, name="loom-mirror", daemon=True,
-                                       args=(self_dir, url, sha, config.forge_token))
+                                       args=(self_dir, url, config.forge_token))
         self.worker.start()
 
-    def _push(self, self_dir: Path, url: str, sha: str, forge_token: str) -> None:
+    def _push(self, self_dir: Path, url: str, forge_token: str) -> None:
         try:
-            push(self_dir, url, sha, forge_token)
+            sha = reconcile(self_dir, url, forge_token)
+            if sha != git(self_dir, "rev-parse", "refs/remotes/origin/main").stdout.strip():
+                push(self_dir, url, sha, forge_token)
             self.failing = None
         except Exception as exc:
             self.failing = (exc, exc.__traceback__)
