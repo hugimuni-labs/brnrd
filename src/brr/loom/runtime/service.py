@@ -837,6 +837,8 @@ def _uninstall(*, run, agents_home, system) -> int:
 LOOM_USAGE = (
     "usage: brnrd loom install [--home PATH] [--no-start] [--dry-run] [--dev] | uninstall | start | stop | restart | status | logs | where | config [edit] | check\n"
     "\n"
+    "Local board: brnrd setup channel --kind web --wait 0\n"
+    "Enables the loopback page, prints its URL and starts the loom.\n\n"
     "The loom is the service brnrd's resident runs on. A body's own verbs\n"
     "(send, wish, ask, settle, send-self, ...) are `brnrd runtime --help`."
 )
