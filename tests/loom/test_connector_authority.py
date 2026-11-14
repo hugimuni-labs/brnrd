@@ -246,3 +246,20 @@ def test_loss_immediately_before_transport_keeps_safe_retry(pair, wires, monkeyp
     assert speak(a, router.lease, 'retry', 'yes', channel='channel:telegram/42',
                  authorize=router.armed)[0] == outcome
     assert len(wires[1]) == 1
+
+
+def test_allowed_checks_live_authority_once_after_ownership(tmp_path, monkeypatch):
+    home = machine(tmp_path, 'aaaa', ('relay',))
+    live, calls = [True], []
+    def authorize():
+        calls.append(live[0])
+        return live[0]
+    monkeypatch.setattr(ownership, 'problem', lambda *args: None)
+    assert ownership.allowed(home, 'relay', authorize)
+    assert calls == [True]
+    def lose_during_refresh(*args):
+        live[0] = False
+    monkeypatch.setattr(ownership, 'problem', lose_during_refresh)
+    calls.clear()
+    assert not ownership.allowed(home, 'relay', authorize)
+    assert calls == [False]
