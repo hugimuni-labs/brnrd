@@ -61,7 +61,7 @@ def binding_key(home, name, kind):
     folder = resolve(home, kind, 'connectors')
     state = home.root / 'loom/connectors' / name / 'state'
     # Adapter helpers can affect identity too. Never walk inbox/drop files.
-    paths = [home.root / 'loom/config.toml', folder, state / 'token']
+    paths = [home.root / 'loom/config.toml', state / 'token']
     paths.extend(sorted(p for p in folder.iterdir() if p.is_file()))
     return tuple((str(p), _stamp(p)) for p in paths)
 
