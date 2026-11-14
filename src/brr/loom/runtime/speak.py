@@ -14,7 +14,7 @@ from .home import channel_parts
 from .ledger import append
 from .port import _front
 
-def speak(home, router_lease, key, text, *, channel=None, context=None):
+def speak(home, router_lease, key, text, *, channel=None, context=None, authorize=None):
     if not key:
         raise ValueError('speak: empty key')
     if channel is None:
@@ -23,6 +23,9 @@ def speak(home, router_lease, key, text, *, channel=None, context=None):
             raise ValueError('speak requires an explicit channel when there is not exactly one instance')
         channel = f'channel:{next(iter(names))}'
     name, chat = channel_parts(channel, home)
+    from .connector_ownership import allowed, require, Unavailable
+    if not allowed(home, name, authorize):
+        return 'unavailable', None, []
     _name, folder, flags = carries(home)[name]
     fields = dict(kind='letter', id=key, **(context or {}), to=chat or '')
     if fields.get('edit') and 'edit' not in flags:
@@ -40,13 +43,23 @@ def speak(home, router_lease, key, text, *, channel=None, context=None):
     safe = hashlib.sha256(key.encode()).hexdigest()
     prior = list(authority.sends.read('sends', safe))
     receipt = next((f.data['receipt'] for f in prior if f.kind == 'sent'), None)
-    if receipt is None and any(f.kind == 'intended' for f in prior):
+    intended = max((i for i, f in enumerate(prior) if f.kind == 'intended'), default=-1)
+    aborted = max((i for i, f in enumerate(prior) if f.kind == 'aborted'), default=-1)
+    if receipt is None and intended > aborted:
         status, receipt = 'maybe-sent', {}
     else:
         def run(_key, _gen):
             with tempfile.TemporaryDirectory(prefix='loom-letter-') as tmp:
                 path = Path(tmp) / 'letter.md'
                 path.write_text(_front(fields, text), encoding='utf-8')
+                try:
+                    require(home, name, authorize)
+                except Unavailable:
+                    # The local intention exists, but transport was never
+                    # invoked. Durable proof permits this draft to recover.
+                    authority.sends.record('sends', safe, 'aborted', router_lease.holder,
+                                           {'key': key, 'gen': router_lease.gen})
+                    raise
                 proc = subprocess.run([str(folder / 'out'), str(path)], env=environment(home, name),
                                       capture_output=True, text=True,
                                       timeout=600 if 'attach' in fields else 60)
@@ -64,6 +77,8 @@ def speak(home, router_lease, key, text, *, channel=None, context=None):
             status = receipt['status']
         except StaleLease:
             return 'stepped-down', None, []
+        except Unavailable:
+            return 'unavailable', None, []
         except Exception:  # an intended effect may have reached the person
             status, receipt = 'maybe-sent', {}
     for n, ident in enumerate(receipt.get('ids', []), 1):

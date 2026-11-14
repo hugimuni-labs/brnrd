@@ -52,12 +52,13 @@ def environment(home, name):
 
 class Inputs:
     """One supervised input per enabled folder. A directory input is passive."""
-    def __init__(self, home):
+    def __init__(self, home, authorize=None):
         carries(home)  # validate the complete declaration before starting any child
         self.home, self.children, self.failures = home, {}, {}
+        self.authorize = authorize
         self.names = instances(home)
         from .connector_presence import Presence
-        self.presence = Presence(home)
+        self.presence = Presence(home, authorize=authorize)
 
     def step(self):
         # Read at every step: a channel paired while the loom runs is heard
@@ -69,6 +70,11 @@ class Inputs:
                 self._stop(self.children.pop(name)[0])
             self.names = names
         for name, kind in self.names.items():
+            from .connector_ownership import allowed
+            if not allowed(self.home, name, self.authorize):
+                if name in self.children:
+                    self._stop(self.children.pop(name)[0])
+                continue
             folder = resolve(self.home, kind, "connectors")
             drop = self.home.root / "loom/connectors" / name / "state/in"
             drop.mkdir(parents=True, exist_ok=True)
@@ -80,12 +86,14 @@ class Inputs:
                     delay = min(delay * 2, 60)
                 if time.monotonic() >= due:
                     try:
+                        if not allowed(self.home, name, self.authorize):
+                            continue
                         child = subprocess.Popen([str(command), str(drop.resolve())],
                                                  env=environment(self.home, name))
                     except OSError:
                         due, delay = time.monotonic() + delay, min(delay * 2, 60)
                 self.children[name] = (child, due, delay)
-            drain(self.home, name, drop, self.failures)
+            drain(self.home, name, drop, self.failures, self.authorize)
 
     def close(self):
         self.presence.close()
@@ -113,7 +121,9 @@ def addressed(name, fm):
     return fields
 
 
-def ingest(home, name, fm, attachments):
+def ingest(home, name, fm, attachments, authorize=None):
+    from .connector_ownership import require
+    require(home, name, authorize)
     ident = fm['id']
     source_id = f'source:{name}:{ident}'
     facts = read_facts(home)
@@ -172,6 +182,7 @@ def ingest(home, name, fm, attachments):
             data['links'] = links
         if misses:
             data['refs_missing'] = misses
+        require(home, name, authorize)
         source = append(home, Fact(kind='source', by=f'loom:{home.install_id()}',
                                    id=source_id, after=tuple(blob_ids), data=data))
     letter_id = source_id.replace('source:', 'letter:', 1)
@@ -185,6 +196,7 @@ def ingest(home, name, fm, attachments):
         for key in ('clean', 'refs', 'links', 'wake', 'wish', 'verdict'):
             if key in data:
                 fields[key] = data[key]
+        require(home, name, authorize)
         append(home, Fact(kind='letter', by=f'loom:{home.install_id()}', id=letter_id,
                           after=(source.id,), data=fields))
     if source.data.get('refs_missing'):
@@ -267,9 +279,12 @@ def _open_ancestor(home, thread):
     return None
 
 
-def drain(home, name, drop, failures=None):
+def drain(home, name, drop, failures=None, authorize=None):
+    from .connector_ownership import allowed, Unavailable
     failures = failures if failures is not None else {}
     for path in sorted(drop.glob('*.md'), key=lambda p: (p.lstat().st_mtime_ns, p.name)):
+        if not allowed(home, name, authorize):
+            return
         attachments = path.with_suffix('.d')
         valid = False
         try:
@@ -288,7 +303,12 @@ def drain(home, name, drop, failures=None):
                     raise ValueError('attachment must be a regular file')
                 file.read_bytes()
             valid = True
-            ingest(home, name, fm, files)
+            if authorize is None:
+                ingest(home, name, fm, files)
+            else:
+                ingest(home, name, fm, files, authorize)
+        except Unavailable:
+            return  # Retain complete drops and attachments; loss is not poison.
         except Exception as exc:
             if valid:
                 failures[path] = failures.get(path, 0) + 1
