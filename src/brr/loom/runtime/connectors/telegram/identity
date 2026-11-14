@@ -1,0 +1,9 @@
+#!/usr/bin/env python3
+"""The public bot id is stable across token rotation; no network needed."""
+from common import token
+
+value = token()
+bot, colon, secret = value.partition(':')
+if not bot.isdecimal() or not colon or not secret:
+    raise SystemExit(1)
+print('telegram:' + bot)
