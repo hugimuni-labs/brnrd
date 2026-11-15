@@ -1,29 +1,22 @@
-"""``Updater``: the loom moves its own source forward, then re-execs.
+"""A green main tip is offered to the resident; only ``update take`` merges it.
 
-``update`` in loom/config.toml picks the source. ``dev`` follows a git
-checkout's main: every ``EVERY`` seconds, off the loop, it fetches origin's
-main and asks the forge for that commit's checks. When every check passed and
-the tip is ahead of HEAD, the loop fast-forwards at the next idle tick and
-re-execs. Idle starts strict (no body of this install has a tool call open)
-and loosens the longer the move waits (``PATIENCE``), since several seated
-bodies seldom pause at once; the start that
-follows writes ``loom.moved``. It never resets: a HEAD main does not contain,
-a branch other than main or a tree with uncommitted changes is refused, and
-the refusal is the ``update`` step's ``loom.degraded``. Red or pending checks
-wait without a fact; a red one is said once in loom.log. A tip no check ever runs on (the
-receipt line's bot push) is stepped over to its first parent that has some. A check counts only
-when the tip's pull request had to pass it (``GitHubChecks.gates``): a deploy
-is not a gate. ``stable`` is the release channel (product-shape move 3), not
-built here: it logs once and stays put. ``auto``, the default, is
-``dev`` for a loom that runs from a checkout and ``off`` otherwise.
+Offers and decisions live in the ledger. The loop polls off-thread, sends one
+notice per open offer, and re-execs only after take checked the merged tree.
+The existing CI gate judgment and progressively looser idle gate are shared.
 """
 
 from __future__ import annotations
 
 import json
+import os
+import sys
+import fcntl
+from functools import lru_cache
+from contextlib import contextmanager
 import re
 import subprocess
 import threading
+import tempfile
 import time
 import urllib.error
 import urllib.request
@@ -45,6 +38,9 @@ PASSED = {"success", "neutral", "skipped"}
 RERUN_GRACE = 120
 #: How many unchecked commits on main's tip ``poll`` steps over: the receipt line's push after a release is one.
 UNCHECKED = 5
+# UTF-8 bytes for the PR detail shared by the letter and its offer fact.
+DETAIL_BYTES = 4500
+BODY_CHARS = 300
 
 
 def _moment(text) -> datetime | None:
@@ -80,6 +76,7 @@ class Refused(Exception):
 class Offer:
     old: str
     new: str
+    pulls: tuple[dict, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -122,6 +119,10 @@ class GitHubChecks:
                      "Accept": "application/vnd.github+json"})
         with urllib.request.urlopen(req, timeout=20) as resp:
             return json.load(resp)
+
+    def description(self, url: str, number: int) -> dict:
+        data = self._get(slug(url), f"pulls/{number}")
+        return {"number": number, "title": data["title"], "body": data.get("body") or ""}
 
     def _runs(self, repo: str, sha: str) -> list[dict]:
         return self._get(repo, f"commits/{sha}/check-runs?per_page=100").get("check_runs") or []
@@ -198,10 +199,11 @@ SEEN: dict = {}
 
 
 class DevSource:
-    """A git checkout that follows origin's main, fast-forward only."""
+    """A git checkout that can merge origin main into any current branch."""
 
     def __init__(self, root: Path, forge):
         self.root, self.forge = root, forge
+        self.descriptions = {}
 
     def _git(self, *args: str, check: bool = True) -> str:
         return git(self.root, *args, check=check).stdout.strip()
@@ -211,13 +213,10 @@ class DevSource:
 
     def refusal(self) -> str:
         """Why the checkout may not move now; empty when it may."""
-        branch = self._git("symbolic-ref", "-q", "--short", "HEAD", check=False)
-        if branch and branch != "main":
-            return f"checkout {self.root} is on branch {branch}, not main: not touched"
         dirty = self._git("status", "--porcelain", "--untracked-files=no").splitlines()
         if dirty:
             return (f"checkout {self.root} has {len(dirty)} uncommitted change"
-                    f"{'s' * (len(dirty) > 1)} ({dirty[0].strip()}): not touched")
+                    f"{'s' * (len(dirty) > 1)} ({dirty[0].strip()}): commit tracked changes first; not touched")
         return ""
 
     def poll(self) -> Offer | Held | None:
@@ -228,9 +227,6 @@ class DevSource:
         SEEN.update(tip=tip, at=time.time())
         if tip == head or self._ancestor(tip, head):
             return None
-        if not self._ancestor(head, tip):
-            raise Refused(f"checkout {self.root} at {head[:8]} has diverged from main "
-                          f"{tip[:8]}: not touched")
         # A tip no check ran on and no pull request gated is never judged: the move goes as far as its first parent
         # that is (``GitHubChecks.ran``). A merge whose runs are not registered yet still waits, as pending.
         target = tip
@@ -239,7 +235,7 @@ class DevSource:
             if pull_of(subject) is not None or self.forge.ran(url, target):
                 break
             parent = self._git("rev-parse", f"{target}^1")
-            if parent == head or not self._ancestor(head, parent):
+            if self._ancestor(parent, head):
                 return None
             target = parent
             subject = self._git("log", "-1", "--format=%s", target)
@@ -248,18 +244,47 @@ class DevSource:
             return Held(target, head, red)
         if state != "green":
             return None
-        if why := self.refusal():
-            raise Refused(why)
-        return Offer(head, target)
+        if self._ancestor(target, head):
+            return None
+        base = self._git("merge-base", head, target)
+        pulls = []
+        subjects = self._git("log", "--first-parent", "--reverse", "--format=%s", f"{base}..{target}")
+        for subject in subjects.splitlines():
+            number = pull_of(subject)
+            if number is None:
+                continue
+            key = (url, number)
+            if key not in self.descriptions:
+                try:
+                    data = self.forge.description(url, number)
+                except Exception:
+                    # Descriptive enrichment must never block a green update.
+                    data = {"number": number, "title": subject, "body": ""}
+                self.descriptions[key] = pull_summary(url, number, data)
+            pulls.append(self.descriptions[key])
+        return Offer(head, target, tuple(pulls))
 
-    def apply(self, offer: Offer) -> bool:
-        """On the loop, at an idle tick: fast-forward; false when HEAD moved since the poll."""
+    def apply(self, offer: Offer) -> tuple[str, str, int]:
+        """Merge on the current branch; abort conflicts without retaining tree changes."""
         if why := self.refusal():
             raise Refused(why)
-        if self._git("rev-parse", "HEAD") != offer.old:
-            return False
-        self._git("merge", "--ff-only", "--quiet", offer.new)
-        return True
+        if self._git("rev-parse", "--verify", "-q", "MERGE_HEAD", check=False):
+            raise Refused("a merge is already in progress; finish or abort it first")
+        before = self._git("rev-parse", "HEAD")
+        own = int(self._git("rev-list", "--count", f"{offer.new}..{before}"))
+        mode = "merge" if own else "fast-forward"
+        if self._ancestor(offer.new, before):
+            return before, "merge" if own else "fast-forward", own
+        result = git(self.root, "-c", "core.hooksPath=/dev/null", "merge", "--no-edit",
+                     "--no-autostash", "--ff", offer.new, check=False)
+        if result.returncode:
+            conflicts = self._git("diff", "--name-only", "--diff-filter=U")
+            if self._git("rev-parse", "--verify", "-q", "MERGE_HEAD", check=False):
+                self._git("merge", "--abort")
+            raise Refused("update merge aborted; checkout left as it was. "
+                          + ("Conflicting files: " + conflicts.replace("\n", ", ") if conflicts
+                             else result.stderr.strip()))
+        return before, mode, own
 
 
 #: The seam for move 3: ``stable`` gets its source here when releases exist.
@@ -281,7 +306,11 @@ class Updater:
         self.offer: Offer | None = None
         self.held: Held | None = None
         self.moved: Offer | None = None
+        self.reconciled = None
+        self.pending = self.loading = False
         self.looked = 0.0
+        self.source = None
+        self.source_mode = None
         #: Monotonic time a green move first waited for an idle tick; cleared by the move.
         self.waiting: float | None = None
         self.said: set[str] = set()
@@ -303,7 +332,12 @@ class Updater:
         if not (self.root / ".git").exists():
             self._say_once(f"update = {mode}, but {self.root} is not a git checkout; staying put")
             return None
-        return SOURCES[mode](self.root, forge_for(config))
+        # A source lives across polls: an open offer must not repeatedly fetch
+        # descriptions already read (including unavailable descriptions).
+        if self.source is None or self.source_mode != (mode, config.forge_token):
+            self.source = SOURCES[mode](self.root, forge_for(config))
+            self.source_mode = (mode, config.forge_token)
+        return self.source
 
     def young(self) -> float | None:
         """How young an open tool call must be to hold back the waiting move."""
@@ -311,31 +345,47 @@ class Updater:
         return [young for after, young in PATIENCE if waited >= after][-1]
 
     def step(self, config, idle) -> None:
-        """Sets ``moved`` once the checkout moved; raises while the source refuses or fails.
-
-        ``idle(young)`` is true when no body has an open tool call younger than ``young``
-        seconds (``None``: none open at all)."""
+        """Offer without moving; a checked take alone enables the idle reload."""
+        from .ledger import shared_reader, kind_facts
         source = self._source(config)
+        self.pending = self.loading = False
         if source is None:
             self.failing = self.offer = self.waiting = None
             return
-        if self.offer is not None and self.waiting is None:
-            self.waiting = time.monotonic()
-            self._say_once(f"{self.offer.new[:8]} is green; waiting for an idle tick")
-        if self.offer is not None and time.monotonic() - self.looked >= LOOK_EVERY:
-            self.looked = time.monotonic()
-            young = self.young()
-            if not idle(young):
-                self._attempt(source)
-                return
-            offer, self.offer = self.offer, None
-            if source.apply(offer):
-                waited = time.monotonic() - self.waiting
-                held = "any open call" if young is None else f"open calls under {young:.0f}s"
-                self.log(self.home, f"update: fast-forwarded {self.root} {offer.old[:8]} -> {offer.new[:8]}"
-                                    f" after waiting {waited:.0f}s ({held} held it)")
-                self.moved, self.waiting = offer, None
-                return
+        facts = shared_reader(self.home).now(self.home)
+        self.pending = open_offer(facts, self.home, self.root) is not None
+        checked = latest(facts, self.home, self.root, "update.checked")
+        self.reconciled = checked.id if checked else None
+        # A start containing the checked tree consumed this take. A later own
+        # commit, hand pull or rollback must not turn that old take pending again.
+        started = next((f for f in reversed(kind_facts(facts, "loom.started"))
+                        if f.data.get("install") == self.home.install_id()), None)
+        consumed = checked and started and started.at >= checked.at and (
+            started.at > checked.at or (
+                started.data.get("commit") and source._ancestor(checked.data["new"], started.data["commit"])))
+        if checked and checked.data["ok"] and not consumed:
+            self.loading = True
+            if source._git("rev-parse", "HEAD") != checked.data["new"]:
+                raise Refused("checkout changed after update take; run update take again to check it")
+            if why := source.refusal():
+                raise Refused(why)
+            if self.waiting is None:
+                self.waiting = time.monotonic()
+                self._say_once(f"{checked.data['new'][:8]} checked; waiting for an idle tick")
+            if time.monotonic() - self.looked >= LOOK_EVERY:
+                self.looked = time.monotonic()
+                young = self.young()
+                if idle(young):
+                    self.moved = Offer(checked.data["old"], checked.data["new"])
+                    self.log(self.home, f"update: loading checked {checked.data['mode']} "
+                             f"{checked.data['new'][:8]} (" +
+                             ("any open call" if young is None else f"open calls under {young:.0f}s") + " held it)")
+            return
+        self.waiting = None
+        if self.offer is not None:
+            found, self.offer = self.offer, None
+            if not source._ancestor(found.new, source._git("rev-parse", "HEAD")):
+                offer_update(self.home, self.root, facts, found)
         self._attempt(source)
         if (held := self.held) is not None:
             self._say_once(f"{held.tip[:8]} is red on {held.check}; staying on {held.head[:8]}")
@@ -374,7 +424,8 @@ def merges(root: Path, old: str, new: str) -> list[str]:
 def moved_text(fact) -> str:
     data = fact.data or {}
     loaded = ", ".join(data.get("merges") or ()) or "no merged pull requests"
-    return f"loom moved {str(data.get('from'))[:8]} → {str(data.get('to'))[:8]}, loaded {loaded}"
+    method = (f", {data['mode']} over {data.get('own', 0)} own commits" if data.get("mode") else "")
+    return f"loom moved {str(data.get('from'))[:8]} → {str(data.get('to'))[:8]}, loaded {loaded}{method}"
 
 
 def moved_line(facts, strand: str, gen: int, install: str) -> str:
@@ -410,3 +461,217 @@ def wake_line(facts, install: str, root: Path) -> str:
                 + (f", not loaded: {', '.join(pending)}" if pending else ""))
     last = next((f for f in reversed(kind_facts(facts, "loom.moved")) if f.data.get("install") == install), None)
     return f"loom: runs {running[:8]}; {main}" + (f"; last {moved_text(last)}" if last else "") + "\n"
+
+
+@lru_cache(maxsize=8)
+def lock_path(root: Path) -> Path:
+    common = git(root, "rev-parse", "--git-common-dir").stdout.strip()
+    return (root / common).resolve() / "brnrd-update.lock"
+
+
+@contextmanager
+def checkout_lock(root: Path, *, blocking=True):
+    """Serialize take and the loop's source observer, including across homes."""
+    with lock_path(root).open("a") as held:
+        try:
+            fcntl.flock(held, fcntl.LOCK_EX | (0 if blocking else fcntl.LOCK_NB))
+        except BlockingIOError:
+            yield False
+            return
+        try:
+            yield True
+        finally:
+            fcntl.flock(held, fcntl.LOCK_UN)
+
+
+def latest(facts, home, root, kind):
+    from .ledger import kind_facts
+    return next((f for f in reversed(kind_facts(facts, kind)) if f.kind == kind
+                 and f.data.get("install") == home.install_id()
+                 and f.data.get("root") == str(root.resolve())), None)
+
+
+def open_offer(facts, home, root):
+    offered = latest(facts, home, root, "update.offered")
+    closed = latest(facts, home, root, "update.decided")
+    return offered if offered and (not closed or closed.data["offer"] != offered.data["offer"]) else None
+
+
+def record(home, root, kind, **data):
+    from .ledger import Fact, append
+    return append(home, Fact(kind=kind, by=f"loom:{home.install_id()}",
+                            data={"install": home.install_id(), "root": str(root.resolve()), **data}))
+
+
+def offer_update(home, root, facts, found):
+    from .home import mint
+    from .loom import notice, notice_id
+    previous = latest(facts, home, root, "update.offered")
+    current = open_offer(facts, home, root)
+    if previous and previous.data["new"] == found.new and not current:
+        return  # held or taken: one decision per green tip
+    subject = current.data["subject"] if current else f"{home.install_id()}:{mint(12)}"
+    letter = notice_id("update", subject)
+    source = DevSource(root, None)
+    own = int(source._git("rev-list", "--count", f"{found.new}..HEAD"))
+    dirty = bool(source._git("status", "--porcelain", "--untracked-files=no"))
+    pulls, details, omitted = offer_details(found.pulls)
+    # The notice id is stable while its target advances. Record first, so take
+    # reads the offered target even if the loop exits before sending the notice.
+    offered = previous
+    if not previous or previous.data["new"] != found.new:
+        offered = record(home, root, "update.offered", offer=letter, subject=subject, old=found.old,
+                         new=found.new, own=own, dirty=dirty, pulls=pulls, omitted=omitted)
+    if not any(f.id == letter for f in facts):
+        what = (f"Main has a green update, {found.new[:8]}, for {root}. "
+                f"Your checkout carries {own} own commits; "
+                f"tracked files {'have uncommitted changes' if dirty else 'are committed'}.\n\n"
+                + (details or "No merged pull requests since the merge base.") +
+                "\n\nRead what changed; look over your own additions, lessons and habits. "
+                "Take it when you judge it right, or hold and say why. "
+                "Tell your person only what concerns them, as they have said they prefer. "
+                "A newer green tip updates this offer without a second letter; brnrd runtime update shows its current contents.")
+        # notice derives its id; reuse exactly the subject minted above.
+        notice(home, facts, "update", subject, what,
+               "brnrd runtime update take; or brnrd runtime update hold --why 'your reason'")
+    return offered
+
+
+def pull_summary(url, number, data):
+    """Keep identity and a stated excerpt, never a whole PR body."""
+    body = str(data.get("body") or "").strip().split("\n\n", 1)[0]
+    if len(body) > BODY_CHARS:
+        body = body[:BODY_CHARS] + f"… [excerpt: first {BODY_CHARS} characters]"
+    elif body != str(data.get("body") or "").strip():
+        body += " [excerpt: first paragraph]"
+    repo = slug(url)
+    return {"number": number, "title": str(data.get("title") or ""),
+            "url": f"https://github.com/{repo}/pull/{number}" if repo else f"{url}#pull/{number}",
+            "body": body}
+
+
+def offer_details(pulls):
+    """One bounded detail shared by the fact and notice; show lists all landings."""
+    kept, chunks, used = [], [], 0
+    for pull in pulls:
+        chunk = f"#{pull['number']} · {pull['title']}\n{pull['body']}\n{pull['url']}"
+        size = max(len(chunk.encode("utf-8")), len(json.dumps(pull).encode("utf-8"))) + 2
+        if used + size > DETAIL_BYTES:
+            break
+        kept.append(pull)
+        chunks.append(chunk)
+        used += size
+    omitted = len(pulls) - len(kept)
+    if omitted:
+        chunks.append(f"and {omitted} more: brnrd runtime update")
+    return kept, "\n\n".join(chunks), omitted
+
+
+def check_tree(root: Path, home) -> None:
+    """Fresh interpreter, candidate imports and the real home's config; no service starts."""
+    code = """
+import sys
+from pathlib import Path
+root, home = map(Path, sys.argv[1:])
+sys.path.insert(0, str(root / 'src'))
+import brr
+assert Path(brr.__file__).resolve().is_relative_to(root / 'src'), brr.__file__
+from brr.loom.runtime import loom, __main__
+from brr.loom.runtime.config import load_config
+load_config(home)
+"""
+    env = os.environ.copy()
+    env.pop("PYTHONPATH", None)
+    try:
+        # Ignore existing bytecode as well as avoiding writes into the checkout:
+        # git can give two different sources the same timestamp and byte length.
+        with tempfile.TemporaryDirectory(prefix="brnrd-update-check-") as cache:
+            result = subprocess.run([sys.executable, "-B", "-X", f"pycache_prefix={cache}",
+                                     "-c", code, str(root.resolve()), str(home.root)],
+                                    cwd=root, env=env, capture_output=True, text=True, timeout=60)
+    except subprocess.TimeoutExpired as exc:
+        raise Refused("merged tree check timed out after 60s") from exc
+    if result.returncode:
+        raise Refused("merged tree check failed: " + (result.stderr or result.stdout).strip())
+
+
+def decide(home, root, action, why=""):
+    from .config import load_config
+    from .ledger import read_facts, Fact, append
+    with checkout_lock(root):
+        updater = Updater(home, lambda *args: None, root)
+        source = updater._source(load_config(home.root))
+        if source is None:
+            raise Refused("updates are off or this install has no update source")
+        facts = read_facts(home)
+        offered = open_offer(facts, home, root)
+        if offered is None and action == "take":
+            decided = latest(facts, home, root, "update.decided")
+            if decided and decided.data["action"] == "take":
+                offered = latest(facts, home, root, "update.offered")
+        if offered is None:
+            raise Refused("no open update offer")
+        data = offered.data
+        if action == "hold":
+            if not why.strip():
+                raise Refused("holding an update requires --why")
+            record(home, root, "update.decided", offer=data["offer"], tip=data["new"],
+                   action="hold", why=why)
+        else:
+            print(f"Taking offered main {data['new']} into {source._git('rev-parse', '--abbrev-ref', 'HEAD')}")
+            before = source._git("rev-parse", "HEAD")
+            mode, own, ok = "merge", 0, False
+            try:
+                before, mode, own = source.apply(Offer(data["old"], data["new"]))
+                try:
+                    check_tree(root, home)
+                except BaseException:
+                    source._git("reset", "--hard", before)
+                    raise
+                ok = True
+            finally:
+                record(home, root, "update.checked", offer=data["offer"], old=before,
+                       new=source._git("rev-parse", "HEAD"), tip=data["new"],
+                       base=source._git("merge-base", data["old"], data["new"]),
+                       mode=mode, own=own, ok=ok)
+            why = f"checked {mode} over {own} own commits; reload at the next idle tick"
+            record(home, root, "update.decided", offer=data["offer"], tip=data["new"],
+                   action="take", why=why)
+        append(home, Fact(kind="note", by=f"loom:{home.install_id()}",
+                          data={"re": data["offer"], "why": why}))
+        return why
+
+
+def main(argv=None):
+    from .home import home_for
+    from .config import ConfigError
+    from .receipts import source_root
+    from .refusals import Parser, refuse
+    parser = Parser(verb="update", prog="brnrd runtime update")
+    parser.add_argument("action", nargs="?", default="show", choices=("show", "take", "hold"))
+    parser.add_argument("--why", default="")
+    parser.add_argument("--home")
+    parser.add_argument("--room")
+    args = parser.parse_args(argv)
+    try:
+        home, root = home_for(args.home, args.room), source_root()
+        if args.action == "show":
+            from .ledger import read_facts
+            offered = open_offer(read_facts(home), home, root)
+            if offered is None:
+                raise Refused("no open update offer")
+            data = dict(offered.data)
+            # The durable offer and wake stay bounded; inspection can list every
+            # landing directly from the offered range without a forge request.
+            source = DevSource(root, None)
+            base = source._git("merge-base", data["old"], data["new"])
+            url = source._git("remote", "get-url", "origin")
+            subjects = source._git("log", "--first-parent", "--reverse", "--format=%s", f"{base}..{data['new']}")
+            data["landings"] = [pull_summary(url, n, {"title": line})
+                                for line in subjects.splitlines() if (n := pull_of(line)) is not None]
+            print(json.dumps(data, indent=2))
+        else:
+            print(decide(home, root, args.action, args.why))
+        return 0
+    except (Refused, subprocess.CalledProcessError, ConfigError) as exc:
+        return refuse("update", exc)

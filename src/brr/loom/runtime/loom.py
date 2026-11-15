@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import fcntl
 import functools
+from contextlib import nullcontext
 import json
 import os
 import re
@@ -30,7 +31,7 @@ from .health import Health, degraded_line
 from .roomsense import room_line
 from .library import problem_line
 from .since import since_gone
-from .update import Updater, moved_line
+from .update import Updater, moved_line, checkout_lock
 from .home import Home, atomic_write, is_channel, mint, notice_id
 from .ledger import LedgerView, kind_facts, LedgerConflict, append, read_facts
 from .registry import KINDS
@@ -2903,12 +2904,21 @@ def run(root: Path | str, *, adapter: str = "fake", core: str = "haiku",
                     health.guard("board", start_board)
                 if spa is not None:  # the board's build follows the checkout; a failed one stays degraded
                     health.guard("spa", spa.step, backoff=False)
-                # Only at an idle tick, and the re-exec follows in this same pass.
-                health.guard("update", updater.step, config, functools.partial(_idle, home),
-                             backoff=False)
-            # The walk of the runtime's source is paced; follow-main's moves need none of it.
-            if updater.moved is None and time.monotonic() >= next_source:
-                next_source, source_moved = time.monotonic() + SOURCE_EVERY, _source_fingerprint() != fingerprint
+            # Take holds the checkout lock through merge, validation and rollback.
+            # Never observe (or reload) its intermediate tree. A completed check,
+            # including a rollback, resets the mtime observer's baseline.
+            lock = checkout_lock(updater.root, blocking=False) if (updater.root / ".git").exists() else nullcontext(True)
+            with lock as available:
+                if available:
+                    reconciled = updater.reconciled
+                    if router.armed():
+                        health.guard("update", updater.step, config, functools.partial(_idle, home), backoff=False)
+                    if reconciled != updater.reconciled:
+                        fingerprint = _source_fingerprint()
+                    if (updater.moved is None and not updater.pending and not updater.loading
+                            and time.monotonic() >= next_source):
+                        next_source = time.monotonic() + SOURCE_EVERY
+                        source_moved = _source_fingerprint() != fingerprint
             if updater.moved is not None or source_moved:
                 _log(home, "runtime source changed; re-executing loom")
                 _reexec(bodies, inputs)
