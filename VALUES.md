@@ -9,14 +9,14 @@ Each value has three lines: what it is, what it rules out, and where the product
 A change to a resident is not something that happens to it. The resident decides to take it, carries it out, and looks itself over afterwards: it reads what changed, checks what it and its person have added, repairs what it can, and tells the person the rest. How much it asks its person first follows what the person has said they want. This holds for a new version from us, and equally for a change the resident or its person starts: a feature added, a part replaced. It holds for every install.
 
 - rules out: updates that silently change behaviour; a version that loads without the resident having decided to take it; migration machinery that matches a person's additions against version numbers; an update the person has to supervise; an install whose resident has no way to change its own program.
-- today: an install that follows `main` loads new code by itself, with no decision by the resident, and is told which changes it loaded. Nothing asks the resident to look itself over. An install from a release does not update by itself at all, and its resident cannot change the program it runs on. Open: whether every install carries its own code for the resident to change, or only a place to add parts.
+- today: an install that follows `main` loads new code by itself, with no decision by the resident, and is told which changes it loaded. Nothing asks the resident to look itself over. An install from a release does not update by itself at all, and its resident cannot change the program it runs on. Decided 2026-11-15: every install carries its own code, and takes ours as a merge. Not built yet.
 
 ## 2 · What is yours is yours
 
-Every file has one owner. A person's repository belongs to them and their resident: the resident writes there as part of its work, under its own name or the person's. We, the people who ship brnrd, never write into it, and neither does an update from us. What we ship is ours: an update replaces it whole and keeps the way back.
+Every file has one owner. A person's repository belongs to them and their resident: the resident writes there as part of its work, under its own name or the person's. We, the people who ship brnrd, never write into it, and neither does an update from us. What we ship is a starting point: each install carries its own copy of the code, the resident may change it, and our new version arrives as a merge the resident chooses to make. There is always a way back.
 
 - rules out: copying our files into a person's repository; additions kept where no history protects them; a registry that stands between two people who want to share.
-- today: a new install copies our files into the person's repository once and never updates them; replacement parts live outside it.
+- today: a new install copies our files into the person's repository once and never updates them; replacement parts live outside it. An install that carries its code stops receiving ours the moment its resident changes a line.
 
 ## 3 · Free form first: the mind does the matching
 
