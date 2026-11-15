@@ -88,6 +88,14 @@ def _private_jack_clock(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def isolate_person_names():
+    from brr.loom.runtime import person_names
+    person_names._CACHE.clear()
+    yield
+    person_names._CACHE.clear()
+
+
+@pytest.fixture(autouse=True)
 def isolate_preferences_cache():
     from brr.loom.runtime.adapters import _checked_preferences
     _checked_preferences.cache_clear()

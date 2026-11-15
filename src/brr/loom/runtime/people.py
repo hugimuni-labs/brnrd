@@ -55,7 +55,7 @@ def _mtime(path: Path) -> int:
         return 0
 
 
-def tally(self_dir: Path, parsed: Boundary, kept: dict) -> tuple[list[str], list[str], dict]:
+def tally(self_dir: Path, parsed: Boundary, kept: dict, *, names_repo: Path | None = None) -> tuple[list[str], list[str], dict]:
     """The people lines for this gen, what makes them news, and the state to keep.
 
     The news key is each person with their page date, and the over lines: never
@@ -73,6 +73,8 @@ def tally(self_dir: Path, parsed: Boundary, kept: dict) -> tuple[list[str], list
         person = person_of(letter.sender)
         if person and (self_dir / "people" / person).is_dir() and letter.id not in seen.get(person, ()):
             seen.setdefault(person, []).append(letter.id)
+    from .person_names import names, label
+    resolved = names(names_repo or self_dir)
     lines, key = [], []
     for person in sorted(seen):
         page = self_dir / "people" / person / "page.md"
@@ -82,9 +84,9 @@ def tally(self_dir: Path, parsed: Boundary, kept: dict) -> tuple[list[str], list
         if (dates.get(person) or [None])[0] != moved:
             dates[person] = [moved, page_date(self_dir, person) if mtime else "never"]
         count = len(seen[person])
-        lines.append(f"people: {count} letter{'s' * (count != 1)} from {person} this gen; "
+        lines.append(f"people: {count} letter{'s' * (count != 1)} from {label('person:' + person, resolved)} this gen; "
                      f"people/{person}/page.md last changed {dates[person][1]}")
-        key.append(f"{person} {dates[person][1]}")
+        key.append(f"{person} {dates[person][1]}" + (f" {resolved[person]}" if person in resolved else ""))
         size = between_us_bytes(page.read_text(encoding="utf-8")) if mtime else 0
         if size > BETWEEN_US_BUDGET:
             lines.append(f"people: people/{person}/page.md between us is {size} bytes, "

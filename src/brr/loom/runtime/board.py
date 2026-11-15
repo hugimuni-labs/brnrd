@@ -36,6 +36,7 @@ from .ledger import kind_facts
 from .home import Home, atomic_write, channel_parts, mint, thread_of
 from .port import _front
 from .lifecycle import CLOSED, main_snapshot
+from .person_names import names as person_names
 from .project import fold, is_notice, projection_cache, sender_threads
 from .snapshot import _iso, assemble
 from .wishes import Say, receipt, told as told_of, waits_on, wishes
@@ -696,7 +697,7 @@ def compute(home: Home, facts, config, tools: dict, live: dict, person: str | No
     hashes = {name: digest(part) for name, part in parts.items()}
     index = {"v": 1, **{k: v for k, v in snap.items() if k not in {"at", "log"}},
              "threads": [index_thread(t, counts.get(t["id"])) for t in threads],
-             "wishes": counts, **_as(home, person), "parts": hashes, "faces": FACES}
+             "wishes": counts, **_as(home, person), "person_names": person_names(home.root / "self"), "parts": hashes, "faces": FACES}
     if machines := machines_of(home, facts):
         index["machines"] = machines
     parts["index"] = index
@@ -828,7 +829,10 @@ class Parts:
         self.taped |= self.tape.read()
         typed = self._typed()
         # semantic_revision: the loom's own router.renewed heartbeat (6 a minute) is no change here.
-        revision = (id(facts), facts.semantic_revision)
+        from .lifecycle import main_tip
+        repo = self.home.root / "self"
+        revision = (id(facts), facts.semantic_revision,
+                    main_tip(repo) if (repo / ".git").exists() else "")
         now = time.monotonic()
         usage = self._usage_stamp()
         if revision != self.revision or typed or not self.parts:

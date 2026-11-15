@@ -137,6 +137,7 @@ export type Index = {
 	// absent once those wishes ride in the unthreaded part; kept for an index that still sends them
 	unthreaded?: Wish[];
 	person: string | null;
+	person_names?: Record<string, string>;
 	// the channel a letter typed on the board goes out through
 	via?: string | null;
 	parts: Record<string, string>;
@@ -175,6 +176,7 @@ export type Model = {
 	machines: Machine[];
 	faces?: Record<string, string[]>;
 	person: string | null;
+	person_names?: Record<string, string>;
 	via?: string | null;
 	topics?: Topic[];
 };

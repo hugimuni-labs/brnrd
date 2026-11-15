@@ -154,3 +154,19 @@ def test_an_opener_that_runs_here_still_settles_its_own_child_alone(loom):
     assert "only thread:work may settle child" in error
     run("settle", "child", "--room", str(seat), "--why", "Done")
     assert read_thread(home, "child")["status"] == "settled"
+
+
+def test_asks_person_wait_uses_main_name_without_changing_opener(loom):
+    home, seat = loom
+    repo = home.root / "self"
+    page = repo / "people/test/README.md"
+    page.write_text("# Test Human Name\n")
+    readme = repo / "threads/work/README.md"
+    readme.write_text(readme.read_text().replace("status: open", "status: open\nopened-by: person:test"))
+    commit(repo, "person opener")
+    pr = inject_letter(home.root, to="thread:work", body="PR #1 is open")
+    merge = run("wish", "new", "--room", str(seat), "--say", pr, "--line", "merge #1").strip()
+    run("ask", "merge #1? rec: yes", "--room", str(seat), "--for", merge)
+    text = run("asks", "--home", str(home.root))
+    assert "waits on Test Human Name" in text
+    assert read_thread(home, "work")["opened-by"] == "person:test"
