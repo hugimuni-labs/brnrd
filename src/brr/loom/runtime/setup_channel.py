@@ -992,7 +992,10 @@ def _run_loom(home, before):
 
 
 def main(argv=None):
-    parser = argparse.ArgumentParser(prog='brnrd setup')
+    parser = argparse.ArgumentParser(
+        prog='brnrd setup',
+        epilog='Local loom board: brnrd setup channel --kind web --wait 0 '
+               '(enable the loopback page, print its URL and start the loom).')
     parser.add_argument('step', nargs='?', choices=['channel'])
     parser.add_argument('--home')
     parser.add_argument('--kind')
@@ -1002,9 +1005,9 @@ def main(argv=None):
     parser.add_argument('--wait', type=float, default=600,
                         help='seconds to wait for brnrd to answer your first message; 0 skips')
     args = parser.parse_args(argv)
-    # Setup creates a home; the read-only resolver normally requires one.
-    target = args.home or os.environ.get("BRNRD_HOME") or Path.home() / "brnrd"
-    home = Home(resolve_home(target)[0])
+    # Pair the home the operator controls with loom status/where/install.
+    from .service import _service_home
+    home = Home(_service_home(args.home)[0])
     bundled = Path(__file__).parent / 'connectors'
     kinds = sorted({p.name for root in (bundled, home.root / 'loom/connectors')
                     for p in root.glob('*') if (p / 'carries').is_file() and (p / 'out').is_file()})

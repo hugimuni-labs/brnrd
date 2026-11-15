@@ -99,6 +99,20 @@ anything; `--no-start` writes the service and leaves it for the next login.
 `uninstall` do what they say. `brnrd setup` pairs a channel such as Telegram,
 so letters reach you away from the terminal.
 
+To start the local loom board and get its URL:
+
+```bash
+brnrd setup channel --kind web --wait 0
+```
+
+Setup enables the loopback page, prints its URL and starts or restarts the loom.
+It picks `--home`, then `BRNRD_HOME`, the installed service's home, the only
+home found or `~/brnrd`; several homes require `--home PATH`.
+A source checkout needs a built frontend; the loom builds it in the background,
+so the page may take a moment to become available.
+
+This is the loom board, separate from the older daemon's dashboard.
+
 If multiple distinct `brnrd` executables are on `PATH`, the CLI warns on
 stderr for person-facing commands: plain `--help`, setup (including bare
 `brnrd`), and the loom service commands (including status). Runtime, launcher and hook

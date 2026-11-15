@@ -1113,3 +1113,17 @@ def test_first_letter_reports_the_real_failed_attempt_tail(tmp_path):
         inputs.close()
     assert 'run claude, then /login' in str(exc.value)
     assert not any('answered in that chat' in line for line in said)
+
+
+def test_setup_defaults_to_installed_service_home(tmp_path, monkeypatch, capsys):
+    from brr.loom.runtime import service
+    installed = tmp_path / 'installed'
+    (installed / 'loom').mkdir(parents=True)
+    (installed / 'loom/config.toml').write_text('')
+    monkeypatch.delenv('BRNRD_HOME', raising=False)
+    monkeypatch.setattr(service, '_installed_home', lambda *a: installed)
+    seen = []
+    monkeypatch.setattr(setup_channel, '_status', lambda home: seen.append(home.root) or {})
+    assert setup_channel.main([]) == 0
+    assert seen == [installed.resolve()]
+    assert str(installed) in capsys.readouterr().out
