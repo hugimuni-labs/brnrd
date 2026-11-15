@@ -1,0 +1,41 @@
+name: Clean abandoned PR branches
+
+on:
+  schedule:
+    - cron: '43 5 * * 1'
+  workflow_dispatch:
+    inputs:
+      apply:
+        description: Delete eligible branches (unchecked is dry-run)
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+  pull-requests: read
+
+concurrency:
+  group: cleanup-closed-branches
+  cancel-in-progress: false
+
+jobs:
+  cleanup:
+    # Dispatch only trusted main code; forks must opt into their own policy.
+    if: github.repository == 'hugimuni-labs/brnrd' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Clean unchanged closed-unmerged branches older than 30 days
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          APPLY: ${{ github.event_name == 'schedule' || inputs.apply }}
+        shell: bash
+        run: |
+          args=()
+          if [[ "$APPLY" == true ]]; then args+=(--apply); fi
+          python scripts/cleanup_closed_branches.py --repo "$REPOSITORY" "${args[@]}"
