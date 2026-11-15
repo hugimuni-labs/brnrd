@@ -875,3 +875,46 @@ def test_source_observer_reloads_an_own_edit_after_a_taken_update_loaded(world, 
     assert not looming.errors
     assert (world.source / "src/brr/loom/runtime/loom.py").read_text() == "# my own runtime change\n"
     assert not _degraded(world.root)
+
+
+@pytest.mark.parametrize('fails', [False, True])
+def test_dependency_install_precedes_validation_and_restores_on_failure(world, monkeypatch, fails):
+    from brr.loom.runtime import launcher
+    _next_tip(world, 'pyproject.toml', '[project]\nname = "test"\n')
+    _offer(world)
+    events = []
+    def install(root, python):
+        events.append(('install', _git(root, 'rev-parse', 'HEAD'), python))
+    original = update.check_tree
+    def check(root, home):
+        events.append(('check', _git(root, 'rev-parse', 'HEAD')))
+        original(root, home)
+        if fails:
+            raise update.Refused('candidate validation failed')
+    monkeypatch.setattr(launcher, 'reinstall', install)
+    monkeypatch.setattr(update, 'check_tree', check)
+    assert _take(world) == int(fails)
+    assert [event[0] for event in events] == (['install', 'check', 'install'] if fails else ['install', 'check'])
+    assert events[0][1] == world.tip
+    if fails:
+        assert events[-1][1] == world.old
+    assert _git(world.source, 'rev-parse', 'HEAD') == (world.old if fails else world.tip)
+
+
+def test_failed_dependency_install_refuses_take_and_restores_old_tree(world, monkeypatch):
+    from brr.loom.runtime import launcher
+    _next_tip(world, 'pyproject.toml', '[project]\nname = "test"\n')
+    _offer(world)
+    installed = []
+    def install(root, python):
+        installed.append(_git(root, 'rev-parse', 'HEAD'))
+        if len(installed) == 1:
+            raise subprocess.CalledProcessError(1, ['installer'])
+    monkeypatch.setattr(launcher, 'reinstall', install)
+    assert _take(world) == 1
+    assert installed == [world.tip, world.old]
+    assert _git(world.source, 'rev-parse', 'HEAD') == world.old
+    assert not world.execs
+    checked = update.latest(read_facts(Home(world.root)), Home(world.root), world.source, 'update.checked')
+    assert not checked.data['ok']
+    assert _offered(world)

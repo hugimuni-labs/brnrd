@@ -2790,12 +2790,6 @@ def run(root: Path | str, *, adapter: str = "fake", core: str = "haiku",
         ledger.ON_CONTENDED = _free_ledger
         # A pause outlives a re-exec on disk; the loop must still free its lock.
         _PAUSED.update((port.parent, home) for port in (home.root / "rooms").glob("*/port/.paused.json"))
-        from .receipts import record_start
-        try:
-            # Each start and re-exec: which merged pull requests this code holds.
-            record_start(home, read_facts(home))
-        except Exception:
-            _log(home, traceback.format_exc().rstrip())
         _migrate_gates(home)
         _converge_forge_token(home)
         from .config import ConfigError, load_config, tick_config
@@ -2857,6 +2851,18 @@ def run(root: Path | str, *, adapter: str = "fake", core: str = "haiku",
         from .receipts import source_root
         updater = Updater(home, _log, source_root())
         router.watcher = Watcher(home.root / "loom" / "prs.json", home.root / "loom" / "pr-comments.json")
+        from .receipts import record_start
+        try:
+            # Each start and re-exec: which merged pull requests this code holds.
+            record_start(home, read_facts(home))
+        except Exception:
+            _log(home, traceback.format_exc().rstrip())
+        from .launcher import healthy
+        if recovered := healthy():
+            notice(home, read_facts(home), "startup-rollback", recovered["from"],
+                   f"Three starts failed at {recovered['from']}; the launcher restored "
+                   f"last healthy commit {recovered['to']}. Failed code remains at {recovered['ref']}.",
+                   "inspect the failed commit before taking another update")
         while not (stop is not None and stop.is_set()):
             try:
                 config = load_config(home.root)

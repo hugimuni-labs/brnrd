@@ -11,6 +11,7 @@ imports brr. ``BRNRD_ROOT`` moves the whole layout (tests, a second user).
 from __future__ import annotations
 
 import os
+import json
 import shlex
 import sys
 from pathlib import Path
@@ -35,16 +36,15 @@ def current() -> Path:
 
 def script() -> str:
     python = shlex.quote(str(current() / "bin" / "python"))
+    guard = shlex.quote(str(root() / "launcher.py"))
+    source = shlex.quote(str(root() / "launcher-source"))
     return (
         "#!/bin/sh\n"
-        "# brnrd's one entry point, written by the loom and never edited:\n"
-        "# whatever current points at is the brnrd every launcher runs.\n"
         f"python={python}\n"
-        '[ -x "$python" ] || {\n'
-        '    echo "brnrd: $python is missing; run brnrd loom install" >&2\n'
-        "    exit 127\n"
-        "}\n"
-        'BRNRD_CLI_ENTRY="$0" exec "$python" -m brr "$@"\n'
+        '[ -x "$python" ] || { echo "brnrd: $python is missing; run brnrd loom install" >&2; exit 127; }\n'
+        'export BRNRD_CLI_ENTRY="$0"\n'
+        f'[ "$1 $2" = "runtime loom" ] && [ -f {source} ] && exec "$python" -I {guard} "$@"\n'
+        'exec "$python" -m brr "$@"\n'
     )
 
 
@@ -55,9 +55,22 @@ def command(*args: str) -> str:
 
 def write_shim() -> bool:
     """Write the shim when it is absent or differs; True when it wrote."""
+    from .receipts import source_root
+    source = source_root()
+    root().mkdir(parents=True, exist_ok=True)
+    guard = root() / "launcher.py"
+    guard_text = Path(__file__).with_name("launcher.py").read_text()
+    wrote_guard = not guard.exists() or guard.read_text() != guard_text
+    if wrote_guard:
+        atomic_write(guard, guard_text)
+    if (source / ".git").exists():
+        atomic_write(root() / "launcher-source", json.dumps({"source": str(source.resolve()),
+                                                            "prefix": str(prefix().resolve())}))
+    else:
+        (root() / "launcher-source").unlink(missing_ok=True)
     path, text = shim(), script()
     if path.is_file() and path.read_text() == text and os.access(path, os.X_OK):
-        return False
+        return wrote_guard
     path.parent.mkdir(parents=True, exist_ok=True)
     atomic_write(path, text)
     path.chmod(0o755)
@@ -67,7 +80,9 @@ def write_shim() -> bool:
 def sound() -> bool:
     """The shim is the one we write and ``current`` has a python to run."""
     path = shim()
+    guard = root() / "launcher.py"
     return (path.is_file() and path.read_text() == script() and os.access(path, os.X_OK)
+            and guard.is_file() and guard.read_text() == Path(__file__).with_name("launcher.py").read_text()
             and os.access(current() / "bin" / "python", os.X_OK))
 
 
@@ -123,6 +138,8 @@ def reexec_argv() -> list[str] | None:
     of ``sys.executable`` would keep the old target after ``current`` moved.
     """
     argv = list(getattr(sys, "orig_argv", []))
+    if argv[1:2] == ["-I"]:
+        argv.pop(1)
     if argv[1:3] != ["-m", "brr"] or not os.access(shim(), os.X_OK):
         return None
     return [str(shim()), *argv[3:]]

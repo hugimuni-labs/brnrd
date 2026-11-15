@@ -708,6 +708,13 @@ def _stop(*, run, agents_home, system, sleep=None) -> int:
         elapsed += 0.2
 
 
+def _launcher_warning(program: str) -> None:
+    if program and program != str(entry.shim()):
+        print(f"warning: loaded service starts {program}, bypassing {entry.shim()}; "
+              "automatic startup rollback is unavailable. Run `brnrd loom install` "
+              "from your login shell to migrate the service.", file=sys.stderr)
+
+
 def _status(*, run, agents_home, system, pid_alive) -> int:
     system = _platform(system)
     alive = _alive(pid_alive)
@@ -716,6 +723,11 @@ def _status(*, run, agents_home, system, pid_alive) -> int:
             _print_status(state="not-installed", pid=None, home=None)
             return 1
         state, pid = _linux_show(run, UNIT)
+        loaded = _run(run)(["systemctl", "--user", "show", UNIT, "-p", "ExecStart"],
+                           check=False, capture_output=True, text=True)
+        match = re.search(r"path=([^;]+)", loaded.stdout or "")
+        if loaded.returncode == 0 and match:
+            _launcher_warning(match.group(1).strip())
         home = _linux_home(UNIT)
         if pid is not None and not alive(pid):
             pid = None
@@ -732,6 +744,8 @@ def _status(*, run, agents_home, system, pid_alive) -> int:
         text=True,
     )
     fields = _fields(result.stdout or "")
+    if result.returncode == 0:
+        _launcher_warning(fields.get("program", ""))
     pid = _parse_pid(fields.get("pid"))
     state = fields.get("state") or "not-running"
     if result.returncode != 0:
