@@ -623,10 +623,21 @@ def decide(home, root, action, why=""):
             mode, own, ok = "merge", 0, False
             try:
                 before, mode, own = source.apply(Offer(data["old"], data["new"]))
+                from .launcher import dependencies, reinstall
+                changed = dependencies(root, before, source._git("rev-parse", "HEAD"))
                 try:
+                    if changed:
+                        reinstall(root, sys.executable)
                     check_tree(root, home)
-                except BaseException:
+                except BaseException as failure:
                     source._git("reset", "--hard", before)
+                    if changed:
+                        try:
+                            reinstall(root, sys.executable)
+                        except Exception as restore:
+                            raise Refused(f"take failed ({failure}); checkout restored to {before}, "
+                                          f"but dependency restoration failed ({restore}); "
+                                          "the launcher will retry it before starting") from failure
                     raise
                 ok = True
             finally:
@@ -673,5 +684,5 @@ def main(argv=None):
         else:
             print(decide(home, root, args.action, args.why))
         return 0
-    except (Refused, subprocess.CalledProcessError, ConfigError) as exc:
+    except (Refused, subprocess.SubprocessError, OSError, ConfigError) as exc:
         return refuse("update", exc)
