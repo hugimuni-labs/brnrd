@@ -227,10 +227,16 @@ def test_a_healthy_start_breaks_the_failure_streak(installed):
     assert git(i.source, 'rev-parse', 'HEAD') == tip
 
 
-def test_failed_pending_reinstall_still_starts_and_keeps_the_retry_marker(installed):
+@pytest.mark.parametrize('rollback', [False, True])
+def test_failed_pending_reinstall_still_starts_and_keeps_the_retry_marker(installed, rollback):
     i = installed
     i.run(healthy=True)
     state = json.loads(i.state.read_text())
+    if rollback:
+        broken = i.source / 'src/brr/__init__.py'
+        broken.write_text("raise RuntimeError('bad package')\n")
+        git(i.source, 'commit', '-qam', 'broken code with unchanged dependencies')
+        state.update(head=git(i.source, 'rev-parse', 'HEAD'), failures=3)
     state['reinstall'] = True
     i.state.write_text(json.dumps(state))
     # Fail only the independently installed guard's installer, then execute the

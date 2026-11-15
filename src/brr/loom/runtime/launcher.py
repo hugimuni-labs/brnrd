@@ -109,7 +109,7 @@ def start(root, python, args):
                     changed = dependencies(root, head, good)
                     git(root, 'reset', '--keep', good)
                     # Save before installation: an interrupted reinstall must be retried.
-                    state.update(head=good, failures=0, reinstall=changed,
+                    state.update(head=good, failures=0, reinstall=changed or state.get('reinstall', False),
                                  rollback={'from': head, 'to': good, 'ref': rescue})
                     save(path, state)
                     head = good
