@@ -719,3 +719,138 @@ def test_the_source_observer_cannot_reload_during_validation_or_after_rollback(w
         taking.join(10)
         looming.halt()
     assert not looming.errors
+
+
+def test_an_own_commit_after_a_take_still_loads_and_polling_goes_on(world):
+    _load(world)
+    _run(world.root, lambda: any(f.kind == "loom.moved" for f in read_facts(Home(world.root))))
+    (world.source / "mine.py").write_text("mine\n")
+    _git(world.source, "add", "-A")
+    _git(world.source, "commit", "-qm", "my own code after the take")
+    prior = update.SEEN["at"]
+    _run(world.root, lambda: _degraded(world.root) or update.SEEN["at"] != prior)
+    assert not _degraded(world.root), _degraded(world.root)[0].data
+
+    _next_tip(world)
+    _run(world.root, lambda: _offered(world).data["new"] == world.tip)
+    assert _take(world) == 0
+    assert _git(world.source, "rev-parse", "HEAD^2") == world.tip
+    assert (world.source / "mine.py").read_text() == "mine\n"
+    assert not _degraded(world.root)
+
+
+@pytest.mark.parametrize("error", [TimeoutError("forge timeout"), RuntimeError("404")])
+def test_description_failure_falls_back_and_is_not_refetched(world, monkeypatch, error):
+    calls = []
+    def description(url, number):
+        calls.append(number)
+        raise error
+    monkeypatch.setattr(world.forge, "description", description)
+    _run(world.root, lambda: len(world.forge.asked) >= 3 and _offered(world))
+    assert calls == [7]
+    [pull] = _offered(world).data["pulls"]
+    assert pull["number"] == 7
+    assert pull["title"] == "Merge pull request #7 from o/loom/feature"
+    assert pull["url"].endswith("#pull/7")
+    assert not _degraded(world.root)
+    assert _take(world) == 0
+
+
+def test_an_open_offer_keeps_descriptions_when_the_target_advances(world, monkeypatch):
+    calls = []
+    original = world.forge.description
+    def description(url, number):
+        calls.append(number)
+        return original(url, number)
+    monkeypatch.setattr(world.forge, "description", description)
+    looming = Loom(world.root, tick=0.01)
+    looming.start()
+    try:
+        wait_until(lambda: len(world.forge.asked) >= 3 and _offered(world), 10, looming.dump)
+        assert calls == [7]
+        _next_tip(world)
+        wait_until(lambda: _offered(world).data["new"] == world.tip, 10, looming.dump)
+        assert calls == [7, 8]
+    finally:
+        looming.halt()
+    assert not looming.errors
+
+
+def test_fifteen_large_pr_bodies_reach_a_real_wake_under_budget(world, monkeypatch, tmp_path, capsys):
+    from test_wake import cli, commit, write_thread as wake_thread
+    from brr.loom.runtime import selfrepo
+    for number in range(8, 22):
+        _next_tip(world, name=f"change-{number}.py", message=f"Change {number} (#{number})")
+    monkeypatch.setattr(world.forge, "description",
+                        lambda url, number: {"number": number, "title": f"Change {number}",
+                                             "body": "é" * 1500})
+    _offer(world)
+    [letter] = _update_letters(world)
+    offered = _offered(world).data
+    assert offered["omitted"] > 0
+    assert len(json.dumps(offered).encode()) < 10000
+    assert len(letter.data["body"].encode()) < 6000
+    assert "and " in letter.data["body"] and "more: brnrd runtime update" in letter.data["body"]
+    assert "excerpt: first 300 characters" in letter.data["body"]
+    assert all(len(p["body"]) < 350 and p["url"] for p in offered["pulls"])
+    from brr.loom.runtime.__main__ import main
+    assert main(["update", "--home", str(world.root)]) == 0
+    shown = json.loads(capsys.readouterr().out)
+    assert len(shown["landings"]) == 15
+
+    # Exercise the installed wake recipe, with the real offer letter as occasion.
+    home = tmp_path / "wake-home"
+    assert cli(["init", "--home", str(home)]).returncode == 0
+    wake_thread(home / "self", "w-1", "Review the update")
+    commit(home / "self", "thread")
+    clone = selfrepo.room(home, "update-wake")
+    owed = tmp_path / "owed.json"
+    owed.write_text(json.dumps([{"id": letter.id, "from": "loom", "body": letter.data["body"]}]))
+    import io
+    out = io.StringIO()
+    assert selfrepo.run_wake(clone, "w-1", owed, stdout=out) == 0
+    text = out.getvalue()
+    assert len(text.encode()) <= 24000
+    occasion = text.split("## Occasion\n", 1)[1]
+    assert letter.data["body"].strip() in occasion
+    print(f"offer={len(json.dumps(offered).encode())} bytes; "
+          f"letter={len(letter.data['body'].encode())} bytes; "
+          f"wake={len(text.encode())}/24000 bytes")
+
+
+def test_source_observer_reloads_an_own_edit_after_a_taken_update_loaded(world, monkeypatch):
+    _load(world)
+    _run(world.root, lambda: any(f.kind == "loom.moved" for f in read_facts(Home(world.root))))
+    world.execs.clear()
+    monkeypatch.setattr(loom, "SOURCE_EVERY", 0)
+    observed = []
+    def fingerprint():
+        observed.append(True)
+        return (world.source / "src/brr/loom/runtime/loom.py").read_text()
+    monkeypatch.setattr(loom, "_source_fingerprint", fingerprint)
+    looming = Loom(world.root, tick=0.01)
+    looming.start()
+    try:
+        wait_until(lambda: len(observed) >= 3, 10, looming.dump)
+        path = world.source / "src/brr/loom/runtime/loom.py"
+        path.write_text("# my own runtime change\n")
+        _git(world.source, "add", "-A")
+        _git(world.source, "commit", "-qm", "own runtime edit")
+        wait_until(lambda: world.execs, 10, looming.dump)
+    finally:
+        looming.halt()
+    assert not looming.errors
+    assert not _degraded(world.root)
+    _next_tip(world)
+    _run(world.root, lambda: _offered(world).data["new"] == world.tip)
+    world.execs.clear()
+    looming = Loom(world.root, tick=0.01)
+    looming.start()
+    try:
+        assert _take(world) == 0
+        wait_until(lambda: world.execs, 10, looming.dump)
+    finally:
+        looming.halt()
+    assert not looming.errors
+    assert (world.source / "src/brr/loom/runtime/loom.py").read_text() == "# my own runtime change\n"
+    assert not _degraded(world.root)

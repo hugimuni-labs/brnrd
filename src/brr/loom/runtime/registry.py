@@ -92,7 +92,7 @@ REGISTRY = (
     _kind("attempt.ended",     "attempt", "thread strand gen ids cause code dispositions evidence", "loom",  "global",  once=True),
     _kind("wake.sizes",        "wake",    "thread strand gen budget total parts",             "loom",        "global",  once=True),
     _kind("port.drained",      "port",    "thread strand gen",                                "loom",        "global",  once=True),
-    _kind("update.offered", "update", "install root offer subject old new own dirty pulls", "loom", "machine"),
+    _kind("update.offered", "update", "install root offer subject old new own dirty pulls omitted?", "loom", "machine"),
     _kind("update.decided", "update", "install root offer tip action why", "loom", "machine"),
     _kind("update.checked", "update", "install root offer old new tip base mode own ok", "loom", "machine"),
     _kind("loom.started",      "loom",    "install pid commit? loaded merges?",               "loom",        "global"),

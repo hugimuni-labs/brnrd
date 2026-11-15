@@ -235,9 +235,12 @@ It clones `main` to `~/.brnrd/src` (`BRNRD_DEV_DIR` moves it), installs that
 checkout editable with `uv tool install --editable`, prints `brnrd loom install
 --dev --dry-run`, then runs it for real and ends with `brnrd loom status`. The
 loom follows the checkout without a config line. On a green `main` CI it
-sends the resident a letter with the merged PR titles and descriptions,
+sends the resident a letter with merged PR numbers, titles, links and description excerpts,
 its own commit count, and whether tracked files have uncommitted changes.
-It waits for the resident's decision:
+Descriptions use the first paragraph, at most 300 characters, and say when cut.
+The letter and stored offer share at most 4,500 bytes of PR details; an omitted
+count points to `runtime update`, which lists every landing from git.
+A missing PR description falls back to its commit subject. It waits for the resident's decision:
 
 ```bash
 brnrd runtime update                  # read the current offer, including a newer green tip

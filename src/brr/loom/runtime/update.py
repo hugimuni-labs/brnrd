@@ -38,6 +38,9 @@ PASSED = {"success", "neutral", "skipped"}
 RERUN_GRACE = 120
 #: How many unchecked commits on main's tip ``poll`` steps over: the receipt line's push after a release is one.
 UNCHECKED = 5
+# UTF-8 bytes for the PR detail shared by the letter and its offer fact.
+DETAIL_BYTES = 4500
+BODY_CHARS = 300
 
 
 def _moment(text) -> datetime | None:
@@ -200,6 +203,7 @@ class DevSource:
 
     def __init__(self, root: Path, forge):
         self.root, self.forge = root, forge
+        self.descriptions = {}
 
     def _git(self, *args: str, check: bool = True) -> str:
         return git(self.root, *args, check=check).stdout.strip()
@@ -244,8 +248,20 @@ class DevSource:
             return None
         base = self._git("merge-base", head, target)
         pulls = []
-        for number in merges(self.root, base, target):
-            pulls.append(self.forge.description(url, int(number[1:])))
+        subjects = self._git("log", "--first-parent", "--reverse", "--format=%s", f"{base}..{target}")
+        for subject in subjects.splitlines():
+            number = pull_of(subject)
+            if number is None:
+                continue
+            key = (url, number)
+            if key not in self.descriptions:
+                try:
+                    data = self.forge.description(url, number)
+                except Exception:
+                    # Descriptive enrichment must never block a green update.
+                    data = {"number": number, "title": subject, "body": ""}
+                self.descriptions[key] = pull_summary(url, number, data)
+            pulls.append(self.descriptions[key])
         return Offer(head, target, tuple(pulls))
 
     def apply(self, offer: Offer) -> tuple[str, str, int]:
@@ -293,6 +309,8 @@ class Updater:
         self.reconciled = None
         self.pending = self.loading = False
         self.looked = 0.0
+        self.source = None
+        self.source_mode = None
         #: Monotonic time a green move first waited for an idle tick; cleared by the move.
         self.waiting: float | None = None
         self.said: set[str] = set()
@@ -314,7 +332,12 @@ class Updater:
         if not (self.root / ".git").exists():
             self._say_once(f"update = {mode}, but {self.root} is not a git checkout; staying put")
             return None
-        return SOURCES[mode](self.root, forge_for(config))
+        # A source lives across polls: an open offer must not repeatedly fetch
+        # descriptions already read (including unavailable descriptions).
+        if self.source is None or self.source_mode != (mode, config.forge_token):
+            self.source = SOURCES[mode](self.root, forge_for(config))
+            self.source_mode = (mode, config.forge_token)
+        return self.source
 
     def young(self) -> float | None:
         """How young an open tool call must be to hold back the waiting move."""
@@ -333,9 +356,14 @@ class Updater:
         self.pending = open_offer(facts, self.home, self.root) is not None
         checked = latest(facts, self.home, self.root, "update.checked")
         self.reconciled = checked.id if checked else None
-        started = next((f for f in reversed(kind_facts(facts, "loom.started")) if f.kind == "loom.started"
-                        and f.data.get("install") == self.home.install_id()), None)
-        if checked and checked.data["ok"] and (not started or started.data.get("commit") != checked.data["new"]):
+        # A start containing the checked tree consumed this take. A later own
+        # commit, hand pull or rollback must not turn that old take pending again.
+        started = next((f for f in reversed(kind_facts(facts, "loom.started"))
+                        if f.data.get("install") == self.home.install_id()), None)
+        consumed = checked and started and started.at >= checked.at and (
+            started.at > checked.at or (
+                started.data.get("commit") and source._ancestor(checked.data["new"], started.data["commit"])))
+        if checked and checked.data["ok"] and not consumed:
             self.loading = True
             if source._git("rev-parse", "HEAD") != checked.data["new"]:
                 raise Refused("checkout changed after update take; run update take again to check it")
@@ -353,6 +381,7 @@ class Updater:
                              f"{checked.data['new'][:8]} (" +
                              ("any open call" if young is None else f"open calls under {young:.0f}s") + " held it)")
             return
+        self.waiting = None
         if self.offer is not None:
             found, self.offer = self.offer, None
             if not source._ancestor(found.new, source._git("rev-parse", "HEAD")):
@@ -486,14 +515,14 @@ def offer_update(home, root, facts, found):
     source = DevSource(root, None)
     own = int(source._git("rev-list", "--count", f"{found.new}..HEAD"))
     dirty = bool(source._git("status", "--porcelain", "--untracked-files=no"))
+    pulls, details, omitted = offer_details(found.pulls)
     # The notice id is stable while its target advances. Record first, so take
     # reads the offered target even if the loop exits before sending the notice.
     offered = previous
     if not previous or previous.data["new"] != found.new:
         offered = record(home, root, "update.offered", offer=letter, subject=subject, old=found.old,
-                         new=found.new, own=own, dirty=dirty, pulls=list(found.pulls))
+                         new=found.new, own=own, dirty=dirty, pulls=pulls, omitted=omitted)
     if not any(f.id == letter for f in facts):
-        details = "\n\n".join(f"#{p['number']} · {p['title']}\n{p['body']}" for p in found.pulls)
         what = (f"Main has a green update, {found.new[:8]}, for {root}. "
                 f"Your checkout carries {own} own commits; "
                 f"tracked files {'have uncommitted changes' if dirty else 'are committed'}.\n\n"
@@ -506,6 +535,36 @@ def offer_update(home, root, facts, found):
         notice(home, facts, "update", subject, what,
                "brnrd runtime update take; or brnrd runtime update hold --why 'your reason'")
     return offered
+
+
+def pull_summary(url, number, data):
+    """Keep identity and a stated excerpt, never a whole PR body."""
+    body = str(data.get("body") or "").strip().split("\n\n", 1)[0]
+    if len(body) > BODY_CHARS:
+        body = body[:BODY_CHARS] + f"… [excerpt: first {BODY_CHARS} characters]"
+    elif body != str(data.get("body") or "").strip():
+        body += " [excerpt: first paragraph]"
+    repo = slug(url)
+    return {"number": number, "title": str(data.get("title") or ""),
+            "url": f"https://github.com/{repo}/pull/{number}" if repo else f"{url}#pull/{number}",
+            "body": body}
+
+
+def offer_details(pulls):
+    """One bounded detail shared by the fact and notice; show lists all landings."""
+    kept, chunks, used = [], [], 0
+    for pull in pulls:
+        chunk = f"#{pull['number']} · {pull['title']}\n{pull['body']}\n{pull['url']}"
+        size = max(len(chunk.encode("utf-8")), len(json.dumps(pull).encode("utf-8"))) + 2
+        if used + size > DETAIL_BYTES:
+            break
+        kept.append(pull)
+        chunks.append(chunk)
+        used += size
+    omitted = len(pulls) - len(kept)
+    if omitted:
+        chunks.append(f"and {omitted} more: brnrd runtime update")
+    return kept, "\n\n".join(chunks), omitted
 
 
 def check_tree(root: Path, home) -> None:
@@ -601,7 +660,16 @@ def main(argv=None):
             offered = open_offer(read_facts(home), home, root)
             if offered is None:
                 raise Refused("no open update offer")
-            print(json.dumps(offered.data, indent=2))
+            data = dict(offered.data)
+            # The durable offer and wake stay bounded; inspection can list every
+            # landing directly from the offered range without a forge request.
+            source = DevSource(root, None)
+            base = source._git("merge-base", data["old"], data["new"])
+            url = source._git("remote", "get-url", "origin")
+            subjects = source._git("log", "--first-parent", "--reverse", "--format=%s", f"{base}..{data['new']}")
+            data["landings"] = [pull_summary(url, n, {"title": line})
+                                for line in subjects.splitlines() if (n := pull_of(line)) is not None]
+            print(json.dumps(data, indent=2))
         else:
             print(decide(home, root, args.action, args.why))
         return 0
