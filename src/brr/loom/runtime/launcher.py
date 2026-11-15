@@ -79,7 +79,10 @@ def healthy():
         state = read(path)
         if (state.get('head') == attempted and state.get('pid') == os.getpid()
                 and git(root, 'rev-parse', 'HEAD') == attempted):
-            state.update(healthy=attempted, failures=0)
+            state['failures'] = 0
+            # A hand repair can start, but its uncommitted contents are not HEAD.
+            if not git(root, 'status', '--porcelain', '--untracked-files=no'):
+                state['healthy'] = attempted
             save(path, state)
             return state.get('rollback')
 
@@ -96,20 +99,29 @@ def start(root, python, args):
                 print('brnrd: three starts failed; no different healthy commit to restore', file=sys.stderr)
             else:
                 if git(root, 'status', '--porcelain', '--untracked-files=no'):
-                    raise RuntimeError('three starts failed; checkout has uncommitted changes; not touched')
-                # A named ref keeps all private commits reachable after reset.
-                rescue = f'refs/brnrd/failed-start/{head}'
-                git(root, 'update-ref', rescue, head)
-                print(f'brnrd: three starts failed at {head}; restoring healthy {good}', file=sys.stderr)
-                changed = dependencies(root, head, good)
-                git(root, 'reset', '--keep', good)
-                # Save before installation: an interrupted reinstall must be retried.
-                state.update(head=good, failures=0, reinstall=changed, rollback={'from': head, 'to': good, 'ref': rescue})
-                save(path, state)
-                head = good
+                    print('brnrd: three starts failed; checkout has uncommitted changes; '
+                          'not reset; starting current tree', file=sys.stderr)
+                else:
+                    # A unique ref keeps every failed private commit reachable.
+                    rescue = f'refs/brnrd/failed-start/{head}'
+                    git(root, 'update-ref', rescue, head)
+                    print(f'brnrd: three starts failed at {head}; restoring healthy {good}', file=sys.stderr)
+                    changed = dependencies(root, head, good)
+                    git(root, 'reset', '--keep', good)
+                    # Save before installation: an interrupted reinstall must be retried.
+                    state.update(head=good, failures=0, reinstall=changed,
+                                 rollback={'from': head, 'to': good, 'ref': rescue})
+                    save(path, state)
+                    head = good
         if state.get('reinstall'):
-            reinstall(root, python)
-            state['reinstall'] = False
+            try:
+                reinstall(root, python)
+            except Exception as exc:
+                print(f'brnrd: dependency reinstall failed ({exc}); retry remains pending; '
+                      'starting with installed dependencies', file=sys.stderr)
+                state['reinstall'] = True
+            else:
+                state['reinstall'] = False
         state['pid'] = os.getpid()
         state['failures'] = state.get('failures', 0) + 1
         save(path, state)

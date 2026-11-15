@@ -60,8 +60,7 @@ def installed(tmp_path, monkeypatch):
                 if healthy:
                     def acknowledged():
                         return (state.exists() and json.loads(state.read_text()).get('pid') == proc.pid
-                                and json.loads(state.read_text()).get('failures') == 0
-                                and json.loads(state.read_text()).get('healthy') == git(source, 'rev-parse', 'HEAD'))
+                                and json.loads(state.read_text()).get('failures') == 0)
                     wait_until(lambda: proc.poll() is not None or acknowledged(), 20,
                                lambda: (tmp_path / 'out').read_text())
                     assert proc.poll() is None, (tmp_path / 'out').read_text()
@@ -130,10 +129,13 @@ def test_dirty_checkout_is_never_reset_and_no_healthy_commit_is_invented(install
     git(i.source, 'commit', '-qam', 'broken later')
     for _ in range(3):
         assert i.run()[0] != 0
-    broken.write_text('uncommitted repair\n')
-    _, output = i.run()
-    assert 'uncommitted changes' in output
-    assert broken.read_text() == 'uncommitted repair\n'
+    bad = git(i.source, 'rev-parse', 'HEAD')
+    broken.write_text('# uncommitted repair\n')
+    _, output = i.run(healthy=True)
+    assert 'uncommitted changes' in output and 'starting current tree' in output
+    assert broken.read_text() == '# uncommitted repair\n'
+    assert git(i.source, 'rev-parse', 'HEAD') == bad
+    assert json.loads(i.state.read_text())['healthy'] == i.good
 
 
 def test_dependency_metadata_is_compared_in_both_directions(installed):
@@ -223,3 +225,22 @@ def test_a_healthy_start_breaks_the_failure_streak(installed):
     assert json.loads(i.state.read_text())['healthy'] == tip
     assert json.loads(i.state.read_text())['failures'] == 0
     assert git(i.source, 'rev-parse', 'HEAD') == tip
+
+
+def test_failed_pending_reinstall_still_starts_and_keeps_the_retry_marker(installed):
+    i = installed
+    i.run(healthy=True)
+    state = json.loads(i.state.read_text())
+    state['reinstall'] = True
+    i.state.write_text(json.dumps(state))
+    # Fail only the independently installed guard's installer, then execute the
+    # generated unit command. The product startup and health acknowledgement run.
+    guard = entry.root() / 'launcher.py'
+    text = guard.read_text()
+    begin, end = text.index('def reinstall('), text.index('def healthy(')
+    guard.write_text(text[:begin] + "def reinstall(root, python):\n    raise RuntimeError('offline')\n\n\n" + text[end:])
+    _, output = i.run(healthy=True)
+    assert 'dependency reinstall failed (offline)' in output
+    assert 'starting with installed dependencies' in output
+    state = json.loads(i.state.read_text())
+    assert state['reinstall'] is True and state['failures'] == 0
