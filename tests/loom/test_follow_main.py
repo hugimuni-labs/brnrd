@@ -79,6 +79,27 @@ def world(tmp_path, monkeypatch):
     return w
 
 
+def test_single_branch_install_can_fetch_apply_and_pull(world, tmp_path):
+    source = tmp_path / "single"
+    _git(tmp_path, "clone", "--single-branch", "--branch", "main",
+         str(world.upstream), str(source))
+    assert _git(source, "config", "remote.origin.fetch") == "+refs/heads/main:refs/remotes/origin/main"
+    assert _git(source, "rev-parse", "--is-shallow-repository") == "false"
+    assert _git(source, "rev-list", "--count", "HEAD") == _git(world.upstream, "rev-list", "--count", "HEAD")
+    (world.upstream / "next.py").write_text("next\n")
+    _git(world.upstream, "add", "next.py")
+    _git(world.upstream, "commit", "-qm", "next")
+    dev = update.DevSource(source, world.forge)
+    offer = dev.poll()
+    assert isinstance(offer, update.Offer)
+    assert dev.apply(offer)
+    assert _git(source, "rev-parse", "HEAD") == _git(world.upstream, "rev-parse", "HEAD")
+    (world.upstream / "next.py").write_text("later\n")
+    _git(world.upstream, "commit", "-qam", "later")
+    _git(source, "pull", "--ff-only", "origin", "main")
+    assert _git(source, "rev-parse", "HEAD") == _git(world.upstream, "rev-parse", "HEAD")
+
+
 def _degraded(root):
     return [f for f in read_facts(Home(root)) if f.kind == "loom.degraded" and f.data["step"] == "update"]
 

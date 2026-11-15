@@ -71,15 +71,20 @@ jobs:
       contents: read
     steps:
       - uses: actions/checkout@v4
-      # Media, run screenshots and run control files live outside this repo
-      # (hugimuni-labs/animations, PR bodies, `.brr/`). One tracked film costs
-      # every clone forever; this fails the PR that would add it.
-      - name: No runtime state, no heavy files
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: No new media or growing binary assets
+        env:
+          MEDIA_BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
+          MEDIA_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: python scripts/check_repo_media.py
+      - name: No runtime state
         run: |
           bad=$(git ls-files | grep -E '^(\.brr/|\.pr$|\.topics$|docs/pr-assets/)' || true)
           if [ -n "$bad" ]; then echo "::error::runtime/scratch paths are tracked:"; echo "$bad"; exit 1; fi
-          big=$(git ls-files -z | xargs -0 stat -c '%s %n' | awk '$1 > 3145728')
-          if [ -n "$big" ]; then echo "::error::files over 3 MB are tracked (media belongs in hugimuni-labs/animations):"; echo "$big"; exit 1; fi
 
   lint:
     name: Undefined names (F821)
