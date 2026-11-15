@@ -587,7 +587,7 @@ def main(argv=None):
     from .home import home_for
     from .config import ConfigError
     from .receipts import source_root
-    from .refusals import Parser
+    from .refusals import Parser, refuse
     parser = Parser(verb="update", prog="brnrd runtime update")
     parser.add_argument("action", nargs="?", default="show", choices=("show", "take", "hold"))
     parser.add_argument("--why", default="")
@@ -606,5 +606,4 @@ def main(argv=None):
             print(decide(home, root, args.action, args.why))
         return 0
     except (Refused, subprocess.CalledProcessError, ConfigError) as exc:
-        print(str(exc), file=sys.stderr)
-        return 1
+        return refuse("update", exc)
