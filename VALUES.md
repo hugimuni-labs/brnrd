@@ -4,16 +4,16 @@ The [manifesto](MANIFESTO.md) says where brnrd is going. This page says what we 
 
 Each value has three lines: what it is, what it rules out, and where the product stands today. `∅` means nothing yet, said on purpose.
 
-## 1 · Every brnrd updates itself, consciously
+## 1 · Every brnrd changes itself, consciously
 
-A new version is not something that happens to a resident. After an update the resident reads what changed, looks over what it and its person have added, repairs what it can, and tells the person the rest. This holds for every install: one that follows `main` and one that follows releases.
+A change to a resident is not something that happens to it. The resident decides to take it, carries it out, and looks itself over afterwards: it reads what changed, checks what it and its person have added, repairs what it can, and tells the person the rest. How much it asks its person first follows what the person has said they want. This holds for a new version from us, and equally for a change the resident or its person starts: a feature added, a part replaced. It holds for every install.
 
-- rules out: updates that silently change behaviour; migration machinery that matches a person's additions against version numbers; an update the person has to supervise.
-- today: an install that follows `main` loads new code by itself and is told which changes it loaded. Nothing asks the resident to look itself over. An install from a release does not update by itself at all.
+- rules out: updates that silently change behaviour; a version that loads without the resident having decided to take it; migration machinery that matches a person's additions against version numbers; an update the person has to supervise; an install whose resident has no way to change its own program.
+- today: an install that follows `main` loads new code by itself, with no decision by the resident, and is told which changes it loaded. Nothing asks the resident to look itself over. An install from a release does not update by itself at all, and its resident cannot change the program it runs on. Open: whether every install carries its own code for the resident to change, or only a place to add parts.
 
 ## 2 · What is yours is yours
 
-Every file has one owner. A person's repository belongs to them and their resident, and brnrd never writes into it. Everything else is brnrd, and an update replaces it whole and keeps the way back.
+Every file has one owner. A person's repository belongs to them and their resident: the resident writes there as part of its work, under its own name or the person's. We, the people who ship brnrd, never write into it, and neither does an update from us. What we ship is ours: an update replaces it whole and keeps the way back.
 
 - rules out: copying our files into a person's repository; additions kept where no history protects them; a registry that stands between two people who want to share.
 - today: a new install copies our files into the person's repository once and never updates them; replacement parts live outside it.
@@ -27,10 +27,10 @@ Compatibility problems come from rigid structure. Where a mind can read, adapt a
 
 ## 4 · Fewer settings and files, more conversation
 
-When something can be a setting, a file or a sentence between a person and their resident, it is the sentence.
+When something can be a setting, a file or a sentence between a person and their resident, it is the sentence. So the sentences are what the product keeps: every letter stored, and what was said in it findable, linked to what it led to. A decision can be followed back to the words it came from, and the words forward to what was done about them.
 
-- rules out: a new configuration key for a preference a person could simply state; a new file kind where an existing one will do.
-- today: ∅ measured.
+- rules out: a new configuration key for a preference a person could simply state; a new file kind where an existing one will do; a preference or a permission that cannot be traced to the sentence that gave it.
+- today: letters are kept and cited by their number where work answers them. Finding one by what it said, and following it forward to what was done, is by hand.
 
 ## 5 · Trust comes from standing permission and a record, not from a cage
 
@@ -44,5 +44,3 @@ A resident acts on what its person has said yes to, and leaves a record of what 
 From the manifesto, kept here because it decides things weekly: what a person owns stays theirs to move, and working end to end beats a demo.
 
 - rules out: features that need the person's data on our side; a paid tier that sells a feature instead of operating something.
-
-<sub>changes · 2026-11-15: born from the maintainer's word that conscious self-update belongs in a values page (value 1). Values 2 to 5 are his steers of 2026-11-13 to 2026-11-15, written down by the resident for him to prune; value 6 is the manifesto's.</sub>
