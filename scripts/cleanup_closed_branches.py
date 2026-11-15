@@ -39,7 +39,7 @@ def api(path, *, pages=False):
 
 def candidate(prs, repo, branch, default_branch, now):
     """Newest means creation order, never last updated/closed order."""
-    if branch in {'main', 'shots', default_branch} or branch.startswith('shots/'):
+    if branch in {'main', default_branch}:
         return None
     matching = [p for p in prs if p['head']['ref'] == branch
                 and (p['head'].get('repo') or {}).get('full_name', '').lower() == repo.lower()]

@@ -2,14 +2,7 @@
 // metadata panel (says · runs · refs · dispatch prompt), the stage chip, the
 // authored `return:` line and the `touched` footer, then the prose body.
 //
-// Written because #2127's ui-shots check reported this route as "changed and
-// never fetched": no driver opened it, so the page the PR reshaped most was
-// the one nothing looked at. Two items: one carrying every row the page
-// renders, and one carrying *only* a `prompt:` — the case where the panel's
-// own guard once omitted `item.prompt` and the dispatch prompt vanished.
-//
-// Behavioural asserts first, screenshots second (drive-bench-view.mjs's
-// pattern, `finish.mjs`'s bounded teardown and coverage recorder).
+// Exercises the full warp item and prompt-only views locally.
 //
 // Usage: node repro/drive-warp-item.mjs [--out DIR] [--port N]
 import { spawn } from 'node:child_process';
@@ -18,7 +11,7 @@ import { mkdir } from 'node:fs/promises';
 import { chromium } from 'playwright';
 import { setTimeout as delay } from 'node:timers/promises';
 import * as fixtures from './fixtures.mjs';
-import { closeBrowser, exerciseRecorder, runDriver, stopVite } from './finish.mjs';
+import { closeBrowser, runDriver, stopVite } from './finish.mjs';
 
 const args = process.argv.slice(2);
 const arg = (flag) => {
@@ -101,7 +94,7 @@ async function main() {
 	const vite = spawn('npx', ['vite', 'dev', '--port', String(PORT), '--strictPort'], {
 		stdio: ['ignore', 'pipe', 'pipe']
 	});
-	const modules = exerciseRecorder();
+
 	let browser;
 	try {
 		await waitForServer(`http://localhost:${PORT}/`);
@@ -111,7 +104,7 @@ async function main() {
 			deviceScaleFactor: 2,
 			reducedMotion: 'reduce'
 		});
-		const page = await modules.watch(await context.newPage(), 'drive-warp-item');
+		const page = await context.newPage();
 		await routePage(page);
 
 		await page.goto(`http://localhost:${PORT}/warp/w-900`, { waitUntil: 'networkidle' });
@@ -144,9 +137,8 @@ async function main() {
 		assert.ok(loneText.includes('Dispatch me with this line'), `prompt-only item (${loneText})`);
 		await page.screenshot({ path: `${OUT}/2-prompt-only.png`, fullPage: true });
 
-		await modules.harvest(page, 'drive-warp-item');
 		await context.close();
-		await modules.save(OUT, 'drive-warp-item');
+
 		console.log(JSON.stringify({ header, metaText, loneText, ok: true }, null, 2));
 	} finally {
 		if (browser) await closeBrowser(browser, 'drive-warp-item');

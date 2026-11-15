@@ -29,7 +29,7 @@ def eligible(prs, branch='feature/topic', default='main'):
     return cleanup.candidate(prs, REPO, branch, default, NOW)
 
 
-@pytest.mark.parametrize('branch', ['main', 'shots', 'shots/nested', 'trunk'])
+@pytest.mark.parametrize('branch', ['main', 'trunk'])
 def test_protected(branch):
     p = pr()
     p['head']['ref'] = branch

@@ -6,7 +6,7 @@ import { mkdir } from 'node:fs/promises';
 import { chromium } from 'playwright';
 import { setTimeout as delay } from 'node:timers/promises';
 import * as fixtures from './fixtures.mjs';
-import { closeBrowser, exerciseRecorder, runDriver, stopVite } from './finish.mjs';
+import { closeBrowser, runDriver, stopVite } from './finish.mjs';
 
 const args = process.argv.slice(2);
 const arg = (flag) => {
@@ -84,7 +84,7 @@ async function main() {
 	const vite = spawn('npx', ['vite', 'dev', '--port', String(PORT), '--strictPort'], {
 		stdio: ['ignore', 'pipe', 'pipe']
 	});
-	const modules = exerciseRecorder();
+
 	let browser;
 	try {
 		await waitForServer(`http://localhost:${PORT}/`);
@@ -93,10 +93,10 @@ async function main() {
 			viewport: { width: 390, height: 844 },
 			deviceScaleFactor: 2
 		});
-		const beforePage = await modules.watch(await context.newPage(), 'drive-heddle-live-topics');
+		const beforePage = await context.newPage();
 		const before = await capture(beforePage, routesFor([]), 'before-unclaimed');
 		await beforePage.close();
-		const afterPage = await modules.watch(await context.newPage(), 'drive-heddle-live-topics');
+		const afterPage = await context.newPage();
 		const after = await capture(afterPage, routesFor(['mint']), 'after-mint-lit');
 		assert.equal(before.glows, 0, 'an unclaimed topic has no glowing heddle');
 		assert.ok(after.glows > 0, 'a live topic glows through its existing heddle button');
@@ -120,9 +120,9 @@ async function main() {
 				`${id} keeps its derived glyph ${glyph} — no frontmatter to override it`
 			);
 		}
-		await modules.harvest(afterPage, 'drive-heddle-live-topics');
+
 		await context.close();
-		await modules.save(OUT, 'drive-heddle-live-topics');
+
 		console.log(JSON.stringify({ before, after }, null, 2));
 	} finally {
 		if (browser) await closeBrowser(browser, 'drive-heddle-live-topics');

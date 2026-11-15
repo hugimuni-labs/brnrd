@@ -20,7 +20,7 @@ PR on top of this.
 
 ## Repro screenshots
 
-The drivers in `repro/` remain runnable locally (`node repro/drive-fuel.mjs --out /tmp/shots --port 5197`), while their generated pixels stay out of git. On frontend PRs, `.github/workflows/ui-shots.yml` captures the manifest in `repro/ci-shots.json` on the merge-base and PR head, uploads the pairs, and updates the PR's `<!-- ui-shots -->` comment with hosted before/after/diff images.
+The drivers in `repro/` run locally for browser interaction and layout checks. Their generated pixels stay out of git. The board e2e suite runs separately with `npm run e2e`.
 
 ---
 
