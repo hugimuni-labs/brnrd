@@ -23,7 +23,7 @@ import { mkdir } from 'node:fs/promises';
 import { chromium } from 'playwright';
 import { setTimeout as delay } from 'node:timers/promises';
 import * as fixtures from './fixtures.mjs';
-import { closeBrowser, exerciseRecorder, runDriver, stopVite } from './finish.mjs';
+import { closeBrowser, runDriver, stopVite } from './finish.mjs';
 
 const args = process.argv.slice(2);
 const arg = (flag) => {
@@ -107,7 +107,7 @@ async function main() {
 	const vite = spawn('npx', ['vite', 'dev', '--port', String(PORT), '--strictPort'], {
 		stdio: ['ignore', 'pipe', 'pipe']
 	});
-	const modules = exerciseRecorder();
+
 	let browser;
 	const report = { tag: TAG };
 	try {
@@ -119,7 +119,7 @@ async function main() {
 				deviceScaleFactor: 2,
 				reducedMotion: 'reduce' // skips the boot curtain — see routes/+layout.svelte
 			});
-			const page = await modules.watch(await context.newPage(), 'drive-asks');
+			const page = await context.newPage();
 			await routePage(page);
 			await page.goto(`http://localhost:${PORT}/`, { waitUntil: 'networkidle' });
 			await page.waitForSelector('h1', { timeout: 20000 });
@@ -456,10 +456,10 @@ async function main() {
 			}
 			await page.screenshot({ path: `${OUT}/${TAG}-${vp.name}.png`, fullPage: false });
 			await page.screenshot({ path: `${OUT}/${TAG}-${vp.name}-full.png`, fullPage: true });
-			await modules.harvest(page, 'drive-asks');
+
 			await context.close();
 		}
-		await modules.save(OUT, 'drive-asks');
+
 		console.log(JSON.stringify({ ...report, ok: true }, null, 2));
 	} finally {
 		if (browser) await closeBrowser(browser, 'drive-asks');

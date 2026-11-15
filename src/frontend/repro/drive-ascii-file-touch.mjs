@@ -4,7 +4,7 @@ import { spawn } from 'node:child_process';
 import { mkdir } from 'node:fs/promises';
 import { chromium } from 'playwright';
 import { setTimeout as delay } from 'node:timers/promises';
-import { closeBrowser, exerciseRecorder, runDriver, stopVite } from './finish.mjs';
+import { closeBrowser, runDriver, stopVite } from './finish.mjs';
 
 const args = process.argv.slice(2);
 const arg = (flag) => {
@@ -104,15 +104,15 @@ async function main() {
 	const vite = spawn('npx', ['vite', 'dev', '--port', String(PORT), '--strictPort'], {
 		stdio: ['ignore', 'pipe', 'pipe']
 	});
-	const modules = exerciseRecorder();
+
 	let browser;
 	try {
 		await waitForServer(`http://localhost:${PORT}/`);
 		browser = await chromium.launch();
-		const page = await modules.watch(
-			await browser.newPage({ viewport: { width: 1280, height: 900 }, deviceScaleFactor: 2 }),
-			'drive-ascii-file-touch'
-		);
+		const page = await browser.newPage({
+			viewport: { width: 1280, height: 900 },
+			deviceScaleFactor: 2
+		});
 		await page.route('**/v1/dashboard/**', async (route) => {
 			const body = routes()[new URL(route.request().url()).pathname];
 			await route.fulfill({
@@ -135,8 +135,7 @@ async function main() {
 		if (!after.includes('∙ AsciiField.svelte') || after.includes('∙ package.json'))
 			throw new Error('newest boundary did not move the light');
 		await board.screenshot({ path: `${OUT}/after-file-touch.png` });
-		await modules.harvest(page, 'drive-ascii-file-touch');
-		await modules.save(OUT, 'drive-ascii-file-touch');
+
 		console.log(JSON.stringify({ before: 'package.json', after: 'AsciiField.svelte' }, null, 2));
 	} finally {
 		if (browser) await closeBrowser(browser, 'drive-ascii-file-touch');

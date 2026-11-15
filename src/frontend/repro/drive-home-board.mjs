@@ -3,7 +3,7 @@
 // a signed-in account with no snapshot and no paired daemon sees.
 //
 // Behavioural asserts first, screenshots second (drive-warp-item.mjs's
-// pattern, `finish.mjs`'s bounded teardown and coverage recorder). The
+// pattern, `finish.mjs`'s bounded teardown). The
 // snapshots come from `loomSnapshots()` in fixtures.mjs, stamped relative to
 // the moment this driver starts, and `brnrd.loom.seen` is seeded ten minutes
 // back so the unread dots have something to mark.
@@ -15,7 +15,7 @@ import { mkdir } from 'node:fs/promises';
 import { chromium } from 'playwright';
 import { setTimeout as delay } from 'node:timers/promises';
 import * as fixtures from './fixtures.mjs';
-import { closeBrowser, exerciseRecorder, runDriver, stopVite } from './finish.mjs';
+import { closeBrowser, runDriver, stopVite } from './finish.mjs';
 
 const args = process.argv.slice(2);
 const arg = (flag) => {
@@ -87,7 +87,7 @@ async function routePage(page, { loom, repos = fixtures.repos }, letters) {
 const text = async (locator) => (await locator.innerText()).replace(/\s+/g, ' ').trim();
 
 /** `kept` seeds `brnrd.loom.body`, the pick an earlier visit left behind. */
-async function scene(browser, modules, viewport, scenario, route = '/', kept = null) {
+async function scene(browser, viewport, scenario, route = '/', kept = null) {
 	const context = await browser.newContext({
 		viewport: VIEWPORTS[viewport],
 		deviceScaleFactor: 2,
@@ -101,7 +101,7 @@ async function scene(browser, modules, viewport, scenario, route = '/', kept = n
 		},
 		[SEEN, kept]
 	);
-	const page = await modules.watch(await context.newPage(), 'drive-home-board');
+	const page = await context.newPage();
 	const letters = [];
 	await routePage(page, scenario, letters);
 	await page.goto(`http://localhost:${PORT}${route}`, { waitUntil: 'networkidle' });
@@ -133,7 +133,7 @@ async function main() {
 	const vite = spawn('npx', ['vite', 'dev', '--port', String(PORT), '--strictPort'], {
 		stdio: ['ignore', 'pipe', 'pipe']
 	});
-	const modules = exerciseRecorder();
+
 	const report = {};
 	let browser;
 	try {
@@ -145,7 +145,7 @@ async function main() {
 
 			// 1. Busy: yours first, every turn mark, unread dots, body choice.
 			{
-				const { context, page, letters } = await scene(browser, modules, viewport, {
+				const { context, page, letters } = await scene(browser, viewport, {
 					loom: SNAPSHOTS.busy
 				});
 				await page.waitForSelector('[data-testid="loom-board"]', { timeout: 20000 });
@@ -269,13 +269,13 @@ async function main() {
 					report.wishes = { owedRows, owedLine, recorded, agreed, letters: letters.slice(-2) };
 				}
 				report[`${viewport}-busy`] = { turns, unread, receipts };
-				await modules.harvest(page, 'drive-home-board');
+
 				await context.close();
 			}
 
 			// 2. Quiet: nothing is yours, the strip stays quiet.
 			{
-				const { context, page } = await scene(browser, modules, viewport, {
+				const { context, page } = await scene(browser, viewport, {
 					loom: SNAPSHOTS.quiet
 				});
 				await page.waitForSelector('[data-testid="loom-board"]', { timeout: 20000 });
@@ -295,7 +295,7 @@ async function main() {
 
 			// 3. Low fuel: a shell under 15% and one dry promote the strip.
 			{
-				const { context, page } = await scene(browser, modules, viewport, {
+				const { context, page } = await scene(browser, viewport, {
 					loom: SNAPSHOTS.lowFuel
 				});
 				await page.waitForSelector('[data-testid="loom-board"]', { timeout: 20000 });
@@ -327,7 +327,6 @@ async function main() {
 			{
 				const { context, page, letters } = await scene(
 					browser,
-					modules,
 					viewport,
 					{ loom: SNAPSHOTS.busy },
 					'/thread/answer-asks-build',
@@ -369,7 +368,7 @@ async function main() {
 
 			// 5. Empty: signed in, no snapshot, never paired: the three nouns.
 			{
-				const { context, page } = await scene(browser, modules, viewport, {
+				const { context, page } = await scene(browser, viewport, {
 					loom: null,
 					repos: NEVER_PAIRED
 				});
@@ -388,7 +387,6 @@ async function main() {
 			}
 		}
 
-		await modules.save(OUT, 'drive-home-board');
 		console.log(JSON.stringify({ ...report, ok: true }, null, 2));
 	} finally {
 		if (browser) await closeBrowser(browser, 'drive-home-board');

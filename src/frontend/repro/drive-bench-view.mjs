@@ -8,9 +8,8 @@
 // Behavioural asserts first, screenshots second (the 2026-08-26 room lesson,
 // named again by #1953/#1944: a screenshot that never exercised the changed
 // component is a green tick meaning nothing looked) — on the #1955 pattern
-// (`drive-heddle-live-topics.mjs`): `finish.mjs`'s bounded teardown and JS
-// coverage recorder, so a hung browser handle can never turn "did the work"
-// into "never exited" again (#1944's sixteen-for-sixteen).
+// (`drive-heddle-live-topics.mjs`): bounded teardown keeps a hung browser
+// handle from preventing the report.
 //
 // Usage: node repro/drive-bench-view.mjs [--out DIR] [--port N]
 import { spawn } from 'node:child_process';
@@ -19,7 +18,7 @@ import { mkdir } from 'node:fs/promises';
 import { chromium } from 'playwright';
 import { setTimeout as delay } from 'node:timers/promises';
 import * as fixtures from './fixtures.mjs';
-import { closeBrowser, exerciseRecorder, runDriver, stopVite } from './finish.mjs';
+import { closeBrowser, runDriver, stopVite } from './finish.mjs';
 
 const args = process.argv.slice(2);
 const arg = (flag) => {
@@ -64,7 +63,7 @@ async function main() {
 	const vite = spawn('npx', ['vite', 'dev', '--port', String(PORT), '--strictPort'], {
 		stdio: ['ignore', 'pipe', 'pipe']
 	});
-	const modules = exerciseRecorder();
+
 	let browser;
 	try {
 		await waitForServer(`http://localhost:${PORT}/`);
@@ -74,7 +73,7 @@ async function main() {
 			deviceScaleFactor: 2,
 			reducedMotion: 'reduce' // skips the boot curtain — see routes/+layout.svelte
 		});
-		const page = await modules.watch(await context.newPage(), 'drive-bench-view');
+		const page = await context.newPage();
 		await routePage(page);
 		await page.goto(`http://localhost:${PORT}/daily`, { waitUntil: 'networkidle' });
 		await page.waitForSelector('#warp-heading', { timeout: 20000 });
@@ -115,9 +114,8 @@ async function main() {
 		);
 		await page.screenshot({ path: `${OUT}/3-missing.png` });
 
-		await modules.harvest(page, 'drive-bench-view');
 		await context.close();
-		await modules.save(OUT, 'drive-bench-view');
+
 		console.log(JSON.stringify({ listText, bodyText, missingText, scrollY, ok: true }, null, 2));
 	} finally {
 		if (browser) await closeBrowser(browser, 'drive-bench-view');
