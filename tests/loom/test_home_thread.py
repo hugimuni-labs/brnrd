@@ -44,6 +44,63 @@ def test_a_new_self_is_born_with_inbox(tmp_path):
     assert home.main_thread() == "inbox"
 
 
+def test_routable_reuses_main_tree_and_sees_the_next_commit(tmp_path, monkeypatch):
+    from brr.loom.runtime import lifecycle
+    home = make(tmp_path, "inbox", "work")
+    calls, real = [], lifecycle.git
+
+    def counted(*args, **kwargs):
+        calls.append(args[1:])
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(lifecycle, "git", counted)
+    assert home.routable("work")
+    calls.clear()
+    for _ in range(10):
+        assert home.routable("work")
+        assert not home.routable("missing")
+    assert calls == []
+    # An unlanded folder is still not routable; main moving retires the tree.
+    path = home.thread_dir("missing") / "README.md"
+    path.parent.mkdir()
+    path.write_text("# arrived\n")
+    assert not home.routable("missing")
+    git(home.root / "self", "add", "-A")
+    _commit(home.root / "self", "Land missing.\n\nLoom-Label: taint=0; audience=self\n")
+    assert home.routable("missing")
+    assert len(calls) == 1 and calls[0][0] == "ls-tree"
+
+
+def test_boundary_owner_inventory_is_cached_by_commit(tmp_path, monkeypatch):
+    import subprocess
+    from brr.loom.runtime import grants, guards
+    home = make(tmp_path, "inbox")
+    repo = home.root / "self"
+    agreement = repo / "people/ada/agreement.md"
+    agreement.write_text("the agreement\n")
+    git(repo, "add", "-A")
+    _commit(repo, "Agreement.\n\nLoom-Label: taint=0; audience=self\n")
+    calls, real = [], guards._git
+
+    def counted(*args, **kwargs):
+        calls.append(args)
+        if len(calls) == 1:
+            return subprocess.CompletedProcess(args, 1, "", "temporarily unreadable")
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(guards, "_git", counted)
+    assert grants.owners(repo) == set()
+    assert grants.owners(repo) == {"person:ada"}
+    grants.owners(repo).clear()  # A caller cannot mutate the cache.
+    assert grants.owners(repo) == {"person:ada"}
+    assert len(calls) == 2
+    agreement.unlink()
+    git(repo, "add", "-A")
+    _commit(repo, "Withdraw agreement.\n\nLoom-Label: taint=0; audience=self\n")
+    assert grants.owners(repo) == set()
+    assert len(calls) == 3
+
+
 def test_inbox_is_the_home_thread_even_beside_a_brnrd_thread(tmp_path):
     home = make(tmp_path, "brnrd", "work")
     assert home.main_thread() == "inbox"

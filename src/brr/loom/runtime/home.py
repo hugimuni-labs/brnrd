@@ -168,12 +168,8 @@ class Home:
         self_dir = self.root / "self"
         if not (self_dir / ".git").exists():
             return True
-        from .selfrepo import git
-        proc = git(
-            self_dir, "cat-file", "-e", f"main:threads/{thread}/README.md",
-            check=False,
-        )
-        return proc.returncode == 0
+        from .lifecycle import main_tree
+        return f"threads/{thread}/README.md" in main_tree(self_dir)[1]
 
     def main_thread(self) -> str:
         """The home thread, where letters with no better address land."""
