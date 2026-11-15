@@ -37,18 +37,23 @@ def check(repo):
     ('nested/image.PNG', b'x', True),
     ('movie.webm', b'x', True),
     ('font.woff2', b'x', True),
-    ('vector.svg', b'<svg/>', True),
+    ('vector.svg', b'<svg/>', False),
+    ('large.svg', b'x' * 16385, True),
+    ('limit.svg', b'x' * 16384, False),
     ('a space\nand newline.bin', b'\0' * 16385, True),
     ('unknown.dat', b'\xff' * 16385, True),
     ('small.bin', b'\0' * 16384, False),
     ('source.py', b'x' * 20000, False),
     ('unicode.json', ('é' * 20000).encode(), False),
-    ('legacy.png', b'new', False),
+    ('large.json', ('é' * (media.FILE_LIMIT // 2 + 1)).encode(), True),
+    ('daemon.py', b'x' * 900000, False),
+    ('limit.txt', b'x' * media.FILE_LIMIT, False),
+    ('legacy.png', b'new', True),
     ('legacy.png', b'x', False),
     ('legacy.png', b'grow', True),
     ('legacy.bin', b'\0' * 20001, True),
-    ('legacy.bin', b'\0' * 20000, False),
-])
+    ('legacy.bin', b'\xff' * 20000, True),
+], ids=lambda value: f'{len(value)}-bytes' if isinstance(value, bytes) else None)
 def test_new_assets_and_legacy_growth(repo, path, data, refused):
     target = repo / path
     target.parent.mkdir(parents=True, exist_ok=True)
@@ -117,3 +122,19 @@ def test_cli_compares_pr_head_from_environment_and_reports_route(repo):
                             env=env, capture_output=True, text=True)
     assert result.returncode == 1
     assert 'could not compare' in result.stderr
+
+
+@pytest.mark.parametrize('size,refused', [(media.FILE_LIMIT + 1, False), (media.FILE_LIMIT + 3, True)])
+def test_oversized_legacy_text_may_shrink_but_not_grow(repo, size, refused):
+    (repo / 'large.txt').write_bytes(b'x' * (media.FILE_LIMIT + 2))
+    check(repo)
+    (repo / 'large.txt').write_bytes(b'y' * size)
+    assert bool(check(repo)) == refused
+
+
+def test_large_text_exact_path_exception(repo):
+    (repo / 'large.json').write_bytes(b'x' * (media.FILE_LIMIT + 1))
+    (repo / '.github').mkdir()
+    (repo / media.ALLOWLIST).write_text(json.dumps({
+        'large.json': {'max_bytes': media.FILE_LIMIT + 1, 'reason': 'required fixture'}}))
+    assert check(repo) == []

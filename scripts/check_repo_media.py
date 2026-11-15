@@ -1,4 +1,4 @@
-"""Refuse new media and growing legacy media; see docs/repository-media.md."""
+"""Refuse new media, equal-size media replacements and oversized growth; see docs/repository-media.md."""
 
 import argparse
 import json
@@ -8,6 +8,7 @@ import subprocess
 import sys
 
 BINARY_LIMIT = 16 * 1024
+FILE_LIMIT = 3 * 1024 * 1024
 ALLOWLIST = '.github/media-allowlist.json'
 MEDIA = frozenset('''.png .jpg .jpeg .gif .webp .avif .heic .heif .bmp .tif .tiff
 .ico .icns .svg .psd .ai .eps .pdf .mp4 .mov .webm .mkv .avi .m4v .mpeg .mpg
@@ -55,12 +56,14 @@ def violations(repo: Path, base: str, head: str) -> list[str]:
     bad = []
     for path, (oid, size) in after.items():
         old_oid, old_size = before.get(path, ('', -1))
-        if oid == old_oid or size <= old_size:
+        if oid == old_oid:
             continue
-        media = Path(path).suffix.lower() in MEDIA
+        suffix = Path(path).suffix.lower()
+        media = suffix in MEDIA and (suffix != '.svg' or size > BINARY_LIMIT)
         if not media and size > BINARY_LIMIT:
             media = binary(git(repo, 'cat-file', 'blob', oid))
-        if media and size > allowed.get(path, {}).get('max_bytes', -1):
+        refused = (media and size >= old_size) or (size > FILE_LIMIT and size > old_size)
+        if refused and size > allowed.get(path, {}).get('max_bytes', -1):
             bad.append(f'{path!r}: {size} bytes (base: {max(old_size, 0)})')
     return bad
 
@@ -79,7 +82,7 @@ def main() -> int:
         return 1
     if bad:
         print('Media belongs in https://github.com/hugimuni-labs/animations.\n'
-              'New media and growing legacy media are refused:\n' + '\n'.join(bad)
+              'New media, equal-size media replacements and oversized growth are refused:\n' + '\n'.join(bad)
               + '\nRare code assets need an exact-path entry with a byte cap and reason in '
               + ALLOWLIST + '; see docs/repository-media.md.', file=sys.stderr)
         return 1
