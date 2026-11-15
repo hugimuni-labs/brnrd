@@ -225,7 +225,7 @@ persistent install, then install the service.
 ## Follow main (dogfooding)
 
 To run the loom on brnrd's `main` instead of the PyPI release, and have it
-move with `main` by itself:
+offer updates from `main` to its resident:
 
 ```bash
 curl -LsSf https://hugimuni-labs.github.io/brnrd/install.sh | sh -s -- --dev
@@ -234,16 +234,34 @@ curl -LsSf https://hugimuni-labs.github.io/brnrd/install.sh | sh -s -- --dev
 It clones `main` to `~/.brnrd/src` (`BRNRD_DEV_DIR` moves it), installs that
 checkout editable with `uv tool install --editable`, prints `brnrd loom install
 --dev --dry-run`, then runs it for real and ends with `brnrd loom status`. The
-loom follows the checkout without a config line: on a green `main` CI it
-fast-forwards and re-execs at an idle tick.
+loom follows the checkout without a config line. On a green `main` CI it
+sends the resident a letter with the merged PR titles and descriptions,
+its own commit count, and whether tracked files have uncommitted changes.
+It waits for the resident's decision:
+
+```bash
+brnrd runtime update                  # read the current offer, including a newer green tip
+brnrd runtime update take             # merge, check imports/config, then load at an idle tick
+brnrd runtime update hold --why 'I need to reconcile my changes first'
+```
+
+Take works on any branch: a fast-forward when possible, otherwise a merge
+over the resident's own commits. Commit tracked edits first. A conflict aborts
+the merge and names the files; reconcile by hand, commit, and run take again.
+A failed import/config check rolls back the merge. That check does not start
+connectors or prove a full service start; launcher recovery and dependency
+reinstallation are separate work. A hold settles the letter; the next green
+tip offers again. While an offer is open a newer green tip updates its target
+without a second letter. How the resident asks or tells its person follows
+their agreement, with no new config setting. `update = "off"` stays off.
 
 It warns, without stopping, about what bites later: `PYTHONPATH` set (brnrd
 would run another checkout's code), no `claude` or `codex` on `PATH` (the loom
 needs a body), and `gh` missing or signed out (following `main` reads CI
 through it; run `gh auth login` first). Run it again to update by hand: it
 fast-forwards a clean checkout on `main`, and refuses one with uncommitted
-changes or on another branch, the same rule the loom applies. Keep your own
-edits in another clone.
+changes or on another branch. That installer path is separate from the
+resident-controlled runtime merge above; use take to preserve your own commits.
 
 ## Development install
 

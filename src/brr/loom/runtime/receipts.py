@@ -87,6 +87,21 @@ def record_start(home, facts, *, root: Path | None = None) -> Fact:
                   if f.data.get("install") == install and f.data.get("commit")), None)
     if commit and first:
         loaded.extend(_landed_since(root, first, commit))
+    if commit:
+        # The resident's merge puts upstream's PRs on a second-parent line.
+        # Retain the precise upstream range each checked take brought in;
+        # counting all branch subjects would mistake private commits for PRs.
+        from .update import merges as between
+        for taken in kind_facts(facts, "update.checked"):
+            d = taken.data
+            if (d.get("install") == install and d.get("root") == str(root.resolve()) and d.get("ok")
+                    and git(root, "merge-base", "--is-ancestor", d["new"], commit, check=False).returncode == 0):
+                numbers = {int(number[1:]) for number in between(root, d["base"], d["tip"])}
+                for landed, _head, number in _merge_log(root, d["tip"]):
+                    if number in numbers:
+                        name = f"{_repo_name(root)}#{number}"
+                        loaded.append(name)
+                        merges[name] = landed
     data = {"install": install, "pid": os.getpid(), "loaded": sorted(set(loaded))}
     if commit:
         data["commit"] = commit
@@ -98,9 +113,17 @@ def record_start(home, facts, *, root: Path | None = None) -> Fact:
     if commit and before and before != commit:
         # Whoever moved it, the updater or a hand: the seated bodies hear it once.
         from .update import merges as between
+        from .update import latest
+        taken = latest(facts, home, root, "update.checked")
+        detail = {}
+        if taken and taken.data["ok"] and taken.data["new"] == commit:
+            detail = {"mode": taken.data["mode"], "own": taken.data["own"]}
+            landed = between(root, taken.data["base"], taken.data["tip"])
+        else:
+            landed = between(root, before, commit)
         append(home, Fact(kind="loom.moved", by=f"loom:{install}", id=f"loom.moved:{started.id}", data={
             "install": install, "from": before, "to": commit,
-            "merges": between(root, before, commit), "started": started.id}))
+            "merges": landed, "started": started.id, **detail}))
     return started
 
 
@@ -187,6 +210,9 @@ def held_merge(result: dict, start: dict | None, *, root: Path | None = None) ->
         number = match.group(2)
     else:
         return None
+    checked = (start.get("merges") or {}).get(f"{_repo_name(root)}#{number}")
+    if checked:
+        return checked
     return next((landed for landed, _head, n in _merge_log(root, commit) if n == int(number)), None)
 
 
