@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import fcntl
 import functools
+from contextlib import nullcontext
 import json
 import os
 import re
@@ -30,7 +31,7 @@ from .health import Health, degraded_line
 from .roomsense import room_line
 from .library import problem_line
 from .since import since_gone
-from .update import Updater, moved_line
+from .update import Updater, moved_line, checkout_lock
 from .home import Home, atomic_write, is_channel, mint, notice_id
 from .ledger import LedgerView, kind_facts, LedgerConflict, append, read_facts
 from .registry import KINDS
@@ -2120,8 +2121,8 @@ def _render_boundary(home, facts, strand, gen, context):
 
 def park_reminders(facts, thread):
     from .waits import live
-    from .wishes import wishes
-    return "\n".join(read["wait"]["reminder"] for wish, read in live(wishes(facts))
+    from .wishes import told
+    return "\n".join(read["wait"]["reminder"] for wish, read in live(told(facts))
                      if wish.thread == thread and read.get("wait", {}).get("reminder"))
 
 
@@ -2789,12 +2790,6 @@ def run(root: Path | str, *, adapter: str = "fake", core: str = "haiku",
         ledger.ON_CONTENDED = _free_ledger
         # A pause outlives a re-exec on disk; the loop must still free its lock.
         _PAUSED.update((port.parent, home) for port in (home.root / "rooms").glob("*/port/.paused.json"))
-        from .receipts import record_start
-        try:
-            # Each start and re-exec: which merged pull requests this code holds.
-            record_start(home, read_facts(home))
-        except Exception:
-            _log(home, traceback.format_exc().rstrip())
         _migrate_gates(home)
         _converge_forge_token(home)
         from .config import ConfigError, load_config, tick_config
@@ -2858,6 +2853,18 @@ def run(root: Path | str, *, adapter: str = "fake", core: str = "haiku",
         from .receipts import source_root
         updater = Updater(home, _log, source_root())
         router.watcher = Watcher(home.root / "loom" / "prs.json", home.root / "loom" / "pr-comments.json")
+        from .receipts import record_start
+        try:
+            # Each start and re-exec: which merged pull requests this code holds.
+            record_start(home, read_facts(home))
+        except Exception:
+            _log(home, traceback.format_exc().rstrip())
+        from .launcher import healthy
+        if recovered := healthy():
+            notice(home, read_facts(home), "startup-rollback", recovered["from"],
+                   f"Three starts failed at {recovered['from']}; the launcher restored "
+                   f"last healthy commit {recovered['to']}. Failed code remains at {recovered['ref']}.",
+                   "inspect the failed commit before taking another update")
         while not (stop is not None and stop.is_set()):
             try:
                 config = load_config(home.root)
@@ -2907,12 +2914,21 @@ def run(root: Path | str, *, adapter: str = "fake", core: str = "haiku",
                     health.guard("spa", spa.step, backoff=False)
                 # Capture asked for and absent (failed start, append stopped the writer) stays degraded.
                 health.guard("audit", audit_writer.check, backoff=False)
-                # Only at an idle tick, and the re-exec follows in this same pass.
-                health.guard("update", updater.step, config, functools.partial(_idle, home),
-                             backoff=False)
-            # The walk of the runtime's source is paced; follow-main's moves need none of it.
-            if updater.moved is None and time.monotonic() >= next_source:
-                next_source, source_moved = time.monotonic() + SOURCE_EVERY, _source_fingerprint() != fingerprint
+            # Take holds the checkout lock through merge, validation and rollback.
+            # Never observe (or reload) its intermediate tree. A completed check,
+            # including a rollback, resets the mtime observer's baseline.
+            lock = checkout_lock(updater.root, blocking=False) if (updater.root / ".git").exists() else nullcontext(True)
+            with lock as available:
+                if available:
+                    reconciled = updater.reconciled
+                    if router.armed():
+                        health.guard("update", updater.step, config, functools.partial(_idle, home), backoff=False)
+                    if reconciled != updater.reconciled:
+                        fingerprint = _source_fingerprint()
+                    if (updater.moved is None and not updater.pending and not updater.loading
+                            and time.monotonic() >= next_source):
+                        next_source = time.monotonic() + SOURCE_EVERY
+                        source_moved = _source_fingerprint() != fingerprint
             if updater.moved is not None or source_moved:
                 _log(home, "runtime source changed; re-executing loom")
                 _reexec(bodies, inputs)

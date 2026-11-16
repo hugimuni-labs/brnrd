@@ -38,6 +38,7 @@ pace the fuel can carry, without the body arming a timer (continuous).
 
 from __future__ import annotations
 
+import heapq
 import json
 import os
 import re
@@ -360,6 +361,78 @@ def _turn(home, facts, wish, read, now: datetime, pace, held) -> None:
         _TURNED[wish.thread] = now
 
 
+class _Pending:
+    """Indexes for one wish projection; the clock visits only due parks.
+
+    Rebuilt when wish/letter inputs change, discarded with a repaired ledger.
+    Files are external inputs and must still be checked each tick. Forge
+    values are copied: the watcher may replace or mutate its state mapping.
+    """
+
+    def __init__(self, found, facts, now):
+        from .home import notice_id
+        self.found = found
+        self.rows = {}
+        self.files = set()
+        self.forge = {}
+        self.states = {}
+        self.prs = set()
+        self.pr_revision = None
+        self.due = []
+        self.first = True
+        self.retry = set()
+        for wish, read in live(found):
+            key = subject(wish, read)
+            if notice_id("wait", key) in facts.by_id:
+                continue
+            self.rows[key] = (wish, read)
+            on = str(read["wait"].get("on") or "")
+            if on.startswith("file:"):
+                self.files.add(key)
+            if on.startswith(("pr:", "ci:")):
+                self.forge.setdefault(want(read), set()).add(key)
+            if on.startswith("pr:"):
+                self.prs.add(key)
+            times = [parse_instant(str(read["wait"].get("until", "")))]
+            if on.startswith("at:"):
+                times.append(parse_instant(on[3:]))
+            for due in times:
+                if due is not None:
+                    heapq.heappush(self.due, (due, key))
+            self._next_turn(key, read, now)
+        self.order = {key: index for index, key in enumerate(self.rows)}
+
+    def _next_turn(self, key, read, now):
+        turn = int(read["wait"].get("turn") or 0)
+        began = _instant(read["at"])
+        if turn > 0 and began is not None and now is not None:
+            due = began + timedelta(seconds=turn * (turn_slot(read, now) + 1))
+            heapq.heappush(self.due, (due, key))
+
+    def candidates(self, facts, forge, now):
+        selected = set(self.rows) if self.first else set(self.files)
+        selected.update(self.retry)
+        self.first = False
+        revision = tuple(len(facts.by_kind[k]) for k in ("pr.opened", "pr.merged"))
+        if revision != self.pr_revision:
+            selected.update(self.prs)
+            self.pr_revision = revision
+        for condition, keys in self.forge.items():
+            state = dict(forge.get(condition) or {})
+            if self.states.get(condition) != state:
+                selected.update(keys)
+                self.states[condition] = state
+        timed = set()
+        while self.due and self.due[0][0] <= now:
+            _, key = heapq.heappop(self.due)
+            timed.add(key)
+        for key in timed:
+            self._next_turn(key, self.rows[key][1], now)
+        selected.update(timed)
+        self.retry = selected
+        return [self.rows[key] for key in sorted(selected, key=self.order.__getitem__)]
+
+
 def observe_waits(home, facts, armed: bool, forge: dict | None = None, now: datetime | None = None,
                   pace=None):
     """Write a notice for each live wait that came true or ran out; only the lease holder writes.
@@ -371,11 +444,20 @@ def observe_waits(home, facts, armed: bool, forge: dict | None = None, now: date
     from .home import notice_id
     from .loom import notice
     from .wishes import told
+    from .ledger import LedgerView
     found = told(facts)
-    rows = live(found)
+    now = now or datetime.now(timezone.utc)
+    if isinstance(facts, LedgerView):
+        pending = getattr(facts, "_pending_waits", None)
+        if pending is None or pending.found is not found:
+            pending = facts._pending_waits = _Pending(found, facts, now)
+        rows = pending.candidates(facts, forge or {}, now)
+    else:
+        pending = None
+        rows = [(wish, read) for wish, read in live(found)
+                if not any(f.id == notice_id("wait", subject(wish, read)) for f in facts)]
     if not rows:
         return facts
-    now = now or datetime.now(timezone.utc)
     from functools import cache
 
     @cache
@@ -403,6 +485,8 @@ def observe_waits(home, facts, armed: bool, forge: dict | None = None, now: date
             from .ledger import append
             from .trust import answer_fact
             append(home, answer_fact(f"loom:{home.install_id()}", on[5:], "lapsed", notice_id("wait", subject(wish, read))))
+    if pending is not None:
+        pending.retry.clear()
     return facts
 
 

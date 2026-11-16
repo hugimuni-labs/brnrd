@@ -77,8 +77,8 @@ KEYS: tuple[Key, ...] = (
         "else the machine's gh login; off signs it out.",
         choices=("auto", "off")),
     Key("update", "choice", "auto",
-        "How the loom follows new code: dev fast-forwards the checkout it runs from to origin's "
-        "main once main's CI is green, then re-execs at an idle tick; stable is the release "
+        "How the loom follows new code: dev offers origin's main for the resident to merge into its checkout "
+        "once its CI is green; take checks the merged tree, then re-execs at an idle tick. Stable is the release "
         "channel (not built yet); off stays put. auto: dev for a git checkout, else off.",
         choices=("auto", "dev", "stable", "off")),
     Key("connectors", "names", (),

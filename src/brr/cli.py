@@ -207,6 +207,7 @@ def build_parser() -> argparse.ArgumentParser:
         description="Resident agent runtime for local and managed repo work",
         epilog=(
             "The loom, the service the resident runs on: `brnrd loom --help`. "
+            "Local board: `brnrd setup channel --kind web --wait 0`. "
             "A body's verbs (send, wish, ask, settle, send-self, publish, lib): "
             "`brnrd runtime --help`."
         ),
@@ -308,7 +309,9 @@ def build_parser() -> argparse.ArgumentParser:
 
     # The loom setup remains off the daemon help until cut-over. The old
     # `setup <gate>` spelling still fails with its existing migration pointer.
-    p = sub.add_parser("setup")
+    p = sub.add_parser(
+        "setup", epilog="Local loom board: brnrd setup channel --kind web --wait 0 "
+        "(enable the loopback page, print its URL and start the loom).")
     p.add_argument("step", nargs="?")
     p.add_argument("--home")
     p.add_argument("--kind")

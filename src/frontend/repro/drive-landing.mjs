@@ -15,7 +15,7 @@ import { strict as assert } from 'node:assert';
 import { mkdir, readFile } from 'node:fs/promises';
 import { chromium } from 'playwright';
 import { setTimeout as delay } from 'node:timers/promises';
-import { closeBrowser, exerciseRecorder, runDriver, stopVite } from './finish.mjs';
+import { closeBrowser, runDriver, stopVite } from './finish.mjs';
 
 const args = process.argv.slice(2);
 const arg = (flag) => {
@@ -118,7 +118,7 @@ async function main() {
 	const vite = spawn('npx', ['vite', 'dev', '--port', String(PORT), '--strictPort'], {
 		stdio: ['ignore', 'pipe', 'pipe']
 	});
-	const modules = exerciseRecorder();
+
 	let browser;
 	const seen = {};
 	try {
@@ -130,7 +130,7 @@ async function main() {
 				deviceScaleFactor: viewport.name === 'phone' ? 2 : 1,
 				reducedMotion: 'reduce'
 			});
-			const page = await modules.watch(await context.newPage(), 'drive-landing');
+			const page = await context.newPage();
 			await routePage(page);
 			await page.goto(`${ORIGIN}/`, { waitUntil: 'networkidle' });
 			const hero = page.locator('h1');
@@ -149,10 +149,10 @@ async function main() {
 				assert.ok(!body.toLowerCase().includes(stale), `daemon-era copy "${stale}" is gone`);
 
 			seen[viewport.name] = await checkLinks(page);
-			await modules.harvest(page, 'drive-landing');
+
 			await context.close();
 		}
-		await modules.save(OUT, 'drive-landing');
+
 		console.log(JSON.stringify({ seen, ok: true }, null, 2));
 	} finally {
 		if (browser) await closeBrowser(browser, 'drive-landing');

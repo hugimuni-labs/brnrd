@@ -213,7 +213,7 @@ preflight() {
 # on main, no uncommitted change to a tracked file, fast-forward only.
 dev_checkout() {
   if [ ! -e "$DEV_DIR" ]; then
-    run_named "git clone ${REPO} ${DEV_DIR}" git clone "$REPO" "$DEV_DIR"
+    run_named "git clone --single-branch --branch main ${REPO} ${DEV_DIR}" git clone --single-branch --branch main "$REPO" "$DEV_DIR"
     return 0
   fi
   if [ ! -e "${DEV_DIR}/.git" ]; then

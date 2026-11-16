@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { personLabel } from '../sides.ts';
 	import RenderScope from './RenderScope.svelte';
 	// The board (design §C): every thread as a column, the inbox pinned left, the bead sheet on the right, the composer
 	// below. Data is the loom's parts (design §D1), live over SSE; the order moves at most once per 10 s and holds while
@@ -191,8 +192,10 @@
 		{/if}
 		<span id="open" style="color:#d33">{b.letters.filter((l) => l.open).length} open</span>
 		<span class="dim" id="at"
-			>loom {b.heard.slice(11, 19)}Z · {b.letters.length} letters · as {b.model?.person ||
-				'?'}</span
+			>loom {b.heard.slice(11, 19)}Z · {b.letters.length} letters · as {personLabel(
+				'person:' + (b.model?.person || ''),
+				b.model?.person_names
+			) || '?'}</span
 		>
 		<span id="live" class="dim" class:off={b.live === 'offline'}>{b.error || b.live}</span>
 		{#if b.newer}<button

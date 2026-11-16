@@ -263,7 +263,7 @@ def test_dev_clones_main_then_installs_it_editable(tmp_path, shell):
     clone = tmp_path / "home" / ".brnrd" / "src"
     assert result.stderr == ""
     assert _commands(result) == [
-        f"git clone https://github.com/hugimuni-labs/brnrd {clone}",
+        f"git clone --single-branch --branch main https://github.com/hugimuni-labs/brnrd {clone}",
         *_dev_tail(clone),
     ]
 
@@ -272,7 +272,7 @@ def test_dev_env_var_means_the_flag_and_dev_dir_moves_the_clone(tmp_path):
     clone = tmp_path / "elsewhere"
     result = _run(tmp_path, DEV_TOOLS, env={"BRNRD_INSTALL_DEV": "1", "BRNRD_DEV_DIR": str(clone)})
     assert _commands(result) == [
-        f"git clone https://github.com/hugimuni-labs/brnrd {clone}",
+        f"git clone --single-branch --branch main https://github.com/hugimuni-labs/brnrd {clone}",
         *_dev_tail(clone),
     ]
 
@@ -328,7 +328,7 @@ def test_dev_refuses_a_directory_that_is_not_a_checkout(tmp_path):
 def test_dev_bootstraps_uv_when_it_is_missing(tmp_path):
     tools = {name: body for name, body in DEV_TOOLS.items() if name != "uv"}
     commands = _commands(_run(tmp_path, tools, args=("--dev",)))
-    assert commands[:2] == [UV_BOOTSTRAP, f"git clone https://github.com/hugimuni-labs/brnrd {tmp_path / 'home' / '.brnrd' / 'src'}"]
+    assert commands[:2] == [UV_BOOTSTRAP, f"git clone --single-branch --branch main https://github.com/hugimuni-labs/brnrd {tmp_path / 'home' / '.brnrd' / 'src'}"]
 
 
 def test_an_unknown_option_is_refused(tmp_path):

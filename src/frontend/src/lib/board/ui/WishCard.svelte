@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { personLabel } from '../sides.ts';
 	// A wish card in the inbox's wish view (board.html card): state, origin, id and thread, the line, the pips, results
 	// and verdict; opened, its says and every letter tied to it, oldest first.
 	import type { Letter, Wish } from '../types.ts';
@@ -71,7 +72,7 @@
 			{#each ls as l (l.id)}<!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
 				<div class="lrow" class:quiet={l.chatter} onclick={() => b.openBead(l.id)}>
 					<b
-						>{l.notice ? 'loom' : l.from.replace('person:', '').split('/')[0]} → {String(
+						>{l.notice ? 'loom' : personLabel(l.from, b.model?.person_names)} → {String(
 							l.to || ''
 						).replace(/^thread:/, '')}</b
 					>

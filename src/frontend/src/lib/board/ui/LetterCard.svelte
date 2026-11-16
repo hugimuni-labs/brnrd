@@ -9,7 +9,7 @@
 	import { board } from './board.svelte.ts';
 	let { l, col, inbox }: { l: Letter; col: string; inbox: boolean } = $props();
 	const b = board();
-	const who = $derived(sender(l));
+	const who = $derived(sender(l, b.model?.person_names));
 	const mark = $derived(letterMark(l, col, b.model?.threads || []));
 	const q = $derived(splitQuote(l, b.model?.byId || new Map()));
 	const shut = $derived(inbox && internal(l) && !b.showAll && !b.open.has('l:' + l.id));
@@ -105,7 +105,12 @@
 				{#each (l.answers || [])
 					.map((id) => b.model?.byId.get(id))
 					.filter(Boolean) as x (x!.id)}<div class="row">
-						<b>{sender(x!)} → {String(x!.to || '').replace(/^thread:/, '')}</b>
+						<b
+							>{sender(x!, b.model?.person_names)} → {String(x!.to || '').replace(
+								/^thread:/,
+								''
+							)}</b
+						>
 						{hm(x!.at)}<br />{String(x!.body).replace(/\s+/g, ' ').slice(0, 140)}
 					</div>{:else}<div class="dim">none yet</div>{/each}
 			</div>

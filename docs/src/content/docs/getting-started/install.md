@@ -99,6 +99,20 @@ anything; `--no-start` writes the service and leaves it for the next login.
 `uninstall` do what they say. `brnrd setup` pairs a channel such as Telegram,
 so letters reach you away from the terminal.
 
+To start the local loom board and get its URL:
+
+```bash
+brnrd setup channel --kind web --wait 0
+```
+
+Setup enables the loopback page, prints its URL and starts or restarts the loom.
+It picks `--home`, then `BRNRD_HOME`, the installed service's home, the only
+home found or `~/brnrd`; several homes require `--home PATH`.
+A source checkout needs a built frontend; the loom builds it in the background,
+so the page may take a moment to become available.
+
+This is the loom board, separate from the older daemon's dashboard.
+
 If multiple distinct `brnrd` executables are on `PATH`, the CLI warns on
 stderr for person-facing commands: plain `--help`, setup (including bare
 `brnrd`), and the loom service commands (including status). Runtime, launcher and hook
@@ -211,7 +225,7 @@ persistent install, then install the service.
 ## Follow main (dogfooding)
 
 To run the loom on brnrd's `main` instead of the PyPI release, and have it
-move with `main` by itself:
+offer updates from `main` to its resident:
 
 ```bash
 curl -LsSf https://hugimuni-labs.github.io/brnrd/install.sh | sh -s -- --dev
@@ -220,16 +234,37 @@ curl -LsSf https://hugimuni-labs.github.io/brnrd/install.sh | sh -s -- --dev
 It clones `main` to `~/.brnrd/src` (`BRNRD_DEV_DIR` moves it), installs that
 checkout editable with `uv tool install --editable`, prints `brnrd loom install
 --dev --dry-run`, then runs it for real and ends with `brnrd loom status`. The
-loom follows the checkout without a config line: on a green `main` CI it
-fast-forwards and re-execs at an idle tick.
+loom follows the checkout without a config line. On a green `main` CI it
+sends the resident a letter with merged PR numbers, titles, links and description excerpts,
+its own commit count, and whether tracked files have uncommitted changes.
+Descriptions use the first paragraph, at most 300 characters, and say when cut.
+The letter and stored offer share at most 4,500 bytes of PR details; an omitted
+count points to `runtime update`, which lists every landing from git.
+A missing PR description falls back to its commit subject. It waits for the resident's decision:
+
+```bash
+brnrd runtime update                  # read the current offer, including a newer green tip
+brnrd runtime update take             # merge, check imports/config, then load at an idle tick
+brnrd runtime update hold --why 'I need to reconcile my changes first'
+```
+
+Take works on any branch: a fast-forward when possible, otherwise a merge
+over the resident's own commits. Commit tracked edits first. A conflict aborts
+the merge and names the files; reconcile by hand, commit, and run take again.
+A failed import/config check rolls back the merge. That check does not start
+connectors or prove a full service start; launcher recovery and dependency
+reinstallation are separate work. A hold settles the letter; the next green
+tip offers again. While an offer is open a newer green tip updates its target
+without a second letter. How the resident asks or tells its person follows
+their agreement, with no new config setting. `update = "off"` stays off.
 
 It warns, without stopping, about what bites later: `PYTHONPATH` set (brnrd
 would run another checkout's code), no `claude` or `codex` on `PATH` (the loom
 needs a body), and `gh` missing or signed out (following `main` reads CI
 through it; run `gh auth login` first). Run it again to update by hand: it
 fast-forwards a clean checkout on `main`, and refuses one with uncommitted
-changes or on another branch, the same rule the loom applies. Keep your own
-edits in another clone.
+changes or on another branch. That installer path is separate from the
+resident-controlled runtime merge above; use take to preserve your own commits.
 
 ## Development install
 

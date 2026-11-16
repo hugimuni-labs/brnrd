@@ -1044,7 +1044,7 @@ export function loomSnapshots(now = Date.now()) {
 				from: 's-ae66-riiuvn',
 				thread: 'answer-asks-build',
 				kind: 'letter',
-				head: 'Ready for you: #2347 is green, ui-shots posted. Merge, or tell me what is off.'
+				head: 'Ready for you: #2347 is green. Merge, or tell me what is off.'
 			},
 			{
 				id: 's-ae66-riiuvn/r1',

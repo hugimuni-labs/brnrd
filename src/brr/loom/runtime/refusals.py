@@ -16,6 +16,7 @@ MARK = "\n  e.g. "
 
 # (verb, flag) -> example; a flag the refusal names picks the first that matches, in order.
 FLAGS: dict[str, list[tuple[str, str]]] = {
+    "update": [("--why", 'update hold --why "waiting for my local change to be ready"')],
     "send": [
         ("--note", 'send --re <letter id> --to thread:<thread> --note "what you did"'),
         ("--budget", "send --to thread:<thread> --budget 2m"),
@@ -63,6 +64,7 @@ FLAGS: dict[str, list[tuple[str, str]]] = {
 }
 
 VERB: dict[str, str] = {
+    "update": "update take",
     "send": 'send --re <letter id> --to thread:inbox "reply"',
     "settle": 'settle <thread> --why "what it became"',
     "reincarnate": 'reincarnate --why "mostly residue; the README has the rest"',

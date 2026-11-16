@@ -76,6 +76,6 @@ Malicious execution will happen; injection rides every page, issue and message, 
 
 ---
 
-*Saying no:* a feature that moves no node argues for its place or doesn't ship. The owner's hardware, files and keys beat our convenience. Working end to end beats a demo. *Joining?* Read this, then `README.md`, then `AGENTS.md`, then ask the resident what it's chasing.
+*Saying no:* a feature that moves no node argues for its place or doesn't ship. What we will not trade on the way is in [VALUES](VALUES.md). The owner's hardware, files and keys beat our convenience. Working end to end beats a demo. *Joining?* Read this, then `README.md`, then `AGENTS.md`, then ask the resident what it's chasing.
 
 <sub>changes · 2026-10-09: born from the maintainer's brief; reshaped into a tracker, then a tree, then given horizons instead of next steps, a cross-cutting measure, a buildable character, and a society of residents (his steers, same day).</sub>

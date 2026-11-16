@@ -711,3 +711,36 @@ def test_paused_tape_publishes_the_pause_time(tmp_path):
     assert tools.read()
     assert tools.live["s-aa-paused"]["paused"] is False
     assert tools.live["s-aa-paused"]["paused_at"] is None
+
+
+def test_person_names_follow_self_main_without_changing_addresses(parts):
+    from test_people import _git
+    root = parts.home.root
+    repo = root / "self"
+    page = repo / "people" / "login-slug" / "README.md"
+    page.parent.mkdir(parents=True)
+    page.write_text("# Ada Lovelace\n")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-qm", "person name")
+    parts.person = "login-slug"
+    ident = "person-name-letter"
+    append(parts.home, Fact(kind="letter", by="person:login-slug", id=ident,
+                            data={"id": ident, "from": "person:login-slug", "to": "thread:web",
+                                  "body": "literal person:login-slug"}))
+    assert parts.step()
+    index = parts.parts["index"]
+    assert index["person"] == "login-slug"
+    assert index["person_names"]["login-slug"] == "Ada Lovelace"
+    letter = next(l for l in parts.parts["thread/web"]["letters"] if l["id"] == ident)
+    assert letter["from"] == "person:login-slug"
+    assert letter["body"] == "literal person:login-slug"
+    assert parts.parts["beads"][ident][2] == "person:login-slug"
+    before = dict(parts.hashes)
+    page.write_text("# Countess Ada\n")
+    assert not parts.step()  # uncommitted writes cannot change a person's name
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-qm", "rename")
+    assert parts.step()  # a name-only commit is news even without a ledger move
+    assert parts.parts["index"]["person_names"]["login-slug"] == "Countess Ada"
+    assert parts.hashes["thread/web"] == before["thread/web"]
+    assert parts.hashes["beads"] == before["beads"]

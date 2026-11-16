@@ -58,6 +58,8 @@ def test_the_shim_runs_whatever_current_points_at(tmp_path, monkeypatch):
     monkeypatch.setattr(sys, "orig_argv", ["/old/bin/python", "-m", "brr", "runtime", "loom", "--home", "/h"])
     argv = entry.reexec_argv()
     assert argv == [str(entry.shim()), "runtime", "loom", "--home", "/h"]
+    monkeypatch.setattr(sys, "orig_argv", ["/old/bin/python", "-I", "-m", "brr", "runtime", "loom", "--home", "/h"])
+    assert entry.reexec_argv() == argv
     entry.point(fake_prefix(tmp_path, "three"))
     assert run(argv).stdout == "three -m brr runtime loom --home /h\n"
 
