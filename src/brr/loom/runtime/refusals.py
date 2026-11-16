@@ -76,6 +76,7 @@ VERB: dict[str, str] = {
     "graph": "graph",
     "gauge": "gauge --days 7",
     "trust": "trust --days 14",
+    "audit": "audit verify",
     "face": "face take",
     "machines": "machines",
     "attention": 'attention --note <letter id> --why "what was done"',

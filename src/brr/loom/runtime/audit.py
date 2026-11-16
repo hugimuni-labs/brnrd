@@ -5,7 +5,6 @@ DEADLINE seconds, and fail open. No arguments or result bodies cross the socket.
 """
 from __future__ import annotations
 
-import argparse
 import fcntl
 import hashlib
 import json
@@ -18,6 +17,7 @@ import time
 from pathlib import Path
 
 from .home import Home, home_for, home_of_room
+from .refusals import Parser, refuse
 
 DOMAIN = b"brnrd.audit.entry.v1\0"
 PAYLOAD = b"brnrd.audit.payload.v1\0"
@@ -310,7 +310,7 @@ def note(room: Path, stdin_text: str, phase: str) -> None:
 
 
 def main(argv=None) -> int:
-    parser = argparse.ArgumentParser(description="Verify the local record-only tool journal (no witness).")
+    parser = Parser(verb="audit", description="Verify the local record-only tool journal (no witness).")
     parser.add_argument("action", choices=["verify"])
     parser.add_argument("--home")
     parser.add_argument("--room")
@@ -333,5 +333,4 @@ def main(argv=None) -> int:
         print(json.dumps(result, sort_keys=True))
         return 0
     except (OSError, ValueError, KeyError, TypeError) as exc:
-        sys.stderr.write(f"audit: incomplete or corrupt: {exc}\n")
-        return 1
+        return refuse("audit", exc, prefix="audit: incomplete or corrupt: ")
