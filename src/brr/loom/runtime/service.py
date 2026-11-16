@@ -60,12 +60,11 @@ def _program(home: Path) -> list[str]:
     return ["runtime", "loom", "--home", str(home)]
 
 
-def _path_env() -> str:
-    """The installing shell's PATH, the shim's directory first and this venv's ``bin`` read
-    through ``current``: a unit that names the venv would outlive it."""
+def _path_env(previous: str = "") -> str:
+    """Shim first, then old and shell entries, with venv bins read through current."""
     venv = {os.path.abspath(entry.prefix() / "bin"), os.path.dirname(_interpreter())}
     kept = [str(entry.current() / "bin") if os.path.abspath(part) in venv else part
-            for part in os.environ.get("PATH", "").split(os.pathsep) if part]
+            for part in (previous + os.pathsep + os.environ.get("PATH", "")).split(os.pathsep) if part]
     return os.pathsep.join(dict.fromkeys([str(entry.shim().parent), *kept]))
 
 
@@ -81,9 +80,12 @@ def _kept_environment(system: str, unit_file: Path) -> tuple[dict[str, str], tup
                 not isinstance(k, str) or not isinstance(v, str) for k, v in env.items()
             ):
                 raise ValueError("EnvironmentVariables must contain string values")
-            return env, (), sorted(set(env) - {"BRR_INSTALL_MANAGED"})
+            names = sorted(set(env) - {"BRR_INSTALL_MANAGED"})
+            env["PATH"] = _path_env(env.get("PATH", ""))
+            return env, (), names
         lines = []
         names: set[str] = set()
+        old_path = ""
         section = ""
         # A continuation is whitespace in systemd; retain the directive's
         # quoted values rather than decoding and re-encoding them as shell.
@@ -99,6 +101,7 @@ def _kept_environment(system: str, unit_file: Path) -> tuple[dict[str, str], tup
             if not raw:
                 lines.clear()
                 names.clear()
+                old_path = ""
                 continue
             assignments = shlex.split(raw)
             for assignment in assignments:
@@ -106,10 +109,11 @@ def _kept_environment(system: str, unit_file: Path) -> tuple[dict[str, str], tup
                 if not sep or not re.fullmatch(r"[A-Za-z_][A-Za-z_0-9]*", name):
                     raise ValueError("invalid Environment assignment")
                 names.add(name)
-            if len(assignments) != 1 or not assignments[0].startswith("BRR_INSTALL_MANAGED="):
+                if name == "PATH":
+                    old_path = _value.replace("%%", "%")
+            if len(assignments) != 1 or assignments[0].partition("=")[0] not in {"BRR_INSTALL_MANAGED", "PATH"}:
                 lines.append(stripped)
-        if "PATH" not in names:
-            lines.append('Environment="PATH=' + linux._systemd_escape(_path_env()) + '"')
+        lines.append('Environment="PATH=' + linux._systemd_escape(_path_env(old_path)) + '"')
         return {}, tuple(lines), sorted(names - {"BRR_INSTALL_MANAGED"})
     except (OSError, ValueError, TypeError, AttributeError) as exc:
         raise SystemExit(f"loom install: cannot preserve environment from {unit_file}; repair the unit before reinstalling ({type(exc).__name__})") from None

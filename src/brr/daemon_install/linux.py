@@ -304,9 +304,14 @@ def render_systemd_unit(
     if environment_lines:
         # Keep the unit's spelling (systemd escapes and specifiers included).
         # The install-owned flag wins even if the old unit set it differently.
-        text = text.replace(
+        anchor = (
             'Environment=BRR_INSTALL_MANAGED=1\nEnvironment="PATH='
-            + _systemd_escape(path_value) + '"',
+            + _systemd_escape(path_value) + '"'
+        )
+        if text.count(anchor) != 1:
+            raise ValueError("cannot preserve environment: systemd template anchor changed")
+        text = text.replace(
+            anchor,
             "\n".join(environment_lines) + "\nEnvironment=BRR_INSTALL_MANAGED=1",
             1,
         )

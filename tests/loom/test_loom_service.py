@@ -417,7 +417,7 @@ def test_cli_service_lifecycle_at_subprocess_boundary(tmp_path, monkeypatch, cap
     assert choices[0][1]["adapter"] == "grok"
     assert choices[0][1]["core"] == "grok-4"
 
-    # Reinstall refreshes the home, preserves the installed PATH, and restarts the job.
+    # Reinstall refreshes the home, merges the installed and shell PATH, and restarts the job.
     other = tmp_path / "other-home"
     _body(other, "codex/gpt-6")
     monkeypatch.setenv("PATH", "/new/bin:/usr/bin")
@@ -426,12 +426,12 @@ def test_cli_service_lifecycle_at_subprocess_boundary(tmp_path, monkeypatch, cap
     if system == "Linux":
         assert ("systemctl", "--user", "restart", service.UNIT) in events
         assert f"WorkingDirectory={other}" in path.read_text()
-        assert f'Environment="PATH={entry.shim().parent}:/initial/bin:/usr/bin"' in path.read_text()
+        assert f'Environment="PATH={entry.shim().parent}:/initial/bin:/usr/bin:/new/bin"' in path.read_text()
     else:
         # Reading the running service's pid comes first; the first change is bootout.
         assert [e for e in events if e[1] != "print"][0][1] == "bootout"
         assert plistlib.loads(path.read_bytes())["WorkingDirectory"] == str(other)
-        assert plistlib.loads(path.read_bytes())["EnvironmentVariables"]["PATH"] == f"{entry.shim().parent}:/initial/bin:/usr/bin"
+        assert plistlib.loads(path.read_bytes())["EnvironmentVariables"]["PATH"] == f"{entry.shim().parent}:/initial/bin:/usr/bin:/new/bin"
     capsys.readouterr()
     main(["loom", "status"])
     output = capsys.readouterr().out
@@ -1120,10 +1120,13 @@ def test_linux_restart_stops_before_start_and_preserves_stop_failure(tmp_path, m
     assert changes == (['stop', 'start'] if stop_code == 0 else ['stop'])
 
 
+@pytest.mark.parametrize("old_venv", [False, True])
 @pytest.mark.parametrize("system", ["Linux", "Darwin"])
-def test_reinstall_keeps_hand_set_environment_and_path(tmp_path, monkeypatch, capsys, system):
+def test_reinstall_keeps_hand_set_environment_and_path(tmp_path, monkeypatch, capsys, system, old_venv):
     home = tmp_path / "home"
     _body(home)
+    old_path = f"{entry.prefix() / 'bin'}:/old/tools:/usr/bin" if old_venv else "/old/tools:/usr/bin"
+    expected_path = f"{entry.shim().parent}:" + (f"{entry.current() / 'bin'}:" if old_venv else "") + "/old/tools:/usr/bin:/body/tools"
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "config"))
     monkeypatch.setattr(linux, "supported", lambda: True)
     agents = tmp_path / "agents"
@@ -1131,7 +1134,7 @@ def test_reinstall_keeps_hand_set_environment_and_path(tmp_path, monkeypatch, ca
         path = macos.plist_path(home=agents, label=service.LABEL)
         path.parent.mkdir(parents=True)
         path.write_bytes(plistlib.dumps({"EnvironmentVariables": {
-            "PATH": "/old/tools:/usr/bin", "LOOM_BUDGET_BYTES": "32000",
+            "PATH": old_path, "LOOM_BUDGET_BYTES": "32000",
             "CUSTOM": 'space % "quote" \\ slash', "BRR_INSTALL_MANAGED": "0",
         }}))
         manager = _Mac()
@@ -1139,7 +1142,7 @@ def test_reinstall_keeps_hand_set_environment_and_path(tmp_path, monkeypatch, ca
         path = linux.unit_path(service.UNIT)
         path.parent.mkdir(parents=True)
         path.write_text('[Service]\nEnvironment=LOOM_BUDGET_BYTES=32000\n'
-                        'Environment="PATH=/old/tools:/usr/bin"\n'
+                        f'Environment="PATH={old_path}"\n'
                         'Environment="CUSTOM=space %% \\"quote\\" \\\\ slash"\n'
                         'Environment=BRR_INSTALL_MANAGED=0\n')
         manager = _Linux()
@@ -1160,14 +1163,14 @@ def test_reinstall_keeps_hand_set_environment_and_path(tmp_path, monkeypatch, ca
         if system == "Darwin":
             env = plistlib.loads(path.read_bytes())["EnvironmentVariables"]
             assert env == {
-                "PATH": "/old/tools:/usr/bin", "LOOM_BUDGET_BYTES": "32000",
+                "PATH": expected_path, "LOOM_BUDGET_BYTES": "32000",
                 "CUSTOM": 'space % "quote" \\ slash', "BRR_INSTALL_MANAGED": "1",
             }
         else:
             text = path.read_text()
-            assert 'Environment="PATH=/old/tools:/usr/bin"' in text
+            assert f'Environment="PATH={expected_path}"' in text
             assert 'Environment=LOOM_BUDGET_BYTES=32000' in text
             assert 'Environment="CUSTOM=space %% \\"quote\\" \\\\ slash"' in text
             assert text.count("Environment=BRR_INSTALL_MANAGED=1") == 1
             assert "BRR_INSTALL_MANAGED=0" not in text
-        assert "/body/tools" not in path.read_text()
+        assert "/body/tools" in path.read_text()

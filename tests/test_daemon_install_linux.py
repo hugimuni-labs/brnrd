@@ -440,4 +440,12 @@ def test_missing_policy_directives_does_not_accuse_an_operator_override(
 
     assert linux.missing_policy_directives() == []
 
-
+def test_kept_environment_refuses_changed_template_anchor(monkeypatch, tmp_path):
+    monkeypatch.setattr(linux, "USER_SERVICE_UNIT", linux.USER_SERVICE_UNIT.replace(
+        'Environment=BRR_INSTALL_MANAGED=1', 'Environment="BRR_INSTALL_MANAGED=1"',
+    ))
+    with pytest.raises(ValueError, match="template anchor changed"):
+        linux.render_systemd_unit(
+            brr_path="/bin/brnrd", workdir=tmp_path, label="loom.service",
+            environment_lines=('Environment=CUSTOM=kept',),
+        )
