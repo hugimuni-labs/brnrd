@@ -55,6 +55,9 @@ class Key:
 
 
 KEYS: tuple[Key, ...] = (
+    Key("audit", "choice", "off",
+        "Record tool-hook digests in the local durable journal. Record-only, fail-open; read at loom start.",
+        choices=("off", "on")),
     Key("name", "text", None,
         "This loom's name. A thread whose README says `for: <name>` runs only on the loom of that name; unset matches none."),
     Key("body", "text", None,
