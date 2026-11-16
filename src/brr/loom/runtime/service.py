@@ -12,7 +12,9 @@ import argparse
 import fcntl
 import json
 import os
+import plistlib
 import re
+import shlex
 import shutil
 import signal
 import site
@@ -65,6 +67,52 @@ def _path_env() -> str:
     kept = [str(entry.current() / "bin") if os.path.abspath(part) in venv else part
             for part in os.environ.get("PATH", "").split(os.pathsep) if part]
     return os.pathsep.join(dict.fromkeys([str(entry.shim().parent), *kept]))
+
+
+def _kept_environment(system: str, unit_file: Path) -> tuple[dict[str, str], tuple[str, ...], list[str]]:
+    """Read before replacing anything. Keep systemd values in their native syntax."""
+    if not unit_file.exists():
+        return {}, (), []
+    try:
+        if system == "Darwin":
+            payload = plistlib.loads(unit_file.read_bytes())
+            env = payload.get("EnvironmentVariables", {})
+            if not isinstance(env, dict) or any(
+                not isinstance(k, str) or not isinstance(v, str) for k, v in env.items()
+            ):
+                raise ValueError("EnvironmentVariables must contain string values")
+            return env, (), sorted(set(env) - {"BRR_INSTALL_MANAGED"})
+        lines = []
+        names: set[str] = set()
+        section = ""
+        # A continuation is whitespace in systemd; retain the directive's
+        # quoted values rather than decoding and re-encoding them as shell.
+        text = unit_file.read_text().replace("\\\n", " ")
+        for line in text.splitlines():
+            stripped = line.strip()
+            if stripped.startswith("["):
+                section = stripped
+            key, equals, value = stripped.partition("=")
+            if section != "[Service]" or key.strip() != "Environment" or not equals:
+                continue
+            raw = value.strip()
+            if not raw:
+                lines.clear()
+                names.clear()
+                continue
+            assignments = shlex.split(raw)
+            for assignment in assignments:
+                name, sep, _value = assignment.partition("=")
+                if not sep or not re.fullmatch(r"[A-Za-z_][A-Za-z_0-9]*", name):
+                    raise ValueError("invalid Environment assignment")
+                names.add(name)
+            if len(assignments) != 1 or not assignments[0].startswith("BRR_INSTALL_MANAGED="):
+                lines.append(stripped)
+        if "PATH" not in names:
+            lines.append('Environment="PATH=' + linux._systemd_escape(_path_env()) + '"')
+        return {}, tuple(lines), sorted(names - {"BRR_INSTALL_MANAGED"})
+    except (OSError, ValueError, TypeError, AttributeError) as exc:
+        raise SystemExit(f"loom install: cannot preserve environment from {unit_file}; repair the unit before reinstalling ({type(exc).__name__})") from None
 
 
 def _refuse_prefix() -> None:
@@ -539,6 +587,7 @@ def _install(argv: list[str], *, run, agents_home, sleep, pid_alive, poll_timeou
         raise SystemExit("[brnrd] loom install on this platform is not implemented yet")
     unit_file = (linux.unit_path(UNIT) if system == "Linux"
                  else macos.plist_path(home=_agents(agents_home), label=LABEL))
+    environment, environment_lines, kept = _kept_environment(system, unit_file)
     receipt = [
         ("interpreter", _interpreter()),
         ("brnrd", __version__ + (" (source checkout, --dev)" if _brr_source() else "")),
@@ -548,6 +597,8 @@ def _install(argv: list[str], *, run, agents_home, sleep, pid_alive, poll_timeou
         ("service", unit_file),
         ("entry", entry.shim()),
     ]
+    if kept:
+        receipt.append(("kept environment", ", ".join(kept)))
     if args.dry_run:
         receipt.append(("current", f"{entry.current()} -> {entry.prefix()} (dry run: not linked)"))
         replaced = "not checked (--no-start)" if args.no_start else _replace(
@@ -575,6 +626,7 @@ def _install(argv: list[str], *, run, agents_home, sleep, pid_alive, poll_timeou
             delay=poll,
             restart=True,
             path_env=_path_env(),
+            environment_lines=environment_lines,
         )
         if args.no_start:
             _receipt(receipt + [("pid", "- (not started: --no-start)")])
@@ -607,7 +659,8 @@ def _install(argv: list[str], *, run, agents_home, sleep, pid_alive, poll_timeou
         abandon_process_group=True,
         confirm=confirm,
         retry_command="`brnrd loom install`",
-        path_env=_path_env(),
+        path_env=environment.get("PATH", _path_env()),
+        environment=environment,
     )
     if args.no_start:
         _receipt(receipt + [("pid", "- (not started: --no-start; it loads at next login)")])
