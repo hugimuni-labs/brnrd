@@ -9,13 +9,17 @@ from __future__ import annotations
 import hashlib
 import io
 import json
+import os
 import re
+import sys
 import shutil
 import tarfile
 import urllib.request
 from pathlib import Path
 
 BASE = "https://github.com/hugimuni-labs/brnrd/releases/download/board-builds"
+#: Where exact assets are read: a mirror, or a local server in tests.
+BASE_ENV = "BRNRD_BOARD_BASE"
 API = "https://api.github.com/repos/hugimuni-labs/brnrd"
 MAX_ARCHIVE = 64 * 1024 * 1024
 MAX_EXPANDED = 256 * 1024 * 1024
@@ -35,10 +39,11 @@ def fetch(commit: str, tree: str, destination: Path, get=download) -> None:
     if not all(re.fullmatch(r"[0-9a-f]{40}", value) for value in (commit, tree)):
         raise ValueError("board commit and tree must be full git hashes")
     name = f"board-{commit}.tar.gz"
-    manifest = json.loads(get(f"{BASE}/{name}.json", 4096))
+    base = os.environ.get(BASE_ENV) or BASE
+    manifest = json.loads(get(f"{base}/{name}.json", 4096))
     if manifest.get("commit") != commit or manifest.get("tree") != tree:
         raise ValueError("board manifest does not match upstream commit/tree")
-    data = get(f"{BASE}/{name}", MAX_ARCHIVE)
+    data = get(f"{base}/{name}", MAX_ARCHIVE)
     if hashlib.sha256(data).hexdigest() != manifest.get("sha256"):
         raise ValueError("board archive digest mismatch")
     with tarfile.open(fileobj=io.BytesIO(data), mode="r:gz") as archive:
@@ -86,12 +91,14 @@ def available(get=download) -> set[str]:
             and name + '.json' in names}
 
 
-def main() -> int:
-    """The single retry command printed when installation has no board."""
+def main(argv: list[str] | None = None) -> int:
+    """The single retry command printed when installation has no board: fetch it for CHECKOUT."""
     from .spabuild import SpaBuild
-    import brr
-    frontend = Path(brr.__file__).resolve().parents[1] / 'frontend'
-    spa = SpaBuild(frontend, print)
+    args = sys.argv[1:] if argv is None else argv
+    if len(args) != 1:
+        print('usage: python -I -m brr.loom.runtime.board_asset CHECKOUT')
+        return 2
+    spa = SpaBuild(Path(args[0]).resolve() / 'src' / 'frontend', print)
     tree = spa.wanted()
     if not tree:
         print('board: no source checkout found')

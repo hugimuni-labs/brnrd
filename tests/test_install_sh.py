@@ -69,14 +69,32 @@ def checkout(room, origin=ORIGIN):
 @pytest.mark.parametrize('shell', SHELLS)
 @pytest.mark.parametrize('args', [(), ('--dev',)])
 def test_default_and_dev_prepare_same_checkout_and_separate_prefix(room, shell, args):
-    result = run(room, shell, args)
+    tmp, binary, env = room
+    real = shutil.which('git')
+    (binary / 'git').unlink()
+    # A clone without the network: record it, make a checkout of main with the given origin.
+    tool(binary, 'git', f'''if [ "$1" = clone ]; then
+  printf 'git %s\\n' "$*" >> "$TRACE"
+  eval "dest=\\${{$#}}"; eval "url=\\${{$(($# - 1))}}"
+  {real} init -q -b main "$dest" && {real} -C "$dest" remote add origin "$url" &&
+  exec {real} -C "$dest" -c user.name=t -c user.email=t@t commit -q --allow-empty -m upstream
+fi
+exec {real} "$@"
+''')
+    result = run(room, shell, args, dry=False)
     assert result.returncode == 0, result.stderr
-    assert 'git clone --single-branch --branch main' in result.stdout
-    assert 'uv venv ' in result.stdout
-    assert 'uv pip install --python ' in result.stdout
-    assert ' -I -m brr.loom.runtime.install_checkout ' in result.stdout
-    assert 'uv tool install' not in result.stdout
-    assert not (Path(room[2]['HOME']) / '.brnrd').exists()
+    home = Path(env['HOME'])
+    source = home / '.brnrd/src'
+    git = lambda *a: subprocess.check_output([real, '-C', str(source), *a], text=True).strip()
+    assert git('remote', 'get-url', 'origin') == ORIGIN
+    assert git('symbolic-ref', '--short', 'HEAD') == 'main'
+    trace = (tmp / 'trace').read_text().splitlines()
+    assert f'git clone --single-branch --branch main {ORIGIN} {source}' in trace
+    candidates = sorted((home / '.brnrd/envs').glob('install-*'))
+    assert len(candidates) == 1 and (candidates[0] / 'bin/python').is_file()
+    assert f'uv pip install --python {candidates[0]}/bin/python --editable {source}' in trace
+    assert f'candidate -I -m brr.loom.runtime.install_checkout {source}' in trace
+    assert not any('tool install' in line for line in trace)
 
 
 @pytest.mark.parametrize('shell', SHELLS)

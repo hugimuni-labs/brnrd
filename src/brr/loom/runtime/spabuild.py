@@ -226,7 +226,7 @@ class SpaBuild:
                 if not (self.build / '200.html').is_file():
                     from . import entry
                     retry = shlex.join([str(entry.current() / 'bin/python'), '-I', '-m',
-                                        'brr.loom.runtime.board_asset'])
+                                        'brr.loom.runtime.board_asset', str(self.frontend.parents[1])])
                     self.notice('absent', f'spa: installed without a board; fetch it later with: {retry}; '
                                 'the loom will retry when idle')
                 self.failed = None

@@ -426,3 +426,57 @@ def test_idle_gates_only_the_retry_and_is_read_only_when_it_is_due(checkout, mon
     clock[0] = 330
     tick()
     assert attempts == [0.0, 330]
+
+
+def test_printed_retry_command_fetches_the_served_board(checkout, monkeypatch, tmp_path):
+    """The one command an install without a board prints, run as printed, brings the board."""
+    import hashlib
+    import http.server
+    import io
+    import json
+    import os
+    import shlex
+    import sys
+    import tarfile
+    import threading
+    from brr.loom.runtime import board_asset, spabuild
+    root, frontend = checkout
+    managed(root, frontend)
+    layout = tmp_path / 'layout'
+    layout.mkdir()
+    (layout / 'current').symlink_to(sys.prefix)
+    monkeypatch.setenv('BRNRD_ROOT', str(layout))
+    monkeypatch.setattr(spabuild, 'npm_supported', lambda: False)
+    monkeypatch.setattr(board_asset, 'fetch', lambda *a: (_ for _ in ()).throw(OSError('404')))
+    messages = []
+    spa = SpaBuild(frontend, messages.append, every=0)
+    settle(spa)
+    assert not spa.build.exists()
+    line = next(m for m in messages if 'installed without a board' in m)
+    command = shlex.split(line.split('fetch it later with: ', 1)[1].split('; the loom will retry', 1)[0])
+    # Publish the asset the command will look for, as the workflow does.
+    commit, tree = spa.upstream
+    served = tmp_path / 'served'
+    served.mkdir()
+    page = io.BytesIO()
+    with tarfile.open(fileobj=page, mode='w:gz') as archive:
+        body = b'the published board'
+        info = tarfile.TarInfo('200.html')
+        info.size = len(body)
+        archive.addfile(info, io.BytesIO(body))
+    data = page.getvalue()
+    (served / f'board-{commit}.tar.gz').write_bytes(data)
+    (served / f'board-{commit}.tar.gz.json').write_text(json.dumps(
+        {'commit': commit, 'tree': tree, 'sha256': hashlib.sha256(data).hexdigest()}))
+    handler = lambda *a, **kw: http.server.SimpleHTTPRequestHandler(*a, directory=str(served), **kw)
+    server = http.server.ThreadingHTTPServer(('127.0.0.1', 0), handler)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        env = {k: v for k, v in os.environ.items() if k not in {'PYTHONPATH', 'PYTHONHOME'}}
+        env['BRNRD_BOARD_BASE'] = f'http://127.0.0.1:{server.server_port}'
+        result = subprocess.run(command, env=env, capture_output=True, text=True, timeout=60)
+    finally:
+        server.shutdown()
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert (spa.build / '200.html').read_text() == 'the published board'
+    assert spa.fetched() == commit and spa.built() == spa.wanted()
