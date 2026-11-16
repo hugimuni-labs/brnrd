@@ -64,16 +64,20 @@ def test_chain_epochs_and_tampering(tmp_path):
             audit.verify(copy)
 
 
-def test_writer_is_single_and_no_repair(tmp_path):
+def test_writer_is_single_and_a_broken_epoch_never_stops_capture(tmp_path):
     home = Home(tmp_path, install="abcd")
     journal = audit.Journal(home)
     with pytest.raises(BlockingIOError):
         audit.Journal(home)
     journal.close()
     (journal.epoch / "entries.jsonl").write_bytes(b'broken\n')
-    with pytest.raises(ValueError):
-        audit.Journal(home)
+    successor = audit.Journal(home)
+    successor.append({"kind": "tool", "event": event("after")})
+    successor.close()
     assert (journal.epoch / "entries.jsonl").read_bytes() == b'broken\n'
+    assert successor.found["epoch"] == journal.epoch.name
+    with pytest.raises(ValueError, match=journal.epoch.name):
+        audit.verify(successor.base)
 
 
 def room(home):
@@ -113,10 +117,9 @@ def test_jack_pre_refusal_completion_and_off(tmp_path, monkeypatch, capsys):
     assert rows[0]['event']['call'] == 'call-1'
     assert b'private-secret' not in data and b'private-result' not in data
     assert audit.main(['verify', '--home', str(home.root)]) == 0
-    # Missing writer: twice called, one visible warning, no refusal.
+    # A writer that closed took its endpoint: no capture running, nothing to warn of.
     audit.note(place, payload, 'pre')
-    audit.note(place, payload, 'pre')
-    assert capsys.readouterr().err.count('capture unavailable') == 1
+    assert 'capture unavailable' not in capsys.readouterr().err
 
 
 def test_append_failure_never_acknowledged_or_repaired(tmp_path, monkeypatch):
@@ -149,7 +152,48 @@ def test_live_verifier_checks_a_prefix_while_writer_continues(tmp_path):
         journal.close()
 
 
-def test_unacknowledged_partial_append_stays_broken(tmp_path, monkeypatch):
+def test_unclean_stop_opens_a_new_epoch_that_says_so(tmp_path, monkeypatch):
+    """The crash window: the row is fsynced, the head is not yet replaced."""
+    home = Home(tmp_path, install="abcd")
+    journal = audit.Journal(home)
+    journal.append({"kind": "tool", "event": event("a")})
+    real = audit._replace
+    def crash(path, value):
+        if path.name == "head.json":
+            raise OSError("power lost")
+        real(path, value)
+    monkeypatch.setattr(audit, "_replace", crash)
+    with pytest.raises(OSError):
+        journal.append({"kind": "tool", "event": event("b")})
+    journal.close()
+    monkeypatch.setattr(audit, "_replace", real)
+    old = (journal.epoch / "entries.jsonl").read_bytes()
+    with pytest.raises(ValueError, match="no later epoch has recorded"):
+        audit.verify(journal.base)
+    successor = audit.Journal(home)
+    successor.append({"kind": "tool", "event": event("c")})
+    successor.close()
+    assert (journal.epoch / "entries.jsonl").read_bytes() == old
+    first = json.loads((successor.epoch / "entries.jsonl").read_bytes().splitlines()[0])
+    committed = json.loads((journal.epoch / "head.json").read_bytes())
+    assert first["found"] == {"epoch": journal.epoch.name, "committed": committed,
+                              "size": len(old), "listed": True}
+    assert first["previous_epoch"] == committed["hash"]
+    result = audit.verify(journal.base)
+    assert result["entries"] == 2  # a and c; b was never acknowledged
+    [report] = result["unclean"]
+    assert report["epoch"] == journal.epoch.name and report["tail_bytes"] > 0
+    # A third clean start links on; the unclean epoch is still reported, still checked after.
+    audit.Journal(home).close()
+    assert audit.verify(journal.base)["unclean"] == [report]
+    # Anything changed in the unclean epoch after it was found is not unclean, it is broken.
+    with open(journal.epoch / "entries.jsonl", "ab") as stream:
+        stream.write(b"more\n")
+    with pytest.raises(ValueError, match="changed after"):
+        audit.verify(journal.base)
+
+
+def test_unacknowledged_partial_append_is_reported_unclean(tmp_path, monkeypatch):
     home = Home(tmp_path, install="abcd")
     journal = audit.Journal(home)
     def fail(*args):
@@ -158,5 +202,103 @@ def test_unacknowledged_partial_append_stays_broken(tmp_path, monkeypatch):
     with pytest.raises(OSError):
         journal.append({"kind": "tool", "event": event("a")})
     journal.close()
-    with pytest.raises(ValueError):
-        audit.Journal(home)
+    monkeypatch.undo()
+    successor = audit.Journal(home)
+    successor.close()
+    assert [u["epoch"] for u in audit.verify(home.root / "audit/abcd")["unclean"]] == [journal.epoch.name]
+
+
+def test_crash_before_the_manifest_or_the_first_head(tmp_path, monkeypatch):
+    home = Home(tmp_path, install="abcd")
+    audit.Journal(home).close()
+    real = audit._replace
+    def crash(path, value):
+        if path.name == "epochs.json":
+            raise OSError("power lost")
+        real(path, value)
+    monkeypatch.setattr(audit, "_replace", crash)
+    with pytest.raises(OSError):
+        audit.Journal(home)  # entry 0 written, manifest never replaced
+    monkeypatch.undo()
+    orphan = audit.Journal(home)
+    orphan.close()
+    assert orphan.found["listed"] is False
+    (orphan.base / f"{3:020d}-deadbeef").mkdir()  # mkdir, then a crash before any head
+    last = audit.Journal(home)
+    last.close()
+    assert last.found["committed"] is None
+    result = audit.verify(last.base)
+    assert result["epochs"] == 5 and len(result["unclean"]) == 2
+
+
+def test_start_reads_no_history(tmp_path, monkeypatch):
+    home = Home(tmp_path, install="abcd")
+    journal = audit.Journal(home)
+    for i in range(50):
+        journal.append({"kind": "tool", "event": event(str(i))})
+    journal.close()
+    def walked(*args):
+        raise AssertionError("start-up walked the history")
+    monkeypatch.setattr(audit, "_rows", walked)
+    monkeypatch.setattr(audit, "verify", walked)
+    successor = audit.Journal(home)
+    successor.close()
+    assert successor.found is None
+
+
+def test_bad_requests_never_poison_the_writer(tmp_path):
+    import socket
+    home = Home(tmp_path)
+    place = room(home)
+    writer = audit.Writer(home)
+    endpoint = json.loads((home.root / "loom/audit-endpoint.json").read_bytes())
+    payload = json.dumps({'tool_name': 'Bash', 'tool_use_id': 'x'})
+    def send(raw, close=True):
+        with socket.create_connection(("127.0.0.1", endpoint["port"]), timeout=1) as conn:
+            conn.sendall(raw)
+            if close:
+                conn.shutdown(socket.SHUT_WR)
+            try:
+                return conn.recv(3)
+            except OSError:
+                return b""
+    try:
+        good = {"token": endpoint["token"], "event": event("e")}
+        for raw in (b"garbage\n", b'{"token":', b'[1]\n', b'{"token":7}\n',
+                    audit.canonical(dict(good, token="0" * 64)) + b"\n",
+                    audit.canonical({"token": endpoint["token"], "event": {"id": "bad"}}) + b"\n",
+                    b'{"token":"' + endpoint["token"].encode() + b'","event":NaN}\n'):
+            assert send(raw) != b"ok\n"
+        send(audit.canonical(good)[:20], close=False)  # half-sent, then left hanging
+        assert writer.error is None
+        audit.note(place, payload, "pre")
+    finally:
+        writer.close()
+    assert audit.verify(writer.journal.base)["entries"] == 1
+    assert not (home.root / "loom/audit-warning").exists()
+
+
+def test_a_second_outage_warns_again(tmp_path, capsys):
+    home = Home(tmp_path)
+    place = room(home)
+    payload = json.dumps({'tool_name': 'Bash'})
+    (home.root / "loom").mkdir(exist_ok=True)
+    (home.root / "loom/audit-endpoint.json").write_text('{"port": 1, "token": "x"}')
+    audit.note(place, payload, "pre")
+    audit.note(place, payload, "pre")
+    assert capsys.readouterr().err.count("capture unavailable") == 1
+    writer = audit.start(home, True)
+    writer.close()
+    assert not (home.root / "loom/audit-warning").exists()
+    (home.root / "loom/audit-endpoint.json").write_text('{"port": 1, "token": "x"}')
+    audit.note(place, payload, "pre")
+    assert capsys.readouterr().err.count("capture unavailable") == 1
+
+
+def test_start_off_removes_a_dead_endpoint_and_starts_nothing(tmp_path):
+    home = Home(tmp_path)
+    (home.root / "loom").mkdir(parents=True)
+    (home.root / "loom/audit-endpoint.json").write_text('{"port": 1, "token": "x"}')
+    assert audit.start(home, False) is None
+    assert not (home.root / "loom/audit-endpoint.json").exists()
+    assert not (home.root / "audit").exists()

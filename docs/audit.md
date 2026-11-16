@@ -5,8 +5,10 @@ not captured.** This is partial local evidence, never proof that every act was
 captured or authorized. Capture defaults off; this change enables it nowhere.
 
 A home may opt in with `audit = "on"` in `loom/config.toml`, then restart its
-loom. Switching it off stops hook submissions immediately; turning it on needs
-a writer started by the loom. No grants, citations, wake review, witness, push,
+loom. The loom reads the setting at start: when on, it starts the writer, which
+writes `loom/audit-endpoint.json`; when off, it removes any endpoint a dead
+loom left. A hook reads only the endpoint, so switching off takes effect at the
+next loom start, and capture off costs a hook one failed open (measured below). No grants, citations, wake review, witness, push,
 display, trust number, payload storage, encryption or Codex interception ship
 here. Existing guards retain their own behavior.
 
@@ -19,21 +21,40 @@ and ephemeral port live in `loom/audit-endpoint.json` with mode 0600. This is
 coordination, not a boundary against a body with home access.
 
 Each writer lifetime opens a new epoch, ordered by an ordinal rather than wall
-clock, linking the preceding epoch's final hash. `epochs.json` commits their
+clock, linking the preceding epoch's committed hash. `epochs.json` commits their
 ordered names. `head.json` commits the epoch's sequence, hash and byte count.
 Every append writes the line, fsyncs the journal, writes/fsyncs a temporary head,
 replaces the head and fsyncs its directory before acknowledging. Epoch creation
-also syncs the directory. A partial write, failed fsync or crash between these
-steps leaves a detectable discrepancy; no automatic repair, truncation, reset or
-continuation past a corrupt tail occurs. Recovery requires a later design.
+also syncs the directory.
+
+Start-up never reads the history. It reads the manifest, the epoch directories,
+the predecessor's `head.json` and the one row that head names (at most 64 KiB
+read from the end), and links the new epoch to that committed hash. The full
+walk is the verb's. A new epoch opens whatever the predecessor left: when it did
+not end clean (a crash between the journal fsync and the head replacement, a
+partial line, a failed fsync, a missing or unreadable head, an epoch created but
+never added to the manifest, an unreadable manifest), the new epoch's first
+entry carries `found`: the predecessor's name, its committed head as read, its
+actual file size and whether the manifest listed it. Old bytes are never
+truncated, rewritten or repaired; the unacknowledged tail stays where it fell.
+Nothing past a committed head was ever acknowledged, so a tail is never an
+event a hook was told was recorded.
 
 The writer serializes append operations. A hook waits at most a 5 ms socket
 budget for acknowledgement and never retries. Config parsing and hashing are
 additional CPU work; this is not a hard real-time latency guarantee. An ack lost
 after persistence may still leave the event in the journal. Capture errors do
-not refuse tools. A persistent `loom/audit-warning` suppresses repeated warnings;
-the first failure writes it and prints to stderr. If storage cannot even create
-that marker, a once-per-installation warning cannot be guaranteed. A missing
+not refuse tools. A persistent `loom/audit-warning` suppresses repeated warnings
+within one outage; the first failure writes it and prints to stderr, and every
+writer start removes it, so the next outage warns again. If storage cannot even
+create that marker, a single warning per outage cannot be guaranteed.
+
+The writer drops a request it cannot read (garbage, a half-sent or timed-out
+request, valid JSON of the wrong shape, an event it cannot encode or whose id
+or digests are malformed) or cannot authenticate (constant-time token compare),
+and goes on serving. Only a failed journal append stops it: it never appends
+past a write it could not complete, and every later hook sees no
+acknowledgement and warns. A missing
 ack means coverage is uncertain. No automatic gap count is claimed.
 
 The pre hook records attempted dispatch, including calls later refused by an
@@ -71,19 +92,34 @@ cwd are metadata retained in cleartext and may themselves contain private names.
 
 ## Verification and limits
 
-`brnrd runtime audit verify --home PATH` returns JSON with entry/epoch counts and
-the checked head hash, or exits 1 with an error. It checks canonical bytes,
-continuity, entry hashes, event-id uniqueness, digest shape, committed size/head,
-installation/epoch binding and predecessor links. Offline verification takes a
+`brnrd runtime audit verify --home PATH` returns JSON with entry/epoch counts,
+the checked head hash and `unclean`, or exits 1 with every fault it found. It
+checks canonical bytes, continuity, entry hashes, event-id uniqueness, digest
+shape, committed size/head, installation/epoch binding and predecessor links. An
+epoch its successor recorded as `found` is reported in `unclean` with its
+committed and actual byte counts; its committed bytes are still checked, and so
+is every epoch after it. If such an epoch changed after it was found (size or
+head no longer what the successor recorded), or is shorter than its committed
+head, that is a fault, not an unclean stop. A mismatch in the newest epoch with
+no successor yet (a crash not followed by a loom start, or tampering) is a
+fault. A fault in one epoch does not stop the walk. Offline verification takes a
 shared lock. With a live writer it requests a serialized checkpoint, then checks
 that committed prefix outside the writer, so a long scan does not hold up tool
 appends. Newer events may exist by the time the command returns; the returned
 hash identifies the prefix checked. A dead writer's stale endpoint is an error.
 
 Tests change a byte, remove an interior or final entry, reorder entries, duplicate
-an event id, corrupt a digest, remove an epoch and interrupt an append. Tests also
-exercise the jack's existing pre/refusal/post path, off-by-default capture,
-writer exclusion, failed writes, and verification while capture continues.
+an event id, corrupt a digest, remove an epoch and interrupt an append. They
+cut the power in each crash window (after the row's fsync before its head; after
+entry 0 before the manifest; after the epoch directory before any head) and
+read that capture continues, the old bytes are unchanged, the new epoch says
+what it found and the verb reports it unclean while checking what follows; a
+start-up with `_rows`/`verify` replaced by a failure proves it reads no history.
+Garbage, half-sent, wrong-shape, wrong-token and unencodable requests each leave
+the next real event captured. Tests also exercise the jack's existing
+pre/refusal/post path, off-by-default capture, a dead endpoint removed at start,
+the warning re-armed by a writer start, writer exclusion, failed writes, and
+verification while capture continues.
 
 The resident can change this installation's logger, hooks and verifier, so it can
 suppress future capture or rewrite an unwitnessed local history. This record
@@ -109,11 +145,22 @@ scratch directory (the live home stays off):
   reconstruct original tool arguments. Rate is workload-specific, not a capacity
   guarantee. Head/manifest/endpoint files add a small fixed overhead.
 
+- After the review fixes (same machine, 2026-11-16): 500 calls, 1,000 entries,
+  mean 1.49 ms/call, p95 1.87 ms, p99 2.47 ms, max 8.98 ms; no warning.
+- Start-up with a 1 GiB journal (1,239,739 entries, synthetic, valid): 1.7 ms
+  per loom start (5.5 ms first, cold). The full walk the earlier version ran at
+  every start takes 43.7 s on the same journal; it is now only the verb's.
+- A hook with capture off: 16 µs mean (one failed open of the endpoint), where
+  the earlier home-and-config read cost 49 µs. In-process; the hook process's
+  own start-up is not counted.
+
 Reproduce with the checkout's `src` explicitly on the import path:
 
 ```
 PYTHONPATH=src python scripts/bench_audit.py --scratch <room>/tmp
 PYTHONPATH=src python scripts/bench_audit.py --scratch <room>/tmp --trace <body>/port/tools.jsonl
+PYTHONPATH=src python scripts/bench_audit.py --scratch <room>/tmp --startup-bytes 1073741824
+PYTHONPATH=src python scripts/bench_audit.py --scratch <room>/tmp --off --calls 2000
 ```
 
 The script prints the loaded module path, sample counts, latency percentiles,

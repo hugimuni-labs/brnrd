@@ -2800,12 +2800,8 @@ def run(root: Path | str, *, adapter: str = "fake", core: str = "haiku",
         from .config import ConfigError, load_config, tick_config
         from . import usage
         config = load_config(home.root)
-        if config.audit == "on":
-            from .audit import Writer, _warn
-            try:
-                audit_writer = Writer(home)
-            except Exception:
-                _warn(home)
+        from . import audit
+        audit_writer = audit.start(home, config.audit == "on")
         fingerprint = _source_fingerprint()
         next_source, source_moved = time.monotonic() + SOURCE_EVERY, False
         next_usage = 0
