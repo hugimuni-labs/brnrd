@@ -65,6 +65,8 @@ class SpaBuild:
         self.failed: tuple[str, str] | None = None  # (tree, why)
         self.noticed: set[str] = set()
         self.upstream: tuple[str, str] | None = None
+        #: (tree, monotonic time) of an attempt that ended without that tree's board.
+        self.retry: tuple[str, float] | None = None
         self.changed = False
 
     def _git(self, *args: str) -> str | None:
@@ -109,12 +111,18 @@ class SpaBuild:
         stamp = self.build / STAMP
         return stamp.read_text().strip() if stamp.is_file() else ""
 
-    def built_upstream(self) -> str:
-        stamp = self.build / '.upstream'
-        return stamp.read_text().strip() if stamp.is_file() else self.built()
+    def fetched(self) -> str:
+        """The upstream commit a served archive was fetched for; empty for a local build or none."""
+        stamp = self.build / '.commit'
+        return stamp.read_text().strip() if stamp.is_file() else ""
 
     def step(self, idle=True) -> None:
-        """On the loop: start a build when the tree moved; raises while HEAD's tree failed to build."""
+        """On the loop: start a build when the tree moved; raises while HEAD's tree failed to build.
+
+        The first attempt for a tree, and so every local build, starts at once. Only a repeat
+        of an attempt that ended without that tree's board (a missing asset, no npm) waits for
+        its retry time and an idle loom; idle is evaluated only once that time has come.
+        """
         if self.worker is not None and self.worker.is_alive():
             return
         if self.clock() < self.due:
@@ -122,14 +130,15 @@ class SpaBuild:
                 raise BuildFailed(f"{self.failed[1]}; serving the build of tree {self.built()[:8] or 'none'}")
             return
         self.due = self.clock() + self.every
-        if not (idle() if callable(idle) else idle):
-            return
         tree = self.wanted()
         if tree is None or tree == self.built():
-            self.failed = None
+            self.failed = self.retry = None
             return
         if self.failed is not None and self.failed[0] == tree:
             raise BuildFailed(f"{self.failed[1]}; serving the build of tree {self.built()[:8] or 'none'}")
+        if self.retry is not None and self.retry[0] == tree:
+            if self.clock() < self.retry[1] or not (idle() if callable(idle) else idle):
+                return
         self.worker = threading.Thread(target=self._build, args=(tree,), name="spa-build", daemon=True)
         self.worker.start()
 
@@ -138,7 +147,9 @@ class SpaBuild:
         try:
             shutil.rmtree(self.next, ignore_errors=True)
             fetch(commit, tree, self.next)
-            self._swap(upstream=tree)
+            (self.next / STAMP).write_text(tree + "\n")
+            (self.next / ".commit").write_text(commit + "\n")
+            self._swap()
             return True
         except Exception as exc:
             shutil.rmtree(self.next, ignore_errors=True)
@@ -157,6 +168,20 @@ class SpaBuild:
         self._swap()
         self.log(f"spa: built tree {tree[:8]} into {self.build}")
 
+    def _try_local(self, tree: str) -> bool:
+        """A supported npm builds the tree; a failure keeps the last good build (soft, for managed installs)."""
+        if not npm_supported():
+            if self.changed:
+                self.notice(tree, 'spa: frontend changed but npm is unavailable or unsupported; keeping last good build')
+            return False
+        try:
+            self._local(tree)
+            return True
+        except Exception as exc:
+            shutil.rmtree(self.next, ignore_errors=True)
+            self.notice('local:' + tree, f'spa: local board build failed ({exc}); keeping last good build')
+            return False
+
     def _ancestor(self, exact: str) -> bool:
         from .board_asset import available
         try:
@@ -167,6 +192,8 @@ class SpaBuild:
             for commit in ancestors:
                 if commit == exact or commit not in commits:
                     continue
+                if commit == self.fetched() and (self.build / '200.html').is_file():
+                    return True  # already serving the newest published ancestor
                 tree = self._git('rev-parse', f'{commit}:src/frontend')
                 if tree and self._fetch(commit, tree):
                     self.notice('older:' + commit, f'spa: board is from older ancestor commit {commit}')
@@ -179,23 +206,22 @@ class SpaBuild:
         try:
             if self.upstream:
                 commit, upstream_tree = self.upstream
-                matched = (self.build / '200.html').is_file() and self.built_upstream() == upstream_tree
-                if not matched:
-                    matched = self._fetch(commit, upstream_tree)
-                if matched and not self.changed:
-                    self.failed = None
+                if self.changed and self._try_local(tree):
+                    self.failed = self.retry = None
                     return
-                if npm_supported():
-                    try:
-                        self._local(tree)
-                        self.failed = None
+                served = (self.build / '200.html').is_file()
+                if self.changed and served and not self.fetched():
+                    pass  # the resident's last good local build stays served
+                elif served and self.fetched() == commit:
+                    pass  # the upstream board for this commit is already served
+                elif self._fetch(commit, upstream_tree):
+                    if not self.changed:
+                        self.failed = self.retry = None
                         return
-                    except Exception as exc:
-                        self.notice('local:' + tree, f'spa: local board build failed ({exc}); keeping last good build')
-                        shutil.rmtree(self.next, ignore_errors=True)
-                elif self.changed:
-                    self.notice(tree, 'spa: frontend changed but npm is unavailable or unsupported; keeping last good build')
-                if not matched:
+                elif not self.changed and self._try_local(tree):
+                    self.failed = self.retry = None
+                    return
+                else:
                     self._ancestor(commit)
                 if not (self.build / '200.html').is_file():
                     from . import entry
@@ -206,21 +232,20 @@ class SpaBuild:
                 self.failed = None
                 # Missing/bad assets and unavailable npm are soft failures. Retry
                 # off-loop when idle, bounded to one attempt per five minutes.
-                self.due = self.clock() + max(self.every, 300.0)
+                self.retry = (tree, self.clock() + max(self.every, 300.0))
                 return
             if not npm_supported():
                 self.notice(tree, 'spa: npm is unavailable or unsupported; keeping last good build')
                 self.failed = None
+                self.retry = (tree, self.clock() + max(self.every, 300.0))
                 return
             self._local(tree)
-            self.failed = None
+            self.failed = self.retry = None
         except Exception as exc:
             shutil.rmtree(self.next, ignore_errors=True)
             self.failed = (tree, f"{type(exc).__name__}: {exc}"[:300])
 
-    def _swap(self, upstream: str | None = None) -> None:
-        if upstream or self.upstream:
-            (self.next / '.upstream').write_text((upstream or self.upstream[1]) + '\n')
+    def _swap(self) -> None:
         old = self.frontend / "build.old"
         shutil.rmtree(old, ignore_errors=True)
         if self.build.exists():

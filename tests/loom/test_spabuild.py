@@ -151,6 +151,7 @@ def test_changed_without_npm_keeps_upstream_board_and_says_once(checkout, monkey
     spa = SpaBuild(frontend, lambda text: messages.append(text), every=0)
     spa.wanted()
     (frontend / 'build' / '.tree').write_text(spa.upstream[1])
+    (frontend / 'build' / '.commit').write_text(spa.upstream[0])
     (frontend / 'own.svelte').write_text('own edit')
     messages = []
     monkeypatch.setattr(board_asset, 'fetch', lambda *a: pytest.fail('unnecessary download'))
@@ -218,8 +219,7 @@ def test_changed_without_npm_preserves_last_good_local_board(checkout, monkeypat
     spa.wanted()
     spa.build.mkdir()
     (spa.build / '200.html').write_text('last good local board')
-    (spa.build / '.tree').write_text('previous local content hash')
-    (spa.build / '.upstream').write_text(spa.upstream[1])
+    (spa.build / '.tree').write_text('previous local content hash')  # a local build: no .commit
     (frontend / 'own.svelte').write_text('new edit')
     monkeypatch.setattr(board_asset, 'fetch', lambda *a: pytest.fail('discarded last good local build'))
     monkeypatch.setattr(spabuild.shutil, 'which', lambda _: None)
@@ -289,7 +289,7 @@ def test_fallback_selects_newest_reachable_asset_and_reports_older_board(checkou
     settle(spa)
     assert calls == [newer, older]
     assert (spa.build / '200.html').read_text() == 'older verified board'
-    assert spa.built_upstream() != spa.upstream[1]
+    assert spa.fetched() == older != spa.upstream[0]
     assert any('older ancestor commit ' + older in line for line in messages)
     assert spa.failed is None
 
@@ -326,15 +326,103 @@ def test_bad_digest_is_never_served_and_idle_retry_recovers(checkout, monkeypatc
     assert (spa.build / '200.html').read_text() == 'verified later'
 
 
-def test_idle_check_is_only_evaluated_when_retry_is_due(checkout):
-    _, frontend = checkout
-    clock, checks = [0.0], []
-    spa = SpaBuild(frontend, lambda _: None, every=30, clock=lambda: clock[0])
+def upstream_fetch(downloads=None):
+    def fetch(commit, tree, destination):
+        if downloads is not None:
+            downloads.append(commit)
+        destination.mkdir()
+        (destination / '200.html').write_text('upstream')
+    return fetch
+
+
+def local_run(calls):
+    def run(args, cwd, env=None):
+        calls.append(args)
+        if env:
+            out = cwd / env['BRNRD_SPA_OUT']
+            out.mkdir()
+            (out / '200.html').write_text('own board')
+    return run
+
+
+def test_reverted_frontend_change_brings_the_upstream_board_back(checkout, monkeypatch):
+    """A local build of a changed tree never passes for upstream: revert it and upstream's board returns."""
+    from brr.loom.runtime import board_asset, spabuild
+    root, frontend = checkout
+    managed(root, frontend)
+    downloads, calls = [], []
+    monkeypatch.setattr(board_asset, 'fetch', upstream_fetch(downloads))
+    monkeypatch.setattr(spabuild, 'npm_supported', lambda: True)
+    spa = SpaBuild(frontend, lambda _: None, local_run(calls), every=0)
+    settle(spa)
+    assert (spa.build / '200.html').read_text() == 'upstream' and len(downloads) == 1
+    (frontend / 'own.svelte').write_text('own change')
+    settle(spa)
+    assert (spa.build / '200.html').read_text() == 'own board' and spa.fetched() == ''
+    (frontend / 'own.svelte').unlink()
+    settle(spa)
+    assert (spa.build / '200.html').read_text() == 'upstream'
+    assert spa.built() == spa.wanted() and len(downloads) == 2
+    settle(spa)
+    assert spa.worker is None or not spa.worker.is_alive()
+    assert len(downloads) == 2 and calls == [['npm', 'run', 'build']]
+
+
+def test_moved_tree_builds_while_the_loom_is_busy(checkout, monkeypatch):
+    """Only the network retry waits for idle: a changed tree builds locally at once, as before."""
+    from brr.loom.runtime import board_asset, spabuild
+    root, frontend = checkout
+    managed(root, frontend)
+    monkeypatch.setattr(board_asset, 'fetch', upstream_fetch())
+    monkeypatch.setattr(spabuild, 'npm_supported', lambda: True)
+    calls, checks = [], []
+    spa = SpaBuild(frontend, lambda _: None, local_run(calls), every=0)
+
     def busy():
-        checks.append(clock[0])
+        checks.append(1)
         return False
-    for _ in range(20):
-        spa.step(busy)
-        clock[0] += 0.2
-    assert checks == [0.0]
-    assert spa.worker is None
+    spa.step(busy)
+    spa.worker.join(10)
+    assert (spa.build / '200.html').read_text() == 'upstream'
+    (frontend / 'own.svelte').write_text('own change')
+    spa.step(busy)
+    spa.worker.join(10)
+    assert (spa.build / '200.html').read_text() == 'own board'
+    assert checks == []
+
+
+def test_idle_gates_only_the_retry_and_is_read_only_when_it_is_due(checkout, monkeypatch):
+    from brr.loom.runtime import board_asset, spabuild
+    root, frontend = checkout
+    managed(root, frontend)
+    monkeypatch.setattr(spabuild, 'npm_supported', lambda: False)
+    clock, checks, attempts = [0.0], [], []
+
+    def missing(commit, tree, destination):
+        attempts.append(clock[0])
+        raise OSError('404')
+    monkeypatch.setattr(board_asset, 'fetch', missing)
+    spa = SpaBuild(frontend, lambda _: None, every=30, clock=lambda: clock[0])
+    idle = [False]
+
+    def check():
+        checks.append(clock[0])
+        return idle[0]
+
+    def tick():
+        spa.step(check)
+        if spa.worker is not None:
+            spa.worker.join(10)
+    tick()
+    assert attempts == [0.0] and checks == []  # the first attempt does not wait for idle
+    while clock[0] < 270:
+        clock[0] += 30
+        tick()
+    assert attempts == [0.0] and checks == []
+    clock[0] = 300
+    tick()
+    assert attempts == [0.0] and checks == [300]
+    idle[0] = True
+    clock[0] = 330
+    tick()
+    assert attempts == [0.0, 330]

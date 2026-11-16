@@ -12,7 +12,15 @@ done
 REPO=https://github.com/hugimuni-labs/brnrd
 ROOT=${BRNRD_ROOT:-${HOME}/.brnrd}
 DEV_DIR=${BRNRD_DEV_DIR:-${ROOT}/src}
-fail() { printf '%s\n' "$1" >&2; exit 1; }
+candidate=''
+# A failed run leaves no environment behind, unless current already names it.
+drop_candidate() {
+  [ "$dry" != 1 ] && [ -n "$candidate" ] && [ -d "$candidate" ] || return 0
+  case "$candidate" in "${ROOT}/envs/install-"*) : ;; *) return 0 ;; esac
+  if [ -e "${ROOT}/current" ] && [ "${ROOT}/current" -ef "$candidate" ]; then return 0; fi
+  rm -rf "$candidate"
+}
+fail() { printf '%s\n' "$1" >&2; drop_candidate; exit 1; }
 show() { printf '%s\n' "$1"; }
 warn() { printf 'warning: %s\n' "$1" >&2; }
 run_named() {
@@ -34,6 +42,27 @@ if command -v npm >/dev/null 2>&1; then
   if [ -e "${npmroot}/brnrd/package.json" ]; then
     fail 'npm brnrd collides with this install. Run: npm uninstall -g brnrd; then rerun this installer.'
   fi
+fi
+# A machine already running from another checkout keeps it: refuse before any write.
+real_dir() { (cd "$1" 2>/dev/null && pwd -P) || printf '%s' "$1"; }
+running=''
+if [ -f "${ROOT}/launcher-source" ]; then
+  running=$(sed -n 's/.*"source": *"\([^"]*\)".*/\1/p' "${ROOT}/launcher-source")
+fi
+if { [ -z "$running" ] || [ "$(real_dir "$running")" = "$(real_dir "$DEV_DIR")" ]; } && [ -L "${ROOT}/current" ]; then
+  target=$(real_dir "${ROOT}/current")
+  case "${target}/" in
+    "$(real_dir "${ROOT}/envs")"/*) : ;;
+    *)
+      if [ -x "${target}/bin/python" ]; then
+        imported=$("${target}/bin/python" -I -c 'import brr, os; print(os.path.dirname(os.path.dirname(os.path.dirname(os.path.realpath(brr.__file__)))))' </dev/null 2>/dev/null) || imported=''
+        if [ -n "$imported" ] && [ -e "${imported}/.git" ]; then running=$imported; fi
+      fi
+      ;;
+  esac
+fi
+if [ -n "$running" ] && [ "$(real_dir "$running")" != "$(real_dir "$DEV_DIR")" ]; then
+  fail "brnrd already runs from the checkout ${running}. This installer would clone ${DEV_DIR} and move the loom onto it, leaving that checkout and its commits behind; nothing was changed. To keep it, rerun with BRNRD_DEV_DIR=${running}"
 fi
 git --version >/dev/null 2>&1 || fail 'git is missing (on macOS: xcode-select --install); install it and retry.'
 if [ -e "$DEV_DIR" ] || [ -L "$DEV_DIR" ]; then
@@ -118,3 +147,19 @@ else
 fi
 show "Add to your shell profile: export PATH=\"${ROOT}/bin:\$PATH\""
 show "Next: ${ROOT}/bin/brnrd setup"
+# The service now runs the checkout; the person's shell must too, or it is service new, CLI old.
+if [ "$dry" = 1 ]; then
+  show 'check which brnrd a fresh login shell runs'
+else
+  login=${SHELL:-/bin/sh}
+  found=$(env -i HOME="$HOME" USER="${USER:-}" LOGNAME="${LOGNAME:-}" SHELL="$login" "$login" -lc 'command -v brnrd' </dev/null 2>/dev/null) || found=''
+  found=$(printf '%s\n' "$found" | sed -n '$p')
+  if [ -n "$found" ] && ! [ "$found" -ef "${ROOT}/bin/brnrd" ]; then
+    show "warning: a new login shell runs ${found}, not ${ROOT}/bin/brnrd: the loom service runs this checkout, but brnrd typed in a shell would run that older install."
+    if "$uvbin" tool list </dev/null 2>/dev/null | grep -E '^brnrd([[:space:]]|$)' >/dev/null; then
+      show "It is the packaged uv tool install. Remove it with: uv tool uninstall brnrd"
+    else
+      show "Remove ${found}, or put ${ROOT}/bin first on PATH in your shell profile."
+    fi
+  fi
+fi

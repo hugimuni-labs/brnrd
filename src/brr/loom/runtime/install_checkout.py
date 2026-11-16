@@ -9,6 +9,7 @@ import fcntl
 import json
 import os
 from pathlib import Path
+import shutil
 import subprocess
 import sys
 
@@ -127,7 +128,32 @@ def activate(source: Path) -> None:
             except (Exception, SystemExit) as exc:
                 print(f'rollback restart failed: {exc}; run {entry.shim()} loom restart', file=sys.stderr)
         raise
-    print(f'current: {link} -> {entry.prefix()}\nprevious prefix retained: {previous or "none"}')
+    before = (Path(previous) if Path(previous).is_absolute() else link.parent / previous) if previous else None
+    print(f'current: {link} -> {entry.prefix()}\nprevious prefix retained: {before or "none"}')
+    for path in prune([entry.prefix(), before]):
+        print(f'removed older installer environment: {path}')
+    print(f'service: moved from {before or "no interpreter"} to {entry.prefix()}' if installed is not None
+          else 'service: none installed; brnrd setup installs it')
+
+
+def prune(keep: list[Path | None]) -> list[Path]:
+    """Remove installer-made environments other than current and the one before it.
+
+    Only ``envs/install-*`` directories the installer made are candidates; a
+    prefix outside ``envs/`` (a uv tool, a checkout's .venv) is never touched.
+    """
+    envs = entry.root() / 'envs'
+    kept = {path.resolve() for path in keep if path is not None}
+    removed = []
+    for path in sorted(envs.glob('install-*')) if envs.is_dir() else []:
+        if path.is_symlink() or not path.is_dir() or path.resolve() in kept:
+            continue
+        try:
+            shutil.rmtree(path)
+            removed.append(path)
+        except OSError as exc:
+            print(f'could not remove older installer environment {path}: {exc}', file=sys.stderr)
+    return removed
 
 
 def main(argv: list[str] | None = None) -> int:

@@ -43,6 +43,41 @@ def test_fresh_install_activates_exact_prefix_without_installing_service(candida
     assert not unit.exists()
 
 
+def test_success_keeps_current_and_the_one_before_and_prunes_older_installer_envs(candidate, monkeypatch, tmp_path, capsys):
+    source, prefix, unit = candidate
+    envs = prefix.parent
+    made = {name: envs / name for name in ['install-older', 'install-before', 'install-failed']}
+    for path in made.values():
+        (path / 'bin').mkdir(parents=True)
+        (path / 'bin/python').write_text('#!/bin/sh\n')
+    hand = envs / 'hand-made'  # not installer-made: never removed
+    hand.mkdir()
+    outside = tmp_path / 'uv-tool-prefix'
+    outside.mkdir()
+    (envs / 'install-link').symlink_to(outside)
+    entry.point(made['install-before'])
+    monkeypatch.setattr(install.service, 'main', lambda *a: pytest.fail('fresh install touched service'))
+    install.activate(source)
+    assert entry.current().resolve() == prefix
+    assert sorted(path.name for path in envs.iterdir()) == ['hand-made', 'install-before', 'install-link', 'new']
+    assert outside.is_dir()
+    out = capsys.readouterr().out
+    assert f'previous prefix retained: {made["install-before"]}' in out
+    assert 'service: none installed' in out
+
+
+def test_failed_activation_prunes_nothing(candidate, monkeypatch):
+    source, prefix, unit = candidate
+    older = prefix.parent / 'install-older'
+    older.mkdir(parents=True)
+    old = old_install(candidate)
+    monkeypatch.setattr(install.service, '_installed_home', lambda *a: Path('/isolated/home'))
+    monkeypatch.setattr(install.service, 'main', lambda args: int(args[0] == 'install'))
+    with pytest.raises(RuntimeError):
+        install.activate(source)
+    assert older.is_dir() and entry.current().resolve() == old
+
+
 def old_install(candidate):
     source, prefix, unit = candidate
     old = prefix.parent / 'old'
@@ -55,7 +90,7 @@ def old_install(candidate):
     return old
 
 
-def test_existing_service_handoff_and_readback_keep_old_prefix(candidate, monkeypatch):
+def test_existing_service_handoff_and_readback_keep_old_prefix(candidate, monkeypatch, capsys):
     source, prefix, unit = candidate
     old = old_install(candidate)
     monkeypatch.setattr(install.service, '_installed_home', lambda *a: Path('/isolated/home'))
@@ -72,6 +107,7 @@ def test_existing_service_handoff_and_readback_keep_old_prefix(candidate, monkey
     assert calls == [['install', '--home', '/isolated/home'], ['status']]
     assert entry.current().resolve() == prefix
     assert (old / 'bin/python').read_text() == 'old interpreter'
+    assert f'service: moved from {old} to {prefix}' in capsys.readouterr().out
 
 
 @pytest.mark.parametrize('failure', ['install', 'status', 'probe'])
@@ -153,7 +189,6 @@ def test_prepare_allows_missing_matching_board(tmp_path, monkeypatch):
         build = tmp_path / 'missing'
         def wanted(self): return 'b' * 40
         def built(self): return ''
-        def built_upstream(self): return ''
         def _build(self, _): pass
     monkeypatch.setattr(install, 'SpaBuild', lambda *a: MissingBoard())
     monkeypatch.setattr(install, 'managed_source', lambda _: True)

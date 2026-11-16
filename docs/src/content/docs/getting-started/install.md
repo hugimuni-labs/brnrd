@@ -20,12 +20,19 @@ verified against its commit, frontend tree and SHA256 digest.
 
 A fresh install ends with `brnrd setup`; it does not start a service. An existing
 loom service is reinstalled through the candidate interpreter and checked with
-`loom status`; failed handoff restores its unit and launcher. The previous
-interpreter prefix stays on disk. Reinstallation preserves service environment
-variables and adds the new shell's tool directories to PATH.
+`loom status`; failed handoff restores its unit and launcher, and the failed
+run's environment is removed. After a successful run, `~/.brnrd/envs` keeps the
+current environment and the one before it; older installer environments are
+removed, and nothing outside `~/.brnrd/envs` is touched. Reinstallation preserves
+service environment variables and adds the new shell's tool directories to PATH.
+The installer ends by checking which `brnrd` a new login shell runs; if an older
+install (such as the packaged `uv tool install brnrd`) comes first, it names it
+and the command that removes it, and leaves that to you.
 
 Reruns never move checkout HEAD, switch branches or discard edits. A foreign
-origin or non-git directory is refused. Pipx and global npm installs are detected
+origin or non-git directory is refused. A machine whose loom already runs from
+another checkout is refused before any write, with the line that keeps it:
+`BRNRD_DEV_DIR=<that checkout>` before the install command. Pipx and global npm installs are detected
 before writes; the installer gives the uninstall command and leaves it to you.
 `--dev` is accepted for compatibility and selects the same installation.
 
@@ -110,7 +117,9 @@ served and the loom says once that npm is needed. A missing published board
 does not block installation: it tries a supported local npm build, then the
 newest verified ancestor asset with an older-commit notice. If none is available,
 installation continues without a board and prints the command to fetch it later.
-The loom retries when idle. Digest-mismatched archives are never served.
+A changed frontend tree is built at once, whether or not the loom is busy; only
+the retry of a missing asset waits until the loom is idle, at most once every
+five minutes. Digest-mismatched archives are never served.
 
 This is the loom board, separate from the older daemon's dashboard.
 

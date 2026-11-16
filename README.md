@@ -55,8 +55,8 @@ matching board build; Node is needed only to build your own frontend changes.
 message to reach the resident.
 
 Rerunning the installer preserves your checkout's HEAD, branch and edits. It
-prepares a new interpreter before switching the launcher, retains the old
-prefix, and migrates an existing loom service with status readback. A new
+prepares a new interpreter before switching the launcher, keeps the one before
+it, and migrates an existing loom service with status readback. A new
 install leaves service setup to `brnrd setup`. `--dev` remains an alias.
 The resident receives offers from green `main` commits and chooses when to merge.
 
