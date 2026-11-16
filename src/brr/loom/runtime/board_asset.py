@@ -1,7 +1,8 @@
 """Verified, commit-addressed board archives from the rolling prerelease.
 
 Downloads never replace a good build until the complete archive is validated.
-No credentials, Node, Docker, or GitHub API calls are needed by the installer.
+Exact downloads need no API call. Ancestor fallback uses the public, anonymous
+release API; credentials, Node and Docker are optional.
 """
 from __future__ import annotations
 
@@ -15,6 +16,7 @@ import urllib.request
 from pathlib import Path
 
 BASE = "https://github.com/hugimuni-labs/brnrd/releases/download/board-builds"
+API = "https://api.github.com/repos/hugimuni-labs/brnrd"
 MAX_ARCHIVE = 64 * 1024 * 1024
 MAX_EXPANDED = 256 * 1024 * 1024
 
@@ -62,3 +64,44 @@ def fetch(commit: str, tree: str, destination: Path, get=download) -> None:
     if not (destination / "200.html").is_file():
         raise ValueError("board archive has no 200.html")
     (destination / ".tree").write_text(tree + "\n")
+    (destination / ".commit").write_text(commit + "\n")
+
+
+def available(get=download) -> set[str]:
+    """List complete asset pairs anonymously, including beyond the first page."""
+    release = json.loads(get(f'{API}/releases/tags/board-builds', 1024 * 1024))
+    release_id = int(release['id'])
+    names: set[str] = set()
+    page = 1
+    while True:
+        assets = json.loads(get(f'{API}/releases/{release_id}/assets?per_page=100&page={page}', 1024 * 1024))
+        names.update(asset['name'] for asset in assets)
+        if len(assets) < 100:
+            break
+        page += 1
+        if page > 20:
+            raise ValueError('too many board asset pages')
+    return {match.group(1) for name in names
+            if (match := re.fullmatch(r'board-([0-9a-f]{40})\.tar\.gz', name))
+            and name + '.json' in names}
+
+
+def main() -> int:
+    """The single retry command printed when installation has no board."""
+    from .spabuild import SpaBuild
+    import brr
+    frontend = Path(brr.__file__).resolve().parents[1] / 'frontend'
+    spa = SpaBuild(frontend, print)
+    tree = spa.wanted()
+    if not tree:
+        print('board: no source checkout found')
+        return 1
+    spa._build(tree)
+    if (spa.build / '200.html').is_file():
+        print(f'board: {spa.build}')
+        return 0
+    return 1
+
+
+if __name__ == '__main__':
+    raise SystemExit(main())

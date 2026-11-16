@@ -107,7 +107,10 @@ home found or `~/brnrd`; several homes require `--home PATH`.
 The installer fetches the board for its upstream commit. Frontend edits rebuild
 in the background when npm is available; otherwise the last good board stays
 served and the loom says once that npm is needed. A missing published board
-stops a fresh installation before activation; retry after the publisher finishes.
+does not block installation: it tries a supported local npm build, then the
+newest verified ancestor asset with an older-commit notice. If none is available,
+installation continues without a board and prints the command to fetch it later.
+The loom retries when idle. Digest-mismatched archives are never served.
 
 This is the loom board, separate from the older daemon's dashboard.
 

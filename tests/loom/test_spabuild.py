@@ -4,7 +4,14 @@ import subprocess
 
 import pytest
 
-from brr.loom.runtime.spabuild import BuildFailed, SpaBuild
+from brr.loom.runtime.spabuild import BuildFailed, SpaBuild, npm_supported as check_npm
+
+
+@pytest.fixture(autouse=True)
+def board_dependencies(monkeypatch):
+    from brr.loom.runtime import board_asset, spabuild
+    monkeypatch.setattr(board_asset, 'available', lambda: set())
+    monkeypatch.setattr(spabuild, 'npm_supported', lambda: spabuild.shutil.which('npm') is not None)
 
 
 def git(root, *args):
@@ -155,8 +162,9 @@ def test_changed_without_npm_keeps_upstream_board_and_says_once(checkout, monkey
     assert spa.failed is None
 
 
-def test_missing_asset_does_not_fail_loom_or_build_upstream_locally(checkout, monkeypatch):
-    from brr.loom.runtime import board_asset
+def test_missing_asset_without_npm_does_not_fail_loom(checkout, monkeypatch):
+    from brr.loom.runtime import board_asset, spabuild
+    monkeypatch.setattr(spabuild.shutil, 'which', lambda _: None)
     root, frontend = checkout
     managed(root, frontend)
     messages = []
@@ -170,7 +178,8 @@ def test_missing_asset_does_not_fail_loom_or_build_upstream_locally(checkout, mo
     settle(spa)
     assert spa.failed is None
     assert not spa.build.exists()
-    assert len(messages) == 1 and 'board' in messages[0] and 'npm ci' in messages[0]
+    assert any('installed without a board' in line and 'brr.loom.runtime.board_asset' in line for line in messages)
+    assert any('archive not served' in line for line in messages)
 
 
 def test_changed_frontend_with_npm_builds_locally(checkout, monkeypatch):
@@ -216,3 +225,116 @@ def test_changed_without_npm_preserves_last_good_local_board(checkout, monkeypat
     monkeypatch.setattr(spabuild.shutil, 'which', lambda _: None)
     settle(spa)
     assert (spa.build / '200.html').read_text() == 'last good local board'
+
+
+@pytest.mark.parametrize('node,npm,allowed', [
+    ('v20.18.0', '10.0.0', False), ('v20.19.0', '10.0.0', True),
+    ('v22.12.0', '10.0.0', False), ('v22.13.0', '10.0.0', True),
+    ('v23.0.0', '10.0.0', False), ('v24.0.0', '9.0.0', True),
+    ('v24.0.0', '8.0.0', False), ('broken', '10.0.0', False),
+])
+def test_local_build_checks_supported_node_and_npm(monkeypatch, node, npm, allowed):
+    from brr.loom.runtime import spabuild
+    monkeypatch.setattr(spabuild.shutil, 'which', lambda name: '/fixture/' + name)
+    monkeypatch.setattr(spabuild.subprocess, 'run', lambda args, **kw:
+                        subprocess.CompletedProcess(args, 0, node if args[0] == 'node' else npm, ''))
+    assert check_npm() is allowed
+
+
+def test_missing_exact_asset_builds_locally_before_trying_ancestors(checkout, monkeypatch):
+    from brr.loom.runtime import board_asset, spabuild
+    root, frontend = checkout
+    managed(root, frontend)
+    monkeypatch.setattr(board_asset, 'fetch', lambda *a: (_ for _ in ()).throw(OSError('404')))
+    monkeypatch.setattr(board_asset, 'available', lambda: pytest.fail('ancestor before supported local build'))
+    monkeypatch.setattr(spabuild, 'npm_supported', lambda: True)
+    calls = []
+    def run(args, cwd, env=None):
+        calls.append(args)
+        if env:
+            out = cwd / env['BRNRD_SPA_OUT']
+            out.mkdir()
+            (out / '200.html').write_text('locally built')
+    spa = SpaBuild(frontend, lambda _: None, run, every=0)
+    settle(spa)
+    assert calls == [['npm', 'run', 'build']]
+    assert (spa.build / '200.html').read_text() == 'locally built'
+    assert spa.built() == spa.wanted()
+
+
+def test_fallback_selects_newest_reachable_asset_and_reports_older_board(checkout, monkeypatch):
+    from brr.loom.runtime import board_asset, spabuild
+    root, frontend = checkout
+    managed(root, frontend)
+    older = subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=root, text=True).strip()
+    (frontend / 'new.svelte').write_text('new upstream')
+    git(root, 'add', '-A')
+    git(root, '-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-qm', 'new upstream')
+    newer = subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=root, text=True).strip()
+    git(root, 'update-ref', 'refs/remotes/origin/main', 'HEAD')
+    calls, messages = [], []
+    monkeypatch.setattr(spabuild, 'npm_supported', lambda: False)
+    # Unrelated available assets cannot be selected just because they are newer.
+    monkeypatch.setattr(board_asset, 'available', lambda: {older, subprocess.check_output(['git', 'rev-parse', older + '^'], cwd=root, text=True).strip(), 'f' * 40})
+    def fetch(commit, tree, out):
+        calls.append(commit)
+        if commit == newer:
+            raise OSError('not published yet')
+        assert commit == older
+        out.mkdir()
+        (out / '200.html').write_text('older verified board')
+        (out / '.tree').write_text(tree)
+    monkeypatch.setattr(board_asset, 'fetch', fetch)
+    spa = SpaBuild(frontend, messages.append, every=0)
+    settle(spa)
+    assert calls == [newer, older]
+    assert (spa.build / '200.html').read_text() == 'older verified board'
+    assert spa.built_upstream() != spa.upstream[1]
+    assert any('older ancestor commit ' + older in line for line in messages)
+    assert spa.failed is None
+
+
+def test_bad_digest_is_never_served_and_idle_retry_recovers(checkout, monkeypatch):
+    from brr.loom.runtime import board_asset, spabuild
+    root, frontend = checkout
+    managed(root, frontend)
+    clock, attempts, messages = [0.0], [], []
+    monkeypatch.setattr(spabuild, 'npm_supported', lambda: False)
+    def fetch(commit, tree, out):
+        attempts.append(clock[0])
+        if len(attempts) == 1:
+            out.mkdir()
+            (out / '200.html').write_text('unverified bytes')
+            raise ValueError('board archive digest mismatch')
+        out.mkdir()
+        (out / '200.html').write_text('verified later')
+        (out / '.tree').write_text(tree)
+    monkeypatch.setattr(board_asset, 'fetch', fetch)
+    spa = SpaBuild(frontend, messages.append, every=0, clock=lambda: clock[0])
+    settle(spa)
+    assert not spa.build.exists() and not spa.next.exists()
+    assert any('digest mismatch' in line and 'archive not served' in line for line in messages)
+    assert any('installed without a board' in line and ' -I -m brr.loom.runtime.board_asset' in line for line in messages)
+    clock[0] = 299
+    settle(spa)
+    assert attempts == [0.0]
+    clock[0] = 300
+    spa.step(idle=False)
+    assert attempts == [0.0]
+    settle(spa)
+    assert attempts == [0.0, 300]
+    assert (spa.build / '200.html').read_text() == 'verified later'
+
+
+def test_idle_check_is_only_evaluated_when_retry_is_due(checkout):
+    _, frontend = checkout
+    clock, checks = [0.0], []
+    spa = SpaBuild(frontend, lambda _: None, every=30, clock=lambda: clock[0])
+    def busy():
+        checks.append(clock[0])
+        return False
+    for _ in range(20):
+        spa.step(busy)
+        clock[0] += 0.2
+    assert checks == [0.0]
+    assert spa.worker is None

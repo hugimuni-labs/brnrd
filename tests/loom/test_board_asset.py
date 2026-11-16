@@ -99,3 +99,39 @@ def test_publisher_uploads_matching_pair_and_prunes_only_old_pairs(tmp_path, mon
     publisher.main()
     assert len(uploaded) == 1
     assert deleted == ['repos/owner/repo/releases/assets/0', 'repos/owner/repo/releases/assets/1']
+
+
+def test_anonymous_listing_paginates_and_requires_both_assets():
+    names = [f'board-{index:040x}.tar.gz' + suffix for index in range(51) for suffix in ('', '.json')]
+    names += ['board-' + 'e' * 40 + '.tar.gz', 'unrelated']
+    calls = []
+    def get(url, limit):
+        calls.append(url)
+        if url.endswith('/tags/board-builds'):
+            return json.dumps({'id': 17}).encode()
+        page = int(url.rsplit('=', 1)[1])
+        return json.dumps([{'name': name} for name in names[(page - 1) * 100:page * 100]]).encode()
+    assert board_asset.available(get) == {f'{index:040x}' for index in range(51)}
+    assert len(calls) == 3 and calls[-1].endswith('page=2')
+
+
+def test_retry_command_uses_current_checkout_and_reports_no_board(tmp_path, monkeypatch):
+    import brr
+    from brr.loom.runtime import spabuild
+    source = tmp_path / 'source'
+    monkeypatch.setattr(brr, '__file__', str(source / 'src/brr/__init__.py'))
+    built = tmp_path / 'build'
+    calls = []
+    class Retry:
+        build = built
+        def wanted(self): return TREE
+        def _build(self, tree): calls.append(tree)
+    def factory(frontend, log):
+        assert frontend == source / 'src/frontend'
+        return Retry()
+    monkeypatch.setattr(spabuild, 'SpaBuild', factory)
+    assert board_asset.main() == 1
+    built.mkdir()
+    (built / '200.html').write_text('recovered')
+    assert board_asset.main() == 0
+    assert calls == [TREE, TREE]

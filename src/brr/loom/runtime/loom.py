@@ -2824,11 +2824,15 @@ def run(root: Path | str, *, adapter: str = "fake", core: str = "haiku",
             board = Parts(home, lambda: load_config(home.root), _log)
             threading.Thread(target=board.run, name="board", daemon=True).start()
             pusher = Pusher(board)
+        # A managed checkout retries missing board assets even before the
+        # local web door is enabled. Generic developer trees build on demand.
+        from . import entry as install_entry
+        from .spabuild import SpaBuild
+        frontend = Path(__file__).resolve().parents[3] / "frontend"
+        managed_prefix = install_entry.prefix().parent.resolve() == (install_entry.root() / 'envs').resolve()
+        if (config.board_port or managed_prefix) and (frontend / "package.json").is_file() and not os.environ.get("BRNRD_FRONTEND_DIR"):
+            spa = SpaBuild(frontend, lambda text: _log(home, text))
         if config.board_port:  # read at start: a port change waits for the next re-exec
-            from .spabuild import SpaBuild
-            frontend = Path(__file__).resolve().parents[3] / "frontend"
-            if (frontend / "package.json").is_file() and not os.environ.get("BRNRD_FRONTEND_DIR"):
-                spa = SpaBuild(frontend, lambda text: _log(home, text))
             board_port = config.board_port
 
             def start_board():
@@ -2909,7 +2913,7 @@ def run(root: Path | str, *, adapter: str = "fake", core: str = "haiku",
                 if board_port and shell is None:
                     health.guard("board", start_board)
                 if spa is not None:  # the board's build follows the checkout; a failed one stays degraded
-                    health.guard("spa", spa.step, backoff=False)
+                    health.guard("spa", spa.step, functools.partial(_idle, home), backoff=False)
             # Take holds the checkout lock through merge, validation and rollback.
             # Never observe (or reload) its intermediate tree. A completed check,
             # including a rollback, resets the mtime observer's baseline.

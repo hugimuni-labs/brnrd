@@ -102,14 +102,14 @@ def test_failed_handoff_restores_unit_current_and_launcher_before_restart(candid
     assert entry.current().resolve() == old
 
 
-def test_board_failure_precedes_current_or_service_writes(candidate, monkeypatch):
+def test_source_validation_failure_precedes_current_or_service_writes(candidate, monkeypatch):
     source, prefix, unit = candidate
     old = old_install(candidate)
     def unavailable(_):
-        raise RuntimeError('matching board unavailable')
+        raise RuntimeError('candidate source mismatch')
     monkeypatch.setattr(install, 'prepare', unavailable)
     monkeypatch.setattr(install.service, 'main', lambda *a: pytest.fail('service touched'))
-    with pytest.raises(RuntimeError, match='board unavailable'):
+    with pytest.raises(RuntimeError, match='source mismatch'):
         install.activate(source)
     assert entry.current().resolve() == old
     assert unit.read_text() == 'old unit with custom environment'
@@ -145,7 +145,7 @@ def test_prepare_fetches_matching_board_without_npm(tmp_path, monkeypatch):
     assert spa_file(spa.build, '/threads/example') == spa.build / '200.html'
 
 
-def test_prepare_refuses_missing_matching_board(tmp_path, monkeypatch):
+def test_prepare_allows_missing_matching_board(tmp_path, monkeypatch):
     import brr
     source = Path(brr.__file__).resolve().parents[2]
     class MissingBoard:
@@ -158,8 +158,7 @@ def test_prepare_refuses_missing_matching_board(tmp_path, monkeypatch):
     monkeypatch.setattr(install, 'SpaBuild', lambda *a: MissingBoard())
     monkeypatch.setattr(install, 'managed_source', lambda _: True)
     monkeypatch.setattr(install, 'git', lambda *a: 'a' * 40)
-    with pytest.raises(RuntimeError, match='matching board unavailable'):
-        install.prepare(source)
+    assert install.prepare(source) == 'a' * 40
 
 
 @pytest.mark.parametrize('system', ['Linux', 'Darwin'])
