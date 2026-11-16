@@ -28,7 +28,7 @@ export const FAQ: FaqEntry[] = [
 		id: 'more-subscription',
 		question: 'Does it use a lot more of my AI subscription?',
 		answer:
-			"Per session, hardly: each time it starts it reads who it is and where your work stands, about 8 thousand tokens, which on our own install was a little over one percent of a week's use. What changes is the hours. It works far more of the day than a person at a terminal, so it uses more of your plan in total, and it paces that across the week so you do not hit the limit on Tuesday."
+			"Per session, hardly: each time it starts it reads who it is and where your work stands, about 8 thousand tokens, which on our own install was a little over one percent of a week's use. What changes is the hours. A plan's allowance is gone at the end of the week whether you used it or not. brnrd works through the hours you are away, so more of what you already pay for turns into finished work, and it paces that across the week so you do not hit the limit on Tuesday."
 	},
 	{
 		id: 'when-away',
