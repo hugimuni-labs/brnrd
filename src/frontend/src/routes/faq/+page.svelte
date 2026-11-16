@@ -4,14 +4,15 @@
 	import { FAQ } from '$lib/faq';
 
 	const description =
-		'What brnrd is, what you need to run it, where your data lives, what it costs and what it stops before it acts.';
+		'What brnrd is, what you need to run it, where your data lives, what it costs and how far it acts on its own.';
 
 	// Each question is a <details> with an id, so /faq#is-it-safe works as a
 	// link. With JavaScript off the browser still scrolls to it and the
 	// question is one click from its answer; with it on, the linked one opens.
 	function openLinked() {
 		const id = decodeURIComponent(window.location.hash.slice(1));
-		const el = id ? document.getElementById(id) : null;
+		const target = id ? document.getElementById(id) : null;
+		const el = target?.closest('li')?.querySelector('details');
 		if (el instanceof HTMLDetailsElement) el.open = true;
 	}
 
@@ -74,6 +75,7 @@
 			<ul class="space-y-3" data-faq-list>
 				{#each FAQ as entry (entry.id)}
 					<li>
+						{#if entry.alias}<span id={entry.alias}></span>{/if}
 						<details id={entry.id} class="panel group p-4 target:border-amber-800/60" data-faq-item>
 							<summary
 								class="cursor-pointer font-mono text-sm font-semibold text-amber-100 marker:text-ink-quiet"

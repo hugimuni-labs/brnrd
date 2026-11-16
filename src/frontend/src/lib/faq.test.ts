@@ -54,15 +54,20 @@ test('the page makes none of the claims we measured we cannot make', () => {
 	ok(!/never forgets|no looking after|needs no looking/i.test(text));
 	ok(!/\d[\d,.]*\s*(users|people|developers|teams)/i.test(text), 'a user count is on the page');
 	ok(!/[€$]\s?\d/.test(text), 'a price figure is on the page; pricing owns it');
-	const off = FAQ.find((e) => e.id === 'computer-off');
-	ok(off && off.answer.startsWith('No.'), 'the computer-off answer must start with No.');
+	ok(!/picks? up where it was/i.test(text), 'a run cut off by sleep does not resume where it was');
 });
 
-test('the safety answer names the guards the code has, not a blanket promise', () => {
+test('the old computer-off anchor still lands on the laptop question', async () => {
+	const { body: html } = await renderRoute();
+	equal(FAQ.find((e) => e.id === 'laptop-open')?.alias, 'computer-off');
+	ok(html.includes('<span id="computer-off"></span>'), 'alias anchor missing');
+});
+
+test('the safety answer says what the seed tells it, not a list of guards or a blanket promise', () => {
 	const safe = FAQ.find((e) => e.id === 'is-it-safe');
 	ok(safe, 'no safety answer');
-	ok(!/anything that cannot be undone/i.test(safe.answer));
-	for (const guard of ['force-pushing', 'package', 'release', 'checks are not green']) {
-		ok(safe.answer.includes(guard), `safety answer does not name ${guard}`);
-	}
+	ok(!/anything that cannot be undone|before steps it cannot take back/i.test(safe.answer));
+	ok(/within what you have allowed/.test(safe.answer));
+	ok(/can still make mistakes/.test(safe.answer));
+	ok(!/package|checks are not green|determined workaround/.test(safe.answer), 'a guard list is back');
 });

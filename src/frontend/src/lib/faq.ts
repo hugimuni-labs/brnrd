@@ -1,9 +1,9 @@
 // The FAQ's questions and answers (brnrd-self threads/inbox/faq.md, 2026-11-16).
 // Answers are held to what the product does today. Not to be said here: that
-// it works while the computer is off, that it never forgets, that it needs no
+// it works while the computer is off, that it runs in the cloud, that it never forgets, that it needs no
 // looking after, any count of users, or a price figure (the pricing page owns
 // that).
-export type FaqEntry = { id: string; question: string; answer: string };
+export type FaqEntry = { id: string; question: string; answer: string; alias?: string };
 
 export const FAQ: FaqEntry[] = [
 	{
@@ -11,6 +11,49 @@ export const FAQ: FaqEntry[] = [
 		question: 'What is brnrd?',
 		answer:
 			'An AI assistant that lives on your own computer and stays the same one from day to day. You hand it work in plain words; it keeps track of what you asked, does it, and comes back with the result for you to accept or send back. Its memory is a folder you own.'
+	},
+	{
+		id: 'versus-others',
+		question: 'How is it different from OpenClaw, Hermes or Mastra?',
+		answer:
+			'Those give you an agent and many ways to extend it. brnrd is built around one thing: an assistant that is answerable to you. It keeps track of what you asked, shows you what it did, and a result is yours to accept or send back. It runs on the subscriptions you already pay for, and its memory is a folder you own.'
+	},
+	{
+		id: 'why-so-small',
+		question: 'Why is the subscription so small?',
+		answer:
+			'Because it does not pay for the AI. The thinking runs on the AI coding subscription you already have, such as Claude Code or Codex. Ours pays only for the part that runs on our side: reaching your assistant from anywhere.'
+	},
+	{
+		id: 'when-away',
+		question: 'Does it run when I am away?',
+		answer:
+			'Yes, as long as the computer it lives on is on. You hand it work, leave, and write to it from your phone; it keeps going and tells you when something is ready or when it needs a decision from you.'
+	},
+	{
+		id: 'laptop-open',
+		alias: 'computer-off',
+		question: 'Do I really need to keep my laptop open?',
+		answer:
+			'You need one computer that stays on while it works: a desktop, a small always-on machine, or a laptop that is not asleep. If the computer goes to sleep in the middle of a piece of work, that work can be cut off; what you sent while it slept is picked up when it wakes.'
+	},
+	{
+		id: 'in-the-cloud',
+		question: 'Does it run in the cloud?',
+		answer:
+			'No. It runs on your computer, with your files and your tools. brnrd.dev only carries messages between you and it, and shows you its board.'
+	},
+	{
+		id: 'different-projects',
+		question: 'Does it really work on different projects?',
+		answer:
+			'Yes. Each piece of work gets its own thread and can live in its own repository, with its own checkout and its own record of what is left.'
+	},
+	{
+		id: 'asks-questions',
+		question: 'Does it ask questions when something is unclear?',
+		answer:
+			'Yes. When it needs a decision that is yours, it asks, with its own recommendation, and that piece of work waits for your answer while the rest goes on.'
 	},
 	{
 		id: 'how-is-it-different',
@@ -23,12 +66,6 @@ export const FAQ: FaqEntry[] = [
 		question: 'What do I need to run it?',
 		answer:
 			'A Mac or a Linux computer, a GitHub account, and a subscription to an AI coding tool such as Claude Code or Codex. Today you install it with one line in a terminal. We know that is a hurdle and we are working on it.'
-	},
-	{
-		id: 'computer-off',
-		question: 'Does it work when my computer is off?',
-		answer:
-			'No. It runs on your computer, so it works while that computer is on. Work you gave it waits and continues when the computer is back.'
 	},
 	{
 		id: 'where-is-my-data',
@@ -58,17 +95,12 @@ export const FAQ: FaqEntry[] = [
 		id: 'is-it-safe',
 		question: 'Is it safe to let it act for me?',
 		answer:
-			'A short list of destructive acts is stopped until you say yes in a message: deleting its own memory and workspaces, force-pushing, uploading a package, publishing a release, and merging a pull request whose checks are not green. These guards catch careless mistakes, not a determined workaround, and with Codex only the merge and release guards apply. It can still make mistakes, as any assistant can; start it on work where a mistake is cheap.'
+			'It works with your rights on your computer, so treat it like a capable new colleague: start it on work where a mistake is cheap. It is told to act only within what you have allowed and to propose, not act, when a step goes beyond it; a few of the most damaging acts, such as force-pushing or publishing a release, are also stopped outright until you say yes. It can still make mistakes.'
 	},
 	{
 		id: 'who-makes-it',
 		question: 'Who makes it?',
 		answer:
 			'HugiMuni, a small company in Arles, France. The code is public under the MIT licence at github.com/hugimuni-labs/brnrd.'
-	},
-	{
-		id: 'is-it-a-person',
-		question: 'Is the thing answering me on Telegram a person?',
-		answer: 'No. It is brnrd, an AI. It says so.'
 	}
 ];
