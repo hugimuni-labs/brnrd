@@ -83,11 +83,13 @@
 							>
 							<p class="mt-3 text-sm leading-relaxed text-stone-400">{entry.answer}</p>
 							{#if entry.link}
+								<!-- eslint-disable svelte/no-navigation-without-resolve -- an external page -->
 								<p class="mt-2 font-mono text-[11px]">
 									<a class="text-amber-200 hover:text-amber-100" href={entry.link.href}
 										>{entry.link.label}</a
 									>
 								</p>
+								<!-- eslint-enable svelte/no-navigation-without-resolve -->
 							{/if}
 							<p class="mt-3 font-mono text-[10px] text-ink-mute">
 								<a class="hover:text-stone-300" href={`#${entry.id}`}>link to this question</a>
