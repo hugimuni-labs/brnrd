@@ -115,11 +115,9 @@ def test_anonymous_listing_paginates_and_requires_both_assets():
     assert len(calls) == 3 and calls[-1].endswith('page=2')
 
 
-def test_retry_command_uses_current_checkout_and_reports_no_board(tmp_path, monkeypatch):
-    import brr
+def test_retry_command_uses_the_named_checkout_and_reports_no_board(tmp_path, monkeypatch):
     from brr.loom.runtime import spabuild
     source = tmp_path / 'source'
-    monkeypatch.setattr(brr, '__file__', str(source / 'src/brr/__init__.py'))
     built = tmp_path / 'build'
     calls = []
     class Retry:
@@ -130,8 +128,9 @@ def test_retry_command_uses_current_checkout_and_reports_no_board(tmp_path, monk
         assert frontend == source / 'src/frontend'
         return Retry()
     monkeypatch.setattr(spabuild, 'SpaBuild', factory)
-    assert board_asset.main() == 1
+    assert board_asset.main([str(source)]) == 1
     built.mkdir()
     (built / '200.html').write_text('recovered')
-    assert board_asset.main() == 0
+    assert board_asset.main([str(source)]) == 0
+    assert board_asset.main([]) == 2
     assert calls == [TREE, TREE]

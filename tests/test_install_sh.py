@@ -43,7 +43,7 @@ esac
     tool(binary, 'loginsh', 'PATH=/usr/bin:/bin\n[ -f "$HOME/.profile" ] && . "$HOME/.profile"\neval "$2"\n')
     env = {**os.environ, 'HOME': str(tmp_path / 'home'), 'PATH': str(binary), 'SHELL': str(binary / 'loginsh'),
            'TRACE': str(tmp_path / 'trace'), 'BRNRD_INSTALL_DRY_RUN': '1'}
-    for key in ['BRNRD_ROOT', 'BRNRD_DEV_DIR', 'BRNRD_INSTALL_DEV', 'PYTHONPATH', 'PYTHONHOME']:
+    for key in ['BRNRD_ROOT', 'BRNRD_DEV_DIR', 'BRNRD_INSTALL_DEV', 'PYTHONPATH', 'PYTHONHOME', 'XDG_CONFIG_HOME']:
         env.pop(key, None)
     return tmp_path, binary, env
 
