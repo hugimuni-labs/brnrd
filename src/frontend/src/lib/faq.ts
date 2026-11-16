@@ -52,7 +52,7 @@ export const FAQ: FaqEntry[] = [
 		id: 'can-i-change-it',
 		question: 'Can I change it?',
 		answer:
-			'Yes. Your install carries its own copy of the code, and you or your assistant may change it. When we publish a new version, your assistant decides when to take it in, and if a change stops it from starting, it goes back by itself to the last version that worked.'
+			'Yes. brnrd is open source. An install made from the source code is yours to change, by you or by your assistant; when we publish a new version, your assistant decides when to take it in, and if a change stops it from starting, it goes back by itself to the last version that worked. We are making that the only kind of install.'
 	},
 	{
 		id: 'is-it-safe',
