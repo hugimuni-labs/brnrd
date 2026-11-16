@@ -2777,7 +2777,7 @@ def run(root: Path | str, *, adapter: str = "fake", core: str = "haiku",
     held = _hold_loop(home, stop)
     if held is None:
         return
-    inputs = board = shell = None
+    inputs = board = shell = audit_writer = None
     bodies: dict[str, Body] = {}
     try:
         if stop is not None and stop.is_set():
@@ -2800,6 +2800,12 @@ def run(root: Path | str, *, adapter: str = "fake", core: str = "haiku",
         from .config import ConfigError, load_config, tick_config
         from . import usage
         config = load_config(home.root)
+        if config.audit == "on":
+            from .audit import Writer, _warn
+            try:
+                audit_writer = Writer(home)
+            except Exception:
+                _warn(home)
         fingerprint = _source_fingerprint()
         next_source, source_moved = time.monotonic() + SOURCE_EVERY, False
         next_usage = 0
@@ -2917,6 +2923,8 @@ def run(root: Path | str, *, adapter: str = "fake", core: str = "haiku",
                 break
     finally:
         _shutdown(bodies)
+        if audit_writer is not None:
+            audit_writer.close()
         if board is not None:
             board.stop.set()
         if shell is not None:

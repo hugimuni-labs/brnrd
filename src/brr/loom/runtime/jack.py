@@ -730,9 +730,12 @@ def execute(event: str, room: Path, stdin_text: str) -> str:
         said = "\n".join(filter(None, (first, said)))
         refuse = refuse or first_refuse
         tooltrace.note(room, stdin_text, "pre")
+        from .audit import note as audit_note
+        audit_note(room, stdin_text, "pre")
         if refuse:
             # A refused call gets no post hook; its end is written here.
             tooltrace.note(room, stdin_text, "refused")
+            audit_note(room, stdin_text, "refused")
             return _json({"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "deny",
                                                  "permissionDecisionReason": _clocked("refused by a guard:\n" + said)}})
         return _json({"hookSpecificOutput": {"hookEventName": "PreToolUse",
@@ -742,6 +745,8 @@ def execute(event: str, room: Path, stdin_text: str) -> str:
         guarded = "\n".join(filter(None, (_first_word(room)[0], guarded)))
     if event == "post":
         tooltrace.note(room, stdin_text, "post")
+        from .audit import note as audit_note
+        audit_note(room, stdin_text, "post")
         _keep_transcript(room, stdin_text)
         _touch(room, stdin_text)
         guarded = "\n".join(filter(None, (guarded, _lib_changes(room))))
