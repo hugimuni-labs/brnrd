@@ -478,6 +478,9 @@ def publish(room: Path | str, name: str, *, worker: str | None = None,
         data["gen"] = gen
     append(who.home, Fact(kind="branch.published", by=f"strand:{strand}", data=data,
                           id=f"published:{thread}:{name}:{commit}"))
+    # The publish door, after the push it records: recorded, never judged (audit.passage).
+    from .audit import passage
+    passage(who.room, "publish", "push", f"{name} {branch} {commit}")
     return Published(thread, name, branch, commit, lane, note)
 
 

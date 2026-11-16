@@ -127,6 +127,30 @@ def checkpoint(base: Path, names: list[str] | None = None) -> dict:
     return {name: _head(base / name) for name in names}
 
 
+DOORS = ("send", "publish", "forge")
+SAY = "BRNRD_SAY"
+# One note per window: a burst of unsaid passages is one note to the person.
+NOTE_WINDOW = 900
+
+
+def _door_problem(event: object) -> str | None:
+    """A door passage: which door, what act, and the sentence or its absence. Never judged."""
+    if not isinstance(event, dict):
+        return "event is not an object"
+    ident = event.get("id")
+    if not isinstance(ident, str) or not ident:
+        return "invalid event id"
+    if event.get("door") not in DOORS:
+        return "unknown door"
+    if not isinstance(event.get("act"), str) or not event["act"]:
+        return "invalid door act"
+    if not isinstance(event.get("at_ns"), int):
+        return "invalid door time"
+    if event.get("sentence") is not None and not isinstance(event["sentence"], str):
+        return "invalid door sentence"
+    return None
+
+
 def _event_problem(event: object) -> str | None:
     if not isinstance(event, dict):
         return "event is not an object"
@@ -166,9 +190,9 @@ def _walk(path: Path, epoch: str, install: str, previous: str, limit: int, seen:
             if "found" in given and not isinstance(given["found"], dict):
                 raise ValueError("invalid finding")
         else:
-            if given["kind"] != "tool":
+            if given["kind"] not in ("tool", "door"):
                 raise ValueError("unknown entry kind")
-            problem = _event_problem(given["event"])
+            problem = (_event_problem if given["kind"] == "tool" else _door_problem)(given["event"])
             if problem:
                 raise ValueError(problem)
             if given["event"]["id"] in seen:
@@ -331,7 +355,7 @@ def _warning(home: Home) -> Path:
 
 
 class Writer:
-    def __init__(self, home: Home):
+    def __init__(self, home: Home, doors: bool = False):
         self.home = home
         self.journal = Journal(home)
         self.socket = socket.socket()
@@ -343,7 +367,8 @@ class Writer:
         self.error = None
         path = _endpoint(home)
         path.parent.mkdir(parents=True, exist_ok=True)
-        _replace(path, {"port": self.socket.getsockname()[1], "token": self.token})
+        # The sensors' switch rides with the endpoint, so a door reads one file, never the config.
+        _replace(path, {"port": self.socket.getsockname()[1], "token": self.token, "doors": doors})
         path.chmod(0o600)
         # A writer that came up is a new chance: the next outage warns again.
         _warning(home).unlink(missing_ok=True)
@@ -384,10 +409,11 @@ class Writer:
             conn.settimeout(5)
             conn.sendall(canonical(checkpoint(self.journal.base, self.journal.names)) + b"\n")
             return
-        event = request.get("event")
-        if self.error or _event_problem(event):
+        kind = "door" if "door" in request else "tool"
+        event = request.get(kind if kind == "door" else "event")
+        if self.error or (_door_problem if kind == "door" else _event_problem)(event):
             return
-        value = {"kind": "tool", "event": event}
+        value = {"kind": kind, "event": event}
         canonical(value)  # A value the journal cannot encode is the client's fault, not the journal's.
         # No retries: an ack lost after fsync leaves one captured event.
         try:
@@ -426,13 +452,13 @@ class Capture:
             self.writer.close()
 
 
-def start(home: Home, on: bool) -> Capture:
+def start(home: Home, on: bool, doors: bool = False) -> Capture:
     """At loom start: drop a dead writer's endpoint, then start one when the home asks."""
     _endpoint(home).unlink(missing_ok=True)
     if not on:
         return Capture(None)
     try:
-        return Capture(Writer(home))
+        return Capture(Writer(home, doors))
     except Exception as exc:
         _warn(home)
         return Capture(None, exc)
@@ -505,13 +531,111 @@ def note(room: Path, stdin_text: str, phase: str) -> None:
             _warn(home)
 
 
+def passage(room: Path, door: str, act: str, target: str = "") -> None:
+    """A sensor at a door: append the passage and its sentence (``BRNRD_SAY``, or none).
+
+    Nothing is refused or judged here. Sensors off (no endpoint, or one without
+    ``doors``) costs one failed open. On, a passage with no sentence tells the
+    person once per NOTE_WINDOW, through the loom's notice. Never raises."""
+    home = None
+    try:
+        home = home_of_room(room)
+        try:
+            endpoint = json.loads(_endpoint(home).read_bytes())
+        except FileNotFoundError:
+            return
+        if not endpoint.get("doors"):
+            return
+        sentence = os.environ.get(SAY, "").strip() or None
+        event = {"id": secrets.token_hex(16), "at_ns": time.time_ns(), "door": door, "act": act,
+                 "target": target, "sentence": sentence, "strand": room.name,
+                 "thread": os.environ.get("BRNRD_THREAD", ""),
+                 "engine": os.environ.get("BRNRD_BODY_SHELL", "unknown")}
+        try:
+            raw = canonical({"token": endpoint["token"], "door": event}) + b"\n"
+            # A door is a whole process already, never a hot path: a wider budget than a hook's.
+            with socket.create_connection(("127.0.0.1", endpoint["port"]), timeout=1) as conn:
+                conn.sendall(raw)
+                if conn.recv(3) != b"ok\n":
+                    raise OSError("no durable acknowledgement")
+        except Exception:
+            _warn(home)
+        if sentence is None:
+            _unsaid(home, event)
+    except Exception:
+        if home is not None:
+            _warn(home)
+
+
+def _unsaid(home: Home, event: dict) -> None:
+    """One note to the person: judgement slipped at this door, with the act."""
+    from .ledger import read_facts
+    from .loom import _log, notice
+    from .verbs_wishes import _person_dm
+    facts = read_facts(home)
+    to = _person_dm(home, facts, None)
+    if to is None:
+        _log(home, f"doors: {event['door']} {event['act']} passed unsaid; no person has a direct channel")
+        return
+    window = event["at_ns"] // 1_000_000_000 // NOTE_WINDOW
+    where = f"thread {event['thread']}" if event["thread"] else f"strand {event['strand']}"
+    notice(home, facts, "door-unsaid", str(window),
+           f"a {event['door']} passage went out with no sentence: {event['act']}"
+           + (f" {event['target']}" if event["target"] else "") + f", on {where}",
+           f"nothing was stopped. Later unsaid passages in the next {NOTE_WINDOW // 60} min are counted, "
+           f"not told: `brnrd runtime audit doors`", channel=to, passive=True)
+
+
+def doors(base: Path, since_ns: int = 0, until_ns: int | None = None) -> dict:
+    """Per door over a period: passages seen and passages declared, from committed bytes only."""
+    counts = {door: {"seen": 0, "declared": 0} for door in DOORS}
+    for name in _manifest(base):
+        head = _head(base / name)
+        if not head:
+            continue
+        for row in _rows(base / name / "entries.jsonl", head["bytes"]):
+            event = row.get("event") if row.get("kind") == "door" else None
+            if not event or event["at_ns"] < since_ns or (until_ns is not None and event["at_ns"] >= until_ns):
+                continue
+            counts[event["door"]]["seen"] += 1
+            counts[event["door"]]["declared"] += event.get("sentence") is not None
+    return counts
+
+
+def _ns(text: str | None) -> int | None:
+    if text is None:
+        return None
+    from datetime import datetime, timezone
+    when = datetime.fromisoformat(text.replace("Z", "+00:00"))
+    if when.tzinfo is None:
+        when = when.replace(tzinfo=timezone.utc)
+    return int(when.timestamp() * 1_000_000_000)
+
+
 def main(argv=None) -> int:
     parser = Parser(verb="audit", description="Verify the local record-only tool journal (no witness).")
-    parser.add_argument("action", choices=["verify"])
+    parser.add_argument("action", choices=["verify", "doors", "pass"])
     parser.add_argument("--home")
     parser.add_argument("--room")
+    parser.add_argument("--since", help="doors: ISO time, e.g. 2026-11-16T00:00Z")
+    parser.add_argument("--until", help="doors: ISO time, exclusive")
+    parser.add_argument("--door", choices=DOORS, help="pass: the door (the gh shim's sensor)")
+    parser.add_argument("--act", help="pass: what went through")
+    parser.add_argument("--target", default="")
     args = parser.parse_args(argv)
+    if args.action == "pass":
+        if not (args.room and args.door and args.act):
+            return refuse("audit", ValueError("pass needs --room, --door and --act"))
+        passage(Path(args.room), args.door, args.act, args.target)
+        return 0
     home = home_for(args.home, args.room)
+    if args.action == "doors":
+        try:
+            counts = doors(home.root / "audit" / home.install_id(), _ns(args.since) or 0, _ns(args.until))
+        except (OSError, ValueError, KeyError, TypeError) as exc:
+            return refuse("audit", exc, prefix="audit: doors unreadable: ")
+        print(json.dumps(counts, sort_keys=True))
+        return 0
     try:
         endpoint_path = _endpoint(home)
         if endpoint_path.exists():
