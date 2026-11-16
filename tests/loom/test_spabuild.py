@@ -103,3 +103,116 @@ def test_head_is_read_once_per_interval_not_every_tick(checkout, monkeypatch):
     clock[0] = 30.0
     spa.step()
     assert reads == [0.0, 30.0]
+
+
+def managed(root, frontend):
+    (frontend / '.gitignore').write_text('build\nbuild.next\nbuild.old\nnode_modules\n')
+    git(root, 'add', '-A')
+    git(root, '-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-qm', 'ignore builds')
+    git(root, 'remote', 'add', 'origin', 'https://github.com/hugimuni-labs/brnrd.git')
+    git(root, 'update-ref', 'refs/remotes/origin/main', 'HEAD')
+
+
+def test_managed_upstream_fetch_needs_no_npm(checkout, monkeypatch):
+    from brr.loom.runtime import board_asset, spabuild
+    root, frontend = checkout
+    managed(root, frontend)
+    downloads = []
+
+    def fetch(commit, tree, destination):
+        downloads.append((commit, tree))
+        destination.mkdir()
+        (destination / '200.html').write_text('upstream')
+        (destination / '.tree').write_text(tree)
+
+    monkeypatch.setattr(board_asset, 'fetch', fetch)
+    monkeypatch.setattr(spabuild.shutil, 'which', lambda name: None)
+    spa = SpaBuild(frontend, lambda text: None, lambda *a: pytest.fail('npm ran'), every=0)
+    settle(spa)
+    settle(spa)
+    assert len(downloads) == 1
+    assert (frontend / 'build' / '200.html').read_text() == 'upstream'
+    assert spa.built() == spa.wanted()
+
+
+def test_changed_without_npm_keeps_upstream_board_and_says_once(checkout, monkeypatch):
+    from brr.loom.runtime import board_asset, spabuild
+    root, frontend = checkout
+    managed(root, frontend)
+    (frontend / 'build').mkdir()
+    (frontend / 'build' / '200.html').write_text('good')
+    spa = SpaBuild(frontend, lambda text: messages.append(text), every=0)
+    spa.wanted()
+    (frontend / 'build' / '.tree').write_text(spa.upstream[1])
+    (frontend / 'own.svelte').write_text('own edit')
+    messages = []
+    monkeypatch.setattr(board_asset, 'fetch', lambda *a: pytest.fail('unnecessary download'))
+    monkeypatch.setattr(spabuild.shutil, 'which', lambda name: None)
+    settle(spa)
+    settle(spa)
+    assert (frontend / 'build' / '200.html').read_text() == 'good'
+    assert len(messages) == 1 and 'npm is unavailable' in messages[0]
+    assert spa.failed is None
+
+
+def test_missing_asset_does_not_fail_loom_or_build_upstream_locally(checkout, monkeypatch):
+    from brr.loom.runtime import board_asset
+    root, frontend = checkout
+    managed(root, frontend)
+    messages = []
+
+    def missing(*args):
+        raise OSError('404')
+
+    monkeypatch.setattr(board_asset, 'fetch', missing)
+    spa = SpaBuild(frontend, messages.append, lambda *a: pytest.fail('npm ran'), every=0)
+    settle(spa)
+    settle(spa)
+    assert spa.failed is None
+    assert not spa.build.exists()
+    assert len(messages) == 1 and 'board' in messages[0] and 'npm ci' in messages[0]
+
+
+def test_changed_frontend_with_npm_builds_locally(checkout, monkeypatch):
+    from brr.loom.runtime import board_asset, spabuild
+    root, frontend = checkout
+    managed(root, frontend)
+    calls = []
+
+    def fetch(commit, tree, destination):
+        destination.mkdir()
+        (destination / '200.html').write_text('upstream')
+        (destination / '.tree').write_text(tree)
+
+    def run(args, cwd, env=None):
+        calls.append(args)
+        if env:
+            destination = cwd / env['BRNRD_SPA_OUT']
+            destination.mkdir()
+            (destination / '200.html').write_text('own board')
+
+    monkeypatch.setattr(board_asset, 'fetch', fetch)
+    monkeypatch.setattr(spabuild.shutil, 'which', lambda name: '/fixture/npm')
+    (frontend / 'own.svelte').write_text('own change')
+    spa = SpaBuild(frontend, lambda text: None, run, every=0)
+    settle(spa)
+    settle(spa)
+    assert calls == [['npm', 'run', 'build']]
+    assert (spa.build / '200.html').read_text() == 'own board'
+
+
+def test_changed_without_npm_preserves_last_good_local_board(checkout, monkeypatch):
+    from brr.loom.runtime import board_asset, spabuild
+    root, frontend = checkout
+    managed(root, frontend)
+    spa = SpaBuild(frontend, lambda _: None, every=0)
+    spa.wanted()
+    spa.build.mkdir()
+    (spa.build / '200.html').write_text('last good local board')
+    (spa.build / '.tree').write_text('previous local content hash')
+    (spa.build / '.upstream').write_text(spa.upstream[1])
+    (frontend / 'own.svelte').write_text('new edit')
+    monkeypatch.setattr(board_asset, 'fetch', lambda *a: pytest.fail('discarded last good local build'))
+    monkeypatch.setattr(spabuild.shutil, 'which', lambda _: None)
+    settle(spa)
+    assert (spa.build / '200.html').read_text() == 'last good local board'

@@ -1,18 +1,15 @@
-"""``SpaBuild``: the loom keeps ``src/frontend/build`` current with its own checkout (self threads/web-main).
+"""Keep the loopback board matched to the resident's checkout.
 
-The loopback ``serve`` reads the SvelteKit build per request, and nothing else builds it on a resident's machine:
-follow-main fast-forwards the checkout and re-execs, and the build would stay at whatever ``npm run build`` last
-wrote. So at every loop pass, a loom with a board compares the build's stamp (``build/.tree``, the git tree of
-``src/frontend`` it was built from) with ``HEAD:src/frontend``; when they differ it builds off the loop into
-``build.next`` (``npm ci`` first when ``package-lock.json`` is newer than the installed one) and swaps it in only
-once the build succeeded. A failed build keeps the old one served and raises from ``step`` while HEAD stays on
-that tree, which the loop's guard turns into ``loom.degraded`` (step ``spa``) on every body's boundary; the next
-tree tries again. A re-exec mid-build loses nothing: the stamp still differs, so the new process builds again.
+A managed upstream tree uses its verified release asset, without Node. Local
+frontend changes rebuild with npm when available. Missing assets or npm retain
+the last good board and log once; local build failures retain it and degrade.
+Work happens off the loop and only complete builds replace the served tree.
 """
 
 from __future__ import annotations
 
 import os
+import hashlib
 import shutil
 import subprocess
 import threading
@@ -45,14 +42,55 @@ class SpaBuild:
         self.build, self.next = frontend / "build", frontend / "build.next"
         self.worker: threading.Thread | None = None
         self.failed: tuple[str, str] | None = None  # (tree, why)
+        self.noticed: set[str] = set()
+        self.upstream: tuple[str, str] | None = None
+        self.changed = False
+
+    def _git(self, *args: str) -> str | None:
+        proc = subprocess.run(["git", *args], cwd=self.frontend, capture_output=True, text=True)
+        return proc.stdout.strip() if proc.returncode == 0 else None
 
     def wanted(self) -> str | None:
-        proc = subprocess.run(["git", "rev-parse", "HEAD:./"], cwd=self.frontend, capture_output=True, text=True)
-        return proc.stdout.strip() or None if proc.returncode == 0 else None
+        tree = self._git("rev-parse", "HEAD:./")
+        if not tree:
+            return None
+        origin = self._git("remote", "get-url", "origin")
+        self.upstream = None
+        if origin in {"https://github.com/hugimuni-labs/brnrd", "https://github.com/hugimuni-labs/brnrd.git",
+                      "git@github.com:hugimuni-labs/brnrd.git"}:
+            commit = self._git("merge-base", "HEAD", "refs/remotes/origin/main")
+            upstream_tree = self._git("rev-parse", f"{commit}:src/frontend") if commit else None
+            if commit and upstream_tree:
+                self.upstream = (commit, upstream_tree)
+        if not self.upstream:
+            self.changed = True
+            return tree
+        base = self.upstream[0]
+        diff = self._git("diff", "--binary", base, "--", ".") or ""
+        untracked = self._git("ls-files", "--others", "--exclude-standard", "--", ".") or ""
+        self.changed = bool(diff or untracked or (self.upstream and tree != self.upstream[1]))
+        if diff or untracked:
+            digest = hashlib.sha256(diff.encode())
+            for name in untracked.splitlines():
+                path = self.frontend / name
+                digest.update(name.encode())
+                if path.is_file():
+                    digest.update(path.read_bytes())
+            return digest.hexdigest()
+        return tree
+
+    def notice(self, key: str, message: str) -> None:
+        if key not in self.noticed:
+            self.noticed.add(key)
+            self.log(message)
 
     def built(self) -> str:
         stamp = self.build / STAMP
         return stamp.read_text().strip() if stamp.is_file() else ""
+
+    def built_upstream(self) -> str:
+        stamp = self.build / '.upstream'
+        return stamp.read_text().strip() if stamp.is_file() else self.built()
 
     def step(self) -> None:
         """On the loop: start a build when the tree moved; raises while HEAD's tree failed to build."""
@@ -75,6 +113,26 @@ class SpaBuild:
     def _build(self, tree: str) -> None:
         try:
             shutil.rmtree(self.next, ignore_errors=True)
+            if self.upstream:
+                commit, upstream_tree = self.upstream
+                if self.built_upstream() != upstream_tree:
+                    try:
+                        from .board_asset import fetch
+                        fetch(commit, upstream_tree, self.next)
+                        self._swap()
+                        self.log(f"spa: fetched board for upstream {commit}")
+                    except Exception as exc:
+                        shutil.rmtree(self.next, ignore_errors=True)
+                        self.notice(commit, f"spa: board for {commit} unavailable ({exc}); keeping last good build; "
+                                    "if none exists, run npm ci && npm run build in src/frontend")
+                if not self.changed:
+                    self.failed = None
+                    return
+            if shutil.which("npm") is None:
+                self.notice(tree, "spa: frontend changed but npm is unavailable; keeping last good build; "
+                            "install npm and run npm ci && npm run build in src/frontend")
+                self.failed = None
+                return
             lock, installed = self.frontend / "package-lock.json", self.frontend / "node_modules" / ".package-lock.json"
             if not installed.is_file() or lock.stat().st_mtime > installed.stat().st_mtime:
                 self.run(["npm", "ci", "--no-audit", "--no-fund"], self.frontend)
@@ -82,14 +140,24 @@ class SpaBuild:
             if not (self.next / "200.html").is_file():
                 raise BuildFailed(f"npm run build wrote no {self.next.name}/200.html")
             (self.next / STAMP).write_text(tree + "\n")
-            old = self.frontend / "build.old"
-            shutil.rmtree(old, ignore_errors=True)
-            if self.build.exists():
-                self.build.rename(old)
-            self.next.rename(self.build)
-            shutil.rmtree(old, ignore_errors=True)
+            self._swap()
             self.failed = None
             self.log(f"spa: built tree {tree[:8]} into {self.build}")
         except Exception as exc:  # the loop's guard reports it; the old build stays served
             shutil.rmtree(self.next, ignore_errors=True)
             self.failed = (tree, f"{type(exc).__name__}: {exc}"[:300])
+
+    def _swap(self) -> None:
+        if self.upstream:
+            (self.next / '.upstream').write_text(self.upstream[1] + '\n')
+        old = self.frontend / "build.old"
+        shutil.rmtree(old, ignore_errors=True)
+        if self.build.exists():
+            self.build.rename(old)
+        try:
+            self.next.rename(self.build)
+        except OSError:
+            if old.exists():
+                old.rename(self.build)
+            raise
+        shutil.rmtree(old, ignore_errors=True)
