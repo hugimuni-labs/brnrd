@@ -133,3 +133,18 @@ def test_loom_part_points_at_wishes(home, jack):
     assert core.count("Stopping is resting, not ending") == 1 and "A sleep or poll loop is never the wait" in core
     assert core.index("## memory/stance.md") < core.index("## loom briefing")
     assert "Stopping is resting" not in part and "poll loop" not in part
+
+
+@pytest.mark.parametrize("doors", [False, True])
+def test_the_briefing_names_the_door_sentence_only_while_sensors_are_on(home, doors):
+    from brr.loom.runtime import audit
+    writer = audit.Writer(home, doors=doors)
+    try:
+        facts = read_facts(home)
+        room = _prepare(home, STRAND, "inbox", 1, [], sender_threads(facts), facts, "hand")
+    finally:
+        writer.close()
+    core = (room / "port/core.md").read_text()
+    briefing = core[core.index("## loom briefing"):]
+    assert ("BRNRD_SAY=" in briefing) is doors
+    assert core.count("BRNRD_SAY") == (1 if doors else 0)

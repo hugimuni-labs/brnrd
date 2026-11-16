@@ -43,12 +43,33 @@ BURN = (
 )
 
 
+# One sentence, and only while the door sensors are on (audit.passage): a body
+# never told of BRNRD_SAY would be counted as forgetting what it never heard.
+DOORS = (
+    "- At a send to a person, a `publish`, or a `gh` merge, close, comment or release, "
+    "prefix the command with `BRNRD_SAY=\"what, why, whose words (letter id)\"`. "
+    "Nothing is refused; a passage without it is noted to the person.\n"
+)
+
+
+def _doors_on(home) -> bool:
+    from .audit import _endpoint
+    import json
+    try:
+        return bool(json.loads(_endpoint(home).read_bytes()).get("doors"))
+    except (OSError, ValueError, AttributeError):
+        return False
+
+
 def section(home=None) -> str:
-    """The briefing block. ``home`` adds one sentence when two harnesses are installed."""
+    """The briefing block. ``home`` adds one sentence when two harnesses are installed,
+    and one while the door sensors are on."""
     text = BRIEFING
     if home is not None:
         from .adapters import spend_mode
         extra = {"burn": BURN, "headroom": HEADROOM}.get(spend_mode(home), "")
+        if _doors_on(home):
+            extra += DOORS
         if extra:
             text = BRIEFING.rstrip("\n") + "\n" + extra
     return f"## {TITLE}\n{text}"

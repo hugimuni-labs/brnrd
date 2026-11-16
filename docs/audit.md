@@ -120,6 +120,15 @@ door reads one file and never the config. With sensors on, a passage with no
 sentence sends the person one loom notice on their direct channel. One notice
 covers each 15-minute window, so a burst is one note.
 
+While the sensors are on, the wake's loom briefing carries one line naming
+`BRNRD_SAY`; with them off it adds nothing, so a body is never counted for a
+sentence it was never asked for.
+
+The forge passage is recorded before `gh` runs (the shim `exec`s it), so a
+failed `gh` call still counts as a passage; `send` and `publish` record after
+the act. `pr create`, `pr review` and `issue create` leave through the shim
+unsensed.
+
 `brnrd runtime audit doors [--since T] [--until T]` prints, per door, the
 passages seen and the passages declared, read from committed bytes only.
 
