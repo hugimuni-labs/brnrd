@@ -25,6 +25,12 @@ export const FAQ: FaqEntry[] = [
 			'Because it does not pay for the AI. The thinking runs on the AI coding subscription you already have, such as Claude Code or Codex. Ours pays only for the part that runs on our side: reaching your assistant from anywhere.'
 	},
 	{
+		id: 'more-subscription',
+		question: 'Does it use a lot more of my AI subscription?',
+		answer:
+			"Per session, hardly: each time it starts it reads who it is and where your work stands, about 8 thousand tokens, which on our own install was a little over one percent of a week's use. What changes is the hours. It works far more of the day than a person at a terminal, so it uses more of your plan in total, and it paces that across the week so you do not hit the limit on Tuesday."
+	},
+	{
 		id: 'when-away',
 		question: 'Does it run when I am away?',
 		answer:

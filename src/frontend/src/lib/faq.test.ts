@@ -54,6 +54,10 @@ test('the page makes none of the claims we measured we cannot make', () => {
 	ok(!/never forgets|no looking after|needs no looking/i.test(text));
 	ok(!/\d[\d,.]*\s*(users|people|developers|teams)/i.test(text), 'a user count is on the page');
 	ok(!/[€$]\s?\d/.test(text), 'a price figure is on the page; pricing owns it');
+	ok(
+		!/\b(at|from) (the|our) (stand|booth)\b/i.test(text),
+		'the stand and booth are not on the page'
+	);
 	ok(!/picks? up where it was/i.test(text), 'a run cut off by sleep does not resume where it was');
 });
 
