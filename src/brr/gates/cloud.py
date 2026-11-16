@@ -314,9 +314,30 @@ _AUTH_RETRY_CAP_S = 300
 _RETRY_STATUSES = frozenset({502, 503, 504})
 _RETRY_SLEEPS_S = (2.0, 5.0)
 
+# The server's install ceiling (brnrd.limits.Ceiling) answers 429 with a
+# Retry-After. A 429 is never retried here; the path it named is held in this
+# process until the window turns, so a publish lane on its 3 s tick asks once
+# per window instead of once per tick. Per (method, path): a held reports path
+# does not stop a reply.
+_HELD_UNTIL: dict[tuple[str, str], float] = {}
+
+
+def _retry_after_s(resp) -> float | None:
+    try:
+        value = float(resp.headers.get("Retry-After", ""))
+    except (TypeError, ValueError):
+        return None
+    return value if value > 0 else None
+
 
 def _request(base_url: str, method: str, path: str, *, token: str | None = None, json: dict | None = None, params: dict | None = None, timeout: float = _HTTP_TIMEOUT_S, retry: bool = True) -> dict:
     headers = {"Authorization": f"Bearer {token}"} if token else {}
+    held = _HELD_UNTIL.get((method, path), 0.0) - time.monotonic()
+    if held > 0:
+        err = RuntimeError(f"brnrd {method} {path} -> 429 (held here {held:.0f}s more by the server's Retry-After)")
+        err.status_code = 429  # type: ignore[attr-defined]
+        err.retry_after = held  # type: ignore[attr-defined]
+        raise err
     sleeps = _RETRY_SLEEPS_S if retry else ()
     for attempt, sleep_s in enumerate((*sleeps, None)):
         try:
@@ -344,6 +365,9 @@ def _request(base_url: str, method: str, path: str, *, token: str | None = None,
         # string-matching a shape meant for humans.
         err = RuntimeError(f"brnrd {method} {path} -> {resp.status_code}: {resp.text[:200]}")
         err.status_code = resp.status_code  # type: ignore[attr-defined]
+        if resp.status_code == 429 and (wait := _retry_after_s(resp)) is not None:
+            _HELD_UNTIL[(method, path)] = time.monotonic() + wait
+            err.retry_after = wait  # type: ignore[attr-defined]
         raise err
     return resp.json() if resp.content else {}
 

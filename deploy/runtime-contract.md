@@ -117,6 +117,16 @@ All values are non-secret integers consumed by `limits.py`.
 | `BRNRD_LIMIT_ABUSE_EVENTS_PER_DAY` | `5000` | All-tier daily event abuse ceiling. |
 | `BRNRD_LIMIT_MAX_EVENT_BODY_BYTES` | `100000` | Maximum inbound event body size. |
 | `BRNRD_LIMIT_MAX_EVENT_ATTACHMENTS` | `10` | Maximum attachments on one inbound event. |
+| `BRNRD_LIMIT_ABUSE_SENDS_PER_MINUTE` | `60` | All-tier ceiling on an account's install sends (`POST /v1/daemons/{responses,messages,card,pack}`) per minute. |
+| `BRNRD_LIMIT_ABUSE_SENDS_PER_HOUR` | `400` | The same sends, per hour. |
+| `BRNRD_LIMIT_ABUSE_SENDS_PER_DAY` | `1000` | The same sends, per day. |
+| `BRNRD_LIMIT_ABUSE_REPORTS_PER_MINUTE` | `2400` | All-tier ceiling on an account's install reports (the `PUT /v1/daemons/*` publishes, `POST /v1/daemons/loom/{presence,typing}`, the wake-request claim) per minute. |
+| `BRNRD_LIMIT_ABUSE_EPISODE_QUIET_SECONDS` | `600` | A person is told about a rate refusal once per episode; an episode ends after this long with none. |
+
+The install ceilings are counted in the server process, not the database
+(`limits.Ceiling`): exact while the service runs as one process, as it does
+today; under N processes each counts alone, so the bound becomes N times the
+number. A refusal is `429` with `{reason, message}` and `Retry-After`.
 
 ## Platform adapters
 

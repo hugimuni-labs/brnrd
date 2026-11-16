@@ -43,9 +43,11 @@ def deliver(path, state, client):
             result = client.send(payload) or {}
         except RuntimeError as exc:
             # The server refused before sending (unknown chat, closed
-            # WhatsApp window, no sender): not sent, but only for the first
-            # part. A refusal after a part went out is a partial send.
-            if index == 0 and getattr(exc, 'status_code', None) in (404, 409, 501):
+            # WhatsApp window, no sender, the account's send ceiling): not
+            # sent, but only for the first part. A refusal after a part went
+            # out is a partial send. A 429 is not sent, never "maybe": the
+            # drafting thread is told and the loom never resends a draft.
+            if index == 0 and getattr(exc, 'status_code', None) in (404, 409, 429, 501):
                 print(f'relay: {exc}', file=sys.stderr)
                 return 3
             raise

@@ -26,6 +26,7 @@ from sqlalchemy.orm import Session
 from .. import (
     ids,
     inbox as inbox_service,
+    limits,
     publish_scope,
     run_release_requests,
     run_respawn_requests,
@@ -69,6 +70,48 @@ def _should_send_typing(platform: str, chat_id: str, *, now: float | None = None
         return False
     _last_typing_sent[key] = now
     return True
+
+
+_CEILING_NOTICE = (
+    "⌁ brnrd.dev: your brnrd is calling the server far faster than real use, so its {lane} "
+    "are refused for now ({message}). Nothing is lost on the server; it resumes by itself "
+    "once the install slows down. If it keeps happening, restart it: `brnrd loom restart`."
+)
+
+
+def _tell_ceiling(settings, db: Session, account_id: str, lane: str, decision: limits.LimitDecision) -> None:
+    """Once per episode, told in the account's latest chat on the first platform that has one; best effort, never raises."""
+    for platform, sender in _MESSAGE_SENDERS.items():
+        try:
+            reply_to = _most_recent_reply_to(db, account_id, platform)
+            if reply_to is None:
+                continue
+            sender(settings, reply_to, _CEILING_NOTICE.format(lane=lane, message=decision.message))
+        except Exception as e:  # the notice must never turn a 429 into a 500
+            logger.warning("ceiling notice failed account=%s platform=%s: %s", account_id, platform, e)
+        return
+
+
+def _ceiling(lane: str) -> Callable[..., Principal]:
+    """``require_daemon`` behind the account's all-tier ceiling for *lane* (limits.Ceiling): 429 + Retry-After."""
+
+    def admit(request: Request, principal: Principal = Depends(require_daemon), db: Session = Depends(get_db)) -> Principal:
+        settings = request.app.state.settings
+        decision = limits.CEILING.admit(settings, principal.account_id, lane)
+        if not decision.allowed:
+            if limits.CEILING.first_in_episode(settings, principal.account_id, lane):
+                logger.warning("install ceiling account=%s lane=%s path=%s: %s",
+                               principal.account_id, lane, request.url.path, decision.message)
+                _tell_ceiling(settings, db, principal.account_id, lane, decision)
+            limits.raise_if_denied(decision)
+        return principal
+
+    return admit
+
+
+#: The account's install sends (a person's chat, or the pack relay's memory) and reports (publishes, presence).
+admit_send = _ceiling("sends")
+admit_report = _ceiling("reports")
 
 
 def _cloud_chat_target(stream: str) -> tuple[str, str, int | None] | None:
@@ -494,7 +537,7 @@ def publishing_credential(
 
 
 @router.put("/activity", response_model=schemas.ActivityList)
-def put_activity(request: Request, payload: schemas.ActivityReport, principal: Principal = Depends(require_daemon), db: Session = Depends(get_db)):
+def put_activity(request: Request, payload: schemas.ActivityReport, principal: Principal = Depends(admit_report), db: Session = Depends(get_db)):
     """Replace this daemon token's current Activity snapshot for its repo.
 
     Delete-then-insert is atomic per transaction but not against a
@@ -590,7 +633,7 @@ def put_activity(request: Request, payload: schemas.ActivityReport, principal: P
 
 
 @router.put("/surface", response_model=schemas.SurfaceOut)
-def put_surface(payload: schemas.SurfaceReport, principal: Principal = Depends(require_daemon), db: Session = Depends(get_db)):
+def put_surface(payload: schemas.SurfaceReport, principal: Principal = Depends(admit_report), db: Session = Depends(get_db)):
     """Replace the account's discovered corpus mirror (surface + knowledge).
 
     Paths are home-relative (``surface/…``, ``knowledge/…``) since the corpus
@@ -667,7 +710,7 @@ def put_surface(payload: schemas.SurfaceReport, principal: Principal = Depends(r
 
 
 @router.put("/quota", response_model=schemas.QuotaOut)
-def put_quota(payload: schemas.QuotaReport, principal: Principal = Depends(require_daemon), db: Session = Depends(get_db)):
+def put_quota(payload: schemas.QuotaReport, principal: Principal = Depends(admit_report), db: Session = Depends(get_db)):
     """Replace this daemon's runner-quota snapshot (#237).
 
     Mirrors the Activity/Plans publish shape: the daemon owns the read
@@ -732,7 +775,7 @@ def put_quota(payload: schemas.QuotaReport, principal: Principal = Depends(requi
 
 
 @router.put("/news", response_model=schemas.NewsOut)
-def put_news(payload: schemas.NewsReport, principal: Principal = Depends(require_daemon), db: Session = Depends(get_db)):
+def put_news(payload: schemas.NewsReport, principal: Principal = Depends(admit_report), db: Session = Depends(get_db)):
     """Replace this daemon's news-lane snapshot (the-user-hears-it-first).
 
     Same last-write-wins mirror shape as `put_quota`: the daemon owns the
@@ -759,7 +802,7 @@ _MAX_LOOM_BYTES = 1_000_000
 
 
 @router.put("/loom", response_model=schemas.LoomOut)
-def put_loom(doc: dict[str, Any] = Body(...), principal: Principal = Depends(require_daemon), db: Session = Depends(get_db)):
+def put_loom(doc: dict[str, Any] = Body(...), principal: Principal = Depends(admit_report), db: Session = Depends(get_db)):
     """Store the loom snapshot v1 verbatim (threads/inbox/loom-snapshot.md)."""
     if doc.get("v") != 1:
         raise HTTPException(status_code=422, detail="loom snapshot must carry v: 1")
@@ -824,7 +867,7 @@ def _letter_presence(settings, origin, verb, on):
 
 @router.post('/loom/presence')
 def loom_presence(request: Request, operations: list[schemas.LetterPresence] = Body(...),
-                  principal: Principal = Depends(require_daemon), db: Session = Depends(get_db)):
+                  principal: Principal = Depends(admit_report), db: Session = Depends(get_db)):
     """Authorize each event against its owning account, then use its stored origin."""
     if len(operations) > 100:
         raise HTTPException(status_code=422, detail='at most 100 presence operations')
@@ -841,7 +884,7 @@ def loom_presence(request: Request, operations: list[schemas.LetterPresence] = B
 
 @router.post("/loom/typing")
 def loom_typing(request: Request, chats: list[str] = Body(...),
-                principal: Principal = Depends(require_daemon), db: Session = Depends(get_db)):
+                principal: Principal = Depends(admit_report), db: Session = Depends(get_db)):
     """Typing for person letters a live local room still owes, renewed without a model.
 
     Authorize each chat against the account's pairing; a daemon cannot type
@@ -866,7 +909,7 @@ def loom_typing(request: Request, chats: list[str] = Body(...),
 
 
 @router.put("/loom/parts")
-async def put_loom_parts(request: Request, principal: Principal = Depends(require_daemon), db: Session = Depends(get_db)):
+async def put_loom_parts(request: Request, principal: Principal = Depends(admit_report), db: Session = Depends(get_db)):
     """Store the board parts whose hash moved; answer every hash now held.
 
     Only the body read is async. The rest (gunzip up to 40 MB, the parse, a re-gzip per part, the writes) runs on
@@ -933,7 +976,7 @@ def _store_loom_parts(raw: bytes, encoding: str | None, principal: Principal, db
 
 
 @router.put("/runners", response_model=schemas.RunnersOut)
-def put_runners(payload: schemas.RunnersReport, principal: Principal = Depends(require_daemon), db: Session = Depends(get_db)):
+def put_runners(payload: schemas.RunnersReport, principal: Principal = Depends(admit_report), db: Session = Depends(get_db)):
     """Replace this daemon's runner-catalog snapshot (#328 spool rack).
 
     Same last-write-wins mirror shape as `put_quota` above: the daemon owns
@@ -1036,7 +1079,7 @@ def _published_profile_names(daemon: Daemon) -> set[str] | None:
 
 
 @router.post("/runners/wake-request/claim", response_model=schemas.WakeRequestClaimOut)
-def claim_wake_request(payload: schemas.WakeRequestClaim, principal: Principal = Depends(require_daemon), db: Session = Depends(get_db)):
+def claim_wake_request(payload: schemas.WakeRequestClaim, principal: Principal = Depends(admit_report), db: Session = Depends(get_db)):
     """Decide a spool-rack tap's fate for one dispatching wake (#733).
 
     The one claim point. A daemon calls this at dispatch, once, and only
@@ -1076,7 +1119,7 @@ def claim_wake_request(payload: schemas.WakeRequestClaim, principal: Principal =
 
 
 @router.put("/live-runs", response_model=schemas.LiveRunsOut)
-def put_live_runs(request: Request, payload: schemas.LiveRunsReport, principal: Principal = Depends(require_daemon), db: Session = Depends(get_db)):
+def put_live_runs(request: Request, payload: schemas.LiveRunsReport, principal: Principal = Depends(admit_report), db: Session = Depends(get_db)):
     """Replace this daemon's live/coexisting-runs snapshot (#258).
 
     Same last-write-wins shape as `put_quota` above: the daemon owns the
@@ -1185,7 +1228,7 @@ def put_live_runs(request: Request, payload: schemas.LiveRunsReport, principal: 
 
 
 @router.put("/pr-review-queue", response_model=schemas.PRReviewQueueOut)
-def put_pr_review_queue(payload: schemas.PRReviewQueueReport, principal: Principal = Depends(require_daemon), db: Session = Depends(get_db)):
+def put_pr_review_queue(payload: schemas.PRReviewQueueReport, principal: Principal = Depends(admit_report), db: Session = Depends(get_db)):
     """Replace this daemon's open-PR review queue snapshot (#259).
 
     Same last-write-wins shape as `put_live_runs`: the daemon owns the
@@ -1217,7 +1260,7 @@ def put_pr_review_queue(payload: schemas.PRReviewQueueReport, principal: Princip
 
 
 @router.put("/run-ledger", response_model=schemas.RunLedgerOut)
-def put_run_ledger(payload: schemas.RunLedgerReport, principal: Principal = Depends(require_daemon), db: Session = Depends(get_db)):
+def put_run_ledger(payload: schemas.RunLedgerReport, principal: Principal = Depends(admit_report), db: Session = Depends(get_db)):
     """Replace this daemon's closed-run receipt snapshot (#271)."""
     daemon = _current_daemon(db, principal)
     if daemon is None:
@@ -1335,7 +1378,7 @@ def _safe_detail(text: str) -> str:
 
 
 @router.post("/responses", response_model=schemas.ResponseAck)
-def post_response(request: Request, payload: schemas.ResponsePost, principal: Principal = Depends(require_daemon), db: Session = Depends(get_db)):
+def post_response(request: Request, payload: schemas.ResponsePost, principal: Principal = Depends(admit_send), db: Session = Depends(get_db)):
     owned_event = _account_event(db, principal, payload.event_id)
     if owned_event is None:
         raise HTTPException(status_code=404, detail="event not found for this account")
@@ -1460,7 +1503,7 @@ _MESSAGE_SENDERS: dict[str, Callable[[Any, dict[str, Any], str], str]] = {
 def post_message(
     request: Request,
     payload: schemas.MessagePost,
-    principal: Principal = Depends(require_daemon),
+    principal: Principal = Depends(admit_send),
     db: Session = Depends(get_db),
 ):
     """#1205's fresh-send primitive — an unaddressed send, no inbound event.
@@ -1506,7 +1549,7 @@ def post_message(
 
 
 @router.post("/card", response_model=schemas.CardAck)
-def post_card(request: Request, payload: schemas.CardPost, principal: Principal = Depends(require_daemon), db: Session = Depends(get_db)):
+def post_card(request: Request, payload: schemas.CardPost, principal: Principal = Depends(admit_send), db: Session = Depends(get_db)):
     settings = request.app.state.settings
     event = _account_event(db, principal, payload.event_id)
     if event is None:
@@ -1648,7 +1691,7 @@ _MAX_PACK_BYTES = 4 * 1024 * 1024
 
 
 @router.post("/pack", response_model=schemas.PackRelayAck)
-def post_pack(request: Request, payload: schemas.PackRelayPost, principal: Principal = Depends(require_daemon)):
+def post_pack(request: Request, payload: schemas.PackRelayPost, principal: Principal = Depends(admit_send)):
     blob = json.dumps(payload.pack, separators=(",", ":"))
     if len(blob.encode("utf-8")) > _MAX_PACK_BYTES:
         raise HTTPException(status_code=413, detail="review pack too large to relay")
