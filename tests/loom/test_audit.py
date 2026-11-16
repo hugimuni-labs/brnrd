@@ -118,6 +118,7 @@ def test_jack_pre_refusal_completion_and_off(tmp_path, monkeypatch, capsys):
     assert b'private-secret' not in data and b'private-result' not in data
     assert audit.main(['verify', '--home', str(home.root)]) == 0
     # A writer that closed took its endpoint: no capture running, nothing to warn of.
+    capsys.readouterr()  # A slow runner may have warned above on an ack past the 5 ms budget.
     audit.note(place, payload, 'pre')
     assert 'capture unavailable' not in capsys.readouterr().err
 
