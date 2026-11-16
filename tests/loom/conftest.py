@@ -111,3 +111,22 @@ def isolate_connector_ownership_cache():
     yield
     _binding.cache_clear()
     _migration.cache_clear()
+
+
+@pytest.fixture(autouse=True)
+def no_test_host_lookup(monkeypatch):
+    """A ``*.test`` host is a stand-in's address, never a machine (RFC 2606): a lookup of one means a call went
+    past its stand-in to the real network, where it fails or passes by the resolver's luck. The lookup raises
+    at once, and the test that made it fails, even when the call was on a loom thread that swallowed the error."""
+    import socket
+    real, seen = socket.getaddrinfo, []
+
+    def lookup(host, *args, **kwargs):
+        name = host.decode() if isinstance(host, bytes) else str(host or "")
+        if name.rstrip(".").endswith(".test"):
+            seen.append(name)
+            raise socket.gaierror(socket.EAI_NONAME, f"{name}: a .test host reached the network (no stand-in)")
+        return real(host, *args, **kwargs)
+    monkeypatch.setattr(socket, "getaddrinfo", lookup)
+    yield
+    assert not seen, f"looked up {sorted(set(seen))}: a call went past its stand-in to the network"
