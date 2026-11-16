@@ -72,6 +72,8 @@ test('the safety answer says what the seed tells it, not a list of guards or a b
 	ok(safe, 'no safety answer');
 	ok(!/anything that cannot be undone|before steps it cannot take back/i.test(safe.answer));
 	ok(/within what you have allowed/.test(safe.answer));
+	// Codex runs no hooks: only the loom's merge and release gates apply, so name no other act.
+	ok(!/force-push|package|delet/i.test(safe.answer), 'names an act the Codex guards lack');
 	ok(/can still make mistakes/.test(safe.answer));
 	ok(
 		!/package|checks are not green|determined workaround/.test(safe.answer),

@@ -101,7 +101,7 @@ export const FAQ: FaqEntry[] = [
 		id: 'is-it-safe',
 		question: 'Is it safe to let it act for me?',
 		answer:
-			'It works with your rights on your computer, so treat it like a capable new colleague: start it on work where a mistake is cheap. It is told to act only within what you have allowed and to propose, not act, when a step goes beyond it; a few of the most damaging acts, such as force-pushing or publishing a release, are also stopped outright until you say yes. It can still make mistakes.'
+			'It works with your rights on your computer, so treat it like a capable new colleague: start it on work where a mistake is cheap. It is told to act only within what you have allowed and to propose, not act, when a step goes beyond it; a few of the most damaging acts, such as publishing a release, are also stopped outright until you say yes. It can still make mistakes.'
 	},
 	{
 		id: 'who-makes-it',
