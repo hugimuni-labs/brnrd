@@ -69,5 +69,8 @@ test('the safety answer says what the seed tells it, not a list of guards or a b
 	ok(!/anything that cannot be undone|before steps it cannot take back/i.test(safe.answer));
 	ok(/within what you have allowed/.test(safe.answer));
 	ok(/can still make mistakes/.test(safe.answer));
-	ok(!/package|checks are not green|determined workaround/.test(safe.answer), 'a guard list is back');
+	ok(
+		!/package|checks are not green|determined workaround/.test(safe.answer),
+		'a guard list is back'
+	);
 });
