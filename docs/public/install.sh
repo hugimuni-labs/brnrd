@@ -119,6 +119,12 @@ preflight() {
   elif ! gh auth status >/dev/null 2>&1; then
     warn "gh auth status fails, and following main reads CI through it; run gh auth login."
   fi
+  # A loom started by hand from another install keeps running beside the migrated service.
+  me=$(id -u 2>/dev/null) || return 0
+  procs=$(ps -U "$me" -o pid=,args= 2>/dev/null </dev/null) || return 0
+  printf '%s\n' "$procs" | grep 'brr\.loom\.runtime loom' | grep -vF "${ROOT}/" | while read -r pid args; do
+    warn "a loom from another install is running (pid ${pid}: ${args%% *}); the installer moves the loom service, but a loom started by hand keeps running beside it: stop it with that install's brnrd loom stop, or kill ${pid}."
+  done
 }
 
 

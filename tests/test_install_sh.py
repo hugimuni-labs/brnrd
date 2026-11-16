@@ -22,7 +22,7 @@ def tool(directory, name, text):
 def room(tmp_path):
     binary = tmp_path / 'bin'
     binary.mkdir()
-    for name in ['grep', 'mktemp', 'mkdir', 'rm', 'sh', 'git', 'sed', 'env']:
+    for name in ['grep', 'mktemp', 'mkdir', 'rm', 'sh', 'git', 'sed', 'env', 'id']:
         (binary / name).symlink_to(shutil.which(name))
     tool(binary, 'claude', 'exit 0\n')
     tool(binary, 'gh', 'exit 0\n')
@@ -39,6 +39,7 @@ esac
     # The uv fixture uses chmod; every other host utility remains inaccessible.
     (binary / 'chmod').symlink_to(shutil.which('chmod'))
     # A fresh login shell: system PATH, then whatever the person's profile adds.
+    tool(binary, 'ps', 'printf "%s" "${FAKE_PS:-}"\n')
     tool(binary, 'loginsh', 'PATH=/usr/bin:/bin\n[ -f "$HOME/.profile" ] && . "$HOME/.profile"\neval "$2"\n')
     env = {**os.environ, 'HOME': str(tmp_path / 'home'), 'PATH': str(binary), 'SHELL': str(binary / 'loginsh'),
            'TRACE': str(tmp_path / 'trace'), 'BRNRD_INSTALL_DRY_RUN': '1'}
@@ -218,3 +219,84 @@ def test_unknown_option_refuses_without_writes(room):
     result = run(room, args=('--stable',))
     assert result.returncode != 0
     assert 'Unknown option' in result.stderr
+
+
+def warnings(result):
+    return [line for line in result.stderr.splitlines() if line.startswith('warning: ')]
+
+
+def test_pythonpath_warns_and_does_not_stop_the_install(room):
+    room[2]['PYTHONPATH'] = '/elsewhere/src'
+    result = run(room)
+    assert result.returncode == 0, result.stderr
+    assert any('PYTHONPATH is set (/elsewhere/src)' in line for line in warnings(result))
+    assert 'uv venv ' in result.stdout
+
+
+@pytest.mark.parametrize('gh', ['missing', 'signed-out'])
+def test_gh_missing_or_signed_out_warns_and_continues(room, gh):
+    binary = room[1]
+    (binary / 'gh').unlink()
+    if gh == 'signed-out':
+        tool(binary, 'gh', 'exit 1\n')
+    result = run(room)
+    assert result.returncode == 0, result.stderr
+    assert [line for line in warnings(result) if 'gh' in line] == [
+        'warning: gh is not installed, and following main reads CI through it; install the GitHub CLI and run gh auth login.'
+        if gh == 'missing' else
+        'warning: gh auth status fails, and following main reads CI through it; run gh auth login.']
+
+
+def test_no_body_cli_on_path_warns(room):
+    (room[1] / 'claude').unlink()
+    result = run(room)
+    assert result.returncode == 0, result.stderr
+    assert any('neither claude nor codex is on PATH' in line for line in warnings(result))
+
+
+@pytest.mark.parametrize('unit', ['Library/LaunchAgents/dev.brnrd.brr.plist', '.config/systemd/user/brr.service',
+                                  'xdg/systemd/user/brr.service'])
+def test_an_old_daemon_service_warns(room, unit):
+    home = Path(room[2]['HOME'])
+    if unit.startswith('xdg/'):
+        room[2]['XDG_CONFIG_HOME'] = str(home / 'xdg')
+    (home / unit).parent.mkdir(parents=True)
+    (home / unit).write_text('old daemon')
+    result = run(room)
+    assert result.returncode == 0, result.stderr
+    assert [line for line in warnings(result) if 'old brnrd daemon' in line] == [
+        f'warning: an old brnrd daemon is installed ({home / unit}) and runs beside the loom; '
+        'remove it with brnrd daemon uninstall.']
+
+
+def test_warns_about_a_loom_running_from_another_install_only(room):
+    home = Path(room[2]['HOME'])
+    ours = home / '.brnrd/current/bin/python'
+    room[2]['FAKE_PS'] = (f'  101 /opt/py/bin/python -m brr.loom.runtime loom --home /h\n'
+                          f'  102 {ours} -m brr.loom.runtime loom --home /h\n'
+                          '  103 /bin/zsh\n')
+    result = run(room)
+    assert result.returncode == 0, result.stderr
+    assert [line for line in warnings(result) if 'loom from another install' in line] == [
+        'warning: a loom from another install is running (pid 101: /opt/py/bin/python); the installer moves the '
+        "loom service, but a loom started by hand keeps running beside it: stop it with that install's brnrd "
+        'loom stop, or kill 101.']
+
+
+def test_shellcheck_sh_when_installed():
+    shellcheck = shutil.which('shellcheck')
+    if shellcheck is None:
+        pytest.skip('shellcheck is not installed')
+    result = subprocess.run([shellcheck, '-s', 'sh', str(SCRIPT)], capture_output=True, text=True)
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
+def test_readme_and_install_page_lead_with_the_curl_line():
+    root = Path(__file__).parents[1]
+    line = 'curl -fsSL https://brnrd.dev/install | sh'
+    install = (root / 'docs/src/content/docs/getting-started/install.md').read_text()
+    assert install.split('```bash\n', 1)[1].splitlines()[0] == line
+    readme = (root / 'README.md').read_text()
+    start = readme.index('## ✦ Install')
+    window = readme[start:readme.index('\n## ', start + 1)]
+    assert window.split('```bash\n', 1)[1].splitlines()[0] == line
