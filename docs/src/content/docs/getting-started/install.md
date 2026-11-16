@@ -40,11 +40,11 @@ Packaged npm, uv-tool and pipx installations still exist during this transition;
 their convergence and retirement are separate changes. Use the curl installer
 for a resident that owns its source.
 
-Check it:
+Check it (in a new shell, `brnrd --version` does the same once the PATH line is in your profile):
 
 ```bash
-brnrd --version
-brnrd --help
+~/.brnrd/bin/brnrd --version
+~/.brnrd/bin/brnrd --help
 ```
 
 brnrd also needs **git**, and at least one coding-agent CLI on your `PATH` —
@@ -120,6 +120,8 @@ installation continues without a board and prints the command to fetch it later.
 A changed frontend tree is built at once, whether or not the loom is busy; only
 the retry of a missing asset waits until the loom is idle, at most once every
 five minutes. Digest-mismatched archives are never served.
+`BRNRD_BOARD_BASE` points the board download at a mirror of the `board-builds`
+release assets; the commit, tree and digest checks are the same.
 
 This is the loom board, separate from the older daemon's dashboard.
 

@@ -12,6 +12,12 @@ def board_dependencies(monkeypatch):
     from brr.loom.runtime import board_asset, spabuild
     monkeypatch.setattr(board_asset, 'available', lambda: set())
     monkeypatch.setattr(spabuild, 'npm_supported', lambda: spabuild.shutil.which('npm') is not None)
+    # Builds run on a worker thread: a pytest.fail (or any error) raised there must fail the test.
+    import threading
+    raised = []
+    monkeypatch.setattr(threading, 'excepthook', lambda args: raised.append(args.exc_value))
+    yield
+    assert not raised, f'raised on the build thread: {raised!r}'
 
 
 def git(root, *args):
@@ -480,3 +486,66 @@ def test_printed_retry_command_fetches_the_served_board(checkout, monkeypatch, t
     assert result.returncode == 0, result.stdout + result.stderr
     assert (spa.build / '200.html').read_text() == 'the published board'
     assert spa.fetched() == commit and spa.built() == spa.wanted()
+
+
+def test_taking_main_under_a_local_edit_rebuilds(checkout, monkeypatch):
+    """The stamp of a local edit carries its base: main moving another file is a new board."""
+    from brr.loom.runtime import board_asset, spabuild
+    root, frontend = checkout
+    managed(root, frontend)
+    monkeypatch.setattr(board_asset, 'fetch', upstream_fetch())
+    monkeypatch.setattr(spabuild, 'npm_supported', lambda: True)
+    (frontend / 'a.txt').write_text('upstream a')
+    (frontend / 'b.txt').write_text('upstream b')
+    git(root, 'add', '-A')
+    git(root, '-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-qm', 'files')
+    git(root, 'update-ref', 'refs/remotes/origin/main', 'HEAD')
+    calls = []
+    spa = SpaBuild(frontend, lambda _: None, local_run(calls), every=0)
+    (frontend / 'a.txt').write_text('own edit')
+    settle(spa)
+    assert len(calls) == 1
+    settle(spa)
+    assert len(calls) == 1  # nothing moved: nothing rebuilt
+    # main changes b.txt only, and the resident takes it with its edit still on top
+    (frontend / 'b.txt').write_text('new upstream b')
+    git(root, 'add', 'src/frontend/b.txt')
+    git(root, '-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-qm', 'upstream moves b')
+    git(root, 'update-ref', 'refs/remotes/origin/main', 'HEAD')
+    settle(spa)
+    assert len(calls) == 2
+    assert spa.built() == spa.wanted()
+
+
+def test_leftover_staging_dirs_are_not_a_change(checkout, monkeypatch):
+    root, frontend = checkout
+    managed(root, frontend)
+    (frontend / '.gitignore').write_text('build\nnode_modules\n')  # a resident's own ignore file
+    git(root, 'add', '-A')
+    git(root, '-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-qm', 'own ignore')
+    git(root, 'update-ref', 'refs/remotes/origin/main', 'HEAD')
+    spa = SpaBuild(frontend, lambda _: None, every=0)
+    clean = spa.wanted()
+    for name in ('build.next', 'build.old'):
+        (frontend / name).mkdir()
+        (frontend / name / '200.html').write_text('half a build from a killed loom')
+    assert spa.wanted() == clean == spa.upstream[1]
+    assert spa.changed is False
+
+
+def test_retry_with_an_older_board_served_does_not_list_the_api(checkout, monkeypatch):
+    from brr.loom.runtime import board_asset, spabuild
+    root, frontend = checkout
+    managed(root, frontend)
+    monkeypatch.setattr(spabuild, 'npm_supported', lambda: False)
+    monkeypatch.setattr(board_asset, 'fetch', lambda *a: (_ for _ in ()).throw(OSError('404')))
+    listings = []  # a recorder: pytest.fail inside the build's thread would not fail the test
+    monkeypatch.setattr(board_asset, 'available', lambda: listings.append(1) or set())
+    spa = SpaBuild(frontend, lambda _: None, every=0)
+    spa.build.mkdir()
+    (spa.build / '200.html').write_text('older board')
+    (spa.build / '.tree').write_text('0' * 40)
+    (spa.build / '.commit').write_text('1' * 40)
+    settle(spa)
+    assert (spa.build / '200.html').read_text() == 'older board'
+    assert listings == []

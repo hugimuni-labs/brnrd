@@ -90,10 +90,13 @@ class SpaBuild:
             return tree
         base = self.upstream[0]
         diff = self._git("diff", "--binary", base, "--", ".") or ""
-        untracked = self._git("ls-files", "--others", "--exclude-standard", "--", ".") or ""
+        # The loom's own staging dirs are never the resident's change, ignored or not.
+        untracked = self._git("ls-files", "--others", "--exclude-standard", "--", ".",
+                              ":!build", ":!build.next", ":!build.old") or ""
         self.changed = bool(diff or untracked or (self.upstream and tree != self.upstream[1]))
         if diff or untracked:
-            digest = hashlib.sha256(diff.encode())
+            # The base is part of what is built: taking main under a local edit is a new board.
+            digest = hashlib.sha256(self.upstream[1].encode() + b"\0" + diff.encode())
             for name in untracked.splitlines():
                 path = self.frontend / name
                 digest.update(name.encode())
@@ -184,6 +187,11 @@ class SpaBuild:
 
     def _ancestor(self, exact: str) -> bool:
         from .board_asset import available
+        if self.fetched() and (self.build / '200.html').is_file():
+            # An older published board is already served: a retry only tries the exact
+            # asset (a release download), never the anonymous API listing, which is
+            # limited to 60 requests an hour.
+            return True
         try:
             commits = available()
             # git's date order selects the newest published reachable commit,
@@ -192,8 +200,6 @@ class SpaBuild:
             for commit in ancestors:
                 if commit == exact or commit not in commits:
                     continue
-                if commit == self.fetched() and (self.build / '200.html').is_file():
-                    return True  # already serving the newest published ancestor
                 tree = self._git('rev-parse', f'{commit}:src/frontend')
                 if tree and self._fetch(commit, tree):
                     self.notice('older:' + commit, f'spa: board is from older ancestor commit {commit}')
