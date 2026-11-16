@@ -1174,3 +1174,14 @@ def test_reinstall_keeps_hand_set_environment_and_path(tmp_path, monkeypatch, ca
             assert text.count("Environment=BRR_INSTALL_MANAGED=1") == 1
             assert "BRR_INSTALL_MANAGED=0" not in text
         assert "/body/tools" in path.read_text()
+
+
+def test_reinstall_rewrites_old_prefix_path_before_current_moves(tmp_path, monkeypatch):
+    old = tmp_path / 'old-environment'
+    new = tmp_path / 'candidate-environment'
+    monkeypatch.setattr(entry, 'prefix', lambda: new)
+    entry.point(old)
+    monkeypatch.setenv('PATH', '/new/tools:/usr/bin')
+    path = service._path_env(f'{old}/bin:/kept/tools')
+    assert path.split(':') == [str(entry.shim().parent), str(entry.current() / 'bin'),
+                               '/kept/tools', '/new/tools', '/usr/bin']

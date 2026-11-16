@@ -62,7 +62,8 @@ def _program(home: Path) -> list[str]:
 
 def _path_env(previous: str = "") -> str:
     """Shim first, then old and shell entries, with venv bins read through current."""
-    venv = {os.path.abspath(entry.prefix() / "bin"), os.path.dirname(_interpreter())}
+    venv = {os.path.abspath(entry.prefix() / "bin"), os.path.dirname(_interpreter()),
+            str(entry.current().resolve() / "bin")}
     kept = [str(entry.current() / "bin") if os.path.abspath(part) in venv else part
             for part in (previous + os.pathsep + os.environ.get("PATH", "")).split(os.pathsep) if part]
     return os.pathsep.join(dict.fromkeys([str(entry.shim().parent), *kept]))
@@ -158,6 +159,9 @@ def _brr_source() -> Path | None:
 def _refuse_source(dev: bool) -> None:
     source = _brr_source()
     if source is None or dev:
+        return
+    from .install_checkout import managed_source
+    if managed_source(source.parent.parent):
         return
     raise SystemExit(
         f"loom install: {_interpreter()} imports brr from {source}, a source checkout, "
@@ -594,7 +598,7 @@ def _install(argv: list[str], *, run, agents_home, sleep, pid_alive, poll_timeou
     environment, environment_lines, kept = _kept_environment(system, unit_file)
     receipt = [
         ("interpreter", _interpreter()),
-        ("brnrd", __version__ + (" (source checkout, --dev)" if _brr_source() else "")),
+        ("brnrd", __version__ + (" (source checkout)" if _brr_source() else "")),
         ("home", f"{home} ({source})"),
         ("body", f"{body} ({picked})"),
         ("forge", forge),
