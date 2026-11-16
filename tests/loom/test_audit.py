@@ -300,6 +300,40 @@ def test_start_off_removes_a_dead_endpoint_and_starts_nothing(tmp_path):
     home = Home(tmp_path)
     (home.root / "loom").mkdir(parents=True)
     (home.root / "loom/audit-endpoint.json").write_text('{"port": 1, "token": "x"}')
-    assert audit.start(home, False) is None
+    capture = audit.start(home, False)
+    assert capture.writer is None
+    capture.check()
     assert not (home.root / "loom/audit-endpoint.json").exists()
     assert not (home.root / "audit").exists()
+
+
+def test_a_failed_start_and_a_stopped_writer_are_a_loom_degraded_step(tmp_path, monkeypatch):
+    """Through the guard the loop uses: degraded while capture is absent, recovered at a good start."""
+    from brr.loom.runtime.health import Health
+    from brr.loom.runtime.ledger import read_facts
+    home = Home(tmp_path)
+    (home.root / "loom").mkdir(parents=True)
+    log = lambda *a: None
+    def kinds():
+        return [(f.kind, f.data["step"]) for f in read_facts(home) if f.kind.startswith("loom.") and f.data.get("step") == "audit"]
+    real = audit.Journal
+    def refuse(*a):
+        raise OSError("disk full")
+    monkeypatch.setattr(audit, "Journal", refuse)
+    capture = audit.start(home, True)
+    Health(home, read_facts(home), log).guard("audit", capture.check, backoff=False)
+    assert kinds() == [("loom.degraded", "audit")]
+    monkeypatch.setattr(audit, "Journal", real)
+    capture = audit.start(home, True)  # the next start comes up
+    try:
+        health = Health(home, read_facts(home), log)
+        health.guard("audit", capture.check, backoff=False)
+        assert kinds()[-1] == ("loom.recovered", "audit")
+        def fail(*a):
+            raise OSError("disk full")
+        monkeypatch.setattr(capture.writer.journal, "append", fail)
+        audit.note(room(home), json.dumps({"tool_name": "Write"}), "pre")
+        health.guard("audit", capture.check, backoff=False)
+        assert kinds()[-1] == ("loom.degraded", "audit")
+    finally:
+        capture.close()

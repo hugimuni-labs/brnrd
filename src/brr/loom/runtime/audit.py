@@ -405,16 +405,37 @@ class Writer:
         self.journal.close()
 
 
-def start(home: Home, on: bool) -> Writer | None:
+class Capture:
+    """The loom's hold on capture: the writer, or why it did not start.
+
+    `check` is a loom health step (`health.guard("audit", ...)`): it raises while
+    a home that asked for capture has none, so a failed start or a writer stopped
+    by a failed append is a `loom.degraded` fact and, past the guard's notice
+    delay, a notice to the seat; the next good start's pass clears it."""
+    def __init__(self, writer: Writer | None, failure: BaseException | None = None):
+        self.writer, self.failure = writer, failure
+
+    def check(self) -> None:
+        if self.failure is not None:
+            raise self.failure
+        if self.writer is not None and self.writer.error:
+            raise OSError(f"journal append failed, writer stopped appending: {self.writer.error}")
+
+    def close(self) -> None:
+        if self.writer is not None:
+            self.writer.close()
+
+
+def start(home: Home, on: bool) -> Capture:
     """At loom start: drop a dead writer's endpoint, then start one when the home asks."""
     _endpoint(home).unlink(missing_ok=True)
     if not on:
-        return None
+        return Capture(None)
     try:
-        return Writer(home)
-    except Exception:
+        return Capture(Writer(home))
+    except Exception as exc:
         _warn(home)
-        return None
+        return Capture(None, exc)
 
 
 def _warn(home: Home) -> None:

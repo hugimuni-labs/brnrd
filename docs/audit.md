@@ -54,7 +54,14 @@ request, valid JSON of the wrong shape, an event it cannot encode or whose id
 or digests are malformed) or cannot authenticate (constant-time token compare),
 and goes on serving. Only a failed journal append stops it: it never appends
 past a write it could not complete, and every later hook sees no
-acknowledgement and warns. A missing
+acknowledgement and warns.
+
+The loom reports the same two states through its health guard, as the `audit`
+step: when a home asked for capture and the writer did not start, or a failed
+append stopped it, the step fails, a `loom.degraded` fact is written, and past
+the guard's notice delay the seat gets a degraded notice. The next good start's
+pass writes `loom.recovered`. Capture off, the step always passes. This adds no
+display and no new mechanism; the hook's own warning stays as it is. A missing
 ack means coverage is uncertain. No automatic gap count is claimed.
 
 The pre hook records attempted dispatch, including calls later refused by an

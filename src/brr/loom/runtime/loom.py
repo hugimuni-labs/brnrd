@@ -2905,6 +2905,8 @@ def run(root: Path | str, *, adapter: str = "fake", core: str = "haiku",
                     health.guard("board", start_board)
                 if spa is not None:  # the board's build follows the checkout; a failed one stays degraded
                     health.guard("spa", spa.step, backoff=False)
+                # Capture asked for and absent (failed start, append stopped the writer) stays degraded.
+                health.guard("audit", audit_writer.check, backoff=False)
                 # Only at an idle tick, and the re-exec follows in this same pass.
                 health.guard("update", updater.step, config, functools.partial(_idle, home),
                              backoff=False)
