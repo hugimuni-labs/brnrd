@@ -13,6 +13,7 @@ const staticDir = join(here, '..', '..', 'static');
 const publicPaths = [
 	'/',
 	'/pricing',
+	'/faq',
 	'/websummit',
 	'/terms',
 	'/privacy',
