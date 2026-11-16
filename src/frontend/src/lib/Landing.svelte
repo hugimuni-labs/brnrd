@@ -106,6 +106,11 @@
 				>pricing</a
 			>
 			<a
+				href={resolve('/faq')}
+				class="font-mono text-[11px] tracking-wide text-ink-quiet uppercase hover:text-stone-300"
+				>faq</a
+			>
+			<a
 				href={signinHref}
 				rel="external"
 				class="ml-auto border border-amber-700 bg-amber-950/40 px-3 py-1.5 font-mono text-[11px] tracking-wide text-amber-200 uppercase hover:bg-amber-950/70 sm:ml-0"
