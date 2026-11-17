@@ -315,12 +315,35 @@ _RETRY_STATUSES = frozenset({502, 503, 504})
 _RETRY_SLEEPS_S = (2.0, 5.0)
 
 
-def _request(base_url: str, method: str, path: str, *, token: str | None = None, json: dict | None = None, params: dict | None = None, timeout: float = _HTTP_TIMEOUT_S, retry: bool = True) -> dict:
+# Failures a dead pooled connection gives. A read timeout is not one: the
+# request may have been served, and waiting out another 60 s is no cure.
+_STALE_CONNECTION = (requests.ConnectionError,)
+_REPEATABLE_METHODS = frozenset({"GET", "HEAD", "PUT", "DELETE", "OPTIONS"})
+
+
+def _repeatable(method: str, repeat: bool | None) -> bool:
+    """May a request that died on the wire be sent again? ``repeat`` is the
+    caller's word; unset, the HTTP-idempotent methods may and POST/PATCH may
+    not (the first copy may have been served, and a second would double-deliver)."""
+    return method.upper() in _REPEATABLE_METHODS if repeat is None else repeat
+
+
+def _request(base_url: str, method: str, path: str, *, token: str | None = None, json: dict | None = None, params: dict | None = None, timeout: float = _HTTP_TIMEOUT_S, retry: bool = True, repeat: bool | None = None) -> dict:
     headers = {"Authorization": f"Bearer {token}"} if token else {}
     sleeps = _RETRY_SLEEPS_S if retry else ()
     for attempt, sleep_s in enumerate((*sleeps, None)):
         try:
-            resp = _SESSION.request(method, base_url.rstrip("/") + path, json=json, params=params, headers=headers, timeout=timeout)
+            try:
+                resp = _SESSION.request(method, base_url.rstrip("/") + path, json=json, params=params, headers=headers, timeout=timeout)
+            except _STALE_CONNECTION as exc:
+                if not _repeatable(method, repeat) or isinstance(exc, requests.ConnectTimeout):
+                    raise
+                # A pooled keep-alive connection the far side closed while
+                # idle fails on first use (reset, broken pipe, remote
+                # disconnected); urllib3 resends only a bodiless request. Drop
+                # the pool and send once more on a fresh connection.
+                _SESSION.close()
+                resp = _SESSION.request(method, base_url.rstrip("/") + path, json=json, params=params, headers=headers, timeout=timeout)
         except requests.RequestException as exc:
             raise CloudUnavailableError(
                 f"the account service at {base_url.rstrip('/')} is unreachable "

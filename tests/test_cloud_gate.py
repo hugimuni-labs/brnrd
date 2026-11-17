@@ -4017,3 +4017,72 @@ def test_live_runs_snapshot_publishes_portal_pending(tmp_path, monkeypatch):
 # created (this gate's own ingest loop), independent of any run being awake.
 
 
+
+
+# A pooled keep-alive connection the far side closed fails on first use with
+# the very errors loom.log shows (reset, broken pipe, remote disconnected).
+def _dead_then(monkeypatch, exc, then):
+    import requests as rq
+    from brr.gates import cloud
+
+    calls = []
+
+    def request(method, url, **kw):
+        calls.append(method)
+        if len(calls) == 1:
+            raise exc
+        return then
+
+    monkeypatch.setattr(cloud._SESSION, "request", request)
+    monkeypatch.setattr(cloud._SESSION, "close", lambda: calls.append("close"))
+    return calls
+
+
+class _Ok:
+    status_code, content, text = 200, b"{}", ""
+
+    def json(self):
+        return {"ok": True}
+
+
+def test_a_put_on_a_dead_pooled_connection_is_sent_again_fresh(monkeypatch):
+    import requests as rq
+    from brr.gates import cloud
+
+    for exc in (rq.ConnectionError(ConnectionResetError(54, "reset")),
+                rq.ConnectionError(BrokenPipeError(32, "pipe")),
+                rq.ConnectionError("RemoteDisconnected")):
+        calls = _dead_then(monkeypatch, exc, _Ok())
+        assert cloud._request("http://x", "PUT", "/v1/daemons/loom", token="t", json={"v": 1}, retry=False) == {"ok": True}
+        assert calls == ["PUT", "close", "PUT"]
+
+
+def test_a_post_is_not_sent_again_unless_the_caller_says_so(monkeypatch):
+    import pytest
+    import requests as rq
+    from brr.gates import cloud
+
+    calls = _dead_then(monkeypatch, rq.ConnectionError(ConnectionResetError(54, "reset")), _Ok())
+    with pytest.raises(cloud.CloudUnavailableError):
+        cloud._request("http://x", "POST", "/v1/daemons/responses", token="t", json={})
+    assert calls == ["POST"]
+    calls = _dead_then(monkeypatch, rq.ConnectionError(ConnectionResetError(54, "reset")), _Ok())
+    assert cloud._request("http://x", "POST", "/v1/daemons/responses", token="t", json={}, repeat=True) == {"ok": True}
+
+
+def test_a_second_dead_connection_or_a_read_timeout_still_raises(monkeypatch):
+    import pytest
+    import requests as rq
+    from brr.gates import cloud
+
+    def always(method, url, **kw):
+        raise rq.ConnectionError(ConnectionResetError(54, "reset"))
+
+    monkeypatch.setattr(cloud._SESSION, "request", always)
+    with pytest.raises(cloud.CloudUnavailableError):
+        cloud._request("http://x", "PUT", "/p", token="t", json={}, retry=False)
+
+    calls = _dead_then(monkeypatch, rq.ReadTimeout("slow"), _Ok())
+    with pytest.raises(cloud.CloudUnavailableError):
+        cloud._request("http://x", "PUT", "/p", token="t", json={}, retry=False)
+    assert calls == ["PUT"]
