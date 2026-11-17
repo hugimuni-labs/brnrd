@@ -19,7 +19,7 @@ image. Neither runs the daemon, so this directory carries its own `Dockerfile`.
 | file | what | source |
 | --- | --- | --- |
 | `railway.json` | build with `deploy/railway/Dockerfile`; restart `ALWAYS` | Railway config-as-code: `build.builder`, `build.dockerfilePath`, `deploy.restartPolicyType`, `$schema` https://railway.com/railway.schema.json ([reference](https://docs.railway.com/reference/config-as-code)) |
-| `Dockerfile` | node 22 + git + Claude Code + `pip install brnrd` | install routes: `install.md` |
+| `Dockerfile` | node 22 + git + Claude Code + brnrd, a checkout of the release tag `BRNRD_VERSION` (empty: the newest) installed editable | `checkout.sh`; install routes: `install.md` |
 | `start.sh` | clone repo once, pair once, `exec brnrd up --foreground` | `connect.md`, `cmd_up` in `src/brr/cli.py` |
 | `template.json` | volume + variable list (not a Railway file) | see below |
 
