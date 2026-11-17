@@ -24,6 +24,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from .. import (
+    home_access,
     home_trial,
     ids,
     inbox as inbox_service,
@@ -94,9 +95,12 @@ def _tell_ceiling(settings, db: Session, account_id: str, lane: str, decision: l
 
 
 def _ceiling(lane: str) -> Callable[..., Principal]:
-    """``require_daemon`` behind the account's all-tier ceiling for *lane* (limits.Ceiling): 429 + Retry-After."""
+    """The home gate, then the account's all-tier ceiling for *lane* (limits.Ceiling): 429 + Retry-After.
 
-    def admit(request: Request, principal: Principal = Depends(require_daemon), db: Session = Depends(get_db)) -> Principal:
+    The gate goes first, so a refused call is never counted against the ceiling.
+    """
+
+    def admit(request: Request, principal: Principal = Depends(home_access.daemon_gate), db: Session = Depends(get_db)) -> Principal:
         settings = request.app.state.settings
         decision = limits.CEILING.admit(settings, principal.account_id, lane)
         if not decision.allowed:
@@ -320,7 +324,7 @@ def register(payload: schemas.DaemonRegister, principal: Principal = Depends(req
 
 
 @router.post("/door", response_model=schemas.DaemonDoor)
-def door(payload: schemas.DaemonDoorStart, request: Request, principal: Principal = Depends(require_daemon), db: Session = Depends(get_db)):
+def door(payload: schemas.DaemonDoorStart, request: Request, principal: Principal = Depends(home_access.daemon_gate), db: Session = Depends(get_db)):
     """A one-tap link to the shared bot that binds a chat.
 
     The shared bot binds a chat only to a code the server minted, and a
@@ -425,7 +429,7 @@ def publishing_credential(
     request: Request,
     response: Response,
     payload: schemas.PublishingCredentialRequest | None = None,
-    principal: Principal = Depends(require_daemon),
+    principal: Principal = Depends(home_access.daemon_gate),
     db: Session = Depends(get_db),
 ):
     """Mint the installation identity used by managed runner publishing.
@@ -1290,7 +1294,7 @@ def put_run_ledger(payload: schemas.RunLedgerReport, principal: Principal = Depe
 
 
 @router.get("/inbox", response_model=schemas.InboxResponse)
-async def inbox(request: Request, since: int | None = Query(default=None), wait: float | None = Query(default=None), principal: Principal = Depends(require_daemon)):
+async def inbox(request: Request, since: int | None = Query(default=None), wait: float | None = Query(default=None), principal: Principal = Depends(home_access.daemon_gate)):
     settings = request.app.state.settings
     since_seq = since if since is not None else 0
     repo_ids, repo_labels, since_seq = await anyio.to_thread.run_sync(
