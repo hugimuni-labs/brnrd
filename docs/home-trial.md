@@ -9,6 +9,8 @@ start the clock. The computer collecting the approved token does. An existing
 credential starts it on successful daemon registration or an accepted loom
 snapshot/parts upload. Reconnecting, reinstalling or using another computer
 keeps the same account timestamp. Failed or withheld uploads do not start it.
+The parts route checks activity-lane consent before calling `_store_loom_parts`,
+so a withheld parts upload cannot reach the trial write.
 The conditional account update participates in the connection transaction, so
 concurrent connections cannot replace an existing start date.
 
