@@ -64,3 +64,29 @@ export function formatEur(figure: PriceFigure | null | undefined): string | null
 	const euros = figure.amount / 100;
 	return Number.isInteger(euros) ? `€${euros}` : `€${euros.toFixed(2)}`;
 }
+
+const SYMBOLS: Record<string, string> = { eur: '€', usd: '$', gbp: '£' };
+
+/** A Stripe minor-unit amount in whatever currency the Price is in (€12,
+ * $7, 9.50 CHF), for the places that must show what checkout will charge
+ * rather than what the offer intends: the subscribe button, and the pricing
+ * page once it has read the live Price. `null` for no figure. */
+export function formatPrice(figure: PriceFigure | null | undefined): string | null {
+	if (!figure || !figure.currency || !Number.isFinite(figure.amount)) return null;
+	const major = figure.amount / 100;
+	const n = Number.isInteger(major) ? String(major) : major.toFixed(2);
+	const symbol = SYMBOLS[figure.currency.toLowerCase()];
+	return symbol ? `${symbol}${n}` : `${n} ${figure.currency.toUpperCase()}`;
+}
+
+// Only the EUR Price is created tax-inclusive (the pricing decision); the
+// older USD Prices were set exclusive of tax. So the note follows the
+// figure: a USD figure beside "VAT included" would be a false statement.
+export const TAX_NOTE_EXCLUSIVE = 'excl. tax — Stripe shows any tax before you pay';
+
+/** The tax note that is true of the figure shown. No figure means the
+ * baked-in €12 floor, which is the inclusive EUR offer. */
+export function taxNoteFor(figure: PriceFigure | null | undefined): string {
+	if (!figure || figure.currency.toLowerCase() === 'eur') return TAX_NOTE;
+	return TAX_NOTE_EXCLUSIVE;
+}

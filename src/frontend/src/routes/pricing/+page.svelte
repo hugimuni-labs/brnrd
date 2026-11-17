@@ -6,7 +6,8 @@
 	// VAT-inclusive EUR figures on this page. Why the note exists and what it
 	// must track: $lib/pricing.ts. The numbers themselves are Stripe-derived
 	// (#831): fetchPricing refines the baked-in literal below after mount.
-	import { TAX_NOTE, fetchPricing, formatEur, type PricingFigures } from '$lib/pricing';
+	import { fetchPricing, formatPrice, taxNoteFor, type PricingFigures } from '$lib/pricing';
+	import { ACCOUNT_PATH } from '$lib/accountPage';
 
 	// Pricing (his go 10242, 2026-11-05; brnrd-self threads/pricing/design.md):
 	// price what costs us, the deployment; never the trust product or the
@@ -23,9 +24,13 @@
 	});
 
 	// Stripe-derived, with the accepted decision as the no-JS / pre-refine
-	// floor. A Price still in USD (before his Stripe step) renders the floor,
-	// never a dollar figure on a euro page.
-	let premiumMonthly = $derived(formatEur(pricing?.public_monthly) ?? '€12');
+	// floor. The live figure shows in its own currency, since it is what
+	// checkout charges: a USD Price (before his Stripe step) reads $7, not a
+	// €12 the invoice would contradict. The tax note follows the figure:
+	// "VAT included" is true only of the inclusive EUR Price.
+	let live = $derived(formatPrice(pricing?.public_monthly));
+	let premiumMonthly = $derived(live ?? '€12');
+	let taxNote = $derived(taxNoteFor(live ? pricing?.public_monthly : null));
 </script>
 
 <svelte:head>
@@ -120,7 +125,7 @@
 					<p class="mt-2 font-mono text-2xl font-semibold text-amber-100">
 						{premiumMonthly}<span class="text-sm text-ink-quiet">/mo per person</span>
 					</p>
-					<p class="mt-1 font-mono text-[11px] text-ink-quiet">{TAX_NOTE}</p>
+					<p class="mt-1 font-mono text-[11px] text-ink-quiet">{taxNote}</p>
 					<p class="mt-1 font-mono text-[11px] text-amber-200/80">
 						founding price · locked: no price change for a live subscription
 					</p>
@@ -135,10 +140,14 @@
 						price goes with the subscription.
 					</p>
 					<div class="mt-auto pt-6">
+						<!-- after the sign-in, the page with the subscribe button, not the board -->
+						<!-- eslint-disable svelte/no-navigation-without-resolve -- resolve() takes no query; its path is resolved -->
 						<a
 							class="inline-flex w-full items-center justify-center border border-amber-700 bg-amber-950/40 px-3 py-2.5 font-mono text-[12px] tracking-wide text-amber-200 uppercase hover:bg-amber-950/70"
-							href={resolve('/login')}>subscribe · {premiumMonthly}/mo</a
+							href={`${resolve('/login')}?next=${encodeURIComponent(ACCOUNT_PATH)}`}
+							>subscribe · {premiumMonthly}/mo</a
 						>
+						<!-- eslint-enable svelte/no-navigation-without-resolve -->
 					</div>
 				</article>
 			</div>

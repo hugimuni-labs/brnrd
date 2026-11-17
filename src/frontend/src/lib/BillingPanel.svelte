@@ -9,11 +9,13 @@
 		resumeSubscription,
 		startBillingPortal,
 		startSubscriptionCheckout,
+		SUBSCRIBE_PITCH,
 		subscribeOffer,
 		withoutBillingParam,
 		type BillingNotice,
 		type SubscriptionState
 	} from './billing';
+	import { fetchPricing, type PriceFigure } from './pricing';
 
 	// The account's subscription surface (maintainer steer 2026-07-21:
 	// subscription only, no wallet/credits UI). Reads ride the same session
@@ -30,7 +32,12 @@
 	let busy = $state<string | null>(null);
 	let notice = $state<BillingNotice | null>(null);
 
-	const offer = subscribeOffer();
+	// The label is the Stripe Price checkout will charge (/v1/stats/pricing),
+	// in its own currency; the €12 literal shows only if that read fails.
+	// Until it answers the button names no price, so no figure flips under
+	// the reader's eye.
+	let figure = $state<PriceFigure | null | undefined>(undefined);
+	let offer = $derived(subscribeOffer(figure));
 	let hasSubscription = $derived(subscription !== null && subscription.status !== null);
 	let periodEndLabel = $derived(
 		subscription?.current_period_end ? dateLabel(subscription.current_period_end) : null
@@ -57,6 +64,7 @@
 			history.replaceState(history.state, '', withoutBillingParam(window.location.href));
 		}
 		void refresh();
+		void fetchPricing().then((p) => (figure = p?.public_monthly ?? null));
 	});
 
 	async function act(name: string, run: () => Promise<void>) {
@@ -128,8 +136,7 @@
 		{#if !hasSubscription}
 			<!-- subscribe CTA -->
 			<p class="mt-2 text-sm leading-relaxed text-stone-400">
-				Your first repository stays free. A subscription removes the one-repository product cap and
-				the free tier's hosted event limits while funding the open-source engine.
+				{SUBSCRIBE_PITCH}
 			</p>
 			<div class="mt-3 flex flex-wrap items-center gap-3">
 				<button
@@ -138,12 +145,16 @@
 					disabled={busy !== null}
 					onclick={subscribe}
 				>
-					{busy === 'subscribe' ? 'starting checkout…' : `subscribe · ${offer.label}`}
+					{busy === 'subscribe'
+						? 'starting checkout…'
+						: figure === undefined
+							? 'subscribe'
+							: `subscribe · ${offer.label}`}
 				</button>
 			</div>
 			<p class="mt-2 font-mono text-[10px] text-ink-quiet">
-				Stripe-hosted checkout · VAT included · a founding price, unchanged while your subscription
-				is live
+				Stripe-hosted checkout{figure === undefined ? '' : ` · ${offer.taxNote}`} · a founding price,
+				unchanged while your subscription is live
 			</p>
 		{:else}
 			<div class="mt-3 flex flex-wrap items-center gap-3">

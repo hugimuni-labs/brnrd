@@ -29,7 +29,13 @@ export function loadSite(): Promise<Site | null> {
 }
 
 export function cloudOnly(path: string): boolean {
-	return ['/dashboard', '/settings', '/login', '/connect', '/new', '/config-approve'].some(
-		(route) => path === route || path.startsWith(route + '/')
-	);
+	return [
+		'/account',
+		'/dashboard',
+		'/settings',
+		'/login',
+		'/connect',
+		'/new',
+		'/config-approve'
+	].some((route) => path === route || path.startsWith(route + '/'));
 }

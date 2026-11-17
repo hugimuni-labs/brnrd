@@ -2314,11 +2314,18 @@
 						subscription
 					</h2>
 				</div>
-				<a
-					href={resolve('/pricing')}
-					class="font-mono text-[10px] tracking-wide text-ink-quiet uppercase hover:text-stone-300"
-					>pricing</a
-				>
+				<span class="flex gap-3">
+					<a
+						href={resolve('/account')}
+						class="font-mono text-[10px] tracking-wide text-ink-quiet uppercase hover:text-stone-300"
+						>account</a
+					>
+					<a
+						href={resolve('/pricing')}
+						class="font-mono text-[10px] tracking-wide text-ink-quiet uppercase hover:text-stone-300"
+						>pricing</a
+					>
+				</span>
 			</div>
 			<!-- The billing surface (#53's dashboard leg): the pricing page's
 			     "sign in to subscribe" lands here. The panel owns its own fetches

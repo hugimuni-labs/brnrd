@@ -81,5 +81,7 @@
 			href={resolve('/dashboard/bridge')}
 			class="text-ink-quiet hover:text-amber-200">the bridge →</a
 		>
+		·
+		<a href={resolve('/account')} class="text-ink-quiet hover:text-amber-200">account</a>
 	</p>
 </main>
