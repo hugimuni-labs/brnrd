@@ -19,7 +19,7 @@ Shape, deliberately narrow:
   sees ``NewsItem`` cannot drift when a new kind of fact shows up.
 - A **producer** is any ``Callable[[Path], Sequence[NewsItem]]``. This
   module ships exactly one (:func:`release_producer`, wrapping
-  :mod:`release_availability`'s release-tag + npm channels); a sibling producer
+  :mod:`release_availability`'s release tags); a sibling producer
   for a shell version bump, a newly available model, or a pinned core's
   retirement date plugs into :data:`DEFAULT_PRODUCERS` without this file's
   dashboard/announce code changing at all.
@@ -125,21 +125,12 @@ Producer = Callable[[Path], "Sequence[NewsItem]"]
 
 
 def release_producer(repo_root: Path) -> list[NewsItem]:
-    """Wraps :mod:`release_availability`'s release-tag + npm channels.
-
-    Which channel actually installed this copy is not knowable from here,
-    so both are checked and both are named — never one guessed to stand in
-    for the other (the maintainer's own framing for this strand).
-    """
+    """Wraps :mod:`release_availability`'s release tags: every install is a checkout, and npm's version
+    mirrors the tag, so one channel names every release once."""
     now = time.time()
     items: list[NewsItem] = []
     for subject, obs, source in (
         ("release", release_availability.observation(repo_root), release_availability.RELEASES_URL),
-        (
-            "npm",
-            release_availability.npm_observation(repo_root),
-            release_availability.NPM_REGISTRY_URL,
-        ),
     ):
         if obs is None or not obs.available:
             continue

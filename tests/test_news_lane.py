@@ -58,21 +58,18 @@ def test_news_item_render_names_the_expiry_when_set():
 # --- release_producer / collect ---------------------------------------------
 
 
-def test_release_producer_reports_both_channels_by_name(tmp_path, monkeypatch):
+def test_release_producer_names_each_release_once_and_ignores_an_old_npm_value(tmp_path, monkeypatch):
     repo = _repo(tmp_path, monkeypatch)
+    # A cache written before the npm channel went still carries npm_latest; it is never announced.
     _write_release_cache(
         repo,
         schema=1, checked_at=1.0, latest="9.9.9",
         npm_checked_at=1.0, npm_latest="9.9.8",
     )
 
-    items = news_lane.release_producer(repo)
-    by_subject = {item.subject: item for item in items}
+    [item] = news_lane.release_producer(repo)
 
-    assert set(by_subject) == {"release", "npm"}
-    assert by_subject["release"].current == "9.9.9"
-    assert by_subject["npm"].current == "9.9.8"
-    assert all(item.kind == "release" and item.expires_at is None for item in items)
+    assert (item.kind, item.subject, item.current, item.expires_at) == ("release", "release", "9.9.9", None)
 
 
 def test_release_producer_silent_when_up_to_date(tmp_path, monkeypatch):
@@ -82,7 +79,6 @@ def test_release_producer_silent_when_up_to_date(tmp_path, monkeypatch):
     _write_release_cache(
         repo,
         schema=1, checked_at=1.0, latest=__version__,
-        npm_checked_at=1.0, npm_latest=__version__,
     )
 
     assert news_lane.release_producer(repo) == []
