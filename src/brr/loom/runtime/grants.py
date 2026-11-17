@@ -89,7 +89,8 @@ def names(text: str, target: str) -> bool:
     """``target`` stands in ``text`` as a word: ``#2610`` and ``2610`` name PR 2610,
     ``main`` does not stand in ``maintain``, a path is not the start of a longer one."""
     target = target.strip()
-    if not target:
+    if not re.search(r"\w", target):
+        # "?" or "-": no letter names nothing, however it is punctuated.
         return False
     forms = {target, target.lstrip("#")} if target.startswith("#") else {target}
     # People write a release without its v: "Publish 0.7.0" names the tag v0.7.0.

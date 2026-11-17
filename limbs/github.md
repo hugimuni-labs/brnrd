@@ -57,13 +57,19 @@ ask visibility  gh repo edit  {repo}  +--visibility
   default repo: gh repo view --json nameWithOwner -q .nameWithOwner
   target: {repo}
   why: it changes who can see the repository
-ask visibility  gh api  -f|-F|--field|--raw-field=visibility=*  @repos/{repo}
+ask visibility  gh api  -f|-F|--field|--raw-field=visibility=*  @repos/{repo=*/*}
   target: {repo}
   why: it changes who can see the repository
-ask visibility  gh api  -f|-F|--field|--raw-field=private=*  @repos/{repo}
+ask visibility  gh api  -f|-F|--field|--raw-field=private=*  @repos/{repo=*/*}
   target: {repo}
   why: it changes who can see the repository
+ask visibility  gh api  -X|--method=patch  +--input  @repos/{repo=*/*}
+  target: {repo}
+  why: its body is unread, and may change who can see the repository
 
+ask secret  gh secret set  +-f|--env-file  -f|--env-file={file}
+  target: {file}
+  why: each secret in the file is what the workflows act with
 ask secret  gh secret set|delete|remove  {name}
   skip: -R --repo -e --env -o --org -a --app -b --body -f --env-file -r --repos -v --visibility
   target: {name}
@@ -83,6 +89,9 @@ ask run  gh workflow run  {workflow}
 ask run  gh api  @repos/*/*/actions/workflows/{workflow}/dispatches
   target: {workflow}
   why: a workflow acts with the repository's secrets
+ask run  gh api  @repos/{repo=*/*}/dispatches
+  target: {repo}
+  why: a repository_dispatch starts its workflows, which act with its secrets
 
 look  gh * view|list|diff|checks|status
 look  gh api  !-X|--method|-f|--raw-field|-F|--field|--input
@@ -114,7 +123,10 @@ e.g. ask    gh repo edit o/r --description "x y" --visibility private
 e.g. do     gh repo edit --description "x y"
 e.g. ask    gh api -X PATCH repos/o/r -f visibility=public
 e.g. ask    gh api -X PATCH repos/o/r -F private=false
+e.g. ask    gh api -X PATCH repos/o/r --input body.json
+e.g. do     gh api -X PATCH repos/o/r/issues/1 --input body.json
 e.g. ask    gh secret set TOKEN --body x
+e.g. ask    gh secret set -f .env
 e.g. ask    gh secret delete TOKEN -R o/r
 e.g. look   gh secret list
 e.g. ask    gh api -X PUT repos/o/r/actions/secrets/TOKEN -f encrypted_value=x -f key_id=1
@@ -124,6 +136,7 @@ e.g. ask    gh api --method DELETE repos/o/r/collaborators/someone
 e.g. look   gh api repos/o/r/collaborators
 e.g. ask    gh workflow run deploy.yml --ref main -f env=prod
 e.g. ask    gh api -X POST repos/o/r/actions/workflows/deploy.yml/dispatches -f ref=main
+e.g. ask    gh api -X POST repos/o/r/dispatches -f event_type=deploy
 e.g. look   gh workflow list
 e.g. look   gh pr view 2610
 e.g. look   gh api repos/o/r

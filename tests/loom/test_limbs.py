@@ -165,6 +165,12 @@ def test_the_stand_ins_classes_are_the_guards():
     (["gh", "api", "-X", "DELETE", "repos/o/r/releases/123"], "ask", "forge-delete", "123"),
     (["gh", "workflow", "run", "-R", "o/r", "deploy.yml", "-f", "env=prod"], "ask", "run", "deploy.yml"),
     (["gh", "api", "repos/o/r/actions/workflows/9/dispatches", "-f", "ref=main"], "ask", "run", "9"),
+    # Read at e0294bba by inbox (irdre): these landed in do.
+    (["gh", "api", "-X", "PATCH", "repos/o/r", "--input", "body.json"], "ask", "visibility", "o/r"),
+    (["gh", "api", "--method=PATCH", "repos/o/r", "--input", "-"], "ask", "visibility", "o/r"),
+    (["gh", "api", "-X", "POST", "repos/o/r/dispatches", "-f", "event_type=deploy"], "ask", "run", "o/r"),
+    (["gh", "secret", "set", "-f", ".env"], "ask", "secret", ".env"),
+    (["gh", "secret", "set", "--env-file=prod.env", "-R", "o/r"], "ask", "secret", "prod.env"),
     (["gh", "auth", "token"], "never", "", ""),
     (["gh", "auth", "status", "--show-token"], "never", "", ""),
     (["gh", "auth", "status", "-h", "github.com", "-t"], "never", "", ""),
@@ -183,6 +189,8 @@ def test_the_acts_that_were_unlisted_now_ask_or_stop(argv, row, cls, target):
     (["gh", "auth", "status"], "look"),
     (["gh", "release", "delete-asset", "v1", "a.tgz"], "do"),
     (["gh", "api", "-X", "PATCH", "repos/o/r", "-f", "description=x"], "do"),
+    (["gh", "api", "-X", "PATCH", "repos/o/r/issues/1", "--input", "body.json"], "do"),
+    (["gh", "api", "-X", "PATCH", "repos/o/r/issues/1", "-f", "visibility=x"], "do"),
 ])
 def test_their_neighbours_stay_where_they_were(argv, row):
     assert limbs.decide(GITHUB.rules, argv, GITHUB.unlisted)[0] == row
@@ -263,7 +271,8 @@ def _tool(path: Path, body: str) -> Path:
     (["pr", "merge", "-R", "o/r", "--squash"], ["gh pr view -R o/r --json number -q .number",
                                                  "gh pr checks 77 -R o/r"], "guard merge-red #77"),
     (["api", "-X", "PUT", "repos/o/r/pulls/5/merge"], ["gh pr checks 5 -R o/r"], "guard merge-red #5"),
-    (["release", "create", "--target", "main"], [], "guard publish ? --why a release is public"),
+    # No tag: the target is the call itself, never "?" (a letter with a question mark named that).
+    (["release", "create", "--target", "main"], [], "guard publish gh release create --target main --why"),
     # A link to another repository's PR reads that repository's checks, not this one's.
     (["pr", "merge", "https://github.com/o/other/pull/5"], ["gh pr checks 5 -R o/other"], "guard merge-red #5"),
     (["pr", "merge", "-R", "o/r", "https://github.com/o/other/pull/5/"], ["gh pr checks 5 -R o/other"],
@@ -449,3 +458,13 @@ def test_brnrd_limbs_prints_the_table(tmp_path, monkeypatch, capsys):
     main(["limbs"])
     assert capsys.readouterr().out == limbs.table(limbs.products())
     assert sys.modules["brr.loom.runtime.limbs"] is limbs
+
+
+def test_a_target_with_no_word_is_named_by_no_letter():
+    """Before e0294bba's fix the stand-in asked with "?" when a call had no target, and
+    a letter saying "secret" and ending in a question mark granted it."""
+    from brr.loom.runtime import grants
+    assert not grants.names("could you set the secret?", "?")
+    assert not grants.names("anything - really", "-")
+    assert grants.names("set the secret from .env please", ".env")
+    assert grants.names("ok to merge #2610", "#2610")

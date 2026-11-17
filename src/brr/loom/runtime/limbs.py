@@ -88,14 +88,16 @@ def _opt_aliases(spec: str, where: str) -> tuple[str, ...]:
 
 
 def _path_regex(template: str) -> tuple[re.Pattern, tuple[str, ...]]:
+    """``*`` is one segment, ``{name}`` any run of them, ``{name=*/*}`` a capture of that shape."""
     out, names, at = [], [], 0
-    for m in re.finditer(r"\*|\{(\w+)\}", template):
+    for m in re.finditer(r"\*|\{(\w+)(?:=([^{}]+))?\}", template):
         out.append(re.escape(template[at:m.start()]))
         if m.group(0) == "*":
             out.append(r"[^/]+")
         else:
             names.append(m.group(1))
-            out.append(rf"(?P<{m.group(1)}>.+?)")
+            shape = ".+?" if m.group(2) is None else re.escape(m.group(2)).replace(r"\*", "[^/]+")
+            out.append(rf"(?P<{m.group(1)}>{shape})")
         at = m.end()
     out.append(re.escape(template[at:]))
     return re.compile("".join(out)), tuple(names)
@@ -462,7 +464,9 @@ def _ask(rules: list[Rule], argv: list[str], real: str, brnrd: str, unlisted: st
         check_argv = fill(rule.details["unless"], found, real)
         if subprocess.run(check_argv, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode == 0:
             return 0
-    target = _sub(rule.details.get("target", ""), found) or "?"
+    # No target in the call: the call itself, which a letter must quote; never "?", which any
+    # letter with a question mark would name.
+    target = _sub(rule.details.get("target", ""), found) or shlex.join(argv)
     return subprocess.run([brnrd, "runtime", "guard", rule.cls, target, "--why", rule.details.get("why", "")]).returncode
 
 
