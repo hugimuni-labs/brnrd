@@ -164,7 +164,9 @@ else
   mkdir -p "${ROOT}/envs"
   candidate=$(mktemp -d "${ROOT}/envs/install-XXXXXXXX")
 fi
-run_named "uv venv ${candidate}" "$uvbin" venv "$candidate"
+# brnrd needs Python >= 3.10 (pyproject's requires-python); without the bound uv takes the
+# first python3 on PATH, which on a stock Mac is Xcode's 3.9, and the install below fails.
+run_named "uv venv ${candidate} --python >=3.10" "$uvbin" venv "$candidate" --python '>=3.10'
 run_named "uv pip install --python ${candidate}/bin/python --editable ${DEV_DIR}" "$uvbin" pip install --python "${candidate}/bin/python" --editable "$DEV_DIR"
 # -I excludes a shell/body's PYTHONPATH and user site. Never dispatch via PATH.
 run_named "${candidate}/bin/python -I -m brr.loom.runtime.install_checkout ${DEV_DIR}" "${candidate}/bin/python" -I -m brr.loom.runtime.install_checkout "$DEV_DIR"

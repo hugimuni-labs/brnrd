@@ -92,6 +92,7 @@ exec {real} "$@"
     assert f'git clone --single-branch --branch main {ORIGIN} {source}' in trace
     candidates = sorted((home / '.brnrd/envs').glob('install-*'))
     assert len(candidates) == 1 and (candidates[0] / 'bin/python').is_file()
+    assert f'uv venv {candidates[0]} --python >=3.10' in trace  # never the first python3 on PATH (stock Mac: 3.9)
     assert f'uv pip install --python {candidates[0]}/bin/python --editable {source}' in trace
     assert f'candidate -I -m brr.loom.runtime.install_checkout {source}' in trace
     assert not any('tool install' in line for line in trace)
