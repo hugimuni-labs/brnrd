@@ -1,5 +1,6 @@
 """The loop pushes snapshot v1 to the board: on a settled change, else once a minute."""
 
+import gzip
 import json
 import sys
 import time
@@ -8,7 +9,7 @@ import pytest
 
 from brr.daemon2.facts import Fact
 from brr.gates import cloud
-from brr.loom.runtime import snapshot, usage
+from brr.loom.runtime import board as board_parts, snapshot, usage
 from brr.loom.runtime.home import Home
 from brr.loom.runtime.ledger import append, inject_letter, read_facts
 
@@ -52,6 +53,34 @@ class Cloud:
         return {}
 
 
+class Parts:
+    """Stands in for the parts pusher's ``cloud._SESSION.request`` (board.Pusher._put), on the same switches as
+    ``Cloud``: ``fail`` raises, ``withhold`` answers 451, else 200 with the hashes it holds. Its calls are its own,
+    so ``Cloud.calls`` counts the snapshot only."""
+
+    def __init__(self, cloud: Cloud):
+        self.cloud, self.calls, self.held = cloud, [], {}
+
+    def __call__(self, method, url, *, data=None, **_):
+        assert method == "PUT" and url == "https://board.test/v1/daemons/loom/parts", (method, url)
+        self.calls.append(url)
+        if self.cloud.fail:
+            raise RuntimeError("board unreachable")
+        if self.cloud.withhold:
+            return Answer(451, {"detail": "this repo's publish scope withholds the board"})
+        batch = json.loads(gzip.decompress(data))
+        self.held.update({key: part["hash"] for key, part in batch["parts"].items()})
+        return Answer(200, {"hashes": dict(self.held)})
+
+
+class Answer:
+    def __init__(self, status_code, doc):
+        self.status_code, self.doc, self.text = status_code, doc, json.dumps(doc)
+
+    def json(self):
+        return self.doc
+
+
 @pytest.fixture
 def board(tmp_path, monkeypatch):
     root = tmp_path / "home"
@@ -73,9 +102,14 @@ def board(tmp_path, monkeypatch):
     # The loop's gauge sweep would ask this machine's real shells.
     monkeypatch.setattr(usage, "_refresh", lambda *a, **k: None)
     monkeypatch.setattr(snapshot, "assemble", lambda *a: assembled.append(real(*a)) or assembled[-1])
+    # The board's parts bind ``assemble`` at import: first imported under the counter above, they would fail every
+    # tick on ``told=`` and never push; imported earlier, they push. Pinned to the real one, they always push.
+    monkeypatch.setattr(board_parts, "assemble", real)
     monkeypatch.setattr(cloud, "_request", fake)
+    parts = Parts(fake)
+    monkeypatch.setattr(cloud._SESSION, "request", parts)
     loom = Loom(root)
-    loom.now, loom.cloud, loom.assembled = now, fake, assembled
+    loom.now, loom.cloud, loom.parts, loom.assembled = now, fake, parts, assembled
     yield loom
     loom.halt()
     kill_bodies(loom)
@@ -219,6 +253,9 @@ def test_a_withheld_snapshot_is_no_degraded_step_and_keeps_its_idle_pace(board):
     degraded = [f for f in read_facts(Home(board.root))
                 if f.kind == "loom.degraded" and f.data["step"] == "publisher"]
     assert degraded == []
+    parts = lambda: [f for f in read_facts(Home(board.root)) if f.kind == "loom.degraded" and f.data["step"] == "parts"]
+    wait_until(parts, 10, board.dump)
+    assert [f.data["error"].split(":")[0] for f in parts()] == ["BoardWithheld"]
     board.cloud.withhold = False
     wait_until(lambda: len(board.cloud.calls) == 4, 10, board.dump)
     assert board.thread.is_alive()
@@ -236,6 +273,7 @@ def test_a_failing_board_is_one_streak_and_the_loop_keeps_going(board):
     publisher = lambda: [f for f in kinds("loom.degraded") if f.data["step"] == "publisher"]
     [down] = publisher()
     assert "board unreachable" in down.data["error"]
+    wait_until(lambda: any(f.data["step"] == "parts" for f in kinds("loom.degraded")), 10, board.dump)
     log = board.root / "loom/loom.log"
     assert log.read_text().count("degraded: publisher") == 1
     board.cloud.fail = False
