@@ -52,6 +52,10 @@ logger = logging.getLogger(__name__)
 
 REASON = "home_subscription_required"
 
+#: Refusals being held open right now, in this process. Past ``home_gate_max_holds`` a
+#: refusal answers at once: the hold paces old clients, it must never starve the server.
+_holds_open = 0
+
 
 @dataclass(frozen=True)
 class HomeAccess:
@@ -182,7 +186,12 @@ async def daemon_gate(request: Request, principal: Principal = Depends(require_d
     if request.url.path.endswith("/inbox"):
         # The long-poll's own timeout: a refused poller asks no faster than a served one.
         hold = max(hold, settings.inbox_long_poll_max_s)
-    if hold > 0:
-        await asyncio.sleep(hold)
+    global _holds_open
+    if hold > 0 and _holds_open < settings.home_gate_max_holds:
+        _holds_open += 1  # one event loop: no lock needed between the check and the increment
+        try:
+            await asyncio.sleep(hold)
+        finally:
+            _holds_open -= 1
     raise HTTPException(status_code=429, detail=_detail(settings, access),
                         headers={"Retry-After": str(settings.home_gate_retry_after_s)})

@@ -59,4 +59,5 @@ Browser routes answer 402; device routes answer 429 with `Retry-After`
 (`BRNRD_HOME_GATE_RETRY_AFTER_S`, 900), after holding the request
 `BRNRD_HOME_GATE_HOLD_S` (20) seconds, or the long-poll's own timeout for the
 inbox, so an installed client that retries without backoff is paced by the
-server. Both carry `{reason: home_subscription_required, message, account_url}`.
+server. At most `BRNRD_HOME_GATE_MAX_HOLDS` (256) holds are open at once in
+the process; past that a refusal answers at once. Both carry `{reason: home_subscription_required, message, account_url}`.

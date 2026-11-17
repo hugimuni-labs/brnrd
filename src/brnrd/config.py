@@ -241,6 +241,10 @@ class Settings:
     # after Retry-After: an old client's retry loop cannot become a flood.
     home_gate_hold_s: float = _env_float("BRNRD_HOME_GATE_HOLD_S", 20.0)
     home_gate_retry_after_s: int = _env_int("BRNRD_HOME_GATE_RETRY_AFTER_S", 900)
+    # At most this many held refusals open at once in this process; past it the 429 answers
+    # at once. A hold costs one socket and one coroutine (no thread, no DB connection); 256
+    # stays far under the container's file-descriptor limit with room for real traffic.
+    home_gate_max_holds: int = _env_int("BRNRD_HOME_GATE_MAX_HOLDS", 256)
 
     # Free-tier headroom limits + abuse ceilings (#501 repo-cap half; account
     # decision ledger 2026-07-21). ``limit_free_*`` rows bind only accounts
