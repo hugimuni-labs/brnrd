@@ -14,10 +14,15 @@ RUN apt-get update \
         bash ca-certificates curl git openssh-client util-linux python3 python3-pip python3-venv \
     && rm -rf /var/lib/apt/lists/* \
     && npm install -g @anthropic-ai/claude-code \
-    && python3 -m venv /opt/brnrd \
-    && /opt/brnrd/bin/pip install --no-cache-dir "brnrd${BRNRD_VERSION:+==$BRNRD_VERSION}" \
-    && ln -s /opt/brnrd/bin/brnrd /usr/local/bin/brnrd \
     && useradd --create-home --home-dir /home/brnrd --shell /bin/bash brnrd
+
+# brnrd is a checkout at a release tag (BRNRD_VERSION, e.g. 0.7.1; empty: the newest release), installed
+# editable: the one install kind, the same as the curl installer's, pinned the way the image always was.
+COPY checkout.sh /usr/local/bin/brnrd-checkout
+RUN sh /usr/local/bin/brnrd-checkout /opt/brnrd/checkout "$BRNRD_VERSION" \
+    && python3 -m venv /opt/brnrd/env \
+    && /opt/brnrd/env/bin/pip install --no-cache-dir -e /opt/brnrd/checkout \
+    && ln -s /opt/brnrd/env/bin/brnrd /usr/local/bin/brnrd
 
 # One Railway volume per service, mounted at /data. Everything that must
 # survive a redeploy lives under it: the account home (XDG_STATE_HOME), the
