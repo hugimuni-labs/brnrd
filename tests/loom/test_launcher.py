@@ -250,3 +250,19 @@ def test_failed_pending_reinstall_still_starts_and_keeps_the_retry_marker(instal
     assert 'starting with installed dependencies' in output
     state = json.loads(i.state.read_text())
     assert state['reinstall'] is True and state['failures'] == 0
+
+
+@pytest.mark.parametrize("args", [
+    ["status"], ["check", "--help"], ["--help"], ["-h"],
+    ["--home", "/unused", "--help"],
+])
+def test_non_start_loom_commands_do_not_change_startup_state(installed, args):
+    i = installed
+    prior = '{"failures": 2, "healthy": "keep"}\n'
+    i.state.write_text(prior)
+    proc = subprocess.run(
+        [str(entry.shim()), "runtime", "loom", *args],
+        capture_output=True, text=True, timeout=20,
+    )
+    assert proc.returncode in (0, 2)
+    assert i.state.read_text() == prior

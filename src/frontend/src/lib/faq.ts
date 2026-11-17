@@ -3,7 +3,13 @@
 // it works while the computer is off, that it runs in the cloud, that it never forgets, that it needs no
 // looking after, any count of users, or a price figure (the pricing page owns
 // that).
-export type FaqEntry = { id: string; question: string; answer: string; alias?: string };
+export type FaqEntry = {
+	id: string;
+	question: string;
+	answer: string;
+	alias?: string;
+	link?: { label: string; href: string };
+};
 
 export const FAQ: FaqEntry[] = [
 	{
@@ -107,6 +113,10 @@ export const FAQ: FaqEntry[] = [
 		id: 'who-makes-it',
 		question: 'Who makes it?',
 		answer:
-			'HugiMuni, a small company in Arles, France. The code is public under the MIT licence at github.com/hugimuni-labs/brnrd.'
+			'HugiMuni, a small company in Arles, France. The code is public at github.com/hugimuni-labs/brnrd. The part that runs on your computer is under the MIT licence; our server and the web dashboard are under AGPLv3. The licence overview says which part is which.',
+		link: {
+			label: 'licence overview',
+			href: 'https://github.com/hugimuni-labs/brnrd/blob/main/LICENSE-OVERVIEW.md'
+		}
 	}
 ];

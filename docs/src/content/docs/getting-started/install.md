@@ -6,41 +6,45 @@ description: Install the brnrd command, and check that it can see a coding-agent
 New to terminal tooling? Start with the short [Prerequisites](../prerequisites/)
 checklist, then come back here.
 
-Use whichever command matches the tooling you already have — just the one.
-Each installs the same program and leaves you with a `brnrd` command on
-your `PATH`.
+Install the resident's own checkout:
 
 ```bash
-curl -LsSf https://hugimuni-labs.github.io/brnrd/install.sh | sh
+curl -fsSL https://brnrd.dev/install | sh
 ```
 
-This one also [runs the loom](#run-the-loom) for you: it ends with
-`brnrd loom install` and `brnrd loom status`. The routes below install only
-the command.
+The installer clones `main` to `~/.brnrd/src` (`BRNRD_DEV_DIR` moves it),
+prepares an editable install in a separate environment under `~/.brnrd/envs`,
+and switches `~/.brnrd/current` only after source and board checks. It fetches
+uv when needed. Node is not required: the matching board is downloaded and
+verified against its commit, frontend tree and SHA256 digest.
 
-If you have Node:
+A fresh install ends with `brnrd setup`; it does not start a service. An existing
+loom service is reinstalled through the candidate interpreter and checked with
+`loom status`; failed handoff restores its unit and launcher, and the failed
+run's environment is removed. After a successful run, `~/.brnrd/envs` keeps the
+current environment and the one before it; older installer environments are
+removed, and nothing outside `~/.brnrd/envs` is touched. Reinstallation preserves
+service environment variables and adds the new shell's tool directories to PATH.
+The installer ends by checking which `brnrd` a new login shell runs; if an older
+install (such as the packaged `uv tool install brnrd`) comes first, it names it
+and the command that removes it, and leaves that to you.
+
+Reruns never move checkout HEAD, switch branches or discard edits. A foreign
+origin or non-git directory is refused. A machine whose loom already runs from
+another checkout is refused before any write, with the line that keeps it:
+`BRNRD_DEV_DIR=<that checkout>` before the install command. Pipx and global npm installs are detected
+before writes; the installer gives the uninstall command and leaves it to you.
+`--dev` is accepted for compatibility and selects the same installation.
+
+Packaged npm, uv-tool and pipx installations still exist during this transition;
+their convergence and retirement are separate changes. Use the curl installer
+for a resident that owns its source.
+
+Check it (in a new shell, `brnrd --version` does the same once the PATH line is in your profile):
 
 ```bash
-npm install -g brnrd
-```
-
-If you have uv:
-
-```bash
-uv tool install brnrd
-```
-
-If you have pipx:
-
-```bash
-pipx install brnrd
-```
-
-Check it:
-
-```bash
-brnrd --version
-brnrd --help
+~/.brnrd/bin/brnrd --version
+~/.brnrd/bin/brnrd --help
 ```
 
 brnrd also needs **git**, and at least one coding-agent CLI on your `PATH` —
@@ -58,14 +62,13 @@ coding-agent body for each, and hands them letters. It runs as a login
 service, launchd on macOS and systemd --user on Linux:
 
 ```bash
-uv tool install brnrd
 brnrd loom install
 ```
 
 That is the whole install. `brnrd loom install` ends with one receipt:
 
 ```text
-interpreter: /Users/you/.local/share/uv/tools/brnrd/bin/python3
+interpreter: /Users/you/.brnrd/envs/install-XXXXXXXX/bin/python
 brnrd: (the version you installed)
 home: /Users/you/brnrd (default)
 body: claude/sonnet (picked: claude has fuel, session 91% week 76%; written to /Users/you/brnrd/loom/config.toml)
@@ -75,8 +78,8 @@ pid: 4242
 ```
 
 - **interpreter** is the Python the service runs. It is the one brnrd was
-  installed into; install refuses a source checkout (see
-  [Troubleshooting](../../guides/troubleshooting/#loom-install-refuses-a-source-checkout)).
+  installed into. Installer-owned checkouts are accepted; a separate development
+  checkout requires `--dev`.
 - **home** is found for you: the installed service's home, else the one loom
   home on this machine (`~/brnrd`, or a home inside a brnrd account), else a
   new `~/brnrd`. When more than one could be meant, install lists them and asks
@@ -108,8 +111,17 @@ brnrd setup channel --kind web --wait 0
 Setup enables the loopback page, prints its URL and starts or restarts the loom.
 It picks `--home`, then `BRNRD_HOME`, the installed service's home, the only
 home found or `~/brnrd`; several homes require `--home PATH`.
-A source checkout needs a built frontend; the loom builds it in the background,
-so the page may take a moment to become available.
+The installer fetches the board for its upstream commit. Frontend edits rebuild
+in the background when npm is available; otherwise the last good board stays
+served and the loom says once that npm is needed. A missing published board
+does not block installation: it tries a supported local npm build, then the
+newest verified ancestor asset with an older-commit notice. If none is available,
+installation continues without a board and prints the command to fetch it later.
+A changed frontend tree is built at once, whether or not the loom is busy; only
+the retry of a missing asset waits until the loom is idle, at most once every
+five minutes. Digest-mismatched archives are never served.
+`BRNRD_BOARD_BASE` points the board download at a mirror of the `board-builds`
+release assets; the commit, tree and digest checks are the same.
 
 This is the loom board, separate from the older daemon's dashboard.
 
@@ -122,9 +134,8 @@ count once. The warning
 does not run, remove or rewrite other installations; use the paths to check
 which installation your shell is selecting before upgrading.
 
-To upgrade, run `uv tool upgrade brnrd` (or the route you installed with). The
-running loom sees its files change and re-execs itself; its bodies resume from
-the letters they held.
+To refresh the interpreter, rerun the curl installer. To update source, the
+resident accepts an update offer as described below; reinstalling never moves HEAD.
 
 :::note[The loom or the daemon]
 The loom (`brnrd loom …`) is the runtime brnrd's own resident runs on. The
@@ -222,19 +233,9 @@ or `brnrd daemon install` would pin the background service to a binary path that
 persistent install, then install the service.
 :::
 
-## Follow main (dogfooding)
+## Updates from main
 
-To run the loom on brnrd's `main` instead of the PyPI release, and have it
-offer updates from `main` to its resident:
-
-```bash
-curl -LsSf https://hugimuni-labs.github.io/brnrd/install.sh | sh -s -- --dev
-```
-
-It clones `main` to `~/.brnrd/src` (`BRNRD_DEV_DIR` moves it), installs that
-checkout editable with `uv tool install --editable`, prints `brnrd loom install
---dev --dry-run`, then runs it for real and ends with `brnrd loom status`. The
-loom follows the checkout without a config line. On a green `main` CI it
+The default checkout follows main without a config line. On a green `main` CI it
 sends the resident a letter with merged PR numbers, titles, links and description excerpts,
 its own commit count, and whether tracked files have uncommitted changes.
 Descriptions use the first paragraph, at most 300 characters, and say when cut.
@@ -258,13 +259,10 @@ tip offers again. While an offer is open a newer green tip updates its target
 without a second letter. How the resident asks or tells its person follows
 their agreement, with no new config setting. `update = "off"` stays off.
 
-It warns, without stopping, about what bites later: `PYTHONPATH` set (brnrd
-would run another checkout's code), no `claude` or `codex` on `PATH` (the loom
-needs a body), and `gh` missing or signed out (following `main` reads CI
-through it; run `gh auth login` first). Run it again to update by hand: it
-fast-forwards a clean checkout on `main`, and refuses one with uncommitted
-changes or on another branch. That installer path is separate from the
-resident-controlled runtime merge above; use take to preserve your own commits.
+The installer warns about `PYTHONPATH`, missing coding-agent CLIs, and missing
+or signed-out `gh`. Run it from the login shell whose tools the service should
+see. Updating source uses the resident-controlled merge above, independently of
+refreshing its Python environment. Release selection remains separate work.
 
 ## Development install
 

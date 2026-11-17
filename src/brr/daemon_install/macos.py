@@ -147,6 +147,7 @@ def render_plist(
     program_args: list[str] | None = None,
     log_directory: Path | None = None,
     abandon_process_group: bool = False,
+    environment: dict[str, str] | None = None,
 ) -> str:
     """launchd's default PATH is ``/usr/bin:/bin:…`` — the daemon starts but
     cannot find the runner Shells (``claude``, ``codex``) its runs dispatch
@@ -178,6 +179,7 @@ def render_plist(
         "StandardOutPath": str(out_log),
         "StandardErrorPath": str(err_log),
         "EnvironmentVariables": {
+            **(environment or {}),
             "BRR_INSTALL_MANAGED": "1",
             **({"PATH": path_value} if path_value else {}),
         },
@@ -202,6 +204,7 @@ def install(
     program_args: list[str] | None = None,
     log_directory: Path | None = None,
     abandon_process_group: bool = False,
+    environment: dict[str, str] | None = None,
     confirm: Callable[..., int | None] | None = None,
     retry_command: str = "`brnrd daemon install`",
     path_env: str | None = None,
@@ -222,6 +225,7 @@ def install(
             brr_bin, home=home, path_env=path_env, workdir=workdir_value, label=label,
             program_args=program_args, log_directory=logs,
             abandon_process_group=abandon_process_group,
+            environment=environment,
         ),
         encoding="utf-8",
     )

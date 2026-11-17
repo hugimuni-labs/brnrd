@@ -314,13 +314,67 @@ _AUTH_RETRY_CAP_S = 300
 _RETRY_STATUSES = frozenset({502, 503, 504})
 _RETRY_SLEEPS_S = (2.0, 5.0)
 
+# The server's install ceiling (brnrd.limits.Ceiling) answers 429 with a
+# Retry-After. A 429 is never retried here; the path it named is held in this
+# process until the window turns, so a publish lane on its 3 s tick asks once
+# per window instead of once per tick. Per (method, path): a held reports path
+# does not stop a reply.
+_HELD_UNTIL: dict[tuple[str, str], float] = {}
 
-def _request(base_url: str, method: str, path: str, *, token: str | None = None, json: dict | None = None, params: dict | None = None, timeout: float = _HTTP_TIMEOUT_S, retry: bool = True) -> dict:
+
+def _retry_after_s(resp) -> float | None:
+    try:
+        value = float(resp.headers.get("Retry-After", ""))
+    except (TypeError, ValueError):
+        return None
+    return value if value > 0 else None
+
+
+# Failures a dead pooled connection gives. A read timeout is not one: the
+# request may have been served, and waiting out another 60 s is no cure.
+_STALE_CONNECTION = (requests.ConnectionError,)
+_REPEATABLE_METHODS = frozenset({"GET", "HEAD", "PUT", "DELETE", "OPTIONS"})
+
+
+def _repeatable(method: str, repeat: bool | None) -> bool:
+    """May a request that died on the wire be sent again? ``repeat`` is the
+    caller's word; unset, the HTTP-idempotent methods may and POST/PATCH may
+    not (the first copy may have been served, and a second would double-deliver)."""
+    return method.upper() in _REPEATABLE_METHODS if repeat is None else repeat
+
+
+def _send(method: str, url: str, *, repeat: bool | None = None, **kwargs):
+    """``_SESSION.request`` with one repeat on a fresh pool when a pooled
+    keep-alive connection was dead.
+
+    The far side closes an idle connection; its first use fails (reset, broken
+    pipe, remote disconnected) and urllib3 resends only a bodiless request, so
+    every caller on the shared session met it. The repeat drops the pool
+    (idle connections close; one checked out by another thread closes when it
+    returns) and sends once more. Connect and read timeouts are not repeated,
+    nor a method whose second copy could double-deliver (see ``_repeatable``).
+    """
+    try:
+        return _SESSION.request(method, url, **kwargs)
+    except _STALE_CONNECTION as exc:
+        if not _repeatable(method, repeat) or isinstance(exc, requests.ConnectTimeout):
+            raise
+        _SESSION.close()
+        return _SESSION.request(method, url, **kwargs)
+
+
+def _request(base_url: str, method: str, path: str, *, token: str | None = None, json: dict | None = None, params: dict | None = None, timeout: float = _HTTP_TIMEOUT_S, retry: bool = True, repeat: bool | None = None) -> dict:
     headers = {"Authorization": f"Bearer {token}"} if token else {}
+    held = _HELD_UNTIL.get((method, path), 0.0) - time.monotonic()
+    if held > 0:
+        err = RuntimeError(f"brnrd {method} {path} -> 429 (held here {held:.0f}s more by the server's Retry-After)")
+        err.status_code = 429  # type: ignore[attr-defined]
+        err.retry_after = held  # type: ignore[attr-defined]
+        raise err
     sleeps = _RETRY_SLEEPS_S if retry else ()
     for attempt, sleep_s in enumerate((*sleeps, None)):
         try:
-            resp = _SESSION.request(method, base_url.rstrip("/") + path, json=json, params=params, headers=headers, timeout=timeout)
+            resp = _send(method, base_url.rstrip("/") + path, json=json, params=params, headers=headers, timeout=timeout, repeat=repeat)
         except requests.RequestException as exc:
             raise CloudUnavailableError(
                 f"the account service at {base_url.rstrip('/')} is unreachable "
@@ -344,6 +398,9 @@ def _request(base_url: str, method: str, path: str, *, token: str | None = None,
         # string-matching a shape meant for humans.
         err = RuntimeError(f"brnrd {method} {path} -> {resp.status_code}: {resp.text[:200]}")
         err.status_code = resp.status_code  # type: ignore[attr-defined]
+        if resp.status_code == 429 and (wait := _retry_after_s(resp)) is not None:
+            _HELD_UNTIL[(method, path)] = time.monotonic() + wait
+            err.retry_after = wait  # type: ignore[attr-defined]
         raise err
     return resp.json() if resp.content else {}
 
@@ -1193,7 +1250,7 @@ def _download_attachment(base_url: str, token: str, event_id: str, index: int, d
     """
     url = base_url.rstrip("/") + f"/v1/daemons/events/{event_id}/attachments/{index}"
     try:
-        resp = _SESSION.get(url, headers={"Authorization": f"Bearer {token}"}, timeout=_HTTP_TIMEOUT_S, stream=True)
+        resp = _send("GET", url, headers={"Authorization": f"Bearer {token}"}, timeout=_HTTP_TIMEOUT_S, stream=True)
         if not 200 <= resp.status_code < 300:
             print(f"[brnrd:cloud] attachment {event_id}[{index}] -> {resp.status_code}: {resp.text[:120]}")
             return False

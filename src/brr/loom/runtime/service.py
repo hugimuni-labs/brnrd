@@ -12,7 +12,9 @@ import argparse
 import fcntl
 import json
 import os
+import plistlib
 import re
+import shlex
 import shutil
 import signal
 import site
@@ -58,13 +60,64 @@ def _program(home: Path) -> list[str]:
     return ["runtime", "loom", "--home", str(home)]
 
 
-def _path_env() -> str:
-    """The installing shell's PATH, the shim's directory first and this venv's ``bin`` read
-    through ``current``: a unit that names the venv would outlive it."""
-    venv = {os.path.abspath(entry.prefix() / "bin"), os.path.dirname(_interpreter())}
+def _path_env(previous: str = "") -> str:
+    """Shim first, then old and shell entries, with venv bins read through current."""
+    venv = {os.path.abspath(entry.prefix() / "bin"), os.path.dirname(_interpreter()),
+            str(entry.current().resolve() / "bin")}
     kept = [str(entry.current() / "bin") if os.path.abspath(part) in venv else part
-            for part in os.environ.get("PATH", "").split(os.pathsep) if part]
+            for part in (previous + os.pathsep + os.environ.get("PATH", "")).split(os.pathsep) if part]
     return os.pathsep.join(dict.fromkeys([str(entry.shim().parent), *kept]))
+
+
+def _kept_environment(system: str, unit_file: Path) -> tuple[dict[str, str], tuple[str, ...], list[str]]:
+    """Read before replacing anything. Keep systemd values in their native syntax."""
+    if not unit_file.exists():
+        return {}, (), []
+    try:
+        if system == "Darwin":
+            payload = plistlib.loads(unit_file.read_bytes())
+            env = payload.get("EnvironmentVariables", {})
+            if not isinstance(env, dict) or any(
+                not isinstance(k, str) or not isinstance(v, str) for k, v in env.items()
+            ):
+                raise ValueError("EnvironmentVariables must contain string values")
+            names = sorted(set(env) - {"BRR_INSTALL_MANAGED"})
+            env["PATH"] = _path_env(env.get("PATH", ""))
+            return env, (), names
+        lines = []
+        names: set[str] = set()
+        old_path = ""
+        section = ""
+        # A continuation is whitespace in systemd; retain the directive's
+        # quoted values rather than decoding and re-encoding them as shell.
+        text = unit_file.read_text().replace("\\\n", " ")
+        for line in text.splitlines():
+            stripped = line.strip()
+            if stripped.startswith("["):
+                section = stripped
+            key, equals, value = stripped.partition("=")
+            if section != "[Service]" or key.strip() != "Environment" or not equals:
+                continue
+            raw = value.strip()
+            if not raw:
+                lines.clear()
+                names.clear()
+                old_path = ""
+                continue
+            assignments = shlex.split(raw)
+            for assignment in assignments:
+                name, sep, _value = assignment.partition("=")
+                if not sep or not re.fullmatch(r"[A-Za-z_][A-Za-z_0-9]*", name):
+                    raise ValueError("invalid Environment assignment")
+                names.add(name)
+                if name == "PATH":
+                    old_path = _value.replace("%%", "%")
+            if len(assignments) != 1 or assignments[0].partition("=")[0] not in {"BRR_INSTALL_MANAGED", "PATH"}:
+                lines.append(stripped)
+        lines.append('Environment="PATH=' + linux._systemd_escape(_path_env(old_path)) + '"')
+        return {}, tuple(lines), sorted(names - {"BRR_INSTALL_MANAGED"})
+    except (OSError, ValueError, TypeError, AttributeError) as exc:
+        raise SystemExit(f"loom install: cannot preserve environment from {unit_file}; repair the unit before reinstalling ({type(exc).__name__})") from None
 
 
 def _refuse_prefix() -> None:
@@ -106,6 +159,9 @@ def _brr_source() -> Path | None:
 def _refuse_source(dev: bool) -> None:
     source = _brr_source()
     if source is None or dev:
+        return
+    from .install_checkout import managed_source
+    if managed_source(source.parent.parent):
         return
     raise SystemExit(
         f"loom install: {_interpreter()} imports brr from {source}, a source checkout, "
@@ -539,15 +595,18 @@ def _install(argv: list[str], *, run, agents_home, sleep, pid_alive, poll_timeou
         raise SystemExit("[brnrd] loom install on this platform is not implemented yet")
     unit_file = (linux.unit_path(UNIT) if system == "Linux"
                  else macos.plist_path(home=_agents(agents_home), label=LABEL))
+    environment, environment_lines, kept = _kept_environment(system, unit_file)
     receipt = [
         ("interpreter", _interpreter()),
-        ("brnrd", __version__ + (" (source checkout, --dev)" if _brr_source() else "")),
+        ("brnrd", __version__ + (" (source checkout)" if _brr_source() else "")),
         ("home", f"{home} ({source})"),
         ("body", f"{body} ({picked})"),
         ("forge", forge),
         ("service", unit_file),
         ("entry", entry.shim()),
     ]
+    if kept:
+        receipt.append(("kept environment", ", ".join(kept)))
     if args.dry_run:
         receipt.append(("current", f"{entry.current()} -> {entry.prefix()} (dry run: not linked)"))
         replaced = "not checked (--no-start)" if args.no_start else _replace(
@@ -575,6 +634,7 @@ def _install(argv: list[str], *, run, agents_home, sleep, pid_alive, poll_timeou
             delay=poll,
             restart=True,
             path_env=_path_env(),
+            environment_lines=environment_lines,
         )
         if args.no_start:
             _receipt(receipt + [("pid", "- (not started: --no-start)")])
@@ -607,7 +667,8 @@ def _install(argv: list[str], *, run, agents_home, sleep, pid_alive, poll_timeou
         abandon_process_group=True,
         confirm=confirm,
         retry_command="`brnrd loom install`",
-        path_env=_path_env(),
+        path_env=environment.get("PATH", _path_env()),
+        environment=environment,
     )
     if args.no_start:
         _receipt(receipt + [("pid", "- (not started: --no-start; it loads at next login)")])

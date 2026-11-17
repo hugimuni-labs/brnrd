@@ -102,6 +102,17 @@ _FORGE_TOKEN_VARS = ("GH_TOKEN", "GITHUB_TOKEN", "GH_ENTERPRISE_TOKEN", "GITHUB_
 # (threads/forge-auth). {gh} is the real gh, {brnrd} the shim.
 _NEVER_GATE = limbs.gate_shell(limbs.product("github"))
 
+# The forge door's sensor (threads/act-chain, doors and sensors): after the
+# gates, so a refused call is no passage. Capture off is one file test; the
+# verb reads the endpoint's doors switch and BRNRD_SAY, and never refuses.
+_FORGE_DOOR = r"""case "$1 $2" in
+  "pr merge"|"pr close"|"pr comment"|"issue close"|"issue comment"|"release create")
+    if [ -f {endpoint} ]; then
+      {brnrd} runtime audit pass --room {room} --door forge --act "$1 $2" --target="${3-}" >/dev/null || :
+    fi ;;
+esac
+"""
+
 def _forge_env(room: Path, env: dict[str, str]) -> None:
     """Keep a configured forge identity isolated even when a shell bypasses the shim."""
     from .config import ConfigError, load_config, resolve_secret, secret_shell
@@ -160,7 +171,10 @@ def _forge_env(room: Path, env: dict[str, str]) -> None:
             "[ -n \"$GH_TOKEN\" ] || { echo 'gh: forge_token source gave nothing' >&2; exit 1; }\n"
             "export GH_TOKEN\n"
             "unset BRNRD_GH_SECRET_SOURCE\n"
-            + limbs.gate_shell(page).replace("{gh}", shlex.quote(real_gh)).replace("{brnrd}", shlex.quote(str(entry.shim()))) +
+            + limbs.gate_shell(page).replace("{gh}", shlex.quote(real_gh)).replace("{brnrd}", shlex.quote(str(entry.shim())))
+            + _FORGE_DOOR.replace("{brnrd}", shlex.quote(str(entry.shim())))
+                         .replace("{endpoint}", shlex.quote(str(room.parent.parent / "loom" / "audit-endpoint.json")))
+                         .replace("{room}", shlex.quote(str(room))) +
             f"exec {shlex.quote(real_gh)} \"$@\"\n"
         )
         shim = bin_dir / "gh"
@@ -2743,7 +2757,7 @@ def run(root: Path | str, *, adapter: str = "fake", core: str = "haiku",
         from . import usage
         config = load_config(home.root)
         from . import audit
-        audit_writer = audit.start(home, config.audit == "on")
+        audit_writer = audit.start(home, config.audit == "on", doors=config.doors == "on")
         fingerprint = _source_fingerprint()
         next_source, source_moved = time.monotonic() + SOURCE_EVERY, False
         next_usage = 0
@@ -2773,11 +2787,15 @@ def run(root: Path | str, *, adapter: str = "fake", core: str = "haiku",
             board = Parts(home, lambda: load_config(home.root), _log)
             threading.Thread(target=board.run, name="board", daemon=True).start()
             pusher = Pusher(board)
+        # A managed checkout retries missing board assets even before the
+        # local web door is enabled. Generic developer trees build on demand.
+        from . import entry as install_entry
+        from .spabuild import SpaBuild
+        frontend = Path(__file__).resolve().parents[3] / "frontend"
+        managed_prefix = install_entry.prefix().parent.resolve() == (install_entry.root() / 'envs').resolve()
+        if (config.board_port or managed_prefix) and (frontend / "package.json").is_file() and not os.environ.get("BRNRD_FRONTEND_DIR"):
+            spa = SpaBuild(frontend, lambda text: _log(home, text))
         if config.board_port:  # read at start: a port change waits for the next re-exec
-            from .spabuild import SpaBuild
-            frontend = Path(__file__).resolve().parents[3] / "frontend"
-            if (frontend / "package.json").is_file() and not os.environ.get("BRNRD_FRONTEND_DIR"):
-                spa = SpaBuild(frontend, lambda text: _log(home, text))
             board_port = config.board_port
 
             def start_board():
@@ -2858,7 +2876,7 @@ def run(root: Path | str, *, adapter: str = "fake", core: str = "haiku",
                 if board_port and shell is None:
                     health.guard("board", start_board)
                 if spa is not None:  # the board's build follows the checkout; a failed one stays degraded
-                    health.guard("spa", spa.step, backoff=False)
+                    health.guard("spa", spa.step, functools.partial(_idle, home), backoff=False)
                 # Capture asked for and absent (failed start, append stopped the writer) stays degraded.
                 health.guard("audit", audit_writer.check, backoff=False)
             # Take holds the checkout lock through merge, validation and rollback.

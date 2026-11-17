@@ -97,6 +97,46 @@ stored. The verifier checks hash continuity and digest syntax; without payloads
 it cannot recompute payload digests or recover what the tool did. Tool names and
 cwd are metadata retained in cleartext and may themselves contain private names.
 
+## Doors and sensors
+
+A door is where an effect leaves what the room can rebuild. Three doors are
+brnrd's own, and each has a sensor:
+
+| Door | Sensor sits | Recorded act |
+|---|---|---|
+| `send` | `write_send`, for a letter to a `channel:` (not a `--note`) | `letter`, target the channel |
+| `publish` | `publish()`, after the push it records | `push`, target `<repo> <branch> <commit>` |
+| `forge` | the room's `gh` shim, after its gates | `pr merge`, `pr close`, `pr comment`, `issue close`, `issue comment`, `release create` |
+
+The sentence is the body's `BRNRD_SAY` value at the passage: what it is about
+to do, why, and whose words allow it. One environment value serves all three
+doors, including `gh`, which would reject a foreign flag. A sensor records the
+passage and the sentence (or `null`) as a `door` entry in the same journal. It
+refuses nothing and judges nothing.
+
+`doors = "on"` in `loom/config.toml` turns the sensors on. It needs
+`audit = "on"`: the loom writes the switch into `loom/audit-endpoint.json`, so a
+door reads one file and never the config. With sensors on, a passage with no
+sentence sends the person one loom notice on their direct channel. One notice
+covers each 15-minute window, so a burst is one note.
+
+While the sensors are on, the wake's loom briefing carries one line naming
+`BRNRD_SAY`; with them off it adds nothing, so a body is never counted for a
+sentence it was never asked for.
+
+The forge passage is recorded before `gh` runs (the shim `exec`s it), so a
+failed `gh` call still counts as a passage; `send` and `publish` record after
+the act. `pr create`, `pr review` and `issue create` leave through the shim
+unsensed.
+
+`brnrd runtime audit doors [--since T] [--until T]` prints, per door, the
+passages seen and the passages declared, read from committed bytes only.
+
+The forge sensor is as wide as the shim. The shim exists only where the home
+sets `forge_token`; elsewhere `gh` is the machine's own and there is no forge
+door. `gh api` calls and a shell using the exported `GH_TOKEN` directly pass
+no sensor.
+
 ## Verification and limits
 
 `brnrd runtime audit verify --home PATH` returns JSON with entry/epoch counts,

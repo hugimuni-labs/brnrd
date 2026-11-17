@@ -80,3 +80,12 @@ test('the safety answer says what the seed tells it, not a list of guards or a b
 		'a guard list is back'
 	);
 });
+
+test('the licence answer does not say MIT covers everything, and links the overview', async () => {
+	const who = FAQ.find((e) => e.id === 'who-makes-it');
+	ok(who, 'no who-makes-it answer');
+	ok(!/public under the MIT/i.test(who.answer));
+	ok(/MIT/.test(who.answer) && /AGPLv3/.test(who.answer));
+	const { body: html } = await renderRoute();
+	ok(html.includes('href="https://github.com/hugimuni-labs/brnrd/blob/main/LICENSE-OVERVIEW.md"'));
+});
