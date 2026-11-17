@@ -172,6 +172,12 @@ def open_thread(room: Path, thread: str, sender: str, text: str,
         return files
 
     land(room, f"open {thread} from thread:{own}", edit)
+    # A thread seated on a repo is a place the ask put work in (library.record).
+    from .library import record_repo
+    for source in repo_sources:
+        if source != "none":
+            record_repo(room, "opened", source, thread=thread, wishes=list(opened_for) or None,
+                        home=home_of_room(room))
 
 
 def settle(room: Path, thread: str, why: str, retire: bool = False,
