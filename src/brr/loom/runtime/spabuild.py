@@ -58,6 +58,12 @@ def npm_supported() -> bool:
         return False
 
 
+def _unpublished(exc: BaseException | None) -> bool:
+    """A release download that answered 404: that commit has no board, try the next."""
+    import urllib.error
+    return isinstance(exc, urllib.error.HTTPError) and exc.code == 404
+
+
 class SpaBuild:
     def __init__(self, frontend: Path, log, run=_run, every: float = EVERY, clock=time.monotonic):
         self.frontend, self.log, self.run = frontend, log, run
@@ -148,6 +154,7 @@ class SpaBuild:
         self.worker.start()
 
     def _fetch(self, commit: str, tree: str, quiet: bool = False) -> bool:
+        self.missed = None
         from .board_asset import fetch
         try:
             shutil.rmtree(self.next, ignore_errors=True)
@@ -158,6 +165,7 @@ class SpaBuild:
             return True
         except Exception as exc:
             shutil.rmtree(self.next, ignore_errors=True)
+            self.missed = exc
             if not quiet:
                 self.notice(commit, f"spa: rejected/unavailable board for {commit} ({exc}); archive not served")
             return False
@@ -206,6 +214,13 @@ class SpaBuild:
             if tree and self._fetch(commit, tree, quiet=True):
                 self.notice('older:' + commit, f'spa: board is from older ancestor commit {commit}')
                 return True
+            if tree and not _unpublished(self.missed):
+                # Only "not published" moves to the next commit. Anything else (offline,
+                # a timeout, a bad digest) is said once and ends the walk: twenty more
+                # 30 s timeouts would hold the build thread for ten minutes.
+                self.notice('older:' + commit, f'spa: older board for {commit} not served ({self.missed}); '
+                            'stopped looking at older commits')
+                return False
         self.notice('older', f'spa: no board published for the {ANCESTORS} commits before {exact}')
         return False
 
