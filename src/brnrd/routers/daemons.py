@@ -24,6 +24,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from .. import (
+    home_trial,
     ids,
     inbox as inbox_service,
     limits,
@@ -313,6 +314,7 @@ def _upsert_daemon(db: Session, principal: Principal, payload: schemas.DaemonReg
 @router.post("/register", response_model=schemas.DaemonRegistered)
 def register(payload: schemas.DaemonRegister, principal: Principal = Depends(require_daemon), db: Session = Depends(get_db)):
     daemon = _upsert_daemon(db, principal, payload)
+    home_trial.start_once(db, principal.account_id)
     db.commit()
     return schemas.DaemonRegistered(daemon_id=daemon.id, repo_id=principal.repo_id)
 
@@ -818,6 +820,8 @@ def put_loom(doc: dict[str, Any] = Body(...), principal: Principal = Depends(adm
     permitted = publish_scope.lane_permitted(db, repo_id=principal.repo_id, lane="activity")
     daemon.loom_json = blob if permitted else None
     daemon.loom_updated_at = now
+    if permitted:
+        home_trial.start_once(db, principal.account_id)
     daemon.online = True
     daemon.last_seen_at = now
     db.commit()
@@ -971,6 +975,7 @@ def _store_loom_parts(raw: bytes, encoding: str | None, principal: Principal, db
         row.hash, row.body, row.updated_at = digest, body, now
     daemon.online = True
     daemon.last_seen_at = now
+    home_trial.start_once(db, principal.account_id)
     db.commit()
     return {"hashes": {key: row.hash for key, row in held.items()}}
 

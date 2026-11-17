@@ -1643,3 +1643,11 @@ class LetterPresence(BaseModel):
     event_id: str = Field(min_length=1, max_length=64)
     verb: Literal['seen', 'working']
     on: bool = False
+
+
+class HomeTrialOut(BaseModel):
+    status: Literal["not_started", "active", "expired"]
+    started_at: datetime | None = None
+    ends_at: datetime | None = None
+    # This is an observational clock, not an access decision.
+    enforcement_enabled: bool = False

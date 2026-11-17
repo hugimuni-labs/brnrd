@@ -11,7 +11,7 @@ from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request, sta
 from sqlalchemy import select, update
 from sqlalchemy.orm import Session
 
-from .. import ids, schemas
+from .. import home_trial, ids, schemas
 from ..auth import Principal, get_db, require_account
 from ..config import telegram_effective_bot_username
 from ..models import PairRequest, Repo, TgPairCode, Token
@@ -333,6 +333,7 @@ def poll_pair(code: str, request: Request, poll_secret: str = Query(...), db: Se
         token = pair.minted_token
         pair.status = PairRequest.STATUS_CONSUMED
         pair.minted_token = None
+        home_trial.start_once(db, pair.account_id)
         db.commit()
         return schemas.PairStatus(
             status="paired",

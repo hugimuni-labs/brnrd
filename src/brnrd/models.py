@@ -84,6 +84,8 @@ class Account(Base):
     TIER_SUBSCRIBED = "subscribed"
     tier: Mapped[str] = mapped_column(String(32), default=TIER_FREE)
     stripe_customer_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    # Once per account; reconnects and additional computers never restart it.
+    home_trial_started_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     # Art 17 erasure (account_deletion.py). The row is anonymized in place
     # rather than dropped: BillingLedgerEntry.account_id is a NOT NULL FK
     # with no ON DELETE clause, and the ledger is the one store deletion
