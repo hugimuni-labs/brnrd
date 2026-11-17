@@ -469,6 +469,8 @@ def test_unchanged_inputs_skip_the_assemble_until_reassemble(tmp_path, monkeypat
     now[0] += snapshot.REASSEMBLE
     publisher.step(config, router)
     assert len(assembled) == 3
+    # The push runs on a worker: joined here, it never outlives this test's stand-in and reaches board.test.
+    publisher.worker.join(10)
 
 
 def test_the_publisher_folds_the_readers_view_not_a_copy(tmp_path, monkeypatch):
@@ -485,5 +487,7 @@ def test_the_publisher_folds_the_readers_view_not_a_copy(tmp_path, monkeypatch):
     monkeypatch.setattr(snapshot, "assemble", lambda home, facts, *a: seen.append(facts) or real(home, facts, *a))
     home = Home(root)
     router = Router(home)
-    snapshot.Publisher(home, lambda *a: None).step(load_config(root), router)
+    publisher = snapshot.Publisher(home, lambda *a: None)
+    publisher.step(load_config(root), router)
+    publisher.worker.join(10)  # joined under the stand-in, as above
     assert isinstance(seen[0], LedgerView) and seen[0] is router.reader.ordered
