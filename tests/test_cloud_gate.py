@@ -4017,3 +4017,112 @@ def test_live_runs_snapshot_publishes_portal_pending(tmp_path, monkeypatch):
 # created (this gate's own ingest loop), independent of any run being awake.
 
 
+
+
+# A pooled keep-alive connection the far side closed fails on first use with
+# the very errors loom.log shows (reset, broken pipe, remote disconnected).
+def _dead_then(monkeypatch, exc, then):
+    import requests as rq
+    from brr.gates import cloud
+
+    calls = []
+
+    def request(method, url, **kw):
+        calls.append(method)
+        if len(calls) == 1:
+            raise exc
+        return then
+
+    monkeypatch.setattr(cloud._SESSION, "request", request)
+    monkeypatch.setattr(cloud._SESSION, "close", lambda: calls.append("close"))
+    return calls
+
+
+class _Ok:
+    status_code, content, text = 200, b"{}", ""
+
+    def json(self):
+        return {"ok": True}
+
+
+def test_a_put_on_a_dead_pooled_connection_is_sent_again_fresh(monkeypatch):
+    import requests as rq
+    from brr.gates import cloud
+
+    for exc in (rq.ConnectionError(ConnectionResetError(54, "reset")),
+                rq.ConnectionError(BrokenPipeError(32, "pipe")),
+                rq.ConnectionError("RemoteDisconnected")):
+        calls = _dead_then(monkeypatch, exc, _Ok())
+        assert cloud._request("http://x", "PUT", "/v1/daemons/loom", token="t", json={"v": 1}, retry=False) == {"ok": True}
+        assert calls == ["PUT", "close", "PUT"]
+
+
+def test_a_post_is_not_sent_again_unless_the_caller_says_so(monkeypatch):
+    import pytest
+    import requests as rq
+    from brr.gates import cloud
+
+    calls = _dead_then(monkeypatch, rq.ConnectionError(ConnectionResetError(54, "reset")), _Ok())
+    with pytest.raises(cloud.CloudUnavailableError):
+        cloud._request("http://x", "POST", "/v1/daemons/responses", token="t", json={})
+    assert calls == ["POST"]
+    calls = _dead_then(monkeypatch, rq.ConnectionError(ConnectionResetError(54, "reset")), _Ok())
+    assert cloud._request("http://x", "POST", "/v1/daemons/responses", token="t", json={}, repeat=True) == {"ok": True}
+
+
+def test_a_second_dead_connection_or_a_read_timeout_still_raises(monkeypatch):
+    import pytest
+    import requests as rq
+    from brr.gates import cloud
+
+    def always(method, url, **kw):
+        raise rq.ConnectionError(ConnectionResetError(54, "reset"))
+
+    monkeypatch.setattr(cloud._SESSION, "request", always)
+    with pytest.raises(cloud.CloudUnavailableError):
+        cloud._request("http://x", "PUT", "/p", token="t", json={}, retry=False)
+
+    calls = _dead_then(monkeypatch, rq.ReadTimeout("slow"), _Ok())
+    with pytest.raises(cloud.CloudUnavailableError):
+        cloud._request("http://x", "PUT", "/p", token="t", json={}, retry=False)
+    assert calls == ["PUT"]
+
+
+def test_a_put_survives_a_server_that_closes_the_first_connection_unanswered():
+    """The real path: a socket the far side drops, requests raising, close() dropping the pool, the resend on a new connection."""
+    import socket
+    import threading
+
+    import requests as rq
+    from brr.gates import cloud
+
+    srv = socket.socket()
+    srv.bind(("127.0.0.1", 0))
+    srv.listen(4)
+    seen = []
+
+    def serve():
+        for n in range(2):
+            conn, _ = srv.accept()
+            data = conn.recv(65536)
+            seen.append(data.split(b" ", 1)[0])
+            if n == 0:
+                conn.close()  # read the request, answer nothing
+                continue
+            conn.sendall(b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 11\r\n"
+                         b"Connection: close\r\n\r\n{\"ok\":true}")
+            conn.close()
+
+    t = threading.Thread(target=serve, daemon=True)
+    t.start()
+    fresh = rq.Session()
+    try:
+        import unittest.mock as mock
+        with mock.patch.object(cloud, "_SESSION", fresh):
+            out = cloud._request(f"http://127.0.0.1:{srv.getsockname()[1]}", "PUT", "/v1/daemons/loom",
+                                 token="t", json={"v": 1}, retry=False)
+    finally:
+        t.join(5)
+        srv.close()
+    assert out == {"ok": True}
+    assert seen == [b"PUT", b"PUT"]
