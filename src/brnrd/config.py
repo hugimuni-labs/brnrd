@@ -215,6 +215,10 @@ class Settings:
     # author_association check (OWNER/MEMBER/COLLABORATOR) for the
     # managed GitHub webhook. Comma-split, lowercased.
     github_authz_allowlist: tuple[str, ...] = _env_csv_lower("BRNRD_GITHUB_AUTHZ_ALLOWLIST")
+    # The operators' read-outs (page views by referrer, routers/admin.py):
+    # GitHub logins of the accounts that may open them. Comma-split,
+    # lowercased. Unset or empty means nobody; nobody else learns they exist.
+    admin_github_logins: tuple[str, ...] = _env_csv_lower("BRNRD_ADMIN_GITHUB_LOGINS")
 
     # Billing (#53, kb design-billing.md §"Launch defaults + tunable knobs").
     # Test mode until #52 (Stripe France KYB) flips the keys to live.
