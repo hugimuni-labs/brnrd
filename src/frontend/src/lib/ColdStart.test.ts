@@ -150,9 +150,15 @@ function repo(over: Partial<ConnectedRepo> = {}): ConnectedRepo {
 test('an account with nothing connected is told the two things that have to happen', async () => {
 	const html = await renderColdStart([]);
 	ok(html.includes('install the cli'), 'names the install step');
-	ok(html.includes('curl -fsSL https://brnrd.dev/install | sh'), 'prints the headline install command');
+	ok(
+		html.includes('curl -fsSL https://brnrd.dev/install | sh'),
+		'prints the headline install command'
+	);
 	ok(html.includes('npm install -g brnrd'), 'offers the npm alternate');
-	ok(!html.includes('uv tool install') && !html.includes('pipx'), 'the retired packaged routes are off the wall');
+	ok(
+		!html.includes('uv tool install') && !html.includes('pipx'),
+		'the retired packaged routes are off the wall'
+	);
 	ok(html.includes('the guided setup'), 'names the guided-door step');
 	ok(!html.includes('brnrd init'), 'the retired verb is off the wall (08-14 trace)');
 	ok(!html.includes('account connect'), 'the pre-door pairing spell is off the wall too');
@@ -313,7 +319,10 @@ test('the pairing command is rendered from the prop, never restated in the compo
 	const html = await renderColdStart([], 'cd <repo>\nbrnrd account connect https://elsewhere');
 	ok(html.includes('brnrd account connect https://elsewhere'));
 	// the install line is the one brnrd.dev URL the component owns; no pairing endpoint beside it
-	ok(!html.replaceAll('https://brnrd.dev/install', '').includes('https://brnrd.dev'), 'no hardcoded endpoint of its own');
+	ok(
+		!html.replaceAll('https://brnrd.dev/install', '').includes('https://brnrd.dev'),
+		'no hardcoded endpoint of its own'
+	);
 	const source = readFileSync(componentPath, 'utf8');
 	ok(!source.includes('brnrd account connect'), 'the command is not typed into the component');
 });
@@ -460,7 +469,10 @@ test('mobile arrival leads with the messenger door, install ladder demoted to re
 		!html.includes('opens once a machine pairs'),
 		'the CTA states the real unlock condition (a repo), not a stale one'
 	);
-	ok(html.includes('curl -fsSL https://brnrd.dev/install | sh'), 'the install command still renders, as reference');
+	ok(
+		html.includes('curl -fsSL https://brnrd.dev/install | sh'),
+		'the install command still renders, as reference'
+	);
 	ok(!html.includes('text-amber-200/80">01<'), 'the numbered ladder rung is gone on mobile');
 	ok(!html.includes('>copy<'), 'the demoted note is informational — no copy affordance');
 });

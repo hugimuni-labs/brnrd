@@ -331,7 +331,11 @@ class ReleaseSource(DevSource):
         if found is None:
             return None
         tag, _ = found
-        self._git("fetch", "--quiet", "--no-tags", "origin", f"refs/tags/{tag}")
+        # main beside the tag: a tag clone's own refspec names only its first tag, and spabuild takes upstream as
+        # the merge base with origin/main; left at install time, the next release's frontend reads as a local edit.
+        # FETCH_HEAD's first line is the first refspec, the tag.
+        self._git("fetch", "--quiet", "--no-tags", "origin", f"refs/tags/{tag}",
+                  "+refs/heads/main:refs/remotes/origin/main")
         tip, head = self._git("rev-parse", "FETCH_HEAD^{commit}"), self._git("rev-parse", "HEAD")
         SEEN.update(tip=tip, at=time.time(), name=tag)
         if tip == head or self._ancestor(tip, head):

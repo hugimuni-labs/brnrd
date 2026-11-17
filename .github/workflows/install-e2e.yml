@@ -119,6 +119,8 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # a shallow clone cannot be pushed to the local upstream
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
