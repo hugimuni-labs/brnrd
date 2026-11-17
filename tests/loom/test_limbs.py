@@ -90,6 +90,10 @@ GITHUB = limbs.product("github")
     (["gh", "api", "-X", "delete", "repos/o/r"], "never"),
     (["gh", "api", "-f", "a=b", "--method", "DELETE", "repos/o/r"], "never"),
     (["gh", "api", "-H", "Accept: x", "-XDELETE", "/repos/o/r/"], "never"),
+    # gh takes a full address, GitHub's or an Enterprise host's.
+    (["gh", "api", "-X", "DELETE", "https://api.github.com/repos/o/r"], "never"),
+    (["gh", "api", "-X", "DELETE", "https://ghe.example/api/v3/repos/o/r/"], "never"),
+    (["gh", "api", "-X", "DELETE", "https://api.github.com/repos/o/r/issues/comments/1"], "do"),
     # A DELETE below a repository is not deleting it.
     (["gh", "api", "--method=DELETE", "repos/o/r/issues/comments/1"], "do"),
     (["gh", "api", "-X", "GET", "repos/o/r"], "do"),
@@ -111,10 +115,12 @@ def test_github_rows(argv, row):
     (["gh", "pr", "merge", "--repo=o/r", "--admin", "2610"], {"pr": "2610", "repo": "o/r"}),
     (["gh", "pr", "merge", "-Ro/r", "2610"], {"pr": "2610", "repo": "o/r"}),
     (["gh", "pr", "merge", "--match-head-commit", "abc", "--squash"], {"pr": "", "repo": ""}),
-    (["gh", "pr", "merge", "https://github.com/o/r/pull/2610/files"], {"pr": "2610", "repo": ""}),
+    (["gh", "pr", "merge", "https://github.com/o/r/pull/2610/files"], {"pr": "2610", "repo": "o/r"}),
     (["gh", "release", "create", "--notes", "v0.1.0 notes", "-t", "v9", "v0.9.1"], {"tag": "v0.9.1"}),
     (["gh", "release", "create", "-R", "o/r", "--discussion-category", "x", "v0.9.1"], {"tag": "v0.9.1"}),
     (["gh", "api", "-H", "x", "/repos/o/r/pulls/5/merge?y=1"], {"repo": "o/r", "pr": "5"}),
+    (["gh", "pr", "merge", "https://github.com/o/other/pull/5"], {"pr": "5", "repo": "o/other"}),
+    (["gh", "pr", "merge", "-R", "o/r", "https://github.com/o/other/pull/5"], {"pr": "5", "repo": "o/other"}),
 ])
 def test_the_ask_rules_read_flags_that_take_a_value(argv, found):
     row, rule = limbs.decide(GITHUB.rules, argv)
@@ -134,6 +140,12 @@ def _tool(path: Path, body: str) -> Path:
                                                  "gh pr checks 77 -R o/r"], "guard merge-red #77"),
     (["api", "-X", "PUT", "repos/o/r/pulls/5/merge"], ["gh pr checks 5 -R o/r"], "guard merge-red #5"),
     (["release", "create", "--target", "main"], [], "guard publish ? --why a release is public"),
+    # A link to another repository's PR reads that repository's checks, not this one's.
+    (["pr", "merge", "https://github.com/o/other/pull/5"], ["gh pr checks 5 -R o/other"], "guard merge-red #5"),
+    (["pr", "merge", "-R", "o/r", "https://github.com/o/other/pull/5/"], ["gh pr checks 5 -R o/other"],
+     "guard merge-red #5"),
+    (["api", "-X", "PUT", "https://api.github.com/repos/o/r/pulls/5/merge"], ["gh pr checks 5 -R o/r"],
+     "guard merge-red #5"),
 ])
 def test_the_stand_in_asks_with_the_right_target(tmp_path, argv, checks, asked):
     log = tmp_path / "log"
@@ -185,6 +197,42 @@ never  gh frobnicate
 e.g. never  gh frobnicate
 ```
 """
+
+
+OTHER_COMMAND = """# Thing
+
+| row  | what | how    |
+|------|------|--------|
+| look | peek | passes |
+
+```limb
+look  other peek
+e.g. look  other peek
+```
+"""
+
+
+def test_a_persons_page_for_another_command_is_refused_whole():
+    """A product page with no look row: a person's look rule for another command must not become
+    the stand-in's command and so make every never and ask rule miss."""
+    base = limbs.parse("thing", PAGE)
+    own = limbs.parse("thing", OTHER_COMMAND, source="person")
+    page, notes = limbs.overlay(base, own, lambda letter: False)
+    assert page is base
+    assert notes and "for `other`" in notes[0] and "the product's page stands" in notes[0]
+    assert limbs.decide(page.rules, ["thing", "burn", "now"])[0] == "never"
+
+
+def test_the_stand_in_takes_its_command_from_the_page_and_fails_closed_on_a_stray_rule(tmp_path):
+    base = limbs.parse("thing", PAGE)
+    shim = _tool(tmp_path / "shim", limbs.refuse_shell(base) + 'echo "row=$_brnrd_limb"\n')
+    proc = subprocess.run([str(shim), "burn", "now"], capture_output=True, text=True)
+    assert proc.returncode == 1 and "no burning" in proc.stderr
+    mixed = limbs.replace(base, rules=(limbs.parse("thing", OTHER_COMMAND).rules[0], *base.rules))
+    stray = _tool(tmp_path / "stray", limbs.refuse_shell(mixed).replace("--command other", "--command thing")
+                  + 'echo "row=$_brnrd_limb"\n')
+    proc = subprocess.run([str(stray), "look"], capture_output=True, text=True)
+    assert proc.returncode == 1 and "carries rules for other" in proc.stderr
 
 
 def test_a_persons_row_adds_to_the_products_and_only_tightens():

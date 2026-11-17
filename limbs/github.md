@@ -24,6 +24,7 @@ never  gh api  -X|--method=delete  @repos/*/*
 
 ask merge-red  gh pr merge  {pr}  -R|--repo={repo}
   skip: -b --body -F --body-file -t --subject -A --author-email --match-head-commit
+  take repo from pr: [A-Za-z]+://[^/]+/([^/]+/[^/]+)/pull/
   take pr: (?:.*/pull/)?([^/]*)
   default pr: gh pr view [-R {repo}] --json number -q .number
   unless: gh pr checks {pr} [-R {repo}]
@@ -46,12 +47,15 @@ e.g. never  gh api -X DELETE repos/o/r
 e.g. never  gh api --method delete /repos/o/r/
 e.g. never  gh api repos/{owner}/{repo} -XDELETE
 e.g. never  gh api --method=DELETE repos/o/r?x=1
+e.g. never  gh api -X DELETE https://api.github.com/repos/o/r
 e.g. do     gh api -X DELETE repos/o/r/git/refs/heads/x
 e.g. ask    gh pr merge 2610 --squash
 e.g. ask    gh pr merge -R o/r --subject "x y" 2610
 e.g. ask    gh pr merge https://github.com/o/r/pull/2610
+e.g. ask    gh pr merge https://github.com/o/other/pull/5 --squash
 e.g. ask    gh pr merge --squash
 e.g. ask    gh api -X PUT repos/o/r/pulls/2610/merge
+e.g. ask    gh api -X PUT https://api.github.com/repos/o/r/pulls/2610/merge
 e.g. ask    gh release create -t Title v0.9.1
 e.g. ask    gh release create --notes-file notes.md --target main v0.9.1
 e.g. look   gh pr view 2610

@@ -68,6 +68,7 @@ class Page:
 
     @property
     def command(self) -> str:
+        """The one command the page's rules name (``check`` refuses a page naming two)."""
         return self.rules[0].prefix[0] if self.rules else ""
 
     def small_print(self) -> str:
@@ -129,24 +130,29 @@ def _rule(head: str, details: list[str], where: str) -> Rule:
             raise LimbError(f"{where}: {word!r} is not a command word")
     if not prefix or prefix[0] in ("*",) or "|" in prefix[0]:
         raise LimbError(f"{where}: a rule starts with the command's name")
-    parsed: dict = {"skip": (), "take": {}, "default": {}}
+    parsed: dict = {"skip": (), "take": [], "default": {}}
     for line in details:
         key, colon, value = line.strip().partition(":")
         key, _, arg = key.strip().partition(" ")
         value = value.strip()
         if not colon or key not in _KEYS or not value or bool(arg) != (key in ("take", "default")):
-            raise LimbError(f"{where}: {line.strip()!r} is not one of "
-                            "say:, skip:, take <name>:, default <name>:, unless:, target:, why:")
+            raise LimbError(f"{where}: {line.strip()!r} is not one of say:, skip:, take <name>:, "
+                            "take <name> from <name>:, default <name>:, unless:, target:, why:")
         if key == "skip":
             parsed["skip"] = _opt_aliases("|".join(value.split()), where)
         elif key == "take":
+            # take <name>: the group of the pattern in the capture's own value.
+            # take <name> from <other>: the group in <other>'s value, when it matches, over <name>'s own.
+            name, _, source = arg.partition(" from ")
+            if not re.fullmatch(r"\w+", name) or (source and not re.fullmatch(r"\w+", source)):
+                raise LimbError(f"{where}: take {arg}: is 'take <name>:' or 'take <name> from <name>:'")
             try:
                 regex = re.compile(value)
             except re.error as exc:
                 raise LimbError(f"{where}: take {arg}: {exc}") from None
             if regex.groups != 1:
                 raise LimbError(f"{where}: take {arg}: the pattern keeps exactly one group")
-            parsed["take"][arg] = regex
+            parsed["take"].append((name, source, regex))
         elif key == "default":
             parsed["default"][arg] = value
         else:
@@ -157,6 +163,10 @@ def _rule(head: str, details: list[str], where: str) -> Rule:
         raise LimbError(f"{where}: unless:, target: and why: belong to an ask rule")
     names = {c[1] for c in conds if c[0] == "pos"} | {c[2] for c in conds if c[0] == "opt" and c[2]}
     names |= {n for c in conds if c[0] == "path" for n in c[2]}
+    for name, source, _regex in parsed["take"]:
+        for used in filter(None, (name, source)):
+            if used not in names:
+                raise LimbError(f"{where}: take: uses {{{used}}}, which the rule does not capture")
     for key in ("unless", "target"):
         for used in re.findall(r"\{(\w+)\}", parsed.get(key, "")):
             if used not in names:
@@ -290,8 +300,11 @@ def _positionals(rest: list[str], valued: set[str]) -> list[str]:
 
 
 def _path(arg: str) -> str:
-    path = arg.split("?", 1)[0]
+    """An argument as an API path: no query, no scheme and host (gh takes a full address),
+    no Enterprise ``api/v3/``, no edge slash."""
+    path = re.sub(r"^[A-Za-z][\w+.-]*://[^/]*", "", arg.split("?", 1)[0])
     path = path[1:] if path.startswith("/") else path
+    path = path[len("api/v3/"):] if path.startswith("api/v3/") else path
     return path[:-1] if path.endswith("/") else path
 
 
@@ -325,9 +338,16 @@ def match(rule: Rule, argv: list[str] | tuple[str, ...]) -> dict[str, str] | Non
             if hit is None:
                 return None
             found.update(hit.groupdict())
-    for name, regex in rule.details["take"].items():
-        m = regex.match(found.get(name, ""))
-        found[name] = m.group(1) if m else found.get(name, "")
+    raw = dict(found)
+    for name, source, regex in rule.details["take"]:
+        if source:
+            # The source wins: a PR link names its repository, and gh acts on the link's.
+            m = regex.match(raw.get(source, ""))
+            if m:
+                found[name] = m.group(1)
+        else:
+            m = regex.match(raw.get(name, ""))
+            found[name] = m.group(1) if m else found.get(name, "")
     return found
 
 
@@ -363,7 +383,7 @@ def _sub(template: str, found: dict[str, str]) -> str:
 def _call(page: Page, verb: str, extra: str = "") -> str:
     boot = f"import sys; sys.path.insert(0, {SRC!r}); from brr.loom.runtime.limbs import main; sys.exit(main())"
     return (f"{shlex.quote(sys.executable)} -I -c {shlex.quote(boot)} {verb} "
-            f"--name {shlex.quote(page.name)} --rules {shlex.quote(page.small_print())}{extra} -- \"$@\"")
+            f"--name {shlex.quote(page.name)} --command {shlex.quote(page.command)} --rules {shlex.quote(page.small_print())}{extra} -- \"$@\"")
 
 
 def refuse_shell(page: Page) -> str:
@@ -418,7 +438,13 @@ def main(argv: list[str] | None = None) -> int:
         call = rest[1:]
         name = opts["name"]
         rules, _examples = _rules(opts["rules"], f"limbs/{name}.md")
-        command = rules[0].prefix[0]
+        command = opts["command"]
+        strays = sorted({r.prefix[0] for r in rules} - {command})
+        if strays:
+            # A rule for another command would never match this one's calls: fail closed.
+            sys.stderr.write(f"{command}: brnrd's stand-in for {command} carries rules for {', '.join(strays)}; "
+                             "refused until its page is fixed\n")
+            return 1
         argv_ = [command, *call]
         if verb == "first":
             return _first(rules, argv_, command)
@@ -471,6 +497,9 @@ def overlay(base: Page, own: Page, allows: Callable[[str], bool]) -> tuple[Page,
     that ``allows`` (the owner's, naming the service) replaces the product's
     row instead, and so may loosen it.
     """
+    if own.command != base.command:
+        return base, [f"limbs/{own.name}.md: your page is for `{own.command}`, the product's for "
+                      f"`{base.command}`; the product's page stands"]
     rules = list(base.rules)
     table = dict(base.table)
     taken, notes = [], []
