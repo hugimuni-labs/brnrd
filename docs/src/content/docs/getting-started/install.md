@@ -259,10 +259,26 @@ tip offers again. While an offer is open a newer green tip updates its target
 without a second letter. How the resident asks or tells its person follows
 their agreement, with no new config setting. `update = "off"` stays off.
 
+### Following releases instead of main
+
+Releases are a setting of the same mechanism, not another install:
+
+```toml
+# loom/config.toml in the home (e.g. ~/brnrd/loom/config.toml)
+update = "stable"
+```
+
+The same checkout is then offered origin's newest release tag (`vX.Y.Z`;
+a pre-release such as `v0.8.0rc1` is never offered) instead of main's tip.
+The tag is judged by main's own CI gate, and the letter, `update take`, the
+import/config check, its rollback and the idle reload are the ones above.
+A checkout already ahead of every release, as a fresh install of main is,
+stays where it is until a newer release passes it.
+
 The installer warns about `PYTHONPATH`, missing coding-agent CLIs, and missing
 or signed-out `gh`. Run it from the login shell whose tools the service should
 see. Updating source uses the resident-controlled merge above, independently of
-refreshing its Python environment. Release selection remains separate work.
+refreshing its Python environment.
 
 ## Development install
 

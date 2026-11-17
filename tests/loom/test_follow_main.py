@@ -918,3 +918,61 @@ def test_failed_dependency_install_refuses_take_and_restores_old_tree(world, mon
     checked = update.latest(read_facts(Home(world.root)), Home(world.root), world.source, 'update.checked')
     assert not checked.data['ok']
     assert _offered(world)
+
+
+def test_the_newest_release_is_by_number_peeled_and_never_a_pre_release():
+    listing = "\n".join([
+        "a1\trefs/tags/v0.9.9", "b1\trefs/tags/v0.10.0", "b2\trefs/tags/v0.10.0^{}",
+        "c1\trefs/tags/v0.11.0rc1", "d1\trefs/tags/board-builds", "e1\trefs/tags/v0.10.0-fix"])
+    assert update.newest_release(listing) == ("v0.10.0", "b2")
+    assert update.newest_release("d1\trefs/tags/board-builds") is None
+
+
+def _stable(world, tag="v0.7.2", at=None):
+    """``update = stable``; ``tag`` (annotated) on ``at``, by default the green merge, then main moves past it."""
+    with (world.root / "loom/config.toml").open("a") as file:
+        file.write('\nupdate = "stable"\n')
+    _git(world.upstream, "-c", "user.name=t", "-c", "user.email=t@t", "tag", "-a", "-m", tag, tag, at or world.tip)
+    _git(world.upstream, "push", "-q", "origin", tag)
+    release = _git(world.upstream, "rev-parse", f"{tag}^{{commit}}")
+    _next_tip(world, message="After the release (#9)")
+    return release
+
+
+def test_stable_offers_the_newest_release_tag_not_main_and_take_lands_on_it(world, capsys):
+    release = _stable(world)
+    _run(world.root, lambda: _update_letters(world))
+    offered = _offered(world).data
+    assert (offered["new"], offered["ref"]) == (release, "v0.7.2") and release != world.tip
+    [letter] = _update_letters(world)
+    assert letter.data["body"].startswith(f"Release v0.7.2 is out and green, {release[:8]}")
+    assert "#7 · Change 7" in letter.data["body"] and "#9" not in letter.data["body"]
+    assert world.forge.asked == [release] * len(world.forge.asked)  # main's tip is never judged
+    assert _take(world) == 0
+    assert "Taking offered v0.7.2" in capsys.readouterr().out
+    assert _git(world.source, "rev-parse", "HEAD") == release
+    # The next start runs the release and says what it loaded, as a dev move does.
+    _run(world.root, lambda: [f for f in read_facts(Home(world.root)) if f.kind == "loom.moved"])
+    [moved] = [f for f in read_facts(Home(world.root)) if f.kind == "loom.moved"]
+    assert (moved.data["to"], moved.data["merges"]) == (release, ["#7"])
+
+
+def test_stable_leaves_a_checkout_ahead_of_every_release_where_it_is(world):
+    _stable(world, "v0.7.1", at=world.old)  # the release is the commit this checkout already runs
+    _run(world.root, lambda: update.SEEN.get("name") == "v0.7.1")
+    assert not _offered(world) and not world.forge.asked
+    assert _git(world.source, "rev-parse", "HEAD") == world.old
+
+
+def test_stable_holds_a_red_release_and_says_so(world):
+    _stable(world)
+    world.forge.verdict_of = "red"
+    lines = []
+    updater = update.Updater(Home(world.root), lambda home, text: lines.append(text), world.source)
+    from brr.loom.runtime.config import load_config
+    config = load_config(world.root)
+    updater.step(config, lambda young: True)
+    updater.worker.join(10)
+    updater.step(config, lambda young: True)
+    assert not _offered(world)
+    assert any("is red on Backend tests" in line for line in lines), lines
