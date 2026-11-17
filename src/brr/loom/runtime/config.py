@@ -83,8 +83,9 @@ KEYS: tuple[Key, ...] = (
         choices=("auto", "off")),
     Key("update", "choice", "auto",
         "How the loom follows new code: dev offers origin's main for the resident to merge into its checkout "
-        "once its CI is green; take checks the merged tree, then re-execs at an idle tick. Stable is the release "
-        "channel (not built yet); off stays put. auto: dev for a git checkout, else off.",
+        "once its CI is green; take checks the merged tree, then re-execs at an idle tick. stable does the same with "
+        "origin's newest release tag (vX.Y.Z) instead of main, so the same checkout follows releases; off stays put. "
+        "auto: dev for a git checkout, else off.",
         choices=("auto", "dev", "stable", "off")),
     Key("connectors", "names", (),
         "Enabled folders or named channels, e.g. [\"inbox=addon\"]. Home folders override bundled folders; default: none."),

@@ -1,4 +1,5 @@
-"""A green main tip is offered to the resident; only ``update take`` merges it.
+"""A green main tip, or with ``update = stable`` the newest green release tag, is offered to the resident;
+only ``update take`` merges it. Both move the same checkout the same way: stable is a target, not an install kind.
 
 Offers and decisions live in the ledger. The loop polls off-thread, sends one
 notice per open offer, and re-execs only after take checked the merged tree.
@@ -77,6 +78,8 @@ class Offer:
     old: str
     new: str
     pulls: tuple[dict, ...] = ()
+    #: What ``new`` is: ``main``, or the release tag stable follows (``v0.7.2``).
+    name: str = "main"
 
 
 @dataclass(frozen=True)
@@ -224,7 +227,7 @@ class DevSource:
         url = self._git("remote", "get-url", "origin")
         self._git("fetch", "--quiet", "--no-tags", "origin", "refs/heads/main")
         tip, head = self._git("rev-parse", "FETCH_HEAD"), self._git("rev-parse", "HEAD")
-        SEEN.update(tip=tip, at=time.time())
+        SEEN.update(tip=tip, at=time.time(), name="main")
         if tip == head or self._ancestor(tip, head):
             return None
         # A tip no check ran on and no pull request gated is never judged: the move goes as far as its first parent
@@ -239,6 +242,10 @@ class DevSource:
                 return None
             target = parent
             subject = self._git("log", "-1", "--format=%s", target)
+        return self._judged(url, head, target, subject)
+
+    def _judged(self, url: str, head: str, target: str, subject: str, name: str = "main") -> Offer | Held | None:
+        """The offer ``target`` makes once its checks are green; the red check holding it; else nothing yet."""
         state, red = self.forge.judge(url, target, self.forge.gates(url, pull_of(subject)))
         if state == "red":
             return Held(target, head, red)
@@ -262,7 +269,7 @@ class DevSource:
                     data = {"number": number, "title": subject, "body": ""}
                 self.descriptions[key] = pull_summary(url, number, data)
             pulls.append(self.descriptions[key])
-        return Offer(head, target, tuple(pulls))
+        return Offer(head, target, tuple(pulls), name)
 
     def apply(self, offer: Offer) -> tuple[str, str, int]:
         """Merge on the current branch; abort conflicts without retaining tree changes."""
@@ -287,8 +294,52 @@ class DevSource:
         return before, mode, own
 
 
-#: The seam for move 3: ``stable`` gets its source here when releases exist.
-SOURCES = {"dev": DevSource}
+#: A release tag stable follows: ``v`` and three numbers. A suffix (``v0.8.0rc1``) is a pre-release, never followed.
+RELEASE = re.compile(r"refs/tags/v(\d+)\.(\d+)\.(\d+)")
+
+
+def newest_release(listing: str) -> tuple[str, str] | None:
+    """``(tag, commit)`` of the highest release in ``git ls-remote --tags`` output; an annotated tag's
+    peeled ``^{}`` line names its commit."""
+    commits, numbers = {}, {}
+    for line in listing.splitlines():
+        sha, _, ref = line.partition("\t")
+        peeled = ref.endswith("^{}")
+        ref = ref.removesuffix("^{}")
+        if not (match := RELEASE.fullmatch(ref)):
+            continue
+        tag = ref.removeprefix("refs/tags/")
+        numbers[tag] = tuple(map(int, match.groups()))
+        if peeled or tag not in commits:
+            commits[tag] = sha
+    if not numbers:
+        return None
+    tag = max(numbers, key=numbers.get)
+    return tag, commits[tag]
+
+
+class ReleaseSource(DevSource):
+    """The same checkout, offered origin's newest release tag instead of main's tip.
+
+    A release tag is a merge on main (release.yml checks it), so it is judged by main's own gate, merged by
+    ``apply`` like any offer and rolled back by the same take check. A checkout ahead of every release (one
+    installed from main, then set to stable) stays where it is until a release passes it."""
+
+    def poll(self) -> Offer | Held | None:
+        url = self._git("remote", "get-url", "origin")
+        found = newest_release(self._git("ls-remote", "--tags", "origin", "refs/tags/v*"))
+        if found is None:
+            return None
+        tag, _ = found
+        self._git("fetch", "--quiet", "--no-tags", "origin", f"refs/tags/{tag}")
+        tip, head = self._git("rev-parse", "FETCH_HEAD^{commit}"), self._git("rev-parse", "HEAD")
+        SEEN.update(tip=tip, at=time.time(), name=tag)
+        if tip == head or self._ancestor(tip, head):
+            return None
+        return self._judged(url, head, tip, self._git("log", "-1", "--format=%s", tip), tag)
+
+
+SOURCES = {"dev": DevSource, "stable": ReleaseSource}
 
 
 def forge_for(config):
@@ -449,15 +500,15 @@ def wake_line(facts, install: str, root: Path) -> str:
                     if f.data.get("install") == install and f.data.get("commit")), "")
     if not running:
         return ""
-    tip = str(SEEN.get("tip") or "")
+    tip, name = str(SEEN.get("tip") or ""), SEEN.get("name") or "main"
     if not tip:
         main = "main not fetched by this loom (update off, or not polled yet)"
     elif tip == running or git(root, "merge-base", "--is-ancestor", tip, running, check=False).returncode == 0:
-        main = f"main {tip[:8]}, nothing behind"
+        main = f"{name} {tip[:8]}, nothing behind"
     else:
         count = git(root, "rev-list", "--count", f"{running}..{tip}", check=False).stdout.strip() or "?"
         pending = merges(root, running, tip)
-        main = (f"main {tip[:8]} is {count} commit{'s' * (count != '1')} ahead"
+        main = (f"{name} {tip[:8]} is {count} commit{'s' * (count != '1')} ahead"
                 + (f", not loaded: {', '.join(pending)}" if pending else ""))
     last = next((f for f in reversed(kind_facts(facts, "loom.moved")) if f.data.get("install") == install), None)
     return f"loom: runs {running[:8]}; {main}" + (f"; last {moved_text(last)}" if last else "") + "\n"
@@ -521,9 +572,10 @@ def offer_update(home, root, facts, found):
     offered = previous
     if not previous or previous.data["new"] != found.new:
         offered = record(home, root, "update.offered", offer=letter, subject=subject, old=found.old,
-                         new=found.new, own=own, dirty=dirty, pulls=pulls, omitted=omitted)
+                         new=found.new, own=own, dirty=dirty, pulls=pulls, omitted=omitted, ref=found.name)
     if not any(f.id == letter for f in facts):
-        what = (f"Main has a green update, {found.new[:8]}, for {root}. "
+        what = (("Main has a green update" if found.name == "main" else f"Release {found.name} is out and green")
+                + f", {found.new[:8]}, for {root}. "
                 f"Your checkout carries {own} own commits; "
                 f"tracked files {'have uncommitted changes' if dirty else 'are committed'}.\n\n"
                 + (details or "No merged pull requests since the merge base.") +
@@ -618,7 +670,7 @@ def decide(home, root, action, why=""):
             record(home, root, "update.decided", offer=data["offer"], tip=data["new"],
                    action="hold", why=why)
         else:
-            print(f"Taking offered main {data['new']} into {source._git('rev-parse', '--abbrev-ref', 'HEAD')}")
+            print(f"Taking offered {data.get('ref', 'main')} {data['new']} into {source._git('rev-parse', '--abbrev-ref', 'HEAD')}")
             before = source._git("rev-parse", "HEAD")
             mode, own, ok = "merge", 0, False
             try:
