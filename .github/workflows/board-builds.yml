@@ -20,17 +20,27 @@ jobs:
       - uses: actions/checkout@v4
         with:
           ref: ${{ github.event.workflow_run.head_sha }}
-      - uses: actions/setup-node@v4
+      # A commit from before board assets existed (its CI finishing after the merge
+      # that added them) has no publisher to run: skip it, never fail on it.
+      - name: Has a publisher
+        id: has
+        run: |
+          if [ -f scripts/publish_board.py ]; then echo ok=true >> "$GITHUB_OUTPUT"
+          else echo "::notice::${{ github.event.workflow_run.head_sha }} predates scripts/publish_board.py; nothing to publish"; fi
+      - if: steps.has.outputs.ok == 'true'
+        uses: actions/setup-node@v4
         with:
           node-version: '22'
           cache: npm
           cache-dependency-path: src/frontend/package-lock.json
       - name: Build the board
+        if: steps.has.outputs.ok == 'true'
         working-directory: src/frontend
         run: |
           npm ci
           npm run build
       - name: Publish and prune commit assets
+        if: steps.has.outputs.ok == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
           BOARD_COMMIT: ${{ github.event.workflow_run.head_sha }}
