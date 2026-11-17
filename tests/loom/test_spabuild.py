@@ -10,7 +10,7 @@ from brr.loom.runtime.spabuild import BuildFailed, SpaBuild, npm_supported as ch
 @pytest.fixture(autouse=True)
 def board_dependencies(monkeypatch):
     from brr.loom.runtime import board_asset, spabuild
-    monkeypatch.setattr(board_asset, 'available', lambda: set())
+    monkeypatch.setattr(board_asset, 'fetch', lambda *a: (_ for _ in ()).throw(OSError('404')))
     monkeypatch.setattr(spabuild, 'npm_supported', lambda: spabuild.shutil.which('npm') is not None)
     # Builds run on a worker thread: a pytest.fail (or any error) raised there must fail the test.
     import threading
@@ -251,8 +251,8 @@ def test_missing_exact_asset_builds_locally_before_trying_ancestors(checkout, mo
     from brr.loom.runtime import board_asset, spabuild
     root, frontend = checkout
     managed(root, frontend)
-    monkeypatch.setattr(board_asset, 'fetch', lambda *a: (_ for _ in ()).throw(OSError('404')))
-    monkeypatch.setattr(board_asset, 'available', lambda: pytest.fail('ancestor before supported local build'))
+    fetched = []
+    monkeypatch.setattr(board_asset, 'fetch', lambda c, *a: fetched.append(c) or (_ for _ in ()).throw(OSError('404')))
     monkeypatch.setattr(spabuild, 'npm_supported', lambda: True)
     calls = []
     def run(args, cwd, env=None):
@@ -264,6 +264,7 @@ def test_missing_exact_asset_builds_locally_before_trying_ancestors(checkout, mo
     spa = SpaBuild(frontend, lambda _: None, run, every=0)
     settle(spa)
     assert calls == [['npm', 'run', 'build']]
+    assert fetched == [spa.upstream[0]]  # the exact asset only: no ancestor before a supported local build
     assert (spa.build / '200.html').read_text() == 'locally built'
     assert spa.built() == spa.wanted()
 
@@ -280,8 +281,8 @@ def test_fallback_selects_newest_reachable_asset_and_reports_older_board(checkou
     git(root, 'update-ref', 'refs/remotes/origin/main', 'HEAD')
     calls, messages = [], []
     monkeypatch.setattr(spabuild, 'npm_supported', lambda: False)
-    # Unrelated available assets cannot be selected just because they are newer.
-    monkeypatch.setattr(board_asset, 'available', lambda: {older, subprocess.check_output(['git', 'rev-parse', older + '^'], cwd=root, text=True).strip(), 'f' * 40})
+    # The walk is upstream's first parents, nearest first: a hit stops it, so the
+    # grandparent is never tried.
     def fetch(commit, tree, out):
         calls.append(commit)
         if commit == newer:
@@ -307,6 +308,8 @@ def test_bad_digest_is_never_served_and_idle_retry_recovers(checkout, monkeypatc
     clock, attempts, messages = [0.0], [], []
     monkeypatch.setattr(spabuild, 'npm_supported', lambda: False)
     def fetch(commit, tree, out):
+        if commit != spa.upstream[0]:
+            raise OSError('404')  # no ancestor is published: this test is the exact asset's
         attempts.append(clock[0])
         if len(attempts) == 1:
             out.mkdir()
@@ -405,7 +408,8 @@ def test_idle_gates_only_the_retry_and_is_read_only_when_it_is_due(checkout, mon
     clock, checks, attempts = [0.0], [], []
 
     def missing(commit, tree, destination):
-        attempts.append(clock[0])
+        if commit == spa.upstream[0]:  # attempts are counted by the exact asset; ancestors also 404
+            attempts.append(clock[0])
         raise OSError('404')
     monkeypatch.setattr(board_asset, 'fetch', missing)
     spa = SpaBuild(frontend, lambda _: None, every=30, clock=lambda: clock[0])
@@ -533,14 +537,13 @@ def test_leftover_staging_dirs_are_not_a_change(checkout, monkeypatch):
     assert spa.changed is False
 
 
-def test_retry_with_an_older_board_served_does_not_list_the_api(checkout, monkeypatch):
+def test_retry_with_an_older_board_served_tries_only_the_exact_asset(checkout, monkeypatch):
     from brr.loom.runtime import board_asset, spabuild
     root, frontend = checkout
     managed(root, frontend)
     monkeypatch.setattr(spabuild, 'npm_supported', lambda: False)
-    monkeypatch.setattr(board_asset, 'fetch', lambda *a: (_ for _ in ()).throw(OSError('404')))
-    listings = []  # a recorder: pytest.fail inside the build's thread would not fail the test
-    monkeypatch.setattr(board_asset, 'available', lambda: listings.append(1) or set())
+    fetched = []  # a recorder: pytest.fail inside the build's thread would not fail the test
+    monkeypatch.setattr(board_asset, 'fetch', lambda c, *a: fetched.append(c) or (_ for _ in ()).throw(OSError('404')))
     spa = SpaBuild(frontend, lambda _: None, every=0)
     spa.build.mkdir()
     (spa.build / '200.html').write_text('older board')
@@ -548,4 +551,34 @@ def test_retry_with_an_older_board_served_does_not_list_the_api(checkout, monkey
     (spa.build / '.commit').write_text('1' * 40)
     settle(spa)
     assert (spa.build / '200.html').read_text() == 'older board'
-    assert listings == []
+    assert fetched == [spa.upstream[0]]
+
+
+def test_fallback_walks_a_bounded_first_parent_chain_of_upstream(checkout, monkeypatch):
+    """No API listing: the fallback tries release downloads for upstream main's nearest
+    first parents only, at most ANCESTORS of them, and a side branch is never tried."""
+    from brr.loom.runtime import board_asset, spabuild
+    root, frontend = checkout
+    managed(root, frontend)
+    rev = lambda ref: subprocess.check_output(['git', 'rev-parse', ref], cwd=root, text=True).strip()
+    base = rev('HEAD')
+    git(root, 'checkout', '-qb', 'side')
+    git(root, '-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-qm', 'side', '--allow-empty')
+    side = rev('HEAD')
+    git(root, 'checkout', '-q', '-')
+    for index in range(spabuild.ANCESTORS + 3):
+        git(root, '-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-qm', f'm{index}', '--allow-empty')
+        if index == 1:
+            git(root, '-c', 'user.name=t', '-c', 'user.email=t@t', 'merge', '-q', '--no-ff', '-m', 'merge side', 'side')
+    git(root, 'update-ref', 'refs/remotes/origin/main', 'HEAD')
+    exact = rev('HEAD')
+    monkeypatch.setattr(spabuild, 'npm_supported', lambda: False)
+    tried, messages = [], []
+    monkeypatch.setattr(board_asset, 'fetch', lambda c, *a: tried.append(c) or (_ for _ in ()).throw(OSError('404')))
+    spa = SpaBuild(frontend, messages.append, every=0)
+    settle(spa)
+    first_parents = subprocess.check_output(['git', 'rev-list', '--first-parent', exact], cwd=root, text=True).split()
+    assert tried == first_parents[:spabuild.ANCESTORS + 1]
+    assert side not in tried and base not in tried
+    assert sum('rejected/unavailable' in line for line in messages) == 1  # the exact miss, not twenty
+    assert any(f'no board published for the {spabuild.ANCESTORS} commits before {exact}' in line for line in messages)

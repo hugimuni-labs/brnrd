@@ -1,8 +1,8 @@
 """Verified, commit-addressed board archives from the rolling prerelease.
 
 Downloads never replace a good build until the complete archive is validated.
-Exact downloads need no API call. Ancestor fallback uses the public, anonymous
-release API; credentials, Node and Docker are optional.
+Every read is a release download, never an API call: the anonymous API's hourly
+limit is spent by a shared CI or office IP. Credentials, Node and Docker are optional.
 """
 from __future__ import annotations
 
@@ -20,7 +20,6 @@ from pathlib import Path
 BASE = "https://github.com/hugimuni-labs/brnrd/releases/download/board-builds"
 #: Where exact assets are read: a mirror, or a local server in tests.
 BASE_ENV = "BRNRD_BOARD_BASE"
-API = "https://api.github.com/repos/hugimuni-labs/brnrd"
 MAX_ARCHIVE = 64 * 1024 * 1024
 MAX_EXPANDED = 256 * 1024 * 1024
 
@@ -70,25 +69,6 @@ def fetch(commit: str, tree: str, destination: Path, get=download) -> None:
         raise ValueError("board archive has no 200.html")
     (destination / ".tree").write_text(tree + "\n")
     (destination / ".commit").write_text(commit + "\n")
-
-
-def available(get=download) -> set[str]:
-    """List complete asset pairs anonymously, including beyond the first page."""
-    release = json.loads(get(f'{API}/releases/tags/board-builds', 1024 * 1024))
-    release_id = int(release['id'])
-    names: set[str] = set()
-    page = 1
-    while True:
-        assets = json.loads(get(f'{API}/releases/{release_id}/assets?per_page=100&page={page}', 1024 * 1024))
-        names.update(asset['name'] for asset in assets)
-        if len(assets) < 100:
-            break
-        page += 1
-        if page > 20:
-            raise ValueError('too many board asset pages')
-    return {match.group(1) for name in names
-            if (match := re.fullmatch(r'board-([0-9a-f]{40})\.tar\.gz', name))
-            and name + '.json' in names}
 
 
 def main(argv: list[str] | None = None) -> int:

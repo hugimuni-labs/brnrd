@@ -49,11 +49,13 @@ def prepare(source: Path) -> str:
         raise RuntimeError('checkout has no upstream main ancestor; not activated')
     if spa.built() != wanted:
         spa._build(wanted)
-    if not (spa.build / '200.html').is_file():
-        print('board: unavailable; installation continues (retry command printed above)')
+    if (spa.build / '200.html').is_file():
+        board = f'{spa.build} (tree {spa.built()})'
+    else:
+        board = 'unavailable; installation continues (retry command printed above)'
     if git(source, 'rev-parse', 'HEAD') != head:
         raise RuntimeError('checkout HEAD moved during preparation; rerun the installer')
-    print(f'source: {source}\nHEAD: {head}\nboard: {spa.build} (tree {spa.built()})')
+    print(f'source: {source}\nHEAD: {head}\nboard: {board}')
     return head
 
 

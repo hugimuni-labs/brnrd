@@ -24,6 +24,8 @@ LIMIT = 900
 #: Seconds between reads of HEAD's tree: a ``git`` fork at every 0.2 s tick was a share of the loom's idle CPU.
 #: Follow-main re-execs after it moves the checkout, and a fresh process reads at its first pass.
 EVERY = 30.0
+#: How many of upstream main's first parents the fallback tries for a published board.
+ANCESTORS = 20
 
 
 class BuildFailed(Exception):
@@ -145,7 +147,7 @@ class SpaBuild:
         self.worker = threading.Thread(target=self._build, args=(tree,), name="spa-build", daemon=True)
         self.worker.start()
 
-    def _fetch(self, commit: str, tree: str) -> bool:
+    def _fetch(self, commit: str, tree: str, quiet: bool = False) -> bool:
         from .board_asset import fetch
         try:
             shutil.rmtree(self.next, ignore_errors=True)
@@ -156,7 +158,8 @@ class SpaBuild:
             return True
         except Exception as exc:
             shutil.rmtree(self.next, ignore_errors=True)
-            self.notice(commit, f"spa: rejected/unavailable board for {commit} ({exc}); archive not served")
+            if not quiet:
+                self.notice(commit, f"spa: rejected/unavailable board for {commit} ({exc}); archive not served")
             return False
 
     def _local(self, tree: str) -> None:
@@ -186,26 +189,24 @@ class SpaBuild:
             return False
 
     def _ancestor(self, exact: str) -> bool:
-        from .board_asset import available
         if self.fetched() and (self.build / '200.html').is_file():
             # An older published board is already served: a retry only tries the exact
-            # asset (a release download), never the anonymous API listing, which is
-            # limited to 60 requests an hour.
+            # asset, never the walk below.
             return True
-        try:
-            commits = available()
-            # git's date order selects the newest published reachable commit,
-            # never an unrelated branch merely because it has a newer asset.
-            ancestors = (self._git('rev-list', '--date-order', 'HEAD') or '').splitlines()
-            for commit in ancestors:
-                if commit == exact or commit not in commits:
-                    continue
-                tree = self._git('rev-parse', f'{commit}:src/frontend')
-                if tree and self._fetch(commit, tree):
-                    self.notice('older:' + commit, f'spa: board is from older ancestor commit {commit}')
-                    return True
-        except Exception as exc:
-            self.notice('listing', f'spa: cannot list older board assets ({exc})')
+        # Upstream main's own first parents, nearest first: a resident's local commits
+        # and unrelated branches never qualify. Each try is a release download, which
+        # unlike the API's asset listing has no anonymous hourly limit (a shared CI or
+        # office IP exhausts that one).
+        ancestors = (self._git('rev-list', '--first-parent', f'--max-count={ANCESTORS + 1}', exact)
+                     or '').splitlines()
+        for commit in ancestors:
+            if commit == exact:
+                continue
+            tree = self._git('rev-parse', f'{commit}:src/frontend')
+            if tree and self._fetch(commit, tree, quiet=True):
+                self.notice('older:' + commit, f'spa: board is from older ancestor commit {commit}')
+                return True
+        self.notice('older', f'spa: no board published for the {ANCESTORS} commits before {exact}')
         return False
 
     def _build(self, tree: str) -> None:

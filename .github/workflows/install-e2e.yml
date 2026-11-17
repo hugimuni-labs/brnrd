@@ -93,10 +93,12 @@ jobs:
           grep -q '^removed older installer environment: ' "$E/run3.log" || fail 'third run removed nothing'
           grep -q '^service: none installed' "$E/run1.log" || fail 'a service was touched under a throwaway HOME'
           grep -q "^HEAD: $(git rev-parse HEAD)" "$E/run1.log" || fail 'receipt names another HEAD'
-          if ! grep -q '^board: unavailable' "$E/run1.log"; then
-            grep '^board: ' "$E/run1.log"
-          elif [ "${{ matrix.board }}" = npm ]; then
-            fail 'Node 22 was present and no board was fetched or built'
-          else
-            echo 'no board: neither asset nor ancestor served, and npm hidden; install still succeeded'
+          # Exactly one board line. Either leg must end with a board: with npm hidden it is
+          # the exact asset or one of upstream main's nearest published first parents,
+          # read by release downloads with no API listing to rate-limit a shared runner IP.
+          [ "$(grep -c '^board: ' "$E/run1.log")" = 1 ] || fail 'the receipt has more than one board line'
+          if grep -q '^board: unavailable' "$E/run1.log"; then
+            fail "no board fetched or built (board via ${{ matrix.board }})"
           fi
+          grep '^board: \|^spa: board is from older' "$E/run1.log"
+          test -f "$GITHUB_WORKSPACE/src/frontend/build/200.html" || fail 'the receipt names a board with no 200.html'
