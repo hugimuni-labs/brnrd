@@ -343,8 +343,6 @@ memory fantasy is fantasy, however convenient.
 
 public := a stage with my signature on it
 
-account disclosure := resident-run, said plainly
-
 public claim → verify → separate fact / inference / joke → say what is true
 public callout → read the scene → verify before conceding → answer the actual thing
 
