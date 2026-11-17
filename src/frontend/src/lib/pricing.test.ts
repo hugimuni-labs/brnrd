@@ -5,7 +5,15 @@ import { fileURLToPath } from 'node:url';
 import { after, test } from 'node:test';
 import { compile } from 'svelte/compiler';
 import { render } from 'svelte/server';
-import { TAX_NOTE, disclosesTax, fetchPricing, formatEur } from './pricing.ts';
+import {
+	TAX_NOTE,
+	TAX_NOTE_EXCLUSIVE,
+	disclosesTax,
+	fetchPricing,
+	formatEur,
+	formatPrice,
+	taxNoteFor
+} from './pricing.ts';
 import { INSTALL_LINE } from './install.ts';
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -20,6 +28,7 @@ async function renderRoute(): Promise<ReturnType<typeof render>> {
 	const generated = join(here, '.pricingRoute.generated.mjs');
 	const runnable = compiled.js.code
 		.replace(/'\$lib\/pricing'/g, "'./pricing.ts'")
+		.replace(/'\$lib\/accountPage'/g, "'./accountPage.ts'")
 		.replace(/'\$lib\/legalNotice'/g, "'./legalNotice.ts'")
 		.replace(/'\$lib\/install'/g, "'./install.ts'")
 		.replace(/import\s*\{[^}]*\}\s*from\s*'\$app\/paths';/, 'const resolve = (path) => path;');
@@ -147,4 +156,30 @@ test('formatEur refuses to relabel a leftover USD Price as euros', () => {
 test('formatEur is null-safe for an absent figure', () => {
 	ok(formatEur(null) === null);
 	ok(formatEur(undefined) === null);
+});
+
+// --- the figure checkout charges, in its own currency -------------------------
+
+test('formatPrice shows the live Price in whatever currency it is in', () => {
+	ok(formatPrice({ amount: 700, currency: 'usd' }) === '$7');
+	ok(formatPrice({ amount: 1200, currency: 'eur' }) === '€12');
+	ok(formatPrice({ amount: 950, currency: 'chf' }) === '9.50 CHF');
+	ok(formatPrice(null) === null);
+});
+
+test('"VAT included" is said only of a EUR figure or the €12 floor', () => {
+	ok(taxNoteFor({ amount: 1200, currency: 'eur' }) === TAX_NOTE);
+	ok(taxNoteFor(null) === TAX_NOTE, 'the floor is the inclusive EUR offer');
+	const usd = taxNoteFor({ amount: 700, currency: 'usd' });
+	ok(usd === TAX_NOTE_EXCLUSIVE);
+	ok(!/VAT included/i.test(usd), 'a USD figure is labelled VAT included');
+});
+
+test('subscribe on /pricing signs in and comes back to the account page', async () => {
+	const { body: html } = await renderRoute();
+	const href = html.match(/href="([^"]*)"[^>]*>subscribe/)?.[1];
+	ok(href, 'no subscribe link rendered');
+	const url = new URL(href.replace(/&amp;/g, '&'), 'https://brnrd.dev');
+	ok(url.pathname === '/login', `subscribe goes to ${url.pathname}`);
+	ok(url.searchParams.get('next') === '/account', `next is ${url.searchParams.get('next')}`);
 });

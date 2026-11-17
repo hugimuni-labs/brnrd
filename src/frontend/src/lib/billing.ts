@@ -18,6 +18,8 @@
 // stay server-side only so existing subscriptions keep their Stripe Price and
 // still classify.
 
+import { formatPrice, taxNoteFor, type PriceFigure } from './pricing.ts';
+
 export interface SubscriptionState {
 	tier: string;
 	status: string | null;
@@ -109,10 +111,27 @@ export const PRICING = {
 
 /** The single price shown next to the subscribe CTA. Monthly only: the
  * annual cadence stays in the API for subscriptions that already have it,
- * not in the offer. */
-export function subscribeOffer(): { eur: number; cadence: Cadence; label: string } {
-	return { eur: PRICING.monthly, cadence: 'monthly', label: `€${PRICING.monthly}/mo` };
+ * not in the offer. `figure` is the live Stripe Price from
+ * `/v1/stats/pricing`, the one checkout charges, shown in its own currency;
+ * the €12 literal is only the floor for when that read failed. */
+export function subscribeOffer(figure?: PriceFigure | null): {
+	cadence: Cadence;
+	label: string;
+	taxNote: string;
+} {
+	const live = formatPrice(figure);
+	return {
+		cadence: 'monthly',
+		label: `${live ?? `€${PRICING.monthly}`}/mo`,
+		taxNote: taxNoteFor(live ? figure : null)
+	};
 }
+
+/** What a subscription does today, and nothing it does not: no trial and
+ * no gate exist yet (the offering design is undecided). The server's only
+ * paid difference is lifting the free account's hosted limits. */
+export const SUBSCRIBE_PITCH =
+	"A subscription lifts the free account's hosted limits and funds the open-source engine.";
 
 // --- return-param notices ---------------------------------------------------
 

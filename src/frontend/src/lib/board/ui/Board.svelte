@@ -207,6 +207,11 @@
 		<label id="internal" class="dim"
 			><input type="checkbox" bind:checked={b.showAll} onchange={() => b.persist()} /> show internal</label
 		>
+		{#if $site?.deployment === 'cloud'}
+			<!-- last, so a phone's scrolling header keeps the fuel first; the
+			     subscription lives on brnrd.dev only, a local loom has none -->
+			<a class="topics-link" href={resolve('/account')}>account</a>
+		{/if}
 	</header>
 	{#if view === 'board'}
 		<nav id="rail" aria-label="strands">

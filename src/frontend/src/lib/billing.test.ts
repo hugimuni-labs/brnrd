@@ -3,14 +3,36 @@ import test from 'node:test';
 
 import {
 	PRICING,
+	SUBSCRIBE_PITCH,
 	billingReturnNotice,
 	dateLabel,
 	subscribeOffer,
 	withoutBillingParam
 } from './billing.ts';
+import { TAX_NOTE } from './pricing.ts';
 
-test('subscribeOffer returns the one monthly premium price, in euros', () => {
-	assert.deepEqual(subscribeOffer(), { eur: 12, cadence: 'monthly', label: '€12/mo' });
+test('subscribeOffer falls back to the €12 literal, VAT included, with no live figure', () => {
+	assert.deepEqual(subscribeOffer(), {
+		cadence: 'monthly',
+		label: '€12/mo',
+		taxNote: TAX_NOTE
+	});
+	assert.equal(subscribeOffer(null).label, '€12/mo');
+});
+
+test('subscribeOffer labels the button with the Price checkout charges', () => {
+	// Production today: the public monthly Price is 700 usd (2026-11-17).
+	const usd = subscribeOffer({ amount: 700, currency: 'usd' });
+	assert.equal(usd.label, '$7/mo');
+	assert.ok(!/VAT included/.test(usd.taxNote), 'VAT included beside a USD figure');
+	const eur = subscribeOffer({ amount: 1200, currency: 'eur' });
+	assert.equal(eur.label, '€12/mo');
+	assert.equal(eur.taxNote, TAX_NOTE);
+});
+
+test('the pitch promises no trial and no free repository', () => {
+	assert.ok(/hosted limits/.test(SUBSCRIBE_PITCH));
+	assert.ok(!/trial|first repository|stays free/i.test(SUBSCRIBE_PITCH));
 });
 
 test('pricing constants match the 2026-11-05 decision: monthly only', () => {

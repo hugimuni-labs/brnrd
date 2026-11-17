@@ -2314,14 +2314,21 @@
 						subscription
 					</h2>
 				</div>
-				<a
-					href={resolve('/pricing')}
-					class="font-mono text-[10px] tracking-wide text-ink-quiet uppercase hover:text-stone-300"
-					>pricing</a
-				>
+				<span class="flex gap-3">
+					<a
+						href={resolve('/account')}
+						class="font-mono text-[10px] tracking-wide text-ink-quiet uppercase hover:text-stone-300"
+						>account</a
+					>
+					<a
+						href={resolve('/pricing')}
+						class="font-mono text-[10px] tracking-wide text-ink-quiet uppercase hover:text-stone-300"
+						>pricing</a
+					>
+				</span>
 			</div>
-			<!-- The billing surface (#53's dashboard leg): the pricing page's
-			     "sign in to subscribe" lands here. The panel owns its own fetches
+			<!-- The billing surface (#53's dashboard leg), the same panel /account
+			     shows; the pricing page's "subscribe" lands on /account now. The panel owns its own fetches
 			     (session cookie, same seam as every dashboard call) and the
 			     ?billing= Checkout return notice — no polling; money state
 			     changes ride the Stripe webhook, not this page's 2s cadence. -->
