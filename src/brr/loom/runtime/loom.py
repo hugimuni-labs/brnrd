@@ -163,6 +163,17 @@ if [ -n "$cls" ]; then
 fi
 """
 
+# The forge door's sensor (threads/act-chain, doors and sensors): after the
+# gates, so a refused call is no passage. Capture off is one file test; the
+# verb reads the endpoint's doors switch and BRNRD_SAY, and never refuses.
+_FORGE_DOOR = r"""case "$1 $2" in
+  "pr merge"|"pr close"|"pr comment"|"issue close"|"issue comment"|"release create")
+    if [ -f {endpoint} ]; then
+      {brnrd} runtime audit pass --room {room} --door forge --act "$1 $2" --target="${3-}" >/dev/null || :
+    fi ;;
+esac
+"""
+
 def _forge_env(room: Path, env: dict[str, str]) -> None:
     """Keep a configured forge identity isolated even when a shell bypasses the shim."""
     from .config import ConfigError, load_config, resolve_secret, secret_shell
@@ -213,7 +224,10 @@ def _forge_env(room: Path, env: dict[str, str]) -> None:
             "[ -n \"$GH_TOKEN\" ] || { echo 'gh: forge_token source gave nothing' >&2; exit 1; }\n"
             "export GH_TOKEN\n"
             "unset BRNRD_GH_SECRET_SOURCE\n"
-            + _NEVER_GATE.replace("{gh}", shlex.quote(real_gh)).replace("{brnrd}", shlex.quote(str(entry.shim()))) +
+            + _NEVER_GATE.replace("{gh}", shlex.quote(real_gh)).replace("{brnrd}", shlex.quote(str(entry.shim())))
+            + _FORGE_DOOR.replace("{brnrd}", shlex.quote(str(entry.shim())))
+                         .replace("{endpoint}", shlex.quote(str(room.parent.parent / "loom" / "audit-endpoint.json")))
+                         .replace("{room}", shlex.quote(str(room))) +
             f"exec {shlex.quote(real_gh)} \"$@\"\n"
         )
         shim = bin_dir / "gh"
@@ -2796,7 +2810,7 @@ def run(root: Path | str, *, adapter: str = "fake", core: str = "haiku",
         from . import usage
         config = load_config(home.root)
         from . import audit
-        audit_writer = audit.start(home, config.audit == "on")
+        audit_writer = audit.start(home, config.audit == "on", doors=config.doors == "on")
         fingerprint = _source_fingerprint()
         next_source, source_moved = time.monotonic() + SOURCE_EVERY, False
         next_usage = 0

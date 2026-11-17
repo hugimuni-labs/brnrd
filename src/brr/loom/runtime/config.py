@@ -58,6 +58,11 @@ KEYS: tuple[Key, ...] = (
     Key("audit", "choice", "off",
         "Record tool-hook digests in the local durable journal. Record-only, fail-open; read at loom start.",
         choices=("off", "on")),
+    Key("doors", "choice", "off",
+        "Sensors at send (to a person), publish and the gh shim's merge/release/close/comment: each passage "
+        "and its BRNRD_SAY sentence go into the audit journal, and a passage without one tells the person, "
+        "once per 15 min. Nothing is refused. Needs audit = on; read at loom start.",
+        choices=("off", "on")),
     Key("name", "text", None,
         "This loom's name. A thread whose README says `for: <name>` runs only on the loom of that name; unset matches none."),
     Key("body", "text", None,

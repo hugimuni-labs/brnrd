@@ -983,6 +983,10 @@ def write_send(room: Path, *, to: str, sender: str, body: str = "",
             append(home, stamp)
         for result in results:
             append(home, result)
+    if is_channel(to) and note is None:
+        # The send door: a letter to a person's channel. Recorded, never judged (audit.passage).
+        from .audit import passage
+        passage(Path(room), "send", "letter", to)
     return letter_id
 
 
