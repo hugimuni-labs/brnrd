@@ -55,6 +55,9 @@ jobs:
           name: python-package-distributions
           path: dist/
 
+  # PyPI is no longer an install route: the next release publishes pyproject's pointer
+  # readme (packaging/pypi/README.md) once, so pip/uv/pipx users read where brnrd went,
+  # and a follow-up drops this job and the PyPI half of check_release_version.py.
   publish-pypi:
     name: Publish distribution to PyPI
     needs: test-and-build

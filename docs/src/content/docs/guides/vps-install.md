@@ -45,9 +45,8 @@ doesn't reproduce them because they weren't re-verified for this page.
 ## 3. Install brnrd
 
 ```bash
-curl -LsSf https://hugimuni-labs.github.io/brnrd/install.sh | sh
-# or: uv tool install brnrd
-# or: npm install -g brnrd     # if you have Node
+curl -fsSL https://brnrd.dev/install | sh
+# or: npm install -g brnrd     # if you have Node: the same installer, pinned to its release
 brnrd --version
 ```
 
@@ -64,7 +63,7 @@ brnrd is installed in, under the `PATH` of the shell you installed it from. With
 quota left and writes it to `~/brnrd/loom/config.toml`.
 `brnrd loom logs` follows its output. On a box you log out of, keep the user
 manager alive past logout with `sudo loginctl enable-linger $USER`.
-`uv tool upgrade brnrd` upgrades it; the loom re-execs itself on the new files.
+The loom offers its own updates (a green main, or releases with `update = "stable"`); `brnrd runtime update take` takes one.
 More in [Install](../../getting-started/install/) → "Run the loom".
 
 :::note[The daemon instead]

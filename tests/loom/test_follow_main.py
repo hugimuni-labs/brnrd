@@ -1002,3 +1002,41 @@ def test_stable_holds_a_red_release_and_says_so(world):
     updater.step(config, lambda young: True)
     assert not _offered(world)
     assert any("is red on Backend tests" in line for line in lines), lines
+
+
+def test_a_release_take_moves_origin_main_so_the_board_takes_the_new_release_as_upstream(tmp_path, monkeypatch):
+    """A tag clone (install.sh with BRNRD_REF) fetches only its tag; spabuild takes upstream as the merge base
+    with refs/remotes/origin/main. Taking the next release must move that ref too, or the frontend change
+    between the releases reads as the resident's own and the board is built locally (or stays old)."""
+    from brr.loom.runtime.spabuild import SpaBuild
+    origin, up, source = tmp_path / "origin.git", tmp_path / "up", tmp_path / "source"
+    _git(tmp_path, "init", "-q", "--bare", "-b", "main", str(origin))
+    _git(tmp_path, "clone", "-q", str(origin), str(up))
+    (up / "src/frontend").mkdir(parents=True)
+    (up / "src/frontend/app.txt").write_text("one\n")
+    _git(up, "add", "-A")
+    _git(up, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "Merge pull request #1 from o/a")
+    _git(up, "tag", "v0.7.1")
+    _git(up, "push", "-q", "origin", "main", "v0.7.1")
+    # As install.sh leaves a release install: the tag on branch stable, origin/main fetched once.
+    _git(tmp_path, "clone", "-q", "--single-branch", "--branch", "v0.7.1", str(origin), str(source))
+    _git(source, "checkout", "-qb", "stable")
+    _git(source, "fetch", "-q", "origin", "+refs/heads/main:refs/remotes/origin/main")
+    (up / "src/frontend/app.txt").write_text("two\n")
+    _git(up, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qam", "Merge pull request #2 from o/b")
+    _git(up, "tag", "v0.7.2")
+    _git(up, "push", "-q", "origin", "main", "v0.7.2")
+    release = _git(up, "rev-parse", "HEAD")
+
+    src = update.ReleaseSource(source, Forge("green"))
+    offer = src.poll()
+    assert offer is not None and offer.new == release
+    src.apply(offer)
+    assert _git(source, "rev-parse", "HEAD") == release
+
+    real = SpaBuild._git
+    monkeypatch.setattr(SpaBuild, "_git", lambda self, *a: "https://github.com/hugimuni-labs/brnrd"
+                        if a == ("remote", "get-url", "origin") else real(self, *a))
+    spa = SpaBuild(source / "src/frontend", print)
+    assert spa.wanted() and spa.upstream and spa.upstream[0] == release
+    assert spa.changed is False  # the release's own board, not a local build

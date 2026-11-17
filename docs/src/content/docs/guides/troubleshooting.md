@@ -80,29 +80,17 @@ queued messages drain by themselves as soon as the machine is awake again.
 
 ## Update
 
-There is no `brnrd update` command. Use the installer that owns the tool:
-
-```bash
-npm update -g brnrd
-# or: uv tool upgrade brnrd
-# or: pipx upgrade brnrd
-```
-
-Running through `npx`? `npx brnrd@latest <command>` picks up the new version;
-the launcher installs whatever version you pin.
+There is no `brnrd update` command. The loom updates its own checkout: it
+offers a green main (or, with `update = "stable"`, the newest release) and
+`brnrd runtime update take` merges it. See
+[Install](../../getting-started/install/#updates-from-main).
+`npm update -g brnrd` updates only the npm launcher.
 
 ## `brnrd: command not found`
 
-`npx brnrd …` runs brnrd without adding anything to your `PATH`, so it leaves no
-`brnrd` command behind. Either keep prefixing (`npx brnrd up`) or install it for
-real:
-
-```bash
-npm install -g brnrd
-```
-
-Both use the same durable environment under `~/.local/share/brnrd` — installing
-after having used `npx` costs nothing and reuses what is already there.
+The installer puts the command at `~/.brnrd/bin/brnrd` and ends with the line
+that adds `~/.brnrd/bin` to your `PATH`. Add it to your shell profile, open a
+new shell, or call `~/.brnrd/bin/brnrd` directly.
 
 ## `loom install` refuses a source checkout
 
@@ -110,8 +98,7 @@ after having used `npx` costs nothing and reuses what is already there.
 loom install: /…/brnrd/.venv/bin/python3 imports brr from /…/brnrd/src/brr, a source checkout, …
 ```
 
-The `brnrd` your shell found is not the one `uv tool install` put in
-`~/.local/bin`: an activated virtualenv (or `PYTHONPATH`) puts a source
+The `brnrd` your shell found is not the installer's `~/.brnrd/bin/brnrd`: an activated virtualenv (or `PYTHONPATH`) puts a source
 checkout's `brnrd` first. A service installed from it would keep running that
 checkout, at whatever commit it is on, long after you upgraded. Leave the
 virtualenv and let the shell find the installed command again:

@@ -9,6 +9,7 @@ name: Installer end to end
 on:
   pull_request:
     paths:
+      - packaging/npm/**
       - docs/public/install.sh
       - src/brr/loom/runtime/install_checkout.py
       - src/brr/loom/runtime/spabuild.py
@@ -17,6 +18,7 @@ on:
   push:
     branches: [main]
     paths:
+      - packaging/npm/**
       - docs/public/install.sh
       - src/brr/loom/runtime/install_checkout.py
       - src/brr/loom/runtime/spabuild.py
@@ -102,3 +104,62 @@ jobs:
           fi
           grep '^board: \|^spa: board is from older' "$E/run1.log"
           test -f "$GITHUB_WORKSPACE/src/frontend/build/200.html" || fail 'the receipt names a board with no 200.html'
+
+  npm:
+    # The npm route end to end, before a release tag carries it: the packed launcher,
+    # its shipped install.sh pinned to v<package.json version>, a clone of that tag.
+    # The tag lives in a local bare repository holding this PR's HEAD; git's
+    # url.<bare>.insteadOf (set through GIT_CONFIG_* in the environment) routes the
+    # upstream URL there: the clone and every fetch go to it, and the checkout's stored
+    # origin stays upstream. `git remote get-url` applies insteadOf too, so the
+    # installer's upstream checks would see the local path and refuse; a git wrapper
+    # first on PATH drops the rewrite for that read alone. install.sh runs unchanged.
+    name: Install through npm (ubuntu)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # a shallow clone cannot be pushed to the local upstream
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: A local upstream with this HEAD tagged as the package's release
+        run: |
+          E=$RUNNER_TEMP/npm-e2e
+          mkdir -p "$E/home" "$E/prefix"
+          V=$(node -p "require('./packaging/npm/package.json').version")
+          git init -q --bare "$E/upstream.git"
+          git push -q "$E/upstream.git" "HEAD:refs/heads/main" "HEAD:refs/tags/v$V"
+          { echo "E=$E"; echo "V=$V"; } >> "$GITHUB_ENV"
+          mkdir -p "$E/gitbin"
+          G=$(command -v git)
+          printf '#!/bin/sh\ncase " $* " in *" remote get-url "*) exec env -u GIT_CONFIG_COUNT -u GIT_CONFIG_KEY_0 -u GIT_CONFIG_VALUE_0 %s "$@" ;; esac\nexec %s "$@"\n' "$G" "$G" > "$E/gitbin/git"
+          chmod +x "$E/gitbin/git"
+      - name: Pack the launcher and install it globally into a throwaway prefix
+        run: |
+          cd packaging/npm
+          npm pack --pack-destination "$E"
+          npm install -g --prefix "$E/prefix" "$E/brnrd-$V.tgz"
+      - name: First run installs through the launcher, second run is the shim
+        env:
+          GIT_CONFIG_COUNT: '1'
+          GIT_CONFIG_KEY_0: url.${{ runner.temp }}/npm-e2e/upstream.git.insteadOf
+          GIT_CONFIG_VALUE_0: https://github.com/hugimuni-labs/brnrd
+        run: |
+          export HOME=$E/home BRNRD_ROOT=$E/home/.brnrd PATH=$E/gitbin:$PATH
+          "$E/prefix/bin/brnrd" --version </dev/null 2>&1 | tee "$E/run1.log"
+          "$E/prefix/bin/brnrd" --version </dev/null 2>&1 | tee "$E/run2.log"
+      - name: Check what landed
+        run: |
+          R=$E/home/.brnrd S=$E/home/.brnrd/src
+          fail() { echo "::error::$1"; exit 1; }
+          test -x "$R/bin/brnrd" || fail 'no shim at ~/.brnrd/bin/brnrd'
+          HOME=$E/home BRNRD_ROOT=$R "$R/bin/brnrd" --version || fail 'the shim does not answer'
+          grep -q "installing v$V" "$E/run1.log" || fail 'the first run did not install this release'
+          ! grep -q 'installing' "$E/run2.log" || fail 'the second run installed again'
+          [ "$(git -C "$S" rev-parse --abbrev-ref HEAD)" = stable ] || fail "checkout is on $(git -C "$S" rev-parse --abbrev-ref HEAD), want stable"
+          [ "$(git -C "$S" config brnrd.update)" = stable ] || fail 'brnrd.update is not stable'
+          [ "$(git -C "$S" rev-parse HEAD)" = "$(git rev-parse HEAD)" ] || fail "checkout HEAD is not v$V"
+          [ "$(git -C "$S" config remote.origin.url)" = https://github.com/hugimuni-labs/brnrd ] || fail 'origin is not upstream'
+          [ "$(git -C "$S" describe --tags --exact-match)" = "v$V" ] || fail "HEAD is not tagged v$V in the checkout"
