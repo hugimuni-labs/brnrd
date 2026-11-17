@@ -23,6 +23,7 @@ WORKDIR /app
 ARG BRNRD_BUILD_COMMIT=""
 
 COPY pyproject.toml README.md LICENSE LICENSE-OVERVIEW.md ./
+COPY packaging/pypi/README.md ./packaging/pypi/README.md
 COPY src/brr ./src/brr
 COPY src/brnrd ./src/brnrd
 COPY scripts/stamp_build_info.py ./scripts/stamp_build_info.py
