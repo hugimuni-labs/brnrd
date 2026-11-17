@@ -27,6 +27,7 @@ from brr.daemon2.facts import Fact
 from .adapters import body_label, resolve
 from .bodies import COMMANDS, TABLE, Observation, decide, fact_for, row_for, state_of
 from .faces import propose, proposal_line
+from . import limbs
 from .health import Health, degraded_line
 from .roomsense import room_line
 from .library import problem_line
@@ -93,75 +94,13 @@ def _commit_identity(room: Path) -> tuple[str, str]:
 _FORGE_TOKEN_VARS = ("GH_TOKEN", "GITHUB_TOKEN", "GH_ENTERPRISE_TOKEN", "GITHUB_ENTERPRISE_TOKEN")
 
 
-# Repo deletion through the body's gh: ``gh repo delete`` and ``gh api`` with
-# DELETE on ``repos/<owner>/<repo>`` itself. It guards this wrapper only; the
-# minted token can still delete through any other client (threads/forge-auth).
-_REFUSE_REPO_DELETE = r"""refuse=
-if [ "$1" = repo ] && [ "$2" = delete ]; then refuse=1; fi
-if [ "$1" = api ]; then
-  delete= repo= prev=
-  for a in "$@"; do
-    case "$prev" in -X|--method) case "$a" in [Dd][Ee][Ll][Ee][Tt][Ee]) delete=1;; esac;; esac
-    case "$a" in -X[Dd][Ee][Ll][Ee][Tt][Ee]|--method=[Dd][Ee][Ll][Ee][Tt][Ee]) delete=1;; esac
-    r=${a%%\?*}; r=${r#/}; r=${r%/}
-    case "$r" in repos/*/*/*) ;; repos/?*/?*) repo=1;; esac
-    prev=$a
-  done
-  if [ -n "$delete" ] && [ -n "$repo" ]; then refuse=1; fi
-fi
-if [ -n "$refuse" ]; then
-  echo 'gh: brnrd refuses to delete a repository; a person deletes it on github.com' >&2
-  exit 1
-fi
-"""
-
-
-# Two never guards at the gh door (threads/trust-guards): a merge whose checks
-# are not green and a release go only on the owner's letter, which
-# ``guard`` finds on the thread's wishes. Runs after GH_TOKEN is set, since
-# reading the checks needs it. {gh} is the real gh, {brnrd} the shim.
-_NEVER_GATE = r"""cls= target= why= n= repo= prev= skip=
-if [ "$1" = pr ] && [ "$2" = merge ]; then
-  cls=merge-red i=0
-  for a in "$@"; do
-    i=$((i+1)); [ $i -le 2 ] && continue
-    if [ -n "$skip" ]; then skip=; case "$prev" in -R|--repo) repo=$a ;; esac; prev=$a; continue; fi
-    case "$a" in
-      -b|--body|-F|--body-file|-t|--subject|-A|--author-email|--match-head-commit|-R|--repo) skip=1 ;;
-      --repo=*) repo=${a#--repo=} ;;
-      -*) ;;
-      *) [ -z "$n" ] && n=$a ;;
-    esac
-    prev=$a
-  done
-elif [ "$1" = api ]; then
-  for a in "$@"; do
-    r=${a%%\?*}; r=${r#/}
-    case "$r" in repos/*/*/pulls/*/merge) cls=merge-red; repo=${r#repos/}; repo=${repo%%/pulls/*}; n=${r#*/pulls/}; n=${n%/merge} ;; esac
-  done
-elif [ "$1" = release ] && [ "$2" = create ]; then
-  cls=publish i=0
-  for a in "$@"; do
-    i=$((i+1)); [ $i -le 2 ] && continue
-    if [ -n "$skip" ]; then skip=; continue; fi
-    case "$a" in
-      -n|--notes|-F|--notes-file|-t|--title|--target|--discussion-category|--notes-start-tag|-R|--repo) skip=1 ;;
-      -*) ;;
-      *) [ -z "$target" ] && target=$a ;;
-    esac
-  done
-  why="a release is public"
-fi
-if [ "$cls" = merge-red ]; then
-  n=${n%/}; n=${n##*/pull/}; n=${n%%/*}
-  [ -n "$n" ] || n=$({gh} pr view ${repo:+-R "$repo"} --json number -q .number 2>/dev/null)
-  target="#$n"
-  if {gh} pr checks "$n" ${repo:+-R "$repo"} >/dev/null 2>&1; then cls=; else why="its checks are not all green"; fi
-fi
-if [ -n "$cls" ]; then
-  {brnrd} runtime guard "$cls" "${target:-?}" --why "$why" || exit 1
-fi
-"""
+# The gh door is made from limbs/github.md (threads/limbs): a never call
+# (deleting a repository) stops before the key is fetched; a merge whose
+# checks are not green and a release go to ``guard`` for the owner's letter,
+# after GH_TOKEN is set, since reading the checks needs it. It guards this
+# stand-in only; the minted token can still act through any other client
+# (threads/forge-auth). {gh} is the real gh, {brnrd} the shim.
+_NEVER_GATE = limbs.gate_shell(limbs.product("github"))
 
 # The forge door's sensor (threads/act-chain, doors and sensors): after the
 # gates, so a refused call is no passage. Capture off is one file test; the
@@ -214,17 +153,25 @@ def _forge_env(room: Path, env: dict[str, str]) -> None:
             env["BRNRD_GH_SECRET_SOURCE"] = source_token
             snippet = (f'{source_var}=${{{source_var}-$BRNRD_GH_SECRET_SOURCE}}; '
                        f'export {source_var}; ' + snippet)
+        # The person's own rows count only from the self's main; a page that
+        # cannot be read leaves the product's, never no stand-in at all.
+        try:
+            page, notes = limbs.effective(Home(room.parent.parent), "github")
+        except Exception as exc:  # noqa: BLE001 - the gh door must still be written
+            page, notes = limbs.product("github"), [f"limbs: the person's github page was not read: {exc}"]
+        for note in notes:
+            _log(Home(room.parent.parent), note)
         # Restore the original PATH while resolving, so command: gh auth token
         # calls the real gh rather than recursing through this shim.
         script = (
             "#!/bin/sh\n"
-            + _REFUSE_REPO_DELETE +
+            + limbs.refuse_shell(page) +
             f"GH_TOKEN=$(PATH={shlex.quote(path)} sh -c {shlex.quote(snippet)} 2>/dev/null) || "
             "{ echo 'gh: forge_token source failed' >&2; exit 1; }\n"
             "[ -n \"$GH_TOKEN\" ] || { echo 'gh: forge_token source gave nothing' >&2; exit 1; }\n"
             "export GH_TOKEN\n"
             "unset BRNRD_GH_SECRET_SOURCE\n"
-            + _NEVER_GATE.replace("{gh}", shlex.quote(real_gh)).replace("{brnrd}", shlex.quote(str(entry.shim())))
+            + limbs.gate_shell(page).replace("{gh}", shlex.quote(real_gh)).replace("{brnrd}", shlex.quote(str(entry.shim())))
             + _FORGE_DOOR.replace("{brnrd}", shlex.quote(str(entry.shim())))
                          .replace("{endpoint}", shlex.quote(str(room.parent.parent / "loom" / "audit-endpoint.json")))
                          .replace("{room}", shlex.quote(str(room))) +
