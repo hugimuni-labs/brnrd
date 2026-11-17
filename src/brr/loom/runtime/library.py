@@ -632,10 +632,7 @@ def touch(room: Path, stdin_text: str) -> None:
         how = "ran"
         response = payload.get("tool_response")
         output = str(response.get("stdout") or "") if isinstance(response, dict) else str(response or "")
-        shell_places(room, command, cwd, output)
-        for _name, real, spelled in folders:
-            if _names(command, spelled):
-                record(room, "ran", folder_key(real), _home_short(real))
+        shell_places(room, command, cwd, output)  # naming a folder is not work landed in it
     else:
         raw = next((str(given[key]) for key in ("file_path", "notebook_path", "path") if given.get(key)), "")
         if not raw:
@@ -804,6 +801,12 @@ def repo_key(url: str) -> str | None:
     return f"repo:{host}/{path if host == 'file' else path.lower()}"
 
 
+def repo_url(key: str) -> str:
+    """The URL a repo key is shown as: built from the key, so no credential typed in a URL survives."""
+    host, _slash, path = key.removeprefix("repo:").partition("/")
+    return f"file:///{path}" if host == "file" else f"https://{host}/{path}"
+
+
 def folder_key(path: str, host: str | None = None) -> str:
     return f"folder:{host or machine()}:{path}"
 
@@ -837,20 +840,34 @@ def _not_a_place(real: str, room: Path) -> bool:
     return any(_under(real, os.path.realpath(root)) for root in (own, str(room), *EPHEMERAL))
 
 
-def folder_root(target: str, libraries: list[str]) -> str:
-    """The place a written path belongs to: a library folder holding it, the nearest
-    ancestor with a ``.git`` (below the user's home), else its own folder."""
+def folder_root(target: str, libraries: list[str]) -> tuple[str, str]:
+    """The place a written path belongs to, and how it was found: a library folder
+    holding it (``library``), the nearest ancestor with a ``.git`` below the user's
+    home (``git``), else its own folder (``loose``). A loose folder never holds
+    another place: ``~/Documents`` reached by one note is not a root for the repos
+    under it."""
     for real in libraries:
         if _under(target, real):
-            return real
+            return real, "library"
     start = Path(target) if os.path.isdir(target) else Path(target).parent
     user = Path.home().resolve()
     for folder in (start, *start.parents):
         if folder == user or folder == folder.parent:
             break
         if (folder / ".git").exists():
-            return str(folder)
-    return str(start)
+            return str(folder), "git"
+    return str(start), "loose"
+
+
+def _tool_state(root: str) -> bool:
+    """The user's home itself, and anything under a dot-folder in it (``~/.claude``,
+    ``~/.config``): an install's own state, not a place a person's ask names."""
+    user = os.path.realpath(Path.home())
+    if root == user:
+        return True
+    if not _under(root, user):
+        return False
+    return os.path.relpath(root, user).split(os.sep)[0].startswith(".")
 
 
 def _cause(room: Path) -> tuple[list[str], list[str]]:
@@ -862,12 +879,18 @@ def _cause(room: Path) -> tuple[list[str], list[str]]:
             return []
         found = [str(row.get(field) if field else row) for row in rows if row] if isinstance(rows, list) else []
         return [item for item in found if item and item != "None"]
-    return ids("owed.json", "id"), ids(WISHES, None)
+    # A thread's open wishes are not the one worked on: name one only when it is
+    # the only one, else the letters say it.
+    woken = ids(WISHES, None)
+    return ids("owed.json", "id"), woken if len(woken) == 1 else []
 
 
 def record(room: Path, act: str, key: str, shown: str, *, thread: str = "",
-           wishes: list[str] | None = None) -> bool:
-    """Append ``place.touched`` for this room's body: once per act and place, the first cause wins.
+           wishes: list[str] | None = None, root: str = "") -> bool:
+    """Append ``place.touched`` for this room's body: once per thread, act and place, the first cause wins.
+
+    ``root``: for a folder, how its root was found (``folder_root``); only a
+    ``git`` or ``library`` root holds the places under it.
 
     True when a fact was written. Never raises: a lost touch costs a page row.
     """
@@ -877,7 +900,8 @@ def record(room: Path, act: str, key: str, shown: str, *, thread: str = "",
         from .ledger import LedgerConflict, append
         room = Path(room)
         strand = room.name
-        ident = f"place.touched:{strand}:{act}:{_ID.sub('_', key)}"
+        thread = thread or os.environ.get("BRNRD_THREAD", "")
+        ident = f"place.touched:{strand}:{_ID.sub('_', thread)}:{act}:{_ID.sub('_', key)}"
         seen_path = room / "port" / PLACES
         try:
             seen = json.loads(seen_path.read_text())
@@ -887,8 +911,10 @@ def record(room: Path, act: str, key: str, shown: str, *, thread: str = "",
             return False
         letters, woken = _cause(room)
         data = {"place": key, "kind": key.split(":", 1)[0], "act": act, "shown": shown,
-                "thread": thread or os.environ.get("BRNRD_THREAD", ""), "strand": strand,
+                "thread": thread, "strand": strand,
                 "letters": letters, "wishes": list(wishes) if wishes is not None else woken}
+        if root:
+            data["root"] = root
         try:
             append(home_of_room(room), Fact(kind="place.touched", by=f"strand:{strand}", id=ident, data=data))
         except LedgerConflict:
@@ -907,7 +933,7 @@ def record_repo(room: Path, act: str, source: str, *, thread: str = "",
     if repo_key(url) is None and home is not None:
         url = sources(home).get(source, "")
     key = repo_key(url) if url else None
-    return bool(key) and record(room, act, key, url, thread=thread, wishes=wishes)
+    return bool(key) and record(room, act, key, repo_url(key), thread=thread, wishes=wishes)
 
 
 def _library_reals(room: Path) -> list[str]:
@@ -925,9 +951,10 @@ def record_folder(room: Path, act: str, target: str, made: bool = False) -> bool
     if _not_a_place(real, room):
         return False
     libraries = _library_reals(room)
-    held = next((lib for lib in libraries if _under(real, lib)), None)
-    root = held or (real if made else folder_root(real, libraries))
-    return record(room, act, folder_key(root), _home_short(root))
+    root, how = (real, "git") if made else folder_root(real, libraries)
+    if how != "library" and _tool_state(root):
+        return False
+    return record(room, act, folder_key(root), _home_short(root), root=how)
 
 
 _SEGMENT = re.compile(r"&&|\|\||[;|\n]")
@@ -949,6 +976,10 @@ def _operands(words: list[str]) -> list[str]:
     return [word for word in words if not word.startswith("-")]
 
 
+def _cloned(folder: str) -> bool:
+    return os.path.isdir(os.path.join(folder, ".git"))
+
+
 def shell_places(room: Path, command: str, cwd: str, output: str) -> None:
     """``git clone``, ``gh repo clone`` and ``gh repo create`` in a shell command: the repo, and the folder made."""
     for words in _words(command):
@@ -959,24 +990,33 @@ def shell_places(room: Path, command: str, cwd: str, output: str) -> None:
             url = next((word for word in given if repo_key(word)), None)
             if url is None:
                 continue
-            record_repo(room, "cloned", url)
             after = given[given.index(url) + 1:]
             dest = after[0] if after else os.path.basename(url.rstrip("/")).removesuffix(".git")
-            record_folder(room, "cloned", os.path.join(cwd, os.path.expanduser(dest)), made=True)
+            made = os.path.join(cwd, os.path.expanduser(dest))
+            if not _cloned(made):
+                continue  # a failed clone landed nothing
+            record_repo(room, "cloned", url)
+            record_folder(room, "cloned", made, made=True)
         elif "gh" in base and words[base.index("gh") + 1:base.index("gh") + 3] in (["repo", "create"],
                                                                                  ["repo", "clone"]):
             at = base.index("gh")
             verb = words[at + 2]
             given = _operands(words[at + 3:])
-            shown = _GH_URL.search(output or "") if verb == "create" else None
-            url = shown.group(0) if shown else (
-                given[0] if given and repo_key(given[0]) else
-                f"https://github.com/{given[0]}" if given and "/" in given[0] else "")
+            if verb == "create":
+                shown = _GH_URL.search(output or "")  # gh prints the URL once the repo exists
+                if shown:
+                    record_repo(room, "created", shown.group(0))
+                continue
+            if not given:
+                continue
+            dest = given[1] if len(given) > 1 else given[0].rstrip("/").rpartition("/")[2].removesuffix(".git")
+            made = os.path.join(cwd, os.path.expanduser(dest))
+            if not _cloned(made):
+                continue
+            url = given[0] if repo_key(given[0]) else f"https://github.com/{given[0]}" if "/" in given[0] else ""
             if url:
-                record_repo(room, "created" if verb == "create" else "cloned", url)
-            if verb == "clone" and given:
-                dest = given[1] if len(given) > 1 else given[0].rstrip("/").rpartition("/")[2]
-                record_folder(room, "cloned", os.path.join(cwd, os.path.expanduser(dest)), made=True)
+                record_repo(room, "cloned", url)
+            record_folder(room, "cloned", made, made=True)
 
 
 def touched(facts) -> dict[str, list]:
@@ -1055,12 +1095,17 @@ def unlisted(facts, found: list[Entry], host: str | None = None) -> list[tuple[s
     listed = {entry_key(entry, host) for entry in found} - {None}
     said = {str(f.data.get("place")) for f in kind_facts(facts, "place.offered", "place.dismissed")}
     by_place = touched(facts)
-    folders = [key for key in [*by_place, *listed] if key.startswith("folder:")]
+    # What holds a place: a library folder, or a touched repo folder not yet said.
+    # A loose folder holds nothing, and an offered or dismissed one hides no new child.
+    folders = [key for key in listed if key.startswith("folder:")] + [
+        key for key, rows in by_place.items() if key.startswith("folder:") and key not in said
+        and any(f.data.get("root") in ("git", "library") for f in rows)]
     out = []
     for key, rows in by_place.items():
         if key in listed or key in said or _holder(key, folders) is not None:
             continue
-        held = [f for place, more in by_place.items() if _holder(place, [key]) == key for f in more]
+        held = [f for place, more in by_place.items() if key in folders
+                and _holder(place, [key]) == key for f in more]
         out.append((key, rows + held))
     return sorted(out, key=lambda pair: str(pair[1][0].at))
 

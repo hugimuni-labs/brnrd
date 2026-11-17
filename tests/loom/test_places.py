@@ -9,6 +9,7 @@ the home wake offers what the library does not hold.
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 
 import pytest
@@ -23,6 +24,9 @@ from brr.loom.runtime.selfrepo import git
 
 from test_library import _add, _call
 from test_project_repos import _home, _kill, _log, _room, _seat, _source, _started, _tick
+
+
+_EPHEMERAL = library.EPHEMERAL
 
 
 @pytest.fixture(autouse=True)
@@ -66,7 +70,8 @@ def test_a_write_lands_once_per_place_with_the_letter_and_wish_that_woke_the_bod
         assert [f.data["place"] for f in facts] == [library.folder_key(str(site.resolve()))]
         data = facts[0].data
         assert data["act"] == "wrote" and data["thread"] == "work" and data["strand"] == room.name
-        assert data["letters"] == owed and data["wishes"] == wished
+        assert data["letters"] == owed  # a wish only when it is the thread's one open wish
+        assert data["wishes"] == (wished if len(wished) == 1 else [])
         plain = tmp_path / "plain" / "deep"
         plain.mkdir(parents=True)
         execute("post", room, _call("Write", room, file_path=str(plain / "n.md"), content="x"))
@@ -79,15 +84,22 @@ def test_a_clone_and_a_repo_created_in_the_shell_are_places(tmp_path: Path, monk
     root = _home(tmp_path)
     home, room = _body(root, monkeypatch)
     out = tmp_path / "out"
-    out.mkdir()
+    (out / "w" / ".git").mkdir(parents=True)  # what the clone made
+    (room / "other" / ".git").mkdir(parents=True)
     try:
+        execute("post", room, _call("Bash", out, command="git clone https://github.com/ada/gone nope",
+                                    description="a clone that failed"))
+        execute("post", room, json.dumps({
+            "tool_name": "Bash", "cwd": str(room), "hook_event_name": "PostToolUse",
+            "tool_input": {"command": "gh repo create ada/refused", "description": "make"},
+            "tool_response": {"stdout": "", "stderr": "HTTP 422"}}))
         execute("post", room, _call("Bash", out, command="git clone --depth 1 git@github.com:Ada/Widget.git w && ls",
                                     description="clone"))
         execute("post", room, json.dumps({
             "tool_name": "Bash", "cwd": str(room), "hook_event_name": "PostToolUse",
             "tool_input": {"command": "gh repo create fresh --private", "description": "make"},
             "tool_response": {"stdout": "✓ Created repository ada/fresh on GitHub\n  https://github.com/ada/fresh\n"}}))
-        execute("post", room, _call("Bash", room, command="cd tmp; gh repo clone ada/other", description="clone"))
+        execute("post", room, _call("Bash", room, command="gh repo clone ada/other", description="clone"))
         found = {(f.data["act"], f.data["place"]) for f in _touched(home)}
         assert found == {("cloned", "repo:github.com/ada/widget"),
                          ("cloned", library.folder_key(str((out / "w").resolve()))),
@@ -150,6 +162,7 @@ def test_the_home_wake_offers_an_unlisted_place_once_and_a_dismissal_holds(
     assert _add(root, "kb", str(kb), "--kind", "known", "--whose", "Ada", "--for", "her notes") == 0
     stray = tmp_path / "stray"
     (stray / "inner").mkdir(parents=True)
+    (stray / ".git").mkdir()
     home, room = _body(root, monkeypatch, thread="inbox")
     assert home.main_thread() == "inbox"
     assert "touched, not in the library" not in (room / "port/wake.md").read_text()
@@ -157,7 +170,8 @@ def test_the_home_wake_offers_an_unlisted_place_once_and_a_dismissal_holds(
     execute("post", room, _call("Write", room, file_path=str(stray / "s.md"), content="x"))
     execute("post", room, _call("Write", room, file_path=str(stray / "inner/t.md"), content="x"))
     execute("post", room, json.dumps({"tool_name": "Bash", "cwd": str(room), "tool_input": {
-        "command": "gh repo create ada/fresh", "description": "make"}, "tool_response": {"stdout": ""}}))
+        "command": "gh repo create ada/fresh", "description": "make"},
+        "tool_response": {"stdout": "https://github.com/ada/fresh\n"}}))
     _kill(read_facts(home))
     _tick(home, {}, Router(home))  # the home thread's next body
     try:
@@ -172,6 +186,7 @@ def test_the_home_wake_offers_an_unlisted_place_once_and_a_dismissal_holds(
         facts = read_facts(home)
         assert not library.unlisted(facts, library.entries(home)[0])  # said once
         assert cli(["lib", "dismiss", "repo:github.com/ada/fresh", "--room", str(room)]) == 0
+        (room / "fresh" / ".git").mkdir(parents=True)  # the clone below lands, and is still not offered
         execute("post", room, json.dumps({"tool_name": "Bash", "cwd": str(room), "tool_input": {
             "command": "gh repo clone ada/fresh", "description": "x"}}))
         assert not library.unlisted(read_facts(home), library.entries(home)[0])
@@ -184,3 +199,54 @@ def test_the_home_wake_offers_an_unlisted_place_once_and_a_dismissal_holds(
     "ssh://git@github.com/ada/widget/", "https://token@GitHub.com/ada/widget"])
 def test_one_repo_is_one_place_however_it_is_spelled(spelling: str) -> None:
     assert library.repo_key(spelling) == "repo:github.com/ada/widget"
+
+
+def test_a_credential_typed_in_a_url_never_reaches_what_is_shown() -> None:
+    key = library.repo_key("https://x-access-token:ghp_secret@GitHub.com/ada/widget.git")
+    assert library.repo_url(key) == "https://github.com/ada/widget"
+    assert library.repo_url(library.repo_key("file:///srv/Bare.git")) == "file:///srv/Bare"
+
+
+def test_the_os_temp_roots_are_no_place(monkeypatch) -> None:
+    monkeypatch.setattr(library, "EPHEMERAL", _EPHEMERAL)  # the real roots, not the fixture's
+    assert library._not_a_place(os.path.realpath("/var/folders/xy/T/a/b.md"), Path("/nowhere/room"))
+    assert library._not_a_place(os.path.realpath("/tmp/b.md"), Path("/nowhere/room"))
+    assert not library._not_a_place("/srv/site/b.md", Path("/nowhere/room"))
+
+
+def test_one_write_in_the_home_folder_does_not_silence_the_places_under_it(
+        tmp_path: Path, monkeypatch) -> None:
+    root = _home(tmp_path)
+    home, room = _body(root, monkeypatch)
+    user = tmp_path / "user"
+    (user / ".claude" / "projects").mkdir(parents=True)
+    (user / "Documents" / "proj" / ".git").mkdir(parents=True)
+    monkeypatch.setenv("HOME", str(user))
+    try:
+        execute("post", room, _call("Write", room, file_path=str(user / ".zshrc"), content="x"))
+        execute("post", room, _call("Write", room, file_path=str(user / ".claude/projects/m.md"), content="x"))
+        assert not _touched(home)  # home and its dot-folders are the install's state
+        execute("post", room, _call("Write", room, file_path=str(user / "Documents/n.md"), content="x"))
+        execute("post", room, _call("Write", room, file_path=str(user / "Documents/proj/a.md"), content="x"))
+        offered = [key for key, _rows in library.unlisted(read_facts(home), [])]
+        docs, proj = (library.folder_key(str((user / p).resolve())) for p in ("Documents", "Documents/proj"))
+        assert offered == [docs, proj]  # a bare folder holds nothing
+        library.offer_text(home, read_facts(home), [])
+        nested = user / "Documents/proj/vendor/lib"
+        (nested / ".git").mkdir(parents=True)
+        execute("post", room, _call("Write", room, file_path=str(nested / "x.py"), content="x"))
+        offered = [key for key, _rows in library.unlisted(read_facts(home), [])]
+        assert offered == [library.folder_key(str(nested.resolve()))]  # an offered holder hides no new child
+    finally:
+        _kill(read_facts(home))
+
+
+def test_one_body_opening_two_threads_on_one_repo_records_both(tmp_path: Path, monkeypatch) -> None:
+    root = _home(tmp_path)
+    home, room = _body(root, monkeypatch)
+    try:
+        for thread in ("a", "b"):
+            assert library.record_repo(room, "opened", "https://github.com/ada/widget", thread=thread)
+        assert sorted(f.data["thread"] for f in _touched(home)) == ["a", "b"]
+    finally:
+        _kill(read_facts(home))
