@@ -1,18 +1,17 @@
-"""``SpaBuild``: the loom keeps ``src/frontend/build`` current with its own checkout (self threads/web-main).
+"""Keep the loopback board matched to the resident's checkout.
 
-The loopback ``serve`` reads the SvelteKit build per request, and nothing else builds it on a resident's machine:
-follow-main fast-forwards the checkout and re-execs, and the build would stay at whatever ``npm run build`` last
-wrote. So at every loop pass, a loom with a board compares the build's stamp (``build/.tree``, the git tree of
-``src/frontend`` it was built from) with ``HEAD:src/frontend``; when they differ it builds off the loop into
-``build.next`` (``npm ci`` first when ``package-lock.json`` is newer than the installed one) and swaps it in only
-once the build succeeded. A failed build keeps the old one served and raises from ``step`` while HEAD stays on
-that tree, which the loop's guard turns into ``loom.degraded`` (step ``spa``) on every body's boundary; the next
-tree tries again. A re-exec mid-build loses nothing: the stamp still differs, so the new process builds again.
+Try the exact verified asset, supported local npm build, then the newest
+published ancestor. If none works, keep the last good board or run without one.
+Managed installs retry when idle; a missing board never refuses installation.
+Work happens off the loop and only complete builds replace the served tree.
 """
 
 from __future__ import annotations
 
 import os
+import re
+import shlex
+import hashlib
 import shutil
 import subprocess
 import threading
@@ -38,6 +37,25 @@ def _run(args: list[str], cwd: Path, env: dict | None = None) -> None:
         raise BuildFailed(f"{' '.join(args)} exited {proc.returncode}: {' | '.join(tail)}"[:300])
 
 
+def npm_supported() -> bool:
+    """The lockfile's build tooling needs Node 20.19+, 22.13+, or 24+; npm 9+."""
+    if shutil.which('npm') is None or shutil.which('node') is None:
+        return False
+    try:
+        versions = []
+        for command in ('node', 'npm'):
+            result = subprocess.run([command, '--version'], capture_output=True, text=True, timeout=5, check=True)
+            match = re.fullmatch(r'v?(\d+)\.(\d+)\.(\d+)(?:[-+].*)?', result.stdout.strip())
+            if not match:
+                return False
+            versions.append(tuple(map(int, match.groups())))
+        node, npm = versions
+        return npm[0] >= 9 and (node >= (24, 0, 0) or (node[0] == 22 and node >= (22, 13, 0))
+                               or (node[0] == 20 and node >= (20, 19, 0)))
+    except (OSError, subprocess.SubprocessError):
+        return False
+
+
 class SpaBuild:
     def __init__(self, frontend: Path, log, run=_run, every: float = EVERY, clock=time.monotonic):
         self.frontend, self.log, self.run = frontend, log, run
@@ -45,17 +63,69 @@ class SpaBuild:
         self.build, self.next = frontend / "build", frontend / "build.next"
         self.worker: threading.Thread | None = None
         self.failed: tuple[str, str] | None = None  # (tree, why)
+        self.noticed: set[str] = set()
+        self.upstream: tuple[str, str] | None = None
+        #: (tree, monotonic time) of an attempt that ended without that tree's board.
+        self.retry: tuple[str, float] | None = None
+        self.changed = False
+
+    def _git(self, *args: str) -> str | None:
+        proc = subprocess.run(["git", *args], cwd=self.frontend, capture_output=True, text=True)
+        return proc.stdout.strip() if proc.returncode == 0 else None
 
     def wanted(self) -> str | None:
-        proc = subprocess.run(["git", "rev-parse", "HEAD:./"], cwd=self.frontend, capture_output=True, text=True)
-        return proc.stdout.strip() or None if proc.returncode == 0 else None
+        tree = self._git("rev-parse", "HEAD:./")
+        if not tree:
+            return None
+        origin = self._git("remote", "get-url", "origin")
+        self.upstream = None
+        if origin in {"https://github.com/hugimuni-labs/brnrd", "https://github.com/hugimuni-labs/brnrd.git",
+                      "git@github.com:hugimuni-labs/brnrd.git"}:
+            commit = self._git("merge-base", "HEAD", "refs/remotes/origin/main")
+            upstream_tree = self._git("rev-parse", f"{commit}:src/frontend") if commit else None
+            if commit and upstream_tree:
+                self.upstream = (commit, upstream_tree)
+        if not self.upstream:
+            self.changed = True
+            return tree
+        base = self.upstream[0]
+        diff = self._git("diff", "--binary", base, "--", ".") or ""
+        # The loom's own staging dirs are never the resident's change, ignored or not.
+        untracked = self._git("ls-files", "--others", "--exclude-standard", "--", ".",
+                              ":!build", ":!build.next", ":!build.old") or ""
+        self.changed = bool(diff or untracked or (self.upstream and tree != self.upstream[1]))
+        if diff or untracked:
+            # The base is part of what is built: taking main under a local edit is a new board.
+            digest = hashlib.sha256(self.upstream[1].encode() + b"\0" + diff.encode())
+            for name in untracked.splitlines():
+                path = self.frontend / name
+                digest.update(name.encode())
+                if path.is_file():
+                    digest.update(path.read_bytes())
+            return digest.hexdigest()
+        return tree
+
+    def notice(self, key: str, message: str) -> None:
+        if key not in self.noticed:
+            self.noticed.add(key)
+            self.log(message)
 
     def built(self) -> str:
         stamp = self.build / STAMP
         return stamp.read_text().strip() if stamp.is_file() else ""
 
-    def step(self) -> None:
-        """On the loop: start a build when the tree moved; raises while HEAD's tree failed to build."""
+    def fetched(self) -> str:
+        """The upstream commit a served archive was fetched for; empty for a local build or none."""
+        stamp = self.build / '.commit'
+        return stamp.read_text().strip() if stamp.is_file() else ""
+
+    def step(self, idle=True) -> None:
+        """On the loop: start a build when the tree moved; raises while HEAD's tree failed to build.
+
+        The first attempt for a tree, and so every local build, starts at once. Only a repeat
+        of an attempt that ended without that tree's board (a missing asset, no npm) waits for
+        its retry time and an idle loom; idle is evaluated only once that time has come.
+        """
         if self.worker is not None and self.worker.is_alive():
             return
         if self.clock() < self.due:
@@ -65,31 +135,131 @@ class SpaBuild:
         self.due = self.clock() + self.every
         tree = self.wanted()
         if tree is None or tree == self.built():
-            self.failed = None
+            self.failed = self.retry = None
             return
         if self.failed is not None and self.failed[0] == tree:
             raise BuildFailed(f"{self.failed[1]}; serving the build of tree {self.built()[:8] or 'none'}")
+        if self.retry is not None and self.retry[0] == tree:
+            if self.clock() < self.retry[1] or not (idle() if callable(idle) else idle):
+                return
         self.worker = threading.Thread(target=self._build, args=(tree,), name="spa-build", daemon=True)
         self.worker.start()
 
-    def _build(self, tree: str) -> None:
+    def _fetch(self, commit: str, tree: str) -> bool:
+        from .board_asset import fetch
         try:
             shutil.rmtree(self.next, ignore_errors=True)
-            lock, installed = self.frontend / "package-lock.json", self.frontend / "node_modules" / ".package-lock.json"
-            if not installed.is_file() or lock.stat().st_mtime > installed.stat().st_mtime:
-                self.run(["npm", "ci", "--no-audit", "--no-fund"], self.frontend)
-            self.run(["npm", "run", "build"], self.frontend, {**os.environ, "BRNRD_SPA_OUT": self.next.name})
-            if not (self.next / "200.html").is_file():
-                raise BuildFailed(f"npm run build wrote no {self.next.name}/200.html")
+            fetch(commit, tree, self.next)
             (self.next / STAMP).write_text(tree + "\n")
-            old = self.frontend / "build.old"
-            shutil.rmtree(old, ignore_errors=True)
-            if self.build.exists():
-                self.build.rename(old)
-            self.next.rename(self.build)
-            shutil.rmtree(old, ignore_errors=True)
-            self.failed = None
-            self.log(f"spa: built tree {tree[:8]} into {self.build}")
-        except Exception as exc:  # the loop's guard reports it; the old build stays served
+            (self.next / ".commit").write_text(commit + "\n")
+            self._swap()
+            return True
+        except Exception as exc:
+            shutil.rmtree(self.next, ignore_errors=True)
+            self.notice(commit, f"spa: rejected/unavailable board for {commit} ({exc}); archive not served")
+            return False
+
+    def _local(self, tree: str) -> None:
+        shutil.rmtree(self.next, ignore_errors=True)
+        lock, installed = self.frontend / "package-lock.json", self.frontend / "node_modules" / ".package-lock.json"
+        if not installed.is_file() or lock.stat().st_mtime > installed.stat().st_mtime:
+            self.run(["npm", "ci", "--no-audit", "--no-fund"], self.frontend)
+        self.run(["npm", "run", "build"], self.frontend, {**os.environ, "BRNRD_SPA_OUT": self.next.name})
+        if not (self.next / "200.html").is_file():
+            raise BuildFailed(f"npm run build wrote no {self.next.name}/200.html")
+        (self.next / STAMP).write_text(tree + "\n")
+        self._swap()
+        self.log(f"spa: built tree {tree[:8]} into {self.build}")
+
+    def _try_local(self, tree: str) -> bool:
+        """A supported npm builds the tree; a failure keeps the last good build (soft, for managed installs)."""
+        if not npm_supported():
+            if self.changed:
+                self.notice(tree, 'spa: frontend changed but npm is unavailable or unsupported; keeping last good build')
+            return False
+        try:
+            self._local(tree)
+            return True
+        except Exception as exc:
+            shutil.rmtree(self.next, ignore_errors=True)
+            self.notice('local:' + tree, f'spa: local board build failed ({exc}); keeping last good build')
+            return False
+
+    def _ancestor(self, exact: str) -> bool:
+        from .board_asset import available
+        if self.fetched() and (self.build / '200.html').is_file():
+            # An older published board is already served: a retry only tries the exact
+            # asset (a release download), never the anonymous API listing, which is
+            # limited to 60 requests an hour.
+            return True
+        try:
+            commits = available()
+            # git's date order selects the newest published reachable commit,
+            # never an unrelated branch merely because it has a newer asset.
+            ancestors = (self._git('rev-list', '--date-order', 'HEAD') or '').splitlines()
+            for commit in ancestors:
+                if commit == exact or commit not in commits:
+                    continue
+                tree = self._git('rev-parse', f'{commit}:src/frontend')
+                if tree and self._fetch(commit, tree):
+                    self.notice('older:' + commit, f'spa: board is from older ancestor commit {commit}')
+                    return True
+        except Exception as exc:
+            self.notice('listing', f'spa: cannot list older board assets ({exc})')
+        return False
+
+    def _build(self, tree: str) -> None:
+        try:
+            if self.upstream:
+                commit, upstream_tree = self.upstream
+                if self.changed and self._try_local(tree):
+                    self.failed = self.retry = None
+                    return
+                served = (self.build / '200.html').is_file()
+                if self.changed and served and not self.fetched():
+                    pass  # the resident's last good local build stays served
+                elif served and self.fetched() == commit:
+                    pass  # the upstream board for this commit is already served
+                elif self._fetch(commit, upstream_tree):
+                    if not self.changed:
+                        self.failed = self.retry = None
+                        return
+                elif not self.changed and self._try_local(tree):
+                    self.failed = self.retry = None
+                    return
+                else:
+                    self._ancestor(commit)
+                if not (self.build / '200.html').is_file():
+                    from . import entry
+                    retry = shlex.join([str(entry.current() / 'bin/python'), '-I', '-m',
+                                        'brr.loom.runtime.board_asset', str(self.frontend.parents[1])])
+                    self.notice('absent', f'spa: installed without a board; fetch it later with: {retry}; '
+                                'the loom will retry when idle')
+                self.failed = None
+                # Missing/bad assets and unavailable npm are soft failures. Retry
+                # off-loop when idle, bounded to one attempt per five minutes.
+                self.retry = (tree, self.clock() + max(self.every, 300.0))
+                return
+            if not npm_supported():
+                self.notice(tree, 'spa: npm is unavailable or unsupported; keeping last good build')
+                self.failed = None
+                self.retry = (tree, self.clock() + max(self.every, 300.0))
+                return
+            self._local(tree)
+            self.failed = self.retry = None
+        except Exception as exc:
             shutil.rmtree(self.next, ignore_errors=True)
             self.failed = (tree, f"{type(exc).__name__}: {exc}"[:300])
+
+    def _swap(self) -> None:
+        old = self.frontend / "build.old"
+        shutil.rmtree(old, ignore_errors=True)
+        if self.build.exists():
+            self.build.rename(old)
+        try:
+            self.next.rename(self.build)
+        except OSError:
+            if old.exists():
+                old.rename(self.build)
+            raise
+        shutil.rmtree(old, ignore_errors=True)

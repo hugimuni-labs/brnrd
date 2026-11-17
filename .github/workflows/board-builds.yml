@@ -1,0 +1,37 @@
+name: Publish board assets
+
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    if: github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push'
+    runs-on: ubuntu-latest
+    # No concurrency group: GitHub replaces pending runs, losing commit assets.
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: src/frontend/package-lock.json
+      - name: Build the board
+        working-directory: src/frontend
+        run: |
+          npm ci
+          npm run build
+      - name: Publish and prune commit assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BOARD_COMMIT: ${{ github.event.workflow_run.head_sha }}
+        run: python3 scripts/publish_board.py

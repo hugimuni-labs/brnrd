@@ -235,6 +235,7 @@ def render_systemd_unit(
     brr_path: str | Path | None = None,
     *,
     path_env: str | None = None,
+    environment_lines: tuple[str, ...] = (),
     workdir: str | Path | None = None,
     cfg: dict[str, Any] | None = None,
     label: str = SERVICE_UNIT,
@@ -300,6 +301,20 @@ def render_systemd_unit(
             f"StandardError=append:{directory}/err.log\n"
         )
         text = text.replace("\n[Install]\n", "\n" + block + "\n[Install]\n", 1)
+    if environment_lines:
+        # Keep the unit's spelling (systemd escapes and specifiers included).
+        # The install-owned flag wins even if the old unit set it differently.
+        anchor = (
+            'Environment=BRR_INSTALL_MANAGED=1\nEnvironment="PATH='
+            + _systemd_escape(path_value) + '"'
+        )
+        if text.count(anchor) != 1:
+            raise ValueError("cannot preserve environment: systemd template anchor changed")
+        text = text.replace(
+            anchor,
+            "\n".join(environment_lines) + "\nEnvironment=BRR_INSTALL_MANAGED=1",
+            1,
+        )
     return text
 
 
@@ -474,6 +489,7 @@ def install(
     delay: float = 2.0,
     restart: bool = False,
     path_env: str | None = None,
+    environment_lines: tuple[str, ...] = (),
 ) -> int:
     if not supported():
         raise SystemExit("[brnrd] daemon install on this platform is not implemented yet")
@@ -489,6 +505,7 @@ def install(
         log_directory=log_directory,
         workdir=workdir,
         path_env=path_env,
+        environment_lines=environment_lines,
     )
     print(f"[brnrd] wrote {service_path}")
 

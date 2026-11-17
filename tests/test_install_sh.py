@@ -1,468 +1,320 @@
-"""The public installer, run through /bin/sh the way a user pipes it.
-
-BRNRD_INSTALL_DRY_RUN=1 is the whole effect under test. The fakes sit at the
-front of PATH, and HOME is a tmp dir, so a probe cannot reach a real uv.
-"""
-
+"""Run the public POSIX installer with isolated HOME, tools and checkout."""
+import json
 import os
+from pathlib import Path
 import shutil
 import subprocess
-from pathlib import Path
 
 import pytest
 
-ROOT = Path(__file__).parents[1]
-SCRIPT = ROOT / "docs" / "public" / "install.sh"
-SYSTEM = ("sh", "grep", "sed", "wc", "tr", "mktemp", "rm", "id")
-SHELLS = [path for path in ("/bin/sh", "/bin/dash") if os.path.exists(path)]
-CURL = "curl -LsSf https://hugimuni-labs.github.io/brnrd/install.sh | sh"
-UV_BOOTSTRAP = "curl -LsSf https://astral.sh/uv/install.sh | sh"
-
-UV_ABSENT = """
-case "$*" in
-  "tool dir --bin") printf '%s\\n' "$HOME/.local/bin"; exit 0 ;;
-  "tool dir") printf '%s\\n' "$HOME/.local/share/uv/tools"; exit 0 ;;
-esac
-if [ "$1" = "tool" ] && [ "$2" = "list" ]; then
-  exit 0
-fi
-printf '%s\\n' "unexpected uv $*" >> "$BRNRD_TRACE"
-exit 1
-"""
-
-UV_PRESENT = """
-case "$*" in
-  "tool dir --bin") printf '%s\\n' "$HOME/.local/bin"; exit 0 ;;
-  "tool dir") printf '%s\\n' "$HOME/.local/share/uv/tools"; exit 0 ;;
-esac
-if [ "$1" = "tool" ] && [ "$2" = "list" ]; then
-  printf '%s\\n' "brnrd v1.2.3"
-  printf '%s\\n' "- brnrd"
-  exit 0
-fi
-printf '%s\\n' "unexpected uv $*" >> "$BRNRD_TRACE"
-exit 1
-"""
-
-PIPX_ABSENT = """
-if [ "$1" = "list" ] && [ "$2" = "--short" ]; then
-  exit 0
-fi
-printf '%s\\n' "unexpected pipx $*" >> "$BRNRD_TRACE"
-exit 1
-"""
-
-PIPX_PRESENT = """
-if [ "$1" = "list" ] && [ "$2" = "--short" ]; then
-  printf '%s\\n' "brnrd 1.2.3"
-  exit 0
-fi
-printf '%s\\n' "unexpected pipx $*" >> "$BRNRD_TRACE"
-exit 1
-"""
-
-# ps -U <uid> -o pid=,args=: this user's processes, from FAKE_PS.
-PS = """
-printf '%s' "${FAKE_PS:-}"
-"""
-
-REFUSES = """
-printf '%s\\n' "unexpected $0 $*" >> "$BRNRD_TRACE"
-exit 1
-"""
+SCRIPT = Path(__file__).parents[1] / 'docs/public/install.sh'
+SHELLS = [shell for shell in ['/bin/sh', '/bin/dash'] if Path(shell).exists()]
+ORIGIN = 'https://github.com/hugimuni-labs/brnrd'
 
 
-def _tool(bindir: Path, name: str, body: str) -> None:
-    bindir.mkdir(parents=True, exist_ok=True)
-    path = bindir / name
-    path.write_text("#!/bin/sh\n" + body.lstrip("\n"), encoding="utf-8")
+def tool(directory, name, text):
+    path = directory / name
+    path.write_text('#!/bin/sh\n' + text)
     path.chmod(0o755)
 
 
-def _system(tmp_path: Path) -> Path:
-    # Only the utilities the script uses: a runner's /usr/bin holds gh (and
-    # may hold uv or pipx), which a test needs absent.
-    sysbin = tmp_path / "system"
-    sysbin.mkdir()
-    for name in SYSTEM:
-        found = shutil.which(name, path="/usr/bin:/bin")
-        assert found, name
-        (sysbin / name).symlink_to(found)
-    return sysbin
-
-
-def _run(
-    tmp_path: Path,
-    tools: dict[str, str],
-    shell: str = "/bin/sh",
-    args: tuple[str, ...] = (),
-    env: dict[str, str] | None = None,
-) -> subprocess.CompletedProcess[str]:
-    bindir = tmp_path / "bin"
-    for name, body in tools.items():
-        _tool(bindir, name, body)
-    trace = tmp_path / "trace"
-    base = os.environ.copy()
-    # The runner's own settings leak into what the script reads: CI sets
-    # XDG_CONFIG_HOME, which moves the systemd unit path out of the test HOME.
-    for name in ("PYTHONPATH", "XDG_CONFIG_HOME"):
-        base.pop(name, None)
-    base.update(env or {})
-    env = base
-    env["PATH"] = os.pathsep.join((str(bindir), str(_system(tmp_path))))
-    env["HOME"] = str(tmp_path / "home")
-    env["BRNRD_INSTALL_DRY_RUN"] = "1"
-    env["BRNRD_TRACE"] = str(trace)
-    result = subprocess.run(
-        [shell, str(SCRIPT), *args],
-        env=env,
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    result.trace = trace.read_text(encoding="utf-8") if trace.exists() else ""
-    return result
-
-
-GIT_CLEAN = """
-case "$*" in
-  --version) exit 0 ;;
-  *"symbolic-ref -q --short HEAD") printf '%s\\n' "${FAKE_BRANCH:-main}"; exit 0 ;;
-  *"status --porcelain --untracked-files=no") printf '%s' "${FAKE_DIRTY:-}"; exit 0 ;;
+@pytest.fixture
+def room(tmp_path):
+    binary = tmp_path / 'bin'
+    binary.mkdir()
+    for name in ['grep', 'mktemp', 'mkdir', 'rm', 'sh', 'git', 'sed', 'env', 'id']:
+        (binary / name).symlink_to(shutil.which(name))
+    tool(binary, 'claude', 'exit 0\n')
+    tool(binary, 'gh', 'exit 0\n')
+    tool(binary, 'uv', '''printf 'uv %s\\n' "$*" >> "$TRACE"
+case "$1" in
+  tool) [ "$2" = list ] && [ -n "${UV_TOOLS:-}" ] && printf '%s\\n' "$UV_TOOLS" ;;
+  venv)
+    mkdir -p "$2/bin"
+    printf '#!/bin/sh\\nprintf "candidate %%s\\\\n" "$*" >> "$TRACE"\\n' > "$2/bin/python"
+    chmod +x "$2/bin/python"
+    ;;
 esac
-printf '%s\\n' "unexpected git $*" >> "$BRNRD_TRACE"
-exit 1
-"""
+''')
+    # The uv fixture uses chmod; every other host utility remains inaccessible.
+    (binary / 'chmod').symlink_to(shutil.which('chmod'))
+    # A fresh login shell: system PATH, then whatever the person's profile adds.
+    tool(binary, 'ps', 'printf "%s" "${FAKE_PS:-}"\n')
+    tool(binary, 'loginsh', 'PATH=/usr/bin:/bin\n[ -f "$HOME/.profile" ] && . "$HOME/.profile"\neval "$2"\n')
+    env = {**os.environ, 'HOME': str(tmp_path / 'home'), 'PATH': str(binary), 'SHELL': str(binary / 'loginsh'),
+           'TRACE': str(tmp_path / 'trace'), 'BRNRD_INSTALL_DRY_RUN': '1'}
+    for key in ['BRNRD_ROOT', 'BRNRD_DEV_DIR', 'BRNRD_INSTALL_DEV', 'PYTHONPATH', 'PYTHONHOME', 'XDG_CONFIG_HOME']:
+        env.pop(key, None)
+    return tmp_path, binary, env
 
-GH_SIGNED_IN = """
-if [ "$1" = "auth" ] && [ "$2" = "status" ]; then
-  exit 0
+
+def run(room, shell='/bin/sh', args=(), dry=True):
+    _, _, env = room
+    return subprocess.run([shell, str(SCRIPT), *args], env={**env, 'BRNRD_INSTALL_DRY_RUN': str(int(dry))},
+                          text=True, capture_output=True)
+
+
+def checkout(room, origin=ORIGIN):
+    tmp, _, env = room
+    source = Path(env['HOME']) / '.brnrd/src'
+    source.mkdir(parents=True)
+    def git(*args):
+        return subprocess.check_output(['git', '-C', str(source), *args], text=True).strip()
+    git('init', '-q')
+    git('remote', 'add', 'origin', origin)
+    git('-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '--allow-empty', '-qm', 'resident')
+    return source, git
+
+
+@pytest.mark.parametrize('shell', SHELLS)
+@pytest.mark.parametrize('args', [(), ('--dev',)])
+def test_default_and_dev_prepare_same_checkout_and_separate_prefix(room, shell, args):
+    tmp, binary, env = room
+    real = shutil.which('git')
+    (binary / 'git').unlink()
+    # A clone without the network: record it, make a checkout of main with the given origin.
+    tool(binary, 'git', f'''if [ "$1" = clone ]; then
+  printf 'git %s\\n' "$*" >> "$TRACE"
+  eval "dest=\\${{$#}}"; eval "url=\\${{$(($# - 1))}}"
+  {real} init -q -b main "$dest" && {real} -C "$dest" remote add origin "$url" &&
+  exec {real} -C "$dest" -c user.name=t -c user.email=t@t commit -q --allow-empty -m upstream
 fi
-printf '%s\\n' "unexpected gh $*" >> "$BRNRD_TRACE"
-exit 1
-"""
-
-GH_SIGNED_OUT = """
-if [ "$1" = "auth" ] && [ "$2" = "status" ]; then
-  exit 1
-fi
-printf '%s\\n' "unexpected gh $*" >> "$BRNRD_TRACE"
-exit 1
-"""
-
-DEV_TOOLS = {
-    "git": GIT_CLEAN,
-    "uv": UV_ABSENT,
-    "gh": GH_SIGNED_IN,
-    "claude": REFUSES,
-    "pipx": PIPX_ABSENT,
-    "ps": PS,
-    "curl": REFUSES,
-}
-
-
-# Installation leaves service startup to setup.
-RELEASE_TAIL = ["brnrd --version"]
-
-
-def _dev_tail(clone: Path) -> list[str]:
-    return [
-        f"uv tool install --editable {clone}",
-        "uv tool update-shell",
-    ]
-
-
-def _clone(tmp_path: Path) -> Path:
-    clone = tmp_path / "home" / ".brnrd" / "src"
-    (clone / ".git").mkdir(parents=True)
-    return clone
-
-
-def _commands(result: subprocess.CompletedProcess[str]) -> list[str]:
+exec {real} "$@"
+''')
+    result = run(room, shell, args, dry=False)
     assert result.returncode == 0, result.stderr
-    assert result.trace == ""
-    lines = result.stdout.splitlines()
-    assert lines[-1] == "Next: brnrd setup"
-    return lines[:-1]
+    home = Path(env['HOME'])
+    source = home / '.brnrd/src'
+    git = lambda *a: subprocess.check_output([real, '-C', str(source), *a], text=True).strip()
+    assert git('remote', 'get-url', 'origin') == ORIGIN
+    assert git('symbolic-ref', '--short', 'HEAD') == 'main'
+    trace = (tmp / 'trace').read_text().splitlines()
+    assert f'git clone --single-branch --branch main {ORIGIN} {source}' in trace
+    candidates = sorted((home / '.brnrd/envs').glob('install-*'))
+    assert len(candidates) == 1 and (candidates[0] / 'bin/python').is_file()
+    assert f'uv pip install --python {candidates[0]}/bin/python --editable {source}' in trace
+    assert f'candidate -I -m brr.loom.runtime.install_checkout {source}' in trace
+    assert not any('tool install' in line for line in trace)
 
 
-@pytest.mark.parametrize("shell", SHELLS)
-def test_dry_run_installs_with_uv_when_uv_is_present(tmp_path, shell):
-    commands = _commands(_run(tmp_path, {"uv": UV_ABSENT, "pipx": REFUSES, "curl": REFUSES}, shell))
-    assert commands == [
-        "uv tool install brnrd",
-        "uv tool update-shell",
-        *RELEASE_TAIL,
-    ]
+@pytest.mark.parametrize('shell', SHELLS)
+def test_rerun_preserves_branch_head_and_dirty_edits(room, shell):
+    source, git = checkout(room)
+    git('checkout', '-qb', 'resident-work')
+    (source / 'own.txt').write_text('keep my edits')
+    before = git('rev-parse', 'HEAD')
+    result = run(room, shell, dry=False)
+    assert result.returncode == 0, result.stderr
+    assert git('rev-parse', 'HEAD') == before
+    assert git('symbolic-ref', '--short', 'HEAD') == 'resident-work'
+    assert (source / 'own.txt').read_text() == 'keep my edits'
+    trace = (room[0] / 'trace').read_text()
+    assert 'candidate -I -m brr.loom.runtime.install_checkout ' in trace
+    assert 'tool install' not in trace and 'tool upgrade' not in trace
 
 
-@pytest.mark.parametrize("shell", SHELLS)
-def test_dry_run_upgrades_when_uv_already_has_brnrd(tmp_path, shell):
-    commands = _commands(_run(tmp_path, {"uv": UV_PRESENT, "pipx": REFUSES}, shell))
-    assert commands == [
-        "uv tool upgrade brnrd",
-        "uv tool update-shell",
-        *RELEASE_TAIL,
-    ]
-
-
-@pytest.mark.parametrize("shell", SHELLS)
-def test_dry_run_installs_with_pipx_when_only_pipx_is_present(tmp_path, shell):
-    commands = _commands(_run(tmp_path, {"pipx": PIPX_ABSENT, "curl": REFUSES}, shell))
-    assert commands == [
-        "pipx install brnrd",
-        "pipx ensurepath",
-        *RELEASE_TAIL,
-    ]
-
-
-@pytest.mark.parametrize("shell", SHELLS)
-def test_dry_run_upgrades_when_pipx_already_has_brnrd(tmp_path, shell):
-    commands = _commands(_run(tmp_path, {"pipx": PIPX_PRESENT, "curl": REFUSES}, shell))
-    assert commands == [
-        "pipx upgrade brnrd",
-        "pipx ensurepath",
-        *RELEASE_TAIL,
-    ]
-
-
-@pytest.mark.parametrize("shell", SHELLS)
-def test_dry_run_bootstraps_uv_when_neither_is_present(tmp_path, shell):
-    # No uv and no pipx on PATH. curl is present and refuses, so a dry run
-    # that actually downloads fails the trace instead of touching the network.
-    commands = _commands(_run(tmp_path, {"curl": REFUSES}, shell))
-    assert commands == [
-        UV_BOOTSTRAP,
-        "uv tool install brnrd",
-        "uv tool update-shell",
-        *RELEASE_TAIL,
-    ]
-
-
-@pytest.mark.parametrize("shell", SHELLS)
-def test_uv_wins_when_both_uv_and_pipx_are_present(tmp_path, shell):
-    commands = _commands(_run(tmp_path, {"uv": UV_ABSENT, "pipx": REFUSES}, shell))
-    assert commands[0] == "uv tool install brnrd"
-    assert all(not line.startswith("pipx") for line in commands)
-
-
-@pytest.mark.parametrize("shell", SHELLS)
-def test_a_failed_probe_exits_nonzero_with_one_sentence(tmp_path, shell):
-    result = _run(tmp_path, {"uv": REFUSES, "claude": REFUSES}, shell)
+@pytest.mark.parametrize('kind', ['foreign', 'nongit'])
+def test_invalid_existing_directory_refused_before_writes(room, kind):
+    if kind == 'foreign':
+        source, _ = checkout(room, 'https://example.com/foreign')
+    else:
+        source = Path(room[2]['HOME']) / '.brnrd/src'
+        source.mkdir(parents=True)
+    result = run(room, dry=False)
     assert result.returncode != 0
-    assert result.stdout == ""
-    lines = result.stderr.splitlines()
-    assert lines == [
-        "uv tool list failed; run uv tool install brnrd by hand, or uv tool upgrade brnrd if it is already installed."
-    ]
+    assert not (source.parent / 'envs').exists()
+    assert not (room[0] / 'trace').exists()
 
 
-@pytest.mark.parametrize("shell", SHELLS)
-def test_dev_clones_main_then_installs_it_editable(tmp_path, shell):
-    result = _run(tmp_path, DEV_TOOLS, shell, args=("--dev",))
-    clone = tmp_path / "home" / ".brnrd" / "src"
-    assert result.stderr == ""
-    assert _commands(result) == [
-        f"git clone --single-branch --branch main https://github.com/hugimuni-labs/brnrd {clone}",
-        *_dev_tail(clone),
-    ]
-
-
-def test_dev_env_var_means_the_flag_and_dev_dir_moves_the_clone(tmp_path):
-    clone = tmp_path / "elsewhere"
-    result = _run(tmp_path, DEV_TOOLS, env={"BRNRD_INSTALL_DEV": "1", "BRNRD_DEV_DIR": str(clone)})
-    assert _commands(result) == [
-        f"git clone --single-branch --branch main https://github.com/hugimuni-labs/brnrd {clone}",
-        *_dev_tail(clone),
-    ]
-
-
-@pytest.mark.parametrize("shell", SHELLS)
-def test_dev_rerun_fast_forwards_a_clean_clone_on_main(tmp_path, shell):
-    clone = _clone(tmp_path)
-    # An untracked file does not count, as in the loom's own rule.
-    result = _run(tmp_path, DEV_TOOLS, shell, args=("--dev",), env={"FAKE_DIRTY": ""})
-    assert _commands(result) == [
-        f"git -C {clone} pull --ff-only origin main",
-        *_dev_tail(clone),
-    ]
-
-
-@pytest.mark.parametrize("shell", SHELLS)
-def test_dev_rerun_refuses_a_dirty_clone_with_one_sentence(tmp_path, shell):
-    clone = _clone(tmp_path)
-    result = _run(tmp_path, DEV_TOOLS, shell, args=("--dev",),
-                  env={"FAKE_DIRTY": " M src/brr/cli.py\nM  README.md\n"})
+@pytest.mark.parametrize('kind', ['npm', 'pipx'])
+def test_collision_fails_before_bootstrap_clone_or_environment(room, kind):
+    tmp, binary, env = room
+    if kind == 'pipx':
+        tool(binary, 'pipx', 'printf "brnrd 1.2.3\\n"\n')
+    else:
+        npmroot = tmp / 'global_modules'
+        (npmroot / 'brnrd').mkdir(parents=True)
+        (npmroot / 'brnrd/package.json').write_text('{}')
+        tool(binary, 'npm', f'printf "%s\\n" "{npmroot}"\n')
+    result = run(room, dry=False)
     assert result.returncode != 0
-    assert result.trace == ""
-    assert result.stdout == ""
-    assert result.stderr.splitlines() == [
-        f"checkout {clone} has 2 uncommitted change(s) (M src/brr/cli.py): not touched; "
-        "commit or stash them and run this again."
-    ]
+    assert f'{kind} uninstall' in result.stderr
+    assert not (Path(env['HOME']) / '.brnrd').exists()
+    assert not (tmp / 'trace').exists()
 
 
-@pytest.mark.parametrize("shell", SHELLS)
-def test_dev_rerun_refuses_a_clone_on_another_branch(tmp_path, shell):
-    clone = _clone(tmp_path)
-    result = _run(tmp_path, DEV_TOOLS, shell, args=("--dev",), env={"FAKE_BRANCH": "wip"})
+@pytest.mark.parametrize('step', ['venv', 'pip'])
+def test_candidate_failure_keeps_old_prefix_and_removes_the_candidate(room, step):
+    source, _ = checkout(room)
+    envs = source.parent / 'envs'
+    old = envs / 'install-old'
+    old.mkdir(parents=True)
+    (old / 'proof').write_text('retained')
+    (source.parent / 'current').symlink_to(old)
+    tool(room[1], 'uv', f'''[ "$1" = {step} ] && exit 1
+[ "$1" = venv ] && mkdir -p "$2/bin"
+exit 0
+''')
+    result = run(room, dry=False)
     assert result.returncode != 0
-    assert result.stdout == ""
-    assert result.stderr.splitlines() == [
-        f"checkout {clone} is on branch wip, not main: not touched; "
-        f"switch it back with git -C {clone} switch main and run this again."
-    ]
+    assert (old / 'proof').read_text() == 'retained'
+    assert (source.parent / 'current').resolve() == old.resolve()
+    assert sorted(path.name for path in envs.iterdir()) == ['install-old']
 
 
-def test_dev_refuses_a_directory_that_is_not_a_checkout(tmp_path):
-    clone = tmp_path / "home" / ".brnrd" / "src"
-    clone.mkdir(parents=True)
-    result = _run(tmp_path, DEV_TOOLS, args=("--dev",))
+def shell_profile(room, *directories):
+    home = Path(room[2]['HOME'])
+    home.mkdir(parents=True, exist_ok=True)
+    (home / '.profile').write_text(''.join(f'PATH="{d}:$PATH"\n' for d in directories))
+
+
+def test_old_uv_tool_brnrd_ahead_on_path_is_named_and_kept(room):
+    tmp, _, env = room
+    source, _ = checkout(room)
+    home = Path(env['HOME'])
+    old = home / '.local/bin'
+    old.mkdir(parents=True)
+    tool(old, 'brnrd', 'echo packaged\n')
+    shell_profile(room, home / '.brnrd/bin', old)  # the uv tool directory wins
+    env['UV_TOOLS'] = 'brnrd v0.9.0'
+    result = run(room, dry=False)
+    assert result.returncode == 0, result.stderr
+    assert 'candidate -I -m brr.loom.runtime.install_checkout' in (tmp / 'trace').read_text()
+    last = result.stdout.strip().splitlines()[-2:]
+    assert str(old / 'brnrd') in last[0] and 'uv tool uninstall brnrd' in last[1]
+    assert (old / 'brnrd').exists()
+    assert 'tool uninstall' not in (tmp / 'trace').read_text()
+
+
+def test_shim_first_on_path_needs_no_warning(room):
+    _, _, env = room
+    checkout(room)
+    home = Path(env['HOME'])
+    shim = home / '.brnrd/bin'
+    shim.mkdir(parents=True)
+    tool(shim, 'brnrd', 'exit 0\n')
+    old = home / '.local/bin'
+    old.mkdir(parents=True)
+    tool(old, 'brnrd', 'echo packaged\n')
+    shell_profile(room, old, shim)
+    env['UV_TOOLS'] = 'brnrd v0.9.0'
+    result = run(room, dry=False)
+    assert result.returncode == 0, result.stderr
+    assert 'uv tool uninstall' not in result.stdout + result.stderr
+
+
+@pytest.mark.parametrize('shape', ['launcher-source', 'current'])
+def test_machine_running_from_another_checkout_is_refused_before_writes(room, shape):
+    tmp, _, env = room
+    home = Path(env['HOME'])
+    other = tmp / 'Projects/brnrd'
+    other.mkdir(parents=True)
+    for args in (['init', '-q'], ['remote', 'add', 'origin', ORIGIN],
+                 ['-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '--allow-empty', '-qm', 'own work']):
+        subprocess.run(['git', '-C', str(other), *args], check=True)
+    venv = other / '.venv/bin'
+    venv.mkdir(parents=True)
+    tool(venv, 'python', f'printf "%s\\n" "{other}"\n')
+    root = home / '.brnrd'
+    root.mkdir(parents=True)
+    (root / 'current').symlink_to(other / '.venv')
+    if shape == 'launcher-source':
+        (root / 'launcher-source').write_text(json.dumps({'source': str(other), 'prefix': str(other / '.venv')}))
+    result = run(room, dry=False)
     assert result.returncode != 0
-    assert result.stderr.splitlines() == [
-        f"{clone} exists and is not a git checkout: not touched; "
-        "move it away or set BRNRD_DEV_DIR to another directory."
-    ]
+    assert f'BRNRD_DEV_DIR={other}' in result.stderr
+    assert sorted(path.name for path in root.iterdir()) == sorted(
+        ['current'] + (['launcher-source'] if shape == 'launcher-source' else []))
+    assert not (tmp / 'trace').exists()
+    # The line it names is the way through, and it keeps that checkout.
+    env['BRNRD_DEV_DIR'] = str(other)
+    result = run(room, dry=True)
+    assert result.returncode == 0, result.stderr
+    assert 'git clone' not in result.stdout and f'Keeping checkout HEAD and branch in {other}' in result.stdout
 
 
-def test_dev_bootstraps_uv_when_it_is_missing(tmp_path):
-    tools = {name: body for name, body in DEV_TOOLS.items() if name != "uv"}
-    commands = _commands(_run(tmp_path, tools, args=("--dev",)))
-    assert commands[:2] == [UV_BOOTSTRAP, f"git clone --single-branch --branch main https://github.com/hugimuni-labs/brnrd {tmp_path / 'home' / '.brnrd' / 'src'}"]
-
-
-def test_an_unknown_option_is_refused(tmp_path):
-    result = _run(tmp_path, DEV_TOOLS, args=("--stable",))
+def test_unknown_option_refuses_without_writes(room):
+    result = run(room, args=('--stable',))
     assert result.returncode != 0
-    assert result.stderr.splitlines() == ["Unknown option --stable; the only option is --dev."]
+    assert 'Unknown option' in result.stderr
 
 
-@pytest.mark.parametrize("args", [(), ("--dev",)])
-def test_pythonpath_warns_on_both_paths_and_does_not_stop_the_install(tmp_path, args):
-    result = _run(tmp_path, {**DEV_TOOLS, "uv": UV_ABSENT}, args=args, env={"PYTHONPATH": "/x/brnrd/src"})
-    _commands(result)
-    assert result.stderr.splitlines() == [
-        "warning: PYTHONPATH is set (/x/brnrd/src), so brnrd may run another checkout's code "
-        "instead of this install; unset it here and in your shell profile."
-    ]
+def warnings(result):
+    return [line for line in result.stderr.splitlines() if line.startswith('warning: ')]
 
 
-def test_dev_warns_when_gh_is_missing(tmp_path):
-    tools = {name: body for name, body in DEV_TOOLS.items() if name != "gh"}
-    result = _run(tmp_path, tools, args=("--dev",))
-    _commands(result)
-    assert result.stderr.splitlines() == [
-        "warning: gh is not installed, and following main reads CI through it; "
-        "install the GitHub CLI and run gh auth login."
-    ]
+def test_pythonpath_warns_and_does_not_stop_the_install(room):
+    room[2]['PYTHONPATH'] = '/elsewhere/src'
+    result = run(room)
+    assert result.returncode == 0, result.stderr
+    assert any('PYTHONPATH is set (/elsewhere/src)' in line for line in warnings(result))
+    assert 'uv venv ' in result.stdout
 
 
-def test_dev_warns_when_gh_is_signed_out(tmp_path):
-    result = _run(tmp_path, {**DEV_TOOLS, "gh": GH_SIGNED_OUT}, args=("--dev",))
-    _commands(result)
-    assert result.stderr.splitlines() == [
-        "warning: gh auth status fails, and following main reads CI through it; run gh auth login."
-    ]
+@pytest.mark.parametrize('gh', ['missing', 'signed-out'])
+def test_gh_missing_or_signed_out_warns_and_continues(room, gh):
+    binary = room[1]
+    (binary / 'gh').unlink()
+    if gh == 'signed-out':
+        tool(binary, 'gh', 'exit 1\n')
+    result = run(room)
+    assert result.returncode == 0, result.stderr
+    assert [line for line in warnings(result) if 'gh' in line] == [
+        'warning: gh is not installed, and following main reads CI through it; install the GitHub CLI and run gh auth login.'
+        if gh == 'missing' else
+        'warning: gh auth status fails, and following main reads CI through it; run gh auth login.']
 
 
-@pytest.mark.parametrize("args", [(), ("--dev",)])
-def test_no_body_cli_on_path_warns_on_both_paths(tmp_path, args):
-    tools = {name: body for name, body in DEV_TOOLS.items() if name != "claude"}
-    result = _run(tmp_path, tools, args=args)
-    _commands(result)
-    assert result.stderr.splitlines() == [
-        "warning: neither claude nor codex is on PATH, and loom install picks the loom's body from them; "
-        "install and sign in to one first."
-    ]
+def test_no_body_cli_on_path_warns(room):
+    (room[1] / 'claude').unlink()
+    result = run(room)
+    assert result.returncode == 0, result.stderr
+    assert any('neither claude nor codex is on PATH' in line for line in warnings(result))
 
 
-@pytest.mark.parametrize("args", [(), ("--dev",)])
-@pytest.mark.parametrize("unit", ["Library/LaunchAgents/dev.brnrd.brr.plist", ".config/systemd/user/brr.service"])
-def test_an_old_daemon_service_warns_on_both_paths(tmp_path, args, unit):
-    path = tmp_path / "home" / unit
-    path.parent.mkdir(parents=True)
-    path.write_text("", encoding="utf-8")
-    result = _run(tmp_path, DEV_TOOLS, args=args)
-    _commands(result)
-    assert result.stderr.splitlines() == [
-        f"warning: an old brnrd daemon is installed ({path}) and runs beside the loom; "
-        "remove it with brnrd daemon uninstall."
-    ]
+@pytest.mark.parametrize('unit', ['Library/LaunchAgents/dev.brnrd.brr.plist', '.config/systemd/user/brr.service',
+                                  'xdg/systemd/user/brr.service'])
+def test_an_old_daemon_service_warns(room, unit):
+    home = Path(room[2]['HOME'])
+    if unit.startswith('xdg/'):
+        room[2]['XDG_CONFIG_HOME'] = str(home / 'xdg')
+    (home / unit).parent.mkdir(parents=True)
+    (home / unit).write_text('old daemon')
+    result = run(room)
+    assert result.returncode == 0, result.stderr
+    assert [line for line in warnings(result) if 'old brnrd daemon' in line] == [
+        f'warning: an old brnrd daemon is installed ({home / unit}) and runs beside the loom; '
+        'remove it with brnrd daemon uninstall.']
 
 
-def test_an_old_systemd_unit_is_found_under_xdg_config_home(tmp_path):
-    path = tmp_path / "xdg" / "systemd/user/brr.service"
-    path.parent.mkdir(parents=True)
-    path.write_text("", encoding="utf-8")
-    result = _run(tmp_path, DEV_TOOLS, env={"XDG_CONFIG_HOME": str(tmp_path / "xdg")})
-    _commands(result)
-    assert result.stderr.splitlines() == [
-        f"warning: an old brnrd daemon is installed ({path}) and runs beside the loom; "
-        "remove it with brnrd daemon uninstall."
-    ]
-
-
-def test_dev_warns_when_pipx_holds_a_brnrd_release(tmp_path):
-    result = _run(tmp_path, {**DEV_TOOLS, "pipx": PIPX_PRESENT}, args=("--dev",))
-    _commands(result)
-    assert result.stderr.splitlines() == [
-        "warning: pipx has a brnrd release installed, and its brnrd command collides with this install; "
-        "run pipx uninstall brnrd."
-    ]
-
-
-def test_dev_warns_when_another_brnrd_shadows_the_uv_tool_bin(tmp_path):
-    result = _run(tmp_path, {**DEV_TOOLS, "brnrd": REFUSES}, args=("--dev",))
-    _commands(result)
-    ubin = tmp_path / "home" / ".local" / "bin"
-    assert result.stderr.splitlines() == [
-        f"warning: brnrd on PATH is {tmp_path / 'bin' / 'brnrd'}, not {ubin}/brnrd, so it shadows this install; "
-        f"remove it or put {ubin} first on PATH."
-    ]
-
-
-def test_dev_warns_about_a_loom_running_from_another_install_only(tmp_path):
-    ours = tmp_path / "home" / ".local" / "share" / "uv" / "tools" / "brnrd" / "bin" / "python"
-    ps = (f"  101 /opt/py/bin/python -m brr.loom.runtime loom --home /h\n"
-          f"  102 {ours} -m brr.loom.runtime loom --home /h\n"
-          f"  103 /bin/zsh\n")
-    result = _run(tmp_path, DEV_TOOLS, args=("--dev",), env={"FAKE_PS": ps})
-    _commands(result)
-    assert result.stderr.splitlines() == [
-        "warning: a loom from another install is running (pid 101: /opt/py/bin/python); loom install --dev "
-        "replaces the loom service, but a loom started by hand keeps running beside it: stop it with that "
-        "install's brnrd loom stop, or kill 101."
-    ]
-
-
-def test_the_release_path_does_not_ask_about_gh(tmp_path):
-    result = _run(tmp_path, {"uv": UV_ABSENT, "gh": REFUSES, "claude": REFUSES})
-    _commands(result)
-    assert result.stderr == ""
+def test_warns_about_a_loom_running_from_another_install_only(room):
+    home = Path(room[2]['HOME'])
+    ours = home / '.brnrd/current/bin/python'
+    room[2]['FAKE_PS'] = (f'  101 /opt/py/bin/python -m brr.loom.runtime loom --home /h\n'
+                          f'  102 {ours} -m brr.loom.runtime loom --home /h\n'
+                          '  103 /bin/zsh\n')
+    result = run(room)
+    assert result.returncode == 0, result.stderr
+    assert [line for line in warnings(result) if 'loom from another install' in line] == [
+        'warning: a loom from another install is running (pid 101: /opt/py/bin/python); the installer moves the '
+        "loom service, but a loom started by hand keeps running beside it: stop it with that install's brnrd "
+        'loom stop, or kill 101.']
 
 
 def test_shellcheck_sh_when_installed():
-    shellcheck = shutil.which("shellcheck")
+    shellcheck = shutil.which('shellcheck')
     if shellcheck is None:
-        pytest.skip("shellcheck is not installed")
-    result = subprocess.run(
-        [shellcheck, "-s", "sh", str(SCRIPT)],
-        capture_output=True,
-        text=True,
-        check=False,
-    )
+        pytest.skip('shellcheck is not installed')
+    result = subprocess.run([shellcheck, '-s', 'sh', str(SCRIPT)], capture_output=True, text=True)
     assert result.returncode == 0, result.stdout + result.stderr
 
 
 def test_readme_and_install_page_lead_with_the_curl_line():
-    readme = (ROOT / "README.md").read_text(encoding="utf-8")
-    install = (ROOT / "docs" / "src" / "content" / "docs" / "getting-started" / "install.md").read_text(
-        encoding="utf-8"
-    )
-    assert CURL in install
-    # The README installs through brnrd.dev, which serves this same script (src/brnrd/spa.py).
-    start = readme.index("## ✦ Install")
-    window = readme[start:readme.index("\n## ", start + 1)]
-    first = window.split("```bash\n", 1)[1].splitlines()[0]
-    assert first == "curl -fsSL https://brnrd.dev/install | sh"
-    assert "curl -fsSL https://brnrd.dev/install | sh -s -- --dev" in window
+    root = Path(__file__).parents[1]
+    line = 'curl -fsSL https://brnrd.dev/install | sh'
+    install = (root / 'docs/src/content/docs/getting-started/install.md').read_text()
+    assert install.split('```bash\n', 1)[1].splitlines()[0] == line
+    readme = (root / 'README.md').read_text()
+    start = readme.index('## ✦ Install')
+    window = readme[start:readme.index('\n## ', start + 1)]
+    assert window.split('```bash\n', 1)[1].splitlines()[0] == line

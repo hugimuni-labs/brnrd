@@ -135,7 +135,12 @@ def main():
     args = sys.argv[1:]
     source = layout / 'launcher-source'
     try:
-        if args[:2] == ['runtime', 'loom'] and source.exists():
+        if (
+            args[:2] == ['runtime', 'loom']
+            and (len(args) == 2 or args[2].startswith('--'))
+            and not {'--help', '-h'}.intersection(args[2:])
+            and source.exists()
+        ):
             config = read(source)
             if (layout / 'current').resolve() == Path(config['prefix']).resolve():
                 start(Path(config['source']), python, args)

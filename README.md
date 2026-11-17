@@ -48,14 +48,17 @@ curl -fsSL https://brnrd.dev/install | sh
 brnrd setup
 ```
 
-The first line puts `brnrd` on your PATH through `uv` (fetching `uv` if it's
-missing), installs the loom as a login service (launchd or systemd --user) and
-shows its status. `brnrd setup` picks the AI and the doors, pairs them, and
-waits for your first message to reach the resident.
+The first line clones `main` to `~/.brnrd/src`, installs it editable in a
+separate Python environment, and puts the launcher on PATH. It fetches the
+matching board build; Node is needed only to build your own frontend changes.
+`brnrd setup` picks the AI and the doors, pairs them, and waits for your first
+message to reach the resident.
 
-To follow main instead of the PyPI release, pipe it to `sh -s -- --dev`
-(`curl -fsSL https://brnrd.dev/install | sh -s -- --dev`): it clones main to
-`~/.brnrd/src`, and the loom fast-forwards it whenever CI is green.
+Rerunning the installer preserves your checkout's HEAD, branch and edits. It
+prepares a new interpreter before switching the launcher, keeps the one before
+it, and migrates an existing loom service with status readback. A new
+install leaves service setup to `brnrd setup`. `--dev` remains an alias.
+The resident receives offers from green `main` commits and chooses when to merge.
 
 You need git, a signed-in `claude` or `codex` on PATH, and `gh` signed in if
 the resident should back up its memory or open PRs. The full walk is at
@@ -160,8 +163,8 @@ pip install -e ".[dev]"
 pytest
 ```
 
-To run a loom from your checkout, use the `--dev` install above: `brnrd loom
-install` refuses to run its service from a bare source checkout.
+The installer-owned checkout works with `brnrd loom install`. For a separate
+development checkout, pass `brnrd loom install --dev` explicitly.
 
 </details>
 
