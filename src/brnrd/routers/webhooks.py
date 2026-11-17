@@ -142,6 +142,17 @@ def _wa_audit(trace: str, stage: str, detail: str = "") -> None:
     )
 
 
+def _tell_refusal(settings, account_id: str, decision: limits.LimitDecision) -> bool:
+    """Whether a refused message earns its one-line reply: always for its shape, once per episode for a rate.
+
+    A rate refusal repeats under a flood, and a reply to each one would double the flood out through the
+    platform; the first of an episode names the limit, the rest are logged drops (limits.Ceiling.first_in_episode).
+    """
+    if not limits.is_rate_refusal(decision):
+        return True
+    return limits.CEILING.first_in_episode(settings, account_id, "incoming", decision.reason)
+
+
 def _reply(settings, parsed: tg.ParsedMessage, text: str) -> None:
     if not settings.telegram_bot_token:
         return
@@ -606,7 +617,8 @@ def _handle_github_issue_comment(
             "github limit reject repo=%s author=%s reason=%s",
             repo_name, author, decision.reason,
         )
-        _github_reply(settings, reply_to, decision.message, token=token)
+        if _tell_refusal(settings, repo.account_id, decision):
+            _github_reply(settings, reply_to, decision.message, token=token)
         return
     if is_pr:
         reply_to["pr_number"] = issue_number
@@ -719,7 +731,8 @@ def _handle_github_summons(
             summons.trigger,
             decision.reason,
         )
-        _github_reply(settings, reply_to, decision.message, token=token)
+        if _tell_refusal(settings, repo.account_id, decision):
+            _github_reply(settings, reply_to, decision.message, token=token)
         return
 
     if summons.is_pull_request:
@@ -1163,7 +1176,8 @@ async def whatsapp_webhook(request: Request, x_hub_signature_256: str | None = H
         )
         if not decision.allowed:
             _wa_audit(trace, "rejected", f"reason=limit:{decision.reason}")
-            _wa_reply(settings, parsed, decision.message)
+            if _tell_refusal(settings, route.account_id, decision):
+                _wa_reply(settings, parsed, decision.message)
             return {"ok": True}
         _enqueue_whatsapp_event(db, parsed, repo_id=repo.id, body=body)
         _wa_audit(trace, "enqueued")
@@ -1257,7 +1271,8 @@ def telegram_webhook(request: Request, payload: dict, x_telegram_bot_api_secret_
         )
         if not decision.allowed:
             _audit_reject(parsed, reason=f"limit:{decision.reason}")
-            _reply(settings, parsed, decision.message)
+            if _tell_refusal(settings, route.account_id, decision):
+                _reply(settings, parsed, decision.message)
             return {"ok": True}
         _enqueue_telegram_event(db, parsed, repo_id=repo.id, body=body)
         if settings.telegram_bot_token:

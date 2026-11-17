@@ -249,6 +249,18 @@ class Settings:
     limit_abuse_events_per_day: int = _env_int("BRNRD_LIMIT_ABUSE_EVENTS_PER_DAY", 5000)
     limit_max_event_body_bytes: int = _env_int("BRNRD_LIMIT_MAX_EVENT_BODY_BYTES", 100_000)
     limit_max_event_attachments: int = _env_int("BRNRD_LIMIT_MAX_EVENT_ATTACHMENTS", 10)
+    # The routes an install calls (limits.Ceiling), about ten times the heaviest
+    # real use: sends (replies, fresh messages, cards, packs) peaked at 5/min,
+    # 32/hour and 92/day on the busiest account's ledger (two installs,
+    # 2026-10-15..11-16); reports run near 200/min per install at worst
+    # (eight publish lanes every 3 s, the board parts and the loom snapshot).
+    limit_abuse_sends_per_minute: int = _env_int("BRNRD_LIMIT_ABUSE_SENDS_PER_MINUTE", 60)
+    limit_abuse_sends_per_hour: int = _env_int("BRNRD_LIMIT_ABUSE_SENDS_PER_HOUR", 400)
+    limit_abuse_sends_per_day: int = _env_int("BRNRD_LIMIT_ABUSE_SENDS_PER_DAY", 1000)
+    limit_abuse_reports_per_minute: int = _env_int("BRNRD_LIMIT_ABUSE_REPORTS_PER_MINUTE", 2400)
+    # A person is told about a refusal once per episode: an episode ends after
+    # this many seconds with no refusal of the same kind.
+    limit_abuse_episode_quiet_seconds: int = _env_int("BRNRD_LIMIT_ABUSE_EPISODE_QUIET_SECONDS", 600)
 
     # design-the-loom.md §6/§18 — the bench: `<bench_home>/<repo>/<place>/
     # <commit>.md`, one local filesystem root, not an account-to-directory

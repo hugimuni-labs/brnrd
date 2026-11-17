@@ -20,10 +20,17 @@ All numeric bounds live in :class:`brnrd.config.Settings` (the
 read real tables only: connected repos = ``repos`` rows, event rates =
 ``events`` rows by ``created_at`` (kept accurate well past these windows
 by the #502 GC's 90-day row TTL).
+
+The routes an install calls (sends and reports) have their own all-tier
+ceiling, :class:`Ceiling`, counted in this process rather than in the
+database: see its docstring for why.
 """
 
 from __future__ import annotations
 
+import math
+import threading
+import time
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 
@@ -54,6 +61,8 @@ class LimitDecision:
     reason: str = ""
     message: str = ""
     status: int = 429
+    #: Seconds until the refused window ends, sent as ``Retry-After``; ``None`` when there is no window.
+    retry_after: int | None = None
 
 
 _ALLOW = LimitDecision(True)
@@ -187,4 +196,100 @@ def raise_if_denied(decision: LimitDecision) -> None:
     raise HTTPException(
         status_code=decision.status,
         detail={"reason": decision.reason, "message": decision.message},
+        headers={"Retry-After": str(decision.retry_after)} if decision.retry_after else None,
     )
+
+
+# --- the ceiling on the routes an install calls --------------------------------
+
+#: Lane -> the ``(settings attribute, window seconds)`` pairs that bound it.
+#: ``sends`` reach a person's chat (or hold memory, ``/pack``); ``reports`` are
+#: the publish loops' PUTs and the relay's presence and typing posts.
+CEILING_LANES: dict[str, tuple[tuple[str, int], ...]] = {
+    "sends": (
+        ("limit_abuse_sends_per_minute", 60),
+        ("limit_abuse_sends_per_hour", 3600),
+        ("limit_abuse_sends_per_day", 86400),
+    ),
+    "reports": (("limit_abuse_reports_per_minute", 60),),
+}
+
+_SPAN_WORD = {60: "min", 3600: "hour", 86400: "day"}
+
+
+class Ceiling:
+    """Fixed-window call counts per account and lane, held in this process.
+
+    Why not the database: the ceiling exists to protect the server, so it must
+    cost almost nothing on the path it guards. ``reports`` run near 200 calls a
+    minute per install at worst (the 3 s publish loop's eight lanes, the
+    board's parts push, the loom snapshot); a COUNT over a table per call, or a
+    counter row written per call, would add that load to the database it is
+    meant to spare, and a refused call would cost as much as an admitted one.
+    In-process is exact while brnrd runs as one uvicorn process (the
+    Dockerfile's CMD, and ``min-scale 1`` in deploy/scaleway.md), which the
+    product already depends on: the inbox long-poll and the pack relay are in
+    this process's memory too. Under N processes each counts alone, so the
+    ceiling becomes N times the number: still a ceiling, never a false refusal.
+    A restart forgets the counts, which only ever admits more.
+
+    A refused call is not counted, so a caller that backs off is admitted again
+    as soon as the window turns.
+    """
+
+    def __init__(self, clock=time.monotonic) -> None:
+        self.clock = clock
+        self._lock = threading.Lock()
+        self._windows: dict[tuple[str, str, int], tuple[int, int]] = {}
+        self._last_refused: dict[tuple[str, ...], float] = {}
+
+    def admit(self, settings: Settings, account_id: str, lane: str) -> LimitDecision:
+        bounds = [(getattr(settings, attr), span) for attr, span in CEILING_LANES[lane]]
+        with self._lock:
+            now = self.clock()
+            if len(self._windows) > 50_000:
+                self._prune(now)
+            for limit, span in bounds:
+                index = int(now // span)
+                at, count = self._windows.get((account_id, lane, span), (index, 0))
+                if at == index and count >= limit:
+                    word = _SPAN_WORD.get(span, f"{span}s")
+                    return LimitDecision(
+                        False,
+                        f"abuse_{lane}_rate",
+                        f"Account {lane} ceiling reached ({limit}/{word}); "
+                        "this install is calling far faster than real use. Wait and retry.",
+                        retry_after=max(1, math.ceil((index + 1) * span - now)),
+                    )
+            for limit, span in bounds:
+                index = int(now // span)
+                key = (account_id, lane, span)
+                at, count = self._windows.get(key, (index, 0))
+                self._windows[key] = (index, count + 1 if at == index else 1)
+        return _ALLOW
+
+    def first_in_episode(self, settings: Settings, *key: str) -> bool:
+        """True for the first refusal of an episode: none under ``key`` in the last quiet span.
+
+        Every refusal extends the episode, so a flood that never stops is told about once.
+        """
+        quiet = settings.limit_abuse_episode_quiet_seconds
+        with self._lock:
+            now = self.clock()
+            last = self._last_refused.get(key)
+            self._last_refused[key] = now
+            if len(self._last_refused) > 50_000:
+                self._last_refused = {k: t for k, t in self._last_refused.items() if now - t < quiet}
+        return last is None or now - last >= quiet
+
+    def _prune(self, now: float) -> None:
+        self._windows = {k: v for k, v in self._windows.items() if v[0] == int(now // k[2])}
+
+
+#: The one instance: per process, like the inbox long-poll and the typing limiter.
+CEILING = Ceiling()
+
+
+def is_rate_refusal(decision: LimitDecision) -> bool:
+    """A refusal that repeats under a flood (a rate window), not one about this message's shape."""
+    return not decision.allowed and decision.status == 429
