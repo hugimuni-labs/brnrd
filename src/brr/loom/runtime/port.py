@@ -1086,8 +1086,10 @@ def answered(room: Path) -> set[str]:
     stop re-show letters the body had answered (stop-list, and again once the
     reply had left port/out for the ledger: stop-answered) and refused a reincarnation
     whose ack was not yet drained (reincarnate-flake). The stop and the reincarnation both
-    read it here: port/out, then this strand's own ledger file."""
-    found = _ledger_answered(room)
+    read it here: port/out, then this strand's own ledger file. In that order:
+    the loom writes the ledger line before it unlinks the file, so a drain that
+    lands between the two reads is still seen by the second (ledger first lost it)."""
+    found = set()
     for path in (room / "port" / "out").glob("*.md"):
         try:
             fields = parse_frontmatter(path.read_text())
@@ -1095,7 +1097,7 @@ def answered(room: Path) -> set[str]:
             continue
         if fields.get("kind") in {"letter", "note"} and fields.get("re"):
             found.add(fields["re"])
-    return found
+    return found | _ledger_answered(room)
 
 
 def _ledger_answered(room: Path) -> set[str]:

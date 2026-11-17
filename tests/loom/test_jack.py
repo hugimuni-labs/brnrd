@@ -503,6 +503,28 @@ def test_a_reply_the_loom_drained_still_counts_while_the_boundary_lags(tmp_path,
     assert "send --re p-test/abcde" not in held["reason"]
 
 
+def test_a_reply_the_loom_drains_between_the_two_reads_is_still_answered(tmp_path, monkeypatch):
+    # The loom's tick does not wait for the reader: a drain that landed after the
+    # ledger read and before the port/out read was seen by neither, and a
+    # reincarnation right after an ack was refused (CI run 44084583249).
+    from brr.loom.runtime import port
+    from brr.loom.runtime.ledger import append
+    room = _room(tmp_path)
+    _write(room, [_letter()])
+    _reply(room, "p-test/abcde")
+    read = port._ledger_answered
+
+    def drain_after_reading(room_):
+        before = read(room_)
+        for path in (room / "port" / "out").glob("*.md"):
+            append(Home(tmp_path), port.fact_from_port(port.parse_frontmatter(path.read_text()), STRAND, 1, room=room))
+            path.unlink()
+        return before
+
+    monkeypatch.setattr(port, "_ledger_answered", drain_after_reading)
+    assert "p-test/abcde" in port.answered(room)
+
+
 def test_the_stop_repeats_its_whole_list_after_work_and_lets_an_idle_repeat_through(tmp_path, monkeypatch):
     monkeypatch.setenv("BRNRD_STOP_TIMEOUT", "91")
     room = _room(tmp_path)

@@ -24,9 +24,17 @@ Non-fast-forward updates to `main` also refuse.
 
 On GitHub, copy `ci/immune.yml` to `.github/workflows/immune.yml`, run it
 once, and require the `immune` status for `main` through branch protection
-or a ruleset. The workflow uses the push's before/after tips or the PR's
-base/head, and extracts the incumbent script with the same fail-closed
-rule. The workflow itself must be protected: a PR can edit it. Give
+or a ruleset. The workflow is the outside witness of a gate that already
+judged each push where it landed. It runs once a day over everything
+pushed since its last green run, and on a PR over its base/head, and
+extracts the incumbent script with the same fail-closed rule. It does not
+run on every push: GitHub bills a private repository a full minute per
+run, and a self that lands a hundred times a day spends the account's
+whole free allowance on it. A day with no push is a no-op; a last green
+run that cannot be read, or whose commit is gone, refuses. A red run stays
+red until the range from the last green run passes; where it never can
+(history was rewritten and the person accepts it), start the workflow by
+hand with `from` set to the commit to judge from. The workflow itself must be protected: a PR can edit it. Give
 strands contents-write tokens without administration rights, so they
 cannot lift protection. The seed does not configure forge protections.
 
