@@ -247,15 +247,18 @@ def test_start_reads_no_history(tmp_path, monkeypatch):
     assert successor.found is None
 
 
-def test_bad_requests_never_poison_the_writer(tmp_path):
+def test_bad_requests_never_poison_the_writer(tmp_path, monkeypatch):
     import socket
+    # What is tested is the writer's state after bad requests, not the runner's speed: the 5 ms
+    # production deadline (connect, send, fsync, ack) misses on a loaded CI runner (brnrd#2758).
+    monkeypatch.setattr(audit, "DEADLINE", 1.0)
     home = Home(tmp_path)
     place = room(home)
     writer = audit.Writer(home)
     endpoint = json.loads((home.root / "loom/audit-endpoint.json").read_bytes())
     payload = json.dumps({'tool_name': 'Bash', 'tool_use_id': 'x'})
-    def send(raw, close=True):
-        with socket.create_connection(("127.0.0.1", endpoint["port"]), timeout=1) as conn:
+    def send(raw, close=True, wait=1.0):
+        with socket.create_connection(("127.0.0.1", endpoint["port"]), timeout=wait) as conn:
             conn.sendall(raw)
             if close:
                 conn.shutdown(socket.SHUT_WR)
@@ -270,7 +273,7 @@ def test_bad_requests_never_poison_the_writer(tmp_path):
                     audit.canonical({"token": endpoint["token"], "event": {"id": "bad"}}) + b"\n",
                     b'{"token":"' + endpoint["token"].encode() + b'","event":NaN}\n'):
             assert send(raw) != b"ok\n"
-        send(audit.canonical(good)[:20], close=False)  # half-sent, then left hanging
+        send(audit.canonical(good)[:20], close=False, wait=.05)  # half-sent, then left hanging
         assert writer.error is None
         audit.note(place, payload, "pre")
     finally:
