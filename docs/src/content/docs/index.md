@@ -100,14 +100,14 @@ two doors.
 ## Start here
 
 ```bash
-npm install -g brnrd     # or: uv tool install brnrd · pipx install brnrd
+curl -fsSL https://brnrd.dev/install | sh     # or: npm install -g brnrd
 brnrd --version
 ```
 
 1. [Check the prerequisites](./getting-started/prerequisites/) — terminal, GitHub,
    and one coding-agent CLI.
 2. [Install brnrd](./getting-started/install/) — the full picture, including
-   what to do when there is no Python on the machine.
+   what it puts where and how it updates.
 3. [Choose a managed or self-hosted connection](./getting-started/connect/).
 4. [Send your first task](./getting-started/first-task/).
 

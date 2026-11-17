@@ -20,9 +20,9 @@ brnrd account connect       # pair, install, and start
 ```
 
 Nothing installed yet? `npx brnrd account connect` does the whole cold start in
-one line — it bootstraps a durable install first, then runs the command. It
-leaves no `brnrd` command on your `PATH` though, so `npm install -g brnrd`
-afterwards (or instead) is worth the four seconds.
+one line: it runs the installer first, then the command. The command it leaves
+is `~/.brnrd/bin/brnrd`; the installer's last lines say how to put it on your
+`PATH`.
 
 The managed connection relays messages and status between brnrd.dev and your
 daemon. It does not move run execution to hosted compute. See

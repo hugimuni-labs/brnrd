@@ -28,7 +28,7 @@ keep. Then:
 
 ```bash
 rm -rf ~/brnrd ~/.brnrd
-uv tool uninstall brnrd      # or the route you installed with
+npm uninstall -g brnrd       # if you installed through npm
 ```
 
 ## brnrd.dev

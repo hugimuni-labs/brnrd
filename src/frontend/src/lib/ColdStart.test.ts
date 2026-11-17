@@ -150,9 +150,9 @@ function repo(over: Partial<ConnectedRepo> = {}): ConnectedRepo {
 test('an account with nothing connected is told the two things that have to happen', async () => {
 	const html = await renderColdStart([]);
 	ok(html.includes('install the cli'), 'names the install step');
-	ok(html.includes('npm install -g brnrd'), 'prints the headline install command');
-	ok(html.includes('uv tool install brnrd'), 'offers the uv alternate');
-	ok(html.includes('pipx install brnrd'), 'offers the pipx alternate');
+	ok(html.includes('curl -fsSL https://brnrd.dev/install | sh'), 'prints the headline install command');
+	ok(html.includes('npm install -g brnrd'), 'offers the npm alternate');
+	ok(!html.includes('uv tool install') && !html.includes('pipx'), 'the retired packaged routes are off the wall');
 	ok(html.includes('the guided setup'), 'names the guided-door step');
 	ok(!html.includes('brnrd init'), 'the retired verb is off the wall (08-14 trace)');
 	ok(!html.includes('account connect'), 'the pre-door pairing spell is off the wall too');

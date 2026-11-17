@@ -26,7 +26,7 @@ current environment and the one before it; older installer environments are
 removed, and nothing outside `~/.brnrd/envs` is touched. Reinstallation preserves
 service environment variables and adds the new shell's tool directories to PATH.
 The installer ends by checking which `brnrd` a new login shell runs; if an older
-install (such as the packaged `uv tool install brnrd`) comes first, it names it
+install (such as an old `uv tool install brnrd`) comes first, it names it
 and the command that removes it, and leaves that to you.
 
 Reruns never move checkout HEAD, switch branches or discard edits. A foreign
@@ -36,9 +36,14 @@ another checkout is refused before any write, with the line that keeps it:
 before writes; the installer gives the uninstall command and leaves it to you.
 `--dev` is accepted for compatibility and selects the same installation.
 
-Packaged npm, uv-tool and pipx installations still exist during this transition;
-their convergence and retirement are separate changes. Use the curl installer
-for a resident that owns its source.
+There is one install kind. npm is a launcher over this installer (see
+[Through npm](#through-npm)); the PyPI wheel, `uv tool install` and `pipx`
+routes are retired. Following releases instead of main is a setting of the
+same checkout, not another install.
+
+To install a release instead of main, name its tag:
+`curl -fsSL https://brnrd.dev/install | BRNRD_REF=vX.Y.Z sh`. The clone sits on a
+local branch `stable` and follows releases.
 
 Check it (in a new shell, `brnrd --version` does the same once the PATH line is in your profile):
 
@@ -195,43 +200,24 @@ Continue to [Connect](../connect/) for a persistent channel — your phone, a
 chat gate, an identity that isn't you — or skip straight to
 [First task](../first-task/) and keep working from the terminal.
 
-## Trying it without installing
+## Through npm
 
 ```bash
-npx brnrd
+npm install -g brnrd
+brnrd --version
 ```
 
-`npx` runs brnrd once without adding anything to your `PATH`, so there is no
-`brnrd` command afterwards — every later command has to be `npx brnrd …` as
-well. Good for a first look; if you keep using it, install it properly with one
-of the lines above.
+The npm package is a launcher over the same installer. Its first run, when
+there is no `~/.brnrd/bin/brnrd` yet, runs the `install.sh` it ships, pinned to
+its own release (`BRNRD_REF=v<version>`): the checkout is a clone of that
+release tag on a local branch `stable`, set to follow releases (see
+"Following releases instead of main" below). Every run after that hands over
+to `~/.brnrd/bin/brnrd`. `npx brnrd` does the same, so it installs too.
 
-:::note[Managed account, one line]
-`npx brnrd account connect` bootstraps, pairs, and starts the daemon in a single
-command — no separate install step.
-:::
-
-## The Python part, for when it matters
-
-brnrd is a Python program. The npm package is a launcher: on first run it builds
-a private, durable virtualenv under `~/.local/share/brnrd` (or `$BRNRD_HOME`),
-installs brnrd from PyPI into it, and hands over. Every run after that is just a
-launch. Your system Python is not touched and your `PATH` is not rewritten by
-the launcher itself — only by npm, for the `brnrd` command.
-
-That durability is what makes the npm route a real install: `brnrd loom
-install` and `brnrd daemon install` write a systemd/launchd unit pointing into that virtualenv, and it is
-still there tomorrow.
-
-If no Python is on the machine, the launcher downloads a checksum-pinned
-[uv](https://github.com/astral-sh/uv) release and lets uv provision CPython,
-under the same directory. It never pipes a script into a shell.
-
-:::caution[Not `uvx brnrd` or `pipx run brnrd`]
-Both run from a disposable, per-invocation environment. `brnrd loom install`
-or `brnrd daemon install` would pin the background service to a binary path that disappears with it. Use a
-persistent install, then install the service.
-:::
+`npm update -g brnrd` updates only the launcher; the loom follows releases by
+itself. On Windows, use WSL: the loom has never run on native Windows, and the
+launcher says so. A virtualenv an older launcher left under
+`~/.local/share/brnrd` is named once and left alone.
 
 ## Updates from main
 

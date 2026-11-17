@@ -214,7 +214,7 @@
 	});
 	let isMobile = $derived(mobileOverride ?? detectedMobile);
 
-	const INSTALL_COMMAND = 'npm install -g brnrd';
+	const INSTALL_COMMAND = 'curl -fsSL https://brnrd.dev/install | sh';
 
 	let appInstalled = $derived((installations?.length ?? 0) > 0);
 	// "Paired" here means the one-time setup act completed, not "currently
@@ -369,8 +369,7 @@
 						>
 					</div>
 					<p class="mt-1 font-mono text-[11px] text-ink-mute">
-						or <code class="text-stone-400">uv tool install brnrd</code> ·
-						<code class="text-stone-400">pipx install brnrd</code>
+						or <code class="text-stone-400">npm install -g brnrd</code>, the same installer
 					</p>
 				</li>
 
