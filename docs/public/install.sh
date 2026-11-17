@@ -154,6 +154,8 @@ if [ ! -e "$DEV_DIR" ]; then
     # A tag clone is a detached HEAD; the resident's changes want a branch. The loom follows releases from here.
     run_named "git -C ${DEV_DIR} checkout -b stable" git -C "$DEV_DIR" checkout -q -b stable
     run_named "git -C ${DEV_DIR} config brnrd.update stable" git -C "$DEV_DIR" config brnrd.update stable
+    # A single-branch tag clone has no origin/main; the board and activation find upstream by it.
+    run_named "git -C ${DEV_DIR} fetch origin main" git -C "$DEV_DIR" fetch -q origin +refs/heads/main:refs/remotes/origin/main
   fi
 else
   show "Keeping checkout HEAD and branch in ${DEV_DIR}"

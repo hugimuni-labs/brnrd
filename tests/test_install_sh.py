@@ -154,6 +154,11 @@ def fake_clone(binary):
   {real} init -q -b main "$dest" && {real} -C "$dest" remote add origin "$url" &&
   exec {real} -C "$dest" -c user.name=t -c user.email=t@t commit -q --allow-empty -m upstream
 fi
+case " $* " in *" fetch "*" +refs/heads/main:refs/remotes/origin/main "*)
+  # upstream main, without the network: the clone's commit, where a release tag sits on main
+  printf 'git %s\\n' "$*" >> "$TRACE"
+  exec {real} -C "$2" update-ref refs/remotes/origin/main HEAD ;;
+esac
 exec {real} "$@"
 ''')
     return real
@@ -170,6 +175,9 @@ def test_a_release_ref_clones_that_tag_on_a_branch_and_follows_releases(room):
     assert f'git clone --single-branch --branch v0.7.1 {ORIGIN} {source}' in (tmp / 'trace').read_text()
     assert git('symbolic-ref', '--short', 'HEAD') == 'stable'
     assert git('config', '--get', 'brnrd.update') == 'stable'
+    # activation and the board take upstream as the merge base with origin/main, which a
+    # single-branch tag clone lacks: without it install_checkout refuses the checkout.
+    assert git('merge-base', 'HEAD', 'refs/remotes/origin/main') == git('rev-parse', 'HEAD')
 
 
 def test_main_ref_sets_no_following_and_a_rerun_never_sets_it(room):
