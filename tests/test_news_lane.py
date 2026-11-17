@@ -69,8 +69,8 @@ def test_release_producer_reports_both_channels_by_name(tmp_path, monkeypatch):
     items = news_lane.release_producer(repo)
     by_subject = {item.subject: item for item in items}
 
-    assert set(by_subject) == {"pypi", "npm"}
-    assert by_subject["pypi"].current == "9.9.9"
+    assert set(by_subject) == {"release", "npm"}
+    assert by_subject["release"].current == "9.9.9"
     assert by_subject["npm"].current == "9.9.8"
     assert all(item.kind == "release" and item.expires_at is None for item in items)
 
