@@ -100,6 +100,17 @@ def test_an_old_launcher_venv_is_named_once_and_left_alone(tmp_path):
     assert old.is_dir()
 
 
+def test_windows_is_told_to_use_wsl_and_nothing_runs(tmp_path):
+    # npm must let the package onto Windows (no "os" field: it would refuse with EBADPLATFORM),
+    # or this message is never read.
+    assert "os" not in json.loads((NPM / "package.json").read_text())
+    fake = tmp_path / "win32.js"
+    fake.write_text('require("node:os").platform = () => "win32";\n')
+    result, trace = _run(tmp_path, _package(tmp_path), "setup", NODE_OPTIONS=f"--require {fake}")
+    assert result.returncode == 1 and "inside WSL" in result.stderr
+    assert trace == []  # neither the installer nor a shim ran
+
+
 def test_the_tarball_ships_the_public_installer_copied_at_pack_time():
     package = json.loads((NPM / "package.json").read_text())
     assert "install.sh" in package["files"] and "uv-assets.json" not in package["files"]

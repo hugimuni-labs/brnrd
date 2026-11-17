@@ -29,9 +29,5 @@
   ],
   "scripts": {
     "prepack": "cp ../../docs/public/install.sh install.sh"
-  },
-  "os": [
-    "darwin",
-    "linux"
-  ]
+  }
 }
