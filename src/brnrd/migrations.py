@@ -149,6 +149,7 @@ def _migrate_accounts(conn: Connection) -> None:
 
     # Art 17 erasure tombstone (account_deletion.py) — see models.Account.deleted_at.
     conn.execute(text("ALTER TABLE accounts ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMP"))
+    conn.execute(text("ALTER TABLE accounts ADD COLUMN IF NOT EXISTS home_trial_started_at TIMESTAMP"))
 
     _tighten_required_account_columns(conn)
 
