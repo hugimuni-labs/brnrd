@@ -605,7 +605,7 @@ def held_gate_lock():
 # `tests/test_brnrd_legal_pinning.py` / `tests/test_privacy_notice.py` parse
 # real `.svelte` files under `src/frontend/src/routes/` and
 # `src/frontend/src/lib/`, and `tests/test_npm_launcher.py` executes the real
-# `packaging/npm/bin/brnrd.js` and reads `packaging/npm/uv-assets.json`. A
+# `packaging/npm/bin/brnrd.js` and reads `packaging/npm/package.json`. A
 # diff confined to `src/frontend/` or `packaging/npm/` can still break
 # `backend`, and there is no bounded way to enumerate every such coupling
 # from here — the pattern ("read the real file, don't duplicate it") is this

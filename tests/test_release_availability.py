@@ -79,43 +79,16 @@ def test_request_failure_preserves_last_good_observation(tmp_path, monkeypatch):
     assert json.loads(path.read_text(encoding="utf-8")) == saved
 
 
-def test_refresh_if_stale_populates_both_channels_independently(tmp_path, monkeypatch):
+def test_refresh_reads_only_the_release_tags(tmp_path, monkeypatch):
     repo = _repo(tmp_path, monkeypatch)
     monkeypatch.setattr(release_availability, "_fetch_latest", lambda **_kw: "1.2.0")
-    monkeypatch.setattr(release_availability, "_fetch_latest_npm", lambda **_kw: "1.3.0")
+    monkeypatch.setattr(release_availability, "urlopen", lambda *a, **k: pytest.fail("no registry is asked"),
+                        raising=False)
 
     release_availability.refresh_if_stale(repo, now=1.0)
 
     assert release_availability.observation(repo).latest == "1.2.0"
-    assert release_availability.npm_observation(repo).latest == "1.3.0"
-
-
-def test_npm_channel_failure_does_not_blank_the_release_channel(tmp_path, monkeypatch):
-    repo = _repo(tmp_path, monkeypatch)
-    path = release_availability.cache_path(repo)
-    path.write_text(
-        json.dumps({"schema": 1, "attempted_at": 1.0, "checked_at": 1.0,
-                    "latest": "1.0.0", "npm_checked_at": 1.0, "npm_latest": "1.0.0"}),
-        encoding="utf-8",
-    )
-    monkeypatch.setattr(release_availability, "_fetch_latest", lambda **_kw: "1.1.0")
-    monkeypatch.setattr(release_availability, "_fetch_latest_npm", lambda **_kw: None)
-
-    release_availability.refresh_if_stale(
-        repo, now=release_availability.DEFAULT_TTL_SECONDS + 2,
-    )
-
-    # A failed npm fetch keeps its own last-good value, exactly like the
-    # release channel's failure-preserves-last-good contract above — the two
-    # channels' freshness clocks are shared, but their last-known-good
-    # values are not allowed to clobber each other.
-    assert release_availability.observation(repo).latest == "1.1.0"
-    assert release_availability.npm_observation(repo).latest == "1.0.0"
-
-
-def test_npm_observation_absent_when_never_fetched(tmp_path, monkeypatch):
-    repo = _repo(tmp_path, monkeypatch)
-    assert release_availability.npm_observation(repo) is None
+    assert "npm_latest" not in release_availability.load(repo)
 
 
 def test_latest_release_is_read_from_the_repository_tags_not_pypi(monkeypatch):

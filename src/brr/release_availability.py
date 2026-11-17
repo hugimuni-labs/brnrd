@@ -10,7 +10,6 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable
-from urllib.request import Request, urlopen
 
 from packaging.version import InvalidVersion, Version
 
@@ -20,23 +19,10 @@ REPOSITORY_URL = "https://github.com/hugimuni-labs/brnrd"
 #: A release is a ``vX.Y.Z`` tag on the repository: what ``update = "stable"`` follows, read the same way
 #: (``git ls-remote``, no account, no rate limit). PyPI was the source until the packaged install went.
 RELEASES_URL = f"{REPOSITORY_URL}/releases"
-# npm is the other headline install channel (`npm install -g brnrd`,
-# packaging/npm/package.json) and, unlike PyPI, was never polled at all —
-# an install from npm never learned it was behind. The registry's own
-# metadata endpoint, no auth, same shape of identity check as PyPI below.
-NPM_PACKAGE_NAME = "brnrd"
-NPM_REGISTRY_URL = f"https://registry.npmjs.org/{NPM_PACKAGE_NAME}"
-# A published release's metadata is immutable, so the identity check matches
-# every URL this project has ever published under, not only its current one.
-# ``Gurio/brr`` is the pre-transfer name that 0.1.0 (2026-07-12) carries; PyPI
-# cannot be edited in place, only superseded by a later release. Retire the
-# alias once no supported release still names it.
-REPOSITORY_URLS = (REPOSITORY_URL, "https://github.com/Gurio/brr")
 CACHE_NAME = "release-availability.json"
 SCHEMA = 1
 DEFAULT_TTL_SECONDS = 24 * 60 * 60
 REQUEST_TIMEOUT_SECONDS = 5.0
-MAX_RESPONSE_BYTES = 64 * 1024
 
 _refresh_lock = threading.Lock()
 _refreshing = False
@@ -82,20 +68,6 @@ def observation(repo_root: Path, *, installed: str = __version__) -> Availabilit
     return Availability(installed=installed, latest=latest.strip())
 
 
-def npm_observation(repo_root: Path, *, installed: str = __version__) -> Availability | None:
-    """The npm channel's own last-known-good, independent of the release tags'.
-
-    Which channel actually installed this copy is not knowable from here —
-    see ``news_lane.release_producer`` — so both channels are tracked
-    side by side rather than one standing in for the other.
-    """
-    payload = load(repo_root)
-    latest = payload.get("npm_latest") if payload else None
-    if not isinstance(latest, str) or not latest.strip():
-        return None
-    return Availability(installed=installed, latest=latest.strip())
-
-
 def _checked_at(payload: dict[str, Any] | None) -> float | None:
     value = payload.get("attempted_at", payload.get("checked_at")) if payload else None
     return float(value) if isinstance(value, (int, float)) else None
@@ -115,22 +87,6 @@ def _write(repo_root: Path, payload: dict[str, Any]) -> None:
         temporary.replace(path)
     except OSError:
         pass
-
-
-def _repository_url_matches(url: object) -> bool:
-    """True when *url* names one of :data:`REPOSITORY_URLS`.
-
-    npm's ``package.json`` convention prefixes the git remote with
-    ``git+`` and suffixes it with ``.git`` (``git+https://…/brnrd.git``);
-    PyPI's ``project_urls`` values never carry either. Strip both before
-    comparing so one identity check serves both registries.
-    """
-    if not isinstance(url, str):
-        return False
-    normalized = url.removeprefix("git+").rstrip("/").removesuffix(".git")
-    return normalized in {
-        repo.rstrip("/").removesuffix(".git") for repo in REPOSITORY_URLS
-    }
 
 
 def _fetch_latest(*, timeout: float = REQUEST_TIMEOUT_SECONDS) -> str | None:
@@ -157,40 +113,6 @@ def _fetch_latest(*, timeout: float = REQUEST_TIMEOUT_SECONDS) -> str | None:
     return latest
 
 
-def _fetch_latest_npm(*, timeout: float = REQUEST_TIMEOUT_SECONDS) -> str | None:
-    """Same shape as :func:`_fetch_latest`, against npm's registry instead.
-
-    npm's package document nests the identity check under ``repository``
-    (a string or ``{"url": ...}``) rather than PyPI's ``project_urls``
-    mapping — the one structural difference; the fail-open posture
-    (any parse hiccup -> ``None``, never raise) is identical.
-    """
-    request = Request(NPM_REGISTRY_URL, headers={"Accept": "application/json"})
-    try:
-        with urlopen(request, timeout=timeout) as response:  # noqa: S310 - fixed npm endpoint
-            raw = response.read(MAX_RESPONSE_BYTES + 1)
-    except (OSError, TimeoutError, ValueError):
-        return None
-    if len(raw) > MAX_RESPONSE_BYTES:
-        return None
-    try:
-        data = json.loads(raw.decode("utf-8"))
-        if not isinstance(data, dict) or data.get("name") != NPM_PACKAGE_NAME:
-            return None
-        repository = data.get("repository")
-        url = repository.get("url") if isinstance(repository, dict) else repository
-        if not _repository_url_matches(url):
-            return None
-        dist_tags = data.get("dist-tags")
-        latest = dist_tags.get("latest") if isinstance(dist_tags, dict) else None
-        if not isinstance(latest, str):
-            return None
-        Version(latest)
-    except (KeyError, TypeError, UnicodeDecodeError, ValueError, InvalidVersion):
-        return None
-    return str(latest)
-
-
 def refresh_if_stale(
     repo_root: Path,
     *,
@@ -198,24 +120,15 @@ def refresh_if_stale(
     ttl: float = DEFAULT_TTL_SECONDS,
     timeout: float = REQUEST_TIMEOUT_SECONDS,
 ) -> Availability | None:
-    """Refresh at most daily; failed fetches leave the last good observation intact.
-
-    One freshness clock governs both channels (the tags' ``attempted_at`` also
-    gates the npm fetch) — two independent daily timers would double the
-    request rate for no benefit, since both checks are cheap and a daemon
-    tick that is due for one is due for the other.
-    """
+    """Refresh at most daily; failed fetches leave the last good observation intact."""
     current_time = time.time() if now is None else now
     cached = load(repo_root)
     if not _fresh(cached, now=current_time, ttl=ttl):
         latest = _fetch_latest(timeout=timeout)
-        npm_latest = _fetch_latest_npm(timeout=timeout)
         updated = dict(cached or {})
         updated.update({"schema": SCHEMA, "attempted_at": current_time})
         if latest is not None:
             updated.update({"checked_at": current_time, "latest": latest})
-        if npm_latest is not None:
-            updated.update({"npm_checked_at": current_time, "npm_latest": npm_latest})
         # A failed endpoint is still an attempt. Recording it prevents the
         # daemon's fast main loop from turning one outage into a request storm,
         # while retaining any last known-good ``latest`` observation.

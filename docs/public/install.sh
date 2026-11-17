@@ -1,6 +1,8 @@
 #!/bin/sh
 # One install: an editable checkout, with an independently prepared interpreter.
 # --dev and BRNRD_INSTALL_DEV remain accepted aliases. Reruns never move HEAD.
+# BRNRD_REF=vX.Y.Z clones that release (the npm launcher passes its own version) and sets
+# git config brnrd.update stable in the new checkout, so the loom follows releases; default: main.
 set -eu
 dry=${BRNRD_INSTALL_DRY_RUN:-0}
 for arg in "$@"; do
@@ -12,6 +14,16 @@ done
 REPO=https://github.com/hugimuni-labs/brnrd
 ROOT=${BRNRD_ROOT:-${HOME}/.brnrd}
 DEV_DIR=${BRNRD_DEV_DIR:-${ROOT}/src}
+REF=${BRNRD_REF:-main}
+release=0
+case "$REF" in
+  main) : ;;
+  v[0-9]*.[0-9]*.[0-9]*) case "${REF#v}" in *[!0-9.]*) release=bad ;; *) release=1 ;; esac ;;
+  *) release=bad ;;
+esac
+case "$release" in
+  bad) printf 'BRNRD_REF=%s is neither main nor a release tag vX.Y.Z.\n' "$REF" >&2; exit 1 ;;
+esac
 candidate=''
 # A failed run leaves no environment behind, unless current already names it.
 drop_candidate() {
@@ -37,10 +49,15 @@ if command -v pipx >/dev/null 2>&1; then
     fail 'pipx brnrd collides with this install. Run: pipx uninstall brnrd; then rerun this installer.'
   fi
 fi
+# The npm launcher that ships install.sh runs this installer and then the shim, so it is no collision;
+# an older one installs its own copy of brnrd from PyPI beside this one.
+npmshim=''
 if command -v npm >/dev/null 2>&1; then
   npmroot=$(npm root -g </dev/null) || fail 'Cannot check npm installs; run npm root -g and retry.'
   if [ -e "${npmroot}/brnrd/package.json" ]; then
-    fail 'npm brnrd collides with this install. Run: npm uninstall -g brnrd; then rerun this installer.'
+    [ -e "${npmroot}/brnrd/install.sh" ] ||
+      fail 'npm brnrd collides with this install. Run: npm uninstall -g brnrd; then rerun this installer.'
+    if prefix=$(npm prefix -g </dev/null 2>/dev/null); then npmshim="${prefix}/bin/brnrd"; fi
   fi
 fi
 # A machine already running from another checkout keeps it: refuse before any write.
@@ -132,7 +149,12 @@ preflight
 if ! command -v uv >/dev/null 2>&1; then bootstrap_uv; fi
 uvbin=$(command -v uv || printf uv)
 if [ ! -e "$DEV_DIR" ]; then
-  run_named "git clone --single-branch --branch main ${REPO} ${DEV_DIR}" git clone --single-branch --branch main "$REPO" "$DEV_DIR"
+  run_named "git clone --single-branch --branch ${REF} ${REPO} ${DEV_DIR}" git clone --single-branch --branch "$REF" "$REPO" "$DEV_DIR"
+  if [ "$release" = 1 ]; then
+    # A tag clone is a detached HEAD; the resident's changes want a branch. The loom follows releases from here.
+    run_named "git -C ${DEV_DIR} checkout -b stable" git -C "$DEV_DIR" checkout -q -b stable
+    run_named "git -C ${DEV_DIR} config brnrd.update stable" git -C "$DEV_DIR" config brnrd.update stable
+  fi
 else
   show "Keeping checkout HEAD and branch in ${DEV_DIR}"
 fi
@@ -160,7 +182,7 @@ else
   login=${SHELL:-/bin/sh}
   found=$(env -i HOME="$HOME" USER="${USER:-}" LOGNAME="${LOGNAME:-}" SHELL="$login" "$login" -lc 'command -v brnrd' </dev/null 2>/dev/null) || found=''
   found=$(printf '%s\n' "$found" | sed -n '$p')
-  if [ -n "$found" ] && ! [ "$found" -ef "${ROOT}/bin/brnrd" ]; then
+  if [ -n "$found" ] && ! [ "$found" -ef "${ROOT}/bin/brnrd" ] && ! { [ -n "$npmshim" ] && [ "$found" -ef "$npmshim" ]; }; then
     show "warning: a new login shell runs ${found}, not ${ROOT}/bin/brnrd: the loom service runs this checkout, but brnrd typed in a shell would run that older install."
     if "$uvbin" tool list </dev/null 2>/dev/null | grep -E '^brnrd([[:space:]]|$)' >/dev/null; then
       show "It is the packaged uv tool install. Remove it with: uv tool uninstall brnrd"

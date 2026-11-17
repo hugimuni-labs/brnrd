@@ -1,192 +1,120 @@
+"""Drive the npm launcher (packaging/npm/bin/brnrd.js) with node against a fake installer and a fake shim.
+
+The launcher has one job: run brnrd's one installer once, pinned to the package's release tag, then hand every
+call to the shim it made. What is under test is that decision and what it tells the person, never the install.
+"""
 import json
 import os
-import re
 import shutil
 import subprocess
 from pathlib import Path
 
 import pytest
 
-
 ROOT = Path(__file__).parents[1]
 NPM = ROOT / "packaging" / "npm"
-LAUNCHER = NPM / "bin" / "brnrd.js"
+VERSION = json.loads((NPM / "package.json").read_text())["version"]
 
-
-def test_uv_release_assets_are_pinned_for_supported_node_hosts():
-    release = json.loads((NPM / "uv-assets.json").read_text())
-
-    assert re.fullmatch(r"\d+\.\d+\.\d+", release["version"])
-    assert release["python"] == "3.12"
-    assert release["checksums"] == (
-        f"https://github.com/astral-sh/uv/releases/download/"
-        f"{release['version']}/sha256.sum"
-    )
-    assert set(release["assets"]) == {
-        "darwin-arm64",
-        "darwin-x64",
-        "linux-arm64-gnu",
-        "linux-arm64-musl",
-        "linux-ia32-gnu",
-        "linux-ia32-musl",
-        "linux-x64-gnu",
-        "linux-x64-musl",
-        "win32-arm64",
-        "win32-ia32",
-        "win32-x64",
-    }
-    for asset in release["assets"].values():
-        assert asset["archive"].startswith("uv-")
-        assert asset["archive"].endswith((".tar.gz", ".zip"))
-        assert re.fullmatch(r"[0-9a-f]{64}", asset["sha256"])
-        assert asset["size"] > 10_000_000
-
-
-def test_uv_release_manifest_is_in_the_npm_tarball():
-    package = json.loads((NPM / "package.json").read_text())
-    assert "uv-assets.json" in package["files"]
-
-
-# ── the launcher, driven ────────────────────────────────────────────
-#
-# These run `bin/brnrd.js` for real. The virtualenv it would build is faked
-# in a tmp `BRNRD_HOME`, so nothing touches the network: a `bin/python` that
-# exits 0 satisfies the install step, and a `bin/brnrd` that echoes its own
-# environment stands in for the payload. What is under test is the launcher's
-# own decisions — which environment it hands the payload, and what it tells
-# the user — not the bootstrap it wraps.
+pytestmark = pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
 
 
 def _script(path: Path, body: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(f"#!/bin/sh\n{body}\n", encoding="utf-8")
+    path.write_text("#!/bin/sh\n" + body)
     path.chmod(0o755)
 
 
-def _fake_home(tmp_path: Path, *, reported_version: str) -> Path:
-    """A BRNRD_HOME whose venv is already there and answers `--version`."""
-    home = tmp_path / "brnrd-home"
-    bin_dir = home / "venv" / "bin"
-    _script(bin_dir / "python", 'exit 0')
-    _script(
-        bin_dir / "brnrd",
-        f'case "$1" in --version) echo "brnrd {reported_version}"; exit 0;; esac\n'
-        'echo "LAUNCHER=${BRNRD_LAUNCHER-unset}"',
-    )
-    return home
+def _package(tmp_path: Path, where: str = "global/lib/node_modules/brnrd") -> Path:
+    """The package as npm lays it out: brnrd.js and package.json, plus a fake install.sh that records its env
+    and makes the shim (or fails, when FAIL_INSTALL is set)."""
+    package = tmp_path / where
+    (package / "bin").mkdir(parents=True)
+    shutil.copy(NPM / "bin" / "brnrd.js", package / "bin" / "brnrd.js")
+    shutil.copy(NPM / "package.json", package / "package.json")
+    _script(package / "install.sh", r'''printf 'installer BRNRD_REF=%s\n' "$BRNRD_REF" >> "$TRACE"
+[ -n "${FAIL_INSTALL:-}" ] && exit 7
+[ -n "${NO_SHIM:-}" ] && exit 0
+mkdir -p "$BRNRD_ROOT/bin"
+printf '#!/bin/sh\nprintf "shim %%s LAUNCHER=%%s\\n" "$*" "${BRNRD_LAUNCHER-unset}" >> "$TRACE"\nexit 3\n' > "$BRNRD_ROOT/bin/brnrd"
+chmod +x "$BRNRD_ROOT/bin/brnrd"
+''')
+    return package / "bin" / "brnrd.js"
 
 
-def _run_launcher(
-    home: Path, tmp_path: Path, extra_env: dict, *, launcher: Path = LAUNCHER
-) -> subprocess.CompletedProcess:
-    node = shutil.which("node")
-    if not node:  # pragma: no cover - environment-dependent
-        pytest.skip("node is not installed")
-    env = {
-        # A curated PATH: `uv` on the developer's own PATH would send the
-        # install step down the uv branch and make the test host-dependent.
-        "PATH": f"{tmp_path}:/usr/bin:/bin",
-        "HOME": str(tmp_path),
-        "BRNRD_HOME": str(home),
-    }
-    env.update(extra_env)
-    return subprocess.run(
-        [node, str(launcher)],
-        env=env,
-        capture_output=True,
-        text=True,
-        timeout=120,
-    )
+def _run(tmp_path, launcher, *args, **env):
+    home = tmp_path / "home"
+    home.mkdir(exist_ok=True)
+    base = {k: v for k, v in os.environ.items() if not k.startswith(("BRNRD_", "npm_", "XDG_"))}
+    full = {**base, "HOME": str(home), "BRNRD_ROOT": str(home / ".brnrd"), "TRACE": str(tmp_path / "trace"), **env}
+    result = subprocess.run(["node", str(launcher), *args], env=full, text=True, capture_output=True, timeout=30)
+    trace = (tmp_path / "trace").read_text().splitlines() if (tmp_path / "trace").exists() else []
+    return result, trace
 
 
-def _npx_launcher(tmp_path: Path) -> Path:
-    """A copy of the launcher living where npx actually puts one.
-
-    `VIA_NPX` reads the physical install location (`_npx/<hash>/` inside the
-    npm cache), not an environment variable — a wrapping shell, direnv, or
-    parent process can leak an env var into a session that never ran npx
-    (#1084), but it can't move where this file itself is running from. Copy
-    the three files the launcher resolves relative to its own directory
-    (`bin/brnrd.js`, `package.json`, `uv-assets.json`) into that shape so the
-    test drives the real signal instead of re-asserting the old one.
-    """
-    pkg_dir = tmp_path / "npm-cache" / "_npx" / "deadbeef" / "node_modules" / "brnrd"
-    (pkg_dir / "bin").mkdir(parents=True, exist_ok=True)
-    shutil.copy(NPM / "package.json", pkg_dir / "package.json")
-    shutil.copy(NPM / "uv-assets.json", pkg_dir / "uv-assets.json")
-    shutil.copy(LAUNCHER, pkg_dir / "bin" / "brnrd.js")
-    return pkg_dir / "bin" / "brnrd.js"
+def test_first_run_installs_this_release_then_every_run_is_the_shim(tmp_path):
+    launcher = _package(tmp_path)
+    result, trace = _run(tmp_path, launcher, "setup", "--yes")
+    assert trace == [f"installer BRNRD_REF=v{VERSION}", "shim setup --yes LAUNCHER=unset"], result.stderr
+    assert result.returncode == 3  # the shim's status is the launcher's
+    assert f"installing v{VERSION}" in result.stderr
+    (tmp_path / "trace").unlink()
+    result, trace = _run(tmp_path, launcher, "--version")
+    assert trace == ["shim --version LAUNCHER=unset"] and "installing" not in result.stderr
 
 
-def _version() -> str:
-    return json.loads((NPM / "package.json").read_text())["version"]
+def test_an_existing_shim_is_used_and_the_installer_never_runs(tmp_path):
+    launcher = _package(tmp_path)
+    _script(tmp_path / "home/.brnrd/bin/brnrd", 'printf "own shim %s\\n" "$*" >> "$TRACE"\n')
+    result, trace = _run(tmp_path, launcher, "loom", "status")
+    assert result.returncode == 0 and trace == ["own shim loom status"]
 
 
-def test_payload_is_told_when_it_was_launched_through_npx(tmp_path):
-    """`BRNRD_LAUNCHER=npx` is the payload's only way to know.
-
-    brnrd prints its own next steps ("next: `brnrd up`"), and under npx that
-    command does not exist. The launcher is the only component that can tell
-    the two npm spellings apart, so this variable is a contract.
-    """
-    home = _fake_home(tmp_path, reported_version=_version())
-
-    result = _run_launcher(home, tmp_path, {}, launcher=_npx_launcher(tmp_path))
-
-    assert "LAUNCHER=npx" in result.stdout, result.stderr
+def test_a_failed_install_stops_with_its_status_and_runs_nothing(tmp_path):
+    result, trace = _run(tmp_path, _package(tmp_path), "setup", FAIL_INSTALL="1")
+    assert result.returncode == 7 and trace == [f"installer BRNRD_REF=v{VERSION}"]
 
 
-def test_a_path_install_leaves_the_launcher_marker_unset(tmp_path):
-    """`npm i -g brnrd`, `pip`, `uv`, `pipx` — a real `brnrd` exists.
-
-    The regression this guards is silent: were the marker always set, every
-    properly installed user would be told to type `npx brnrd …` forever.
-    """
-    home = _fake_home(tmp_path, reported_version=_version())
-
-    result = _run_launcher(home, tmp_path, {})
-
-    assert "LAUNCHER=unset" in result.stdout, result.stderr
+def test_an_install_that_leaves_no_shim_says_so(tmp_path):
+    result, _ = _run(tmp_path, _package(tmp_path), NO_SHIM="1")
+    assert result.returncode == 1 and "is missing" in result.stderr
 
 
-def test_a_leaked_npm_command_env_var_does_not_fake_npx(tmp_path):
-    """#1084: a reporter ran `npm install -g brnrd` then `brnrd --version`
-
-    from a real PATH install and still got told they'd used npx. Their shell
-    carried `npm_command=exec` for reasons that had nothing to do with that
-    command — the old detection trusted the environment and got fooled.
-    Reproduce the leak directly: same env the real npx sets, run from a real
-    install location. The physical-path signal must not care.
-    """
-    home = _fake_home(tmp_path, reported_version=_version())
-
-    result = _run_launcher(
-        home, tmp_path, {"npm_command": "exec", "npm_lifecycle_event": "npx"}
-    )
-
-    assert "LAUNCHER=unset" in result.stdout, result.stderr
+def test_npx_is_told_to_the_payload_by_where_the_launcher_lives_not_by_env(tmp_path):
+    npx = _package(tmp_path, "npm-cache/_npx/deadbeef/node_modules/brnrd")
+    _, trace = _run(tmp_path, npx, "up")
+    assert trace[-1] == "shim up LAUNCHER=npx"
+    # #1084: a leaked npm_command=exec from a parent shell never fakes npx for a global install.
+    (tmp_path / "trace").unlink()
+    _, trace = _run(tmp_path, _package(tmp_path / "g"), "up", npm_command="exec", npm_lifecycle_event="npx")
+    assert trace[-1] == "shim up LAUNCHER=unset"
 
 
-def test_first_npx_bootstrap_says_where_brnrd_went_and_how_to_get_the_command(
-    tmp_path,
-):
-    """The `command not found` a first-time npx user hits, pre-empted.
-
-    A stale reported version forces the bootstrap branch; the faked `python`
-    makes its install step succeed offline.
-    """
-    home = _fake_home(tmp_path, reported_version="0.0.0-stale")
-
-    result = _run_launcher(home, tmp_path, {}, launcher=_npx_launcher(tmp_path))
-
-    assert "npm install -g brnrd" in result.stderr, result.stderr
-    assert str(home / "venv" / "bin" / "brnrd") in result.stderr
+def test_an_old_launcher_venv_is_named_once_and_left_alone(tmp_path):
+    launcher = _package(tmp_path)
+    old = tmp_path / "home/.local/share/brnrd/venv"
+    old.mkdir(parents=True)
+    first, _ = _run(tmp_path, launcher, "--version")
+    again, _ = _run(tmp_path, launcher, "--version")
+    assert str(old) in first.stderr and "no longer used" in first.stderr
+    assert "no longer used" not in again.stderr
+    assert old.is_dir()
 
 
-def test_a_path_install_is_not_lectured_about_its_own_path(tmp_path):
-    """Same bootstrap, no npx: the advice would be noise, so it is not given."""
-    home = _fake_home(tmp_path, reported_version="0.0.0-stale")
+def test_windows_is_told_to_use_wsl_and_nothing_runs(tmp_path):
+    # npm must let the package onto Windows (no "os" field: it would refuse with EBADPLATFORM),
+    # or this message is never read.
+    assert "os" not in json.loads((NPM / "package.json").read_text())
+    fake = tmp_path / "win32.js"
+    fake.write_text('require("node:os").platform = () => "win32";\n')
+    result, trace = _run(tmp_path, _package(tmp_path), "setup", NODE_OPTIONS=f"--require {fake}")
+    assert result.returncode == 1 and "inside WSL" in result.stderr
+    assert trace == []  # neither the installer nor a shim ran
 
-    result = _run_launcher(home, tmp_path, {})
 
-    assert "npm install -g brnrd" not in result.stderr, result.stderr
+def test_the_tarball_ships_the_public_installer_copied_at_pack_time():
+    package = json.loads((NPM / "package.json").read_text())
+    assert "install.sh" in package["files"] and "uv-assets.json" not in package["files"]
+    assert package["scripts"]["prepack"] == "cp ../../docs/public/install.sh install.sh"
+    assert (NPM / ".gitignore").read_text().split() == ["install.sh"]  # never a second, drifting copy in git
+    assert not (NPM / "install.sh").exists() or (NPM / "install.sh").read_bytes() == (
+        ROOT / "docs/public/install.sh").read_bytes()

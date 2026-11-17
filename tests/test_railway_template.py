@@ -77,7 +77,7 @@ def test_the_image_installs_a_checkout_of_the_release_tag(tmp_path, version, tag
                           env={**os.environ, "BRNRD_SOURCE_URL": str(repo)}, capture_output=True, text=True)
     assert done.returncode == 0, done.stderr
     assert (dest / "version").read_text() == tag  # the newest release, never the pre-release or main
-    assert (dest / ".git").is_dir()  # a checkout the resident can change, not a copied tree
+    assert (dest / ".git").is_dir()  # a git checkout, not a copied tree (root-owned in the image: pinned there)
     assert f"brnrd checkout: {tag} " in done.stdout
 
 

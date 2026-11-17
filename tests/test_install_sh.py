@@ -143,6 +143,88 @@ def test_collision_fails_before_bootstrap_clone_or_environment(room, kind):
     assert not (tmp / 'trace').exists()
 
 
+def fake_clone(binary):
+    """A clone without the network: record it, make a checkout of the asked branch with the given origin."""
+    real = shutil.which('git')
+    (binary / 'git').unlink()
+    tool(binary, 'git', f'''if [ "$1" = clone ]; then
+  printf 'git %s\\n' "$*" >> "$TRACE"
+  eval "dest=\\${{$#}}"; eval "url=\\${{$(($# - 1))}}"
+  {real} init -q -b main "$dest" && {real} -C "$dest" remote add origin "$url" &&
+  exec {real} -C "$dest" -c user.name=t -c user.email=t@t commit -q --allow-empty -m upstream
+fi
+exec {real} "$@"
+''')
+    return real
+
+
+def test_a_release_ref_clones_that_tag_on_a_branch_and_follows_releases(room):
+    tmp, binary, env = room
+    real = fake_clone(binary)
+    env['BRNRD_REF'] = 'v0.7.1'
+    result = run(room, dry=False)
+    assert result.returncode == 0, result.stderr
+    source = Path(env['HOME']) / '.brnrd/src'
+    git = lambda *a: subprocess.check_output([real, '-C', str(source), *a], text=True).strip()
+    assert f'git clone --single-branch --branch v0.7.1 {ORIGIN} {source}' in (tmp / 'trace').read_text()
+    assert git('symbolic-ref', '--short', 'HEAD') == 'stable'
+    assert git('config', '--get', 'brnrd.update') == 'stable'
+
+
+def test_main_ref_sets_no_following_and_a_rerun_never_sets_it(room):
+    tmp, binary, env = room
+    real = fake_clone(binary)
+    assert run(room, dry=False).returncode == 0
+    source = Path(env['HOME']) / '.brnrd/src'
+    unset = lambda: subprocess.run([real, '-C', str(source), 'config', '--get', 'brnrd.update']).returncode == 1
+    assert unset()
+    env['BRNRD_REF'] = 'v0.7.1'  # a release ref on an existing checkout: HEAD and its following stay
+    assert run(room, dry=False).returncode == 0
+    assert unset() and subprocess.check_output([real, '-C', str(source), 'symbolic-ref', '--short', 'HEAD'],
+                                               text=True).strip() == 'main'
+
+
+@pytest.mark.parametrize('ref', ['v0.8.0rc1', 'feature', 'v1'])
+def test_a_ref_that_is_not_main_or_a_release_refuses_without_writes(room, ref):
+    room[2]['BRNRD_REF'] = ref
+    result = run(room, dry=False)
+    assert result.returncode != 0 and 'BRNRD_REF' in result.stderr
+    assert not (Path(room[2]['HOME']) / '.brnrd').exists() and not (room[0] / 'trace').exists()
+
+
+def npm_launcher(room, ships_installer):
+    """A global npm brnrd: the launcher that ships install.sh, or an older one that installs from PyPI."""
+    tmp, binary, _ = room
+    prefix = tmp / 'npm'
+    package = prefix / 'lib/node_modules/brnrd'
+    (package / 'bin').mkdir(parents=True)
+    (package / 'package.json').write_text('{}')
+    if ships_installer:
+        (package / 'install.sh').write_text('')
+    tool(package / 'bin', 'brnrd.js', 'exec "$HOME/.brnrd/bin/brnrd" "$@"\n')
+    (prefix / 'bin').mkdir()
+    (prefix / 'bin/brnrd').symlink_to(package / 'bin/brnrd.js')
+    tool(binary, 'npm', f'case "$1" in root) echo "{package.parent}" ;; prefix) echo "{prefix}" ;; esac\n')
+    return prefix / 'bin'
+
+
+def test_the_npm_launcher_that_runs_this_installer_is_no_collision_nor_a_warning(room):
+    tmp, binary, env = room
+    fake_clone(binary)
+    shell_profile(room, npm_launcher(room, ships_installer=True))  # npm's bin first on a login PATH
+    result = run(room, dry=False)
+    assert result.returncode == 0, result.stderr
+    assert 'candidate -I -m brr.loom.runtime.install_checkout' in (tmp / 'trace').read_text()
+    assert 'a new login shell runs' not in result.stdout
+
+
+def test_an_older_npm_launcher_still_collides(room):
+    npm_launcher(room, ships_installer=False)
+    result = run(room, dry=False)
+    assert result.returncode != 0 and 'npm uninstall -g brnrd' in result.stderr
+    assert not (Path(room[2]['HOME']) / '.brnrd').exists()
+
+
 @pytest.mark.parametrize('step', ['venv', 'pip'])
 def test_candidate_failure_keeps_old_prefix_and_removes_the_candidate(room, step):
     source, _ = checkout(room)

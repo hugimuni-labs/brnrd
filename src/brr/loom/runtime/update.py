@@ -365,16 +365,40 @@ class Updater:
         #: Monotonic time a green move first waited for an idle tick; cleared by the move.
         self.waiting: float | None = None
         self.said: set[str] = set()
+        #: (stat of .git/config, the mode its brnrd.update gave) for ``update = auto``.
+        self.checkout_mode: tuple[tuple | None, str] | None = None
 
     def _say_once(self, text: str) -> None:
         if text not in self.said:
             self.said.add(text)
             self.log(self.home, f"update: {text}")
 
+    def _checkout_mode(self) -> str:
+        """``auto``: the checkout's own ``brnrd.update`` (stable|dev), else dev; off when it is no checkout.
+
+        The npm launcher installs a release tag's checkout before any home config exists, so the
+        checkout carries its following setting itself; an explicit home ``update =`` still wins.
+        """
+        if not (self.root / ".git").exists():
+            return "off"
+        try:  # read again only when the checkout's config changed: step runs every tick
+            seen = (self.root / ".git" / "config").stat()
+            stamp = (seen.st_mtime_ns, seen.st_ino, seen.st_size)
+        except OSError:
+            stamp = None
+        if self.checkout_mode is None or self.checkout_mode[0] != stamp:
+            try:
+                found = subprocess.run(["git", "-C", str(self.root), "config", "--get", "brnrd.update"],
+                                       capture_output=True, text=True, timeout=10).stdout.strip()
+            except (OSError, subprocess.SubprocessError):
+                found = ""
+            self.checkout_mode = (stamp, found if found in ("stable", "dev") else "dev")
+        return self.checkout_mode[1]
+
     def _source(self, config):
         mode = config.update
         if mode == "auto":
-            mode = "dev" if (self.root / ".git").exists() else "off"
+            mode = self._checkout_mode()
         if mode == "off":
             return None
         if mode not in SOURCES:
