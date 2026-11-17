@@ -151,7 +151,7 @@ def test_source_validation_failure_precedes_current_or_service_writes(candidate,
     assert unit.read_text() == 'old unit with custom environment'
 
 
-def test_prepare_fetches_matching_board_without_npm(tmp_path, monkeypatch):
+def test_prepare_fetches_matching_board_without_npm(tmp_path, monkeypatch, capsys):
     import brr
     from brr.loom.runtime import board_asset, spabuild
     # Keep package identity real; only use a temporary frontend for downloads.
@@ -176,12 +176,14 @@ def test_prepare_fetches_matching_board_without_npm(tmp_path, monkeypatch):
     monkeypatch.setattr(board_asset, 'fetch', fetch)
     assert install.prepare(source) == 'a' * 40
     assert (spa.build / '200.html').read_text() == 'board'
+    boards = [line for line in capsys.readouterr().out.splitlines() if line.startswith('board: ')]
+    assert boards == [f'board: {spa.build} (tree {"b" * 40})']
     # Public board lookup reaches the actual downloaded file in this fixture.
     from brr.loom.runtime.board import spa_file
     assert spa_file(spa.build, '/threads/example') == spa.build / '200.html'
 
 
-def test_prepare_allows_missing_matching_board(tmp_path, monkeypatch):
+def test_prepare_allows_missing_matching_board(tmp_path, monkeypatch, capsys):
     import brr
     source = Path(brr.__file__).resolve().parents[2]
     class MissingBoard:
@@ -194,6 +196,9 @@ def test_prepare_allows_missing_matching_board(tmp_path, monkeypatch):
     monkeypatch.setattr(install, 'managed_source', lambda _: True)
     monkeypatch.setattr(install, 'git', lambda *a: 'a' * 40)
     assert install.prepare(source) == 'a' * 40
+    # One board line, and it says there is none: never a path with an empty tree.
+    boards = [line for line in capsys.readouterr().out.splitlines() if line.startswith('board: ')]
+    assert boards == ['board: unavailable; installation continues (retry command printed above)']
 
 
 @pytest.mark.parametrize('system', ['Linux', 'Darwin'])
