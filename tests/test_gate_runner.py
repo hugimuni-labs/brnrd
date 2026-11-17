@@ -724,7 +724,7 @@ def test_jobs_to_run_never_skips_the_catch_all_job_on_an_all_frontend_diff():
 
 def test_jobs_to_run_never_skips_the_catch_all_job_on_an_all_launcher_diff():
     """Same reasoning, the launcher direction: `tests/test_npm_launcher.py`
-    reads `packaging/npm/uv-assets.json` and runs `packaging/npm/bin/brnrd.js`
+    reads `packaging/npm/package.json` and runs `packaging/npm/bin/brnrd.js`
     for real, so backend cannot be ruled out for a launcher-only diff either."""
     gate = _gate()
     run_jobs = gate.jobs_to_run(_CI_LIKE_WORKFLOW, ["packaging/npm/bin/brnrd.js"])

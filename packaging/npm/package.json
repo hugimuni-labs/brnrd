@@ -1,7 +1,7 @@
 {
   "name": "brnrd",
   "version": "0.7.1",
-  "description": "brnrd — structured guardrails for AI agent work, managed from a chat. Install with `npm install -g brnrd`; this package is the launcher for the Python program.",
+  "description": "brnrd: structured guardrails for AI agent work, managed from a chat. `npm install -g brnrd` runs brnrd's installer once, pinned to this release, and then the command it installs.",
   "keywords": [
     "ai",
     "agent",
@@ -24,7 +24,14 @@
   },
   "files": [
     "bin/brnrd.js",
-    "uv-assets.json",
+    "install.sh",
     "README.md"
+  ],
+  "scripts": {
+    "prepack": "cp ../../docs/public/install.sh install.sh"
+  },
+  "os": [
+    "darwin",
+    "linux"
   ]
 }
