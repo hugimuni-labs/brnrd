@@ -1,0 +1,97 @@
+name: Installer end to end
+
+# The real installer, run on the PR's own checkout under a throwaway HOME:
+# real uv, real venv, real editable install, real `python -I -m
+# ...install_checkout`, the shim, and two reruns for env cleanup. Unit tests
+# drive install.sh with fakes; this job is the one place nothing is faked.
+# It needs network to astral.sh (uv), PyPI (deps), GitHub (origin/main and
+# board assets) and, on the npm leg, the npm registry.
+on:
+  pull_request:
+    paths:
+      - docs/public/install.sh
+      - src/brr/loom/runtime/install_checkout.py
+      - src/brr/loom/runtime/spabuild.py
+      - src/brr/loom/runtime/board_asset.py
+      - .github/workflows/install-e2e.yml
+  push:
+    branches: [main]
+    paths:
+      - docs/public/install.sh
+      - src/brr/loom/runtime/install_checkout.py
+      - src/brr/loom/runtime/spabuild.py
+      - src/brr/loom/runtime/board_asset.py
+      - .github/workflows/install-e2e.yml
+
+permissions:
+  contents: read
+
+jobs:
+  install:
+    name: Install (${{ matrix.os }}, board via ${{ matrix.board }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Node present: the board comes from the exact asset or a local npm build.
+          - os: ubuntu-latest
+            board: npm
+          # npm hidden: the asset or its ancestor, or no board; install must still succeed.
+          - os: macos-latest
+            board: none
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Prepare the checkout as a resident's would be
+        run: |
+          # The installer accepts only an upstream origin; actions/checkout already sets it.
+          test "$(git remote get-url origin)" = "https://github.com/hugimuni-labs/brnrd"
+          git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
+          E=$RUNNER_TEMP/e2e
+          mkdir -p "$E/home"
+          echo "E=$E" >> "$GITHUB_ENV"
+      - if: matrix.board == 'npm'
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - if: matrix.board == 'none'
+        name: Hide node and npm
+        run: |
+          # spabuild finds them with shutil.which and reads their versions; a stub that
+          # fails is "npm unavailable or unsupported", the rung a machine without Node takes.
+          mkdir -p "$E/nonode"
+          for c in node npm; do printf '#!/bin/sh\nexit 127\n' > "$E/nonode/$c"; chmod +x "$E/nonode/$c"; done
+          echo "$E/nonode" >> "$GITHUB_PATH"
+      - name: Install, three runs
+        run: |
+          export HOME=$E/home BRNRD_ROOT=$E/home/.brnrd BRNRD_DEV_DIR=$GITHUB_WORKSPACE
+          for n in 1 2 3; do
+            echo "::group::run $n"
+            sh docs/public/install.sh </dev/null 2>&1 | tee "$E/run$n.log"
+            echo "::endgroup::"
+          done
+      - name: Check what landed
+        run: |
+          R=$E/home/.brnrd
+          fail() { echo "::error::$1"; exit 1; }
+          "$R/bin/brnrd" --version || fail 'the shim does not answer'
+          cur=$(cd "$R/current" && pwd -P)
+          case "$cur/" in "$(cd "$R/envs" && pwd -P)"/install-*) : ;; *) fail "current is $cur, outside envs/install-*" ;; esac
+          "$cur/bin/python" -I -c 'import brr, os, sys; p = os.path.realpath(brr.__file__); sys.exit(0 if p.startswith(os.path.realpath(sys.argv[1])) else f"brr imports from {p}")' "$GITHUB_WORKSPACE"
+          # Current and the one before are kept; the first run's env is gone.
+          n=$(ls -d "$R"/envs/install-* | wc -l | tr -d ' ')
+          [ "$n" = 2 ] || fail "$n installer environments left, want 2"
+          grep -q '^previous prefix retained: ' "$E/run3.log" || fail 'third run names no retained prefix'
+          grep -q '^removed older installer environment: ' "$E/run3.log" || fail 'third run removed nothing'
+          grep -q '^service: none installed' "$E/run1.log" || fail 'a service was touched under a throwaway HOME'
+          grep -q "^HEAD: $(git rev-parse HEAD)" "$E/run1.log" || fail 'receipt names another HEAD'
+          if ! grep -q '^board: unavailable' "$E/run1.log"; then
+            grep '^board: ' "$E/run1.log"
+          elif [ "${{ matrix.board }}" = npm ]; then
+            fail 'Node 22 was present and no board was fetched or built'
+          else
+            echo 'no board: neither asset nor ancestor served, and npm hidden; install still succeeded'
+          fi
