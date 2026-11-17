@@ -1049,7 +1049,7 @@ class Pusher:
             headers = {"Authorization": f"Bearer {state['token']}", "Content-Type": "application/json",
                        "Content-Encoding": "gzip"}
             for body in self.batches(held, hashes):
-                resp = cloud._SESSION.request("PUT", url, data=body, headers=headers, timeout=60)
+                resp = cloud._send("PUT", url, data=body, headers=headers, timeout=60)
                 if not 200 <= resp.status_code < 300:
                     err = RuntimeError(f"PUT /v1/daemons/loom/parts -> {resp.status_code}: {resp.text[:200]}")
                     err.status_code = resp.status_code  # type: ignore[attr-defined]
