@@ -1,6 +1,7 @@
 """The loom keeps src/frontend/build on its checkout's tree: a moved tree builds into a fresh dir that replaces the
 served one only on success; a failed build keeps the old one served and raises (the loop's ``spa`` degraded step)."""
 import subprocess
+import urllib.error
 
 import pytest
 
@@ -10,7 +11,7 @@ from brr.loom.runtime.spabuild import BuildFailed, SpaBuild, npm_supported as ch
 @pytest.fixture(autouse=True)
 def board_dependencies(monkeypatch):
     from brr.loom.runtime import board_asset, spabuild
-    monkeypatch.setattr(board_asset, 'fetch', lambda *a: (_ for _ in ()).throw(OSError('404')))
+    monkeypatch.setattr(board_asset, 'fetch', lambda *a: (_ for _ in ()).throw(not_found()))
     monkeypatch.setattr(spabuild, 'npm_supported', lambda: spabuild.shutil.which('npm') is not None)
     # Builds run on a worker thread: a pytest.fail (or any error) raised there must fail the test.
     import threading
@@ -18,6 +19,11 @@ def board_dependencies(monkeypatch):
     monkeypatch.setattr(threading, 'excepthook', lambda args: raised.append(args.exc_value))
     yield
     assert not raised, f'raised on the build thread: {raised!r}'
+
+
+def not_found():
+    """What a release download answers for a commit with no published board."""
+    return urllib.error.HTTPError('https://example.invalid/board', 404, 'Not Found', None, None)
 
 
 def git(root, *args):
@@ -177,7 +183,7 @@ def test_missing_asset_without_npm_does_not_fail_loom(checkout, monkeypatch):
     messages = []
 
     def missing(*args):
-        raise OSError('404')
+        raise not_found()
 
     monkeypatch.setattr(board_asset, 'fetch', missing)
     spa = SpaBuild(frontend, messages.append, lambda *a: pytest.fail('npm ran'), every=0)
@@ -252,7 +258,7 @@ def test_missing_exact_asset_builds_locally_before_trying_ancestors(checkout, mo
     root, frontend = checkout
     managed(root, frontend)
     fetched = []
-    monkeypatch.setattr(board_asset, 'fetch', lambda c, *a: fetched.append(c) or (_ for _ in ()).throw(OSError('404')))
+    monkeypatch.setattr(board_asset, 'fetch', lambda c, *a: fetched.append(c) or (_ for _ in ()).throw(not_found()))
     monkeypatch.setattr(spabuild, 'npm_supported', lambda: True)
     calls = []
     def run(args, cwd, env=None):
@@ -309,7 +315,7 @@ def test_bad_digest_is_never_served_and_idle_retry_recovers(checkout, monkeypatc
     monkeypatch.setattr(spabuild, 'npm_supported', lambda: False)
     def fetch(commit, tree, out):
         if commit != spa.upstream[0]:
-            raise OSError('404')  # no ancestor is published: this test is the exact asset's
+            raise not_found()  # no ancestor is published: this test is the exact asset's
         attempts.append(clock[0])
         if len(attempts) == 1:
             out.mkdir()
@@ -410,7 +416,7 @@ def test_idle_gates_only_the_retry_and_is_read_only_when_it_is_due(checkout, mon
     def missing(commit, tree, destination):
         if commit == spa.upstream[0]:  # attempts are counted by the exact asset; ancestors also 404
             attempts.append(clock[0])
-        raise OSError('404')
+        raise not_found()
     monkeypatch.setattr(board_asset, 'fetch', missing)
     spa = SpaBuild(frontend, lambda _: None, every=30, clock=lambda: clock[0])
     idle = [False]
@@ -457,7 +463,7 @@ def test_printed_retry_command_fetches_the_served_board(checkout, monkeypatch, t
     (layout / 'current').symlink_to(sys.prefix)
     monkeypatch.setenv('BRNRD_ROOT', str(layout))
     monkeypatch.setattr(spabuild, 'npm_supported', lambda: False)
-    monkeypatch.setattr(board_asset, 'fetch', lambda *a: (_ for _ in ()).throw(OSError('404')))
+    monkeypatch.setattr(board_asset, 'fetch', lambda *a: (_ for _ in ()).throw(not_found()))
     messages = []
     spa = SpaBuild(frontend, messages.append, every=0)
     settle(spa)
@@ -543,7 +549,7 @@ def test_retry_with_an_older_board_served_tries_only_the_exact_asset(checkout, m
     managed(root, frontend)
     monkeypatch.setattr(spabuild, 'npm_supported', lambda: False)
     fetched = []  # a recorder: pytest.fail inside the build's thread would not fail the test
-    monkeypatch.setattr(board_asset, 'fetch', lambda c, *a: fetched.append(c) or (_ for _ in ()).throw(OSError('404')))
+    monkeypatch.setattr(board_asset, 'fetch', lambda c, *a: fetched.append(c) or (_ for _ in ()).throw(not_found()))
     spa = SpaBuild(frontend, lambda _: None, every=0)
     spa.build.mkdir()
     (spa.build / '200.html').write_text('older board')
@@ -574,7 +580,7 @@ def test_fallback_walks_a_bounded_first_parent_chain_of_upstream(checkout, monke
     exact = rev('HEAD')
     monkeypatch.setattr(spabuild, 'npm_supported', lambda: False)
     tried, messages = [], []
-    monkeypatch.setattr(board_asset, 'fetch', lambda c, *a: tried.append(c) or (_ for _ in ()).throw(OSError('404')))
+    monkeypatch.setattr(board_asset, 'fetch', lambda c, *a: tried.append(c) or (_ for _ in ()).throw(not_found()))
     spa = SpaBuild(frontend, messages.append, every=0)
     settle(spa)
     first_parents = subprocess.check_output(['git', 'rev-list', '--first-parent', exact], cwd=root, text=True).split()
@@ -582,3 +588,26 @@ def test_fallback_walks_a_bounded_first_parent_chain_of_upstream(checkout, monke
     assert side not in tried and base not in tried
     assert sum('rejected/unavailable' in line for line in messages) == 1  # the exact miss, not twenty
     assert any(f'no board published for the {spabuild.ANCESTORS} commits before {exact}' in line for line in messages)
+
+
+@pytest.mark.parametrize('error', [OSError('network is unreachable'), TimeoutError('timed out'),
+                                   ValueError('board archive digest mismatch')])
+def test_fallback_stops_and_says_so_on_anything_but_not_published(checkout, monkeypatch, error):
+    """Offline, every one of twenty tries would wait out its timeout: only a 404 moves on."""
+    from brr.loom.runtime import board_asset, spabuild
+    root, frontend = checkout
+    managed(root, frontend)
+    for index in range(3):
+        git(root, '-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-qm', f'm{index}', '--allow-empty')
+    git(root, 'update-ref', 'refs/remotes/origin/main', 'HEAD')
+    monkeypatch.setattr(spabuild, 'npm_supported', lambda: False)
+    tried, messages = [], []
+    def fetch(commit, *a):
+        tried.append(commit)
+        raise not_found() if len(tried) == 1 else error
+    monkeypatch.setattr(board_asset, 'fetch', fetch)
+    spa = SpaBuild(frontend, messages.append, every=0)
+    settle(spa)
+    assert len(tried) == 2  # the exact asset's 404, then the first ancestor's error ends the walk
+    assert any(f'older board for {tried[1]} not served ({error})' in line for line in messages)
+    assert not (spa.build / '200.html').exists()
