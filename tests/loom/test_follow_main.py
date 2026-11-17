@@ -928,10 +928,12 @@ def test_the_newest_release_is_by_number_peeled_and_never_a_pre_release():
     assert update.newest_release("d1\trefs/tags/board-builds") is None
 
 
-def _stable(world, tag="v0.7.2", at=None):
-    """``update = stable``; ``tag`` (annotated) on ``at``, by default the green merge, then main moves past it."""
-    with (world.root / "loom/config.toml").open("a") as file:
-        file.write('\nupdate = "stable"\n')
+def _stable(world, tag="v0.7.2", at=None, home="stable"):
+    """``update = <home>`` (None: unset, so auto); ``tag`` (annotated) on ``at``, by default the green merge,
+    then main moves past it."""
+    if home:
+        with (world.root / "loom/config.toml").open("a") as file:
+            file.write(f'\nupdate = "{home}"\n')
     _git(world.upstream, "-c", "user.name=t", "-c", "user.email=t@t", "tag", "-a", "-m", tag, tag, at or world.tip)
     _git(world.upstream, "push", "-q", "origin", tag)
     release = _git(world.upstream, "rev-parse", f"{tag}^{{commit}}")
@@ -955,6 +957,30 @@ def test_stable_offers_the_newest_release_tag_not_main_and_take_lands_on_it(worl
     _run(world.root, lambda: [f for f in read_facts(Home(world.root)) if f.kind == "loom.moved"])
     [moved] = [f for f in read_facts(Home(world.root)) if f.kind == "loom.moved"]
     assert (moved.data["to"], moved.data["merges"]) == (release, ["#7"])
+
+
+def test_auto_follows_releases_when_the_checkout_says_stable_and_an_explicit_home_dev_wins(world):
+    # What the npm launcher's install leaves: a checkout with brnrd.update = stable and no home setting.
+    release = _stable(world, home=None)
+    _git(world.source, "config", "brnrd.update", "stable")
+    _run(world.root, lambda: _update_letters(world))
+    assert (_offered(world).data["new"], _offered(world).data["ref"]) == (release, "v0.7.2")
+    # The home's explicit word beats the checkout's: dev offers main's green tip instead.
+    with (world.root / "loom/config.toml").open("a") as file:
+        file.write('\nupdate = "dev"\n')
+    from brr.loom.runtime.config import load_config
+    updater = update.Updater(Home(world.root), lambda *args: None, world.source)
+    assert updater._source(load_config(world.root)).__class__ is update.SOURCES["dev"]
+
+
+def test_auto_without_a_checkout_setting_follows_main(world):
+    updater = update.Updater(Home(world.root), lambda *args: None, world.source)
+    from brr.loom.runtime.config import load_config
+    assert updater._source(load_config(world.root)).__class__ is update.SOURCES["dev"]
+    _git(world.source, "config", "brnrd.update", "stable")
+    assert updater._source(load_config(world.root)).__class__ is update.SOURCES["stable"]  # read again on change
+    _git(world.source, "config", "brnrd.update", "nonsense")
+    assert updater._source(load_config(world.root)).__class__ is update.SOURCES["dev"]
 
 
 def test_stable_leaves_a_checkout_ahead_of_every_release_where_it_is(world):
