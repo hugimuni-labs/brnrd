@@ -45,7 +45,7 @@ _LOOM_KINDS = {
     "speech", "speech.part", "thread.closed", "attempt.ended", "port.drained", "letter.disposed", "letter.due",
     "loom.started", "home.migrated", "loom.degraded", "loom.recovered", "loom.moved", "loom.pruned", "lease.fenced", "lease.handed", "machines.prefer", "machines.pin", "machines.name", "self.healed",
     "update.offered", "update.decided", "update.checked",
-    "library.problem", "library.cleared", "interview.offer", "interview.offered",
+    "library.problem", "library.cleared", "place.offered", "interview.offer", "interview.offered",
 }
 
 

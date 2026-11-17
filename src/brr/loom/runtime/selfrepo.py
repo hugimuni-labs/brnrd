@@ -930,7 +930,15 @@ def run_wake(room_dir: Path, thread: str, owed: Path | None = None, *,
         from .lifecycle import main_snapshot
         rows = main_snapshot(home).get(thread, {}).get("plan_rows") or ()
         facts = read_facts(home)
-        section = wake_wishes(facts, thread, rows)
+        from .wishes import wishes as fold_wishes
+        told_wishes = fold_wishes(facts)
+        section = wake_wishes(facts, thread, rows, told=told_wishes)
+        if owed is not None and Path(owed).parent.name == "port":
+            # What put the body here, beside the letters it carried: a body's
+            # place.touched reads both without folding the ledger (library.record).
+            from .library import WISHES
+            ids = sorted(w.id for w in told_wishes.values() if w.thread == thread and w.open)
+            (Path(owed).parent / WISHES).write_text(json.dumps(ids) + "\n")
         if thread == home.main_thread():
             # The center wakes with both queues and Next build, derived, never a prose line.
             from .queues import queues, render

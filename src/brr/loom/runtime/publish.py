@@ -481,6 +481,9 @@ def publish(room: Path | str, name: str, *, worker: str | None = None,
     # The publish door, after the push it records: recorded, never judged (audit.passage).
     from .audit import passage
     passage(who.room, "publish", "push", f"{name} {branch} {commit}")
+    # Work landed in a place: the library page's record reads this (library.record).
+    from .library import record_repo
+    record_repo(who.room, "published", source, thread=thread)
     return Published(thread, name, branch, commit, lane, note)
 
 

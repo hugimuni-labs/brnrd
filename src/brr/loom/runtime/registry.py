@@ -109,6 +109,9 @@ REGISTRY = (
     _kind("self.healed",       "loom",    "thread commit",                                    "loom",        "global",  once=True),
     _kind("library.problem",   "loom",    "install name problem text since",                  "loom",        "machine"),
     _kind("library.cleared",   "loom",    "install name problem",                             "loom",        "machine"),
+    _kind("place.touched",     "place",   "place kind act shown thread strand letters wishes root?", "strand",      "global"),
+    _kind("place.offered",     "place",   "place",                                            "loom",        "global"),
+    _kind("place.dismissed",   "place",   "place",                                            "strand",      "global"),
 )
 
 KINDS = {row.kind: row for row in REGISTRY}

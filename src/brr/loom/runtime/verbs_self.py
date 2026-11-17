@@ -58,6 +58,9 @@ def cmd_lib(argv: list[str]) -> int:
     drop = sub.add_parser("drop", help="remove a library page; the folder stays")
     drop.add_argument("name")
     drop.add_argument("--room", default=".")
+    dismiss = sub.add_parser("dismiss", help="on the person's word: a touched place is not one to remember")
+    dismiss.add_argument("place", help="its key, as the wake's 'touched, not in the library' line gives it")
+    dismiss.add_argument("--room", default=os.environ.get("BRNRD_ROOM", "."))
     listing = sub.add_parser("list", help="every entry on main, one line each")
     listing.add_argument("--home")
     args = parser.parse_args(argv)
@@ -81,6 +84,10 @@ def cmd_lib(argv: list[str]) -> int:
             if os.environ.get("BRNRD_ROOM"):
                 library.own_head(Path(os.environ["BRNRD_ROOM"]), entry.name, sha)
             print(f"{args.name}: committed {sha[:12]}")
+            return 0
+        if args.verb == "dismiss":
+            library.dismiss(Path(args.room).resolve(), args.place)
+            print(f"{args.place}: dismissed; it is never offered again")
             return 0
         room = Path(args.room).resolve()
         if args.verb == "add":

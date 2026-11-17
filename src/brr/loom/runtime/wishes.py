@@ -571,9 +571,9 @@ def wish_tree(wish: Wish, bodies: dict[str, str] | None = None, rows=()) -> list
     return lines
 
 
-def wake_wishes(facts: Iterable[Fact], thread: str, plan_rows=()) -> str:
+def wake_wishes(facts: Iterable[Fact], thread: str, plan_rows=(), told: dict | None = None) -> str:
     facts = list(facts)
-    rows = [w for w in wishes(facts).values() if w.thread == thread and w.open]
+    rows = [w for w in (wishes(facts) if told is None else told).values() if w.thread == thread and w.open]
     if not rows:
         return ""
     rows.sort(key=lambda w: (w.sender != "resident", w.id))

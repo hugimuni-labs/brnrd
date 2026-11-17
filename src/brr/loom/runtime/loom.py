@@ -671,6 +671,12 @@ def _prepare(home: Home, strand: str, thread: str, gen: int,
     from . import library
     repo_text += library.wake_text(home, room)
     shelf = library.entries(home)[0]
+    if thread == home.main_thread():
+        # The seat that talks to the person hears, once, where work landed outside the library.
+        try:
+            repo_text += library.offer_text(home, facts, shelf)
+        except Exception as exc:  # noqa: BLE001 - a wake never fails on this line
+            _log(home, f"start {strand}: touched places not offered: {exc}")
     library.write_room_list(room, shelf)
     for trouble in library.link(room, shelf):
         repo_text += trouble + "\n"
