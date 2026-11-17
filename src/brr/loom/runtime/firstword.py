@@ -72,6 +72,11 @@ def page(person: str, letter: str, channels: list[str]) -> str:
 Who {person} is to brnrd and what happened between them, each line cited by
 letter id. How they work together is the [agreement](agreement.md); this page
 doesn't restate it. {person} can read and edit it like any file in the self.
+The page says each thing once, in its current form: before adding a line, find
+the line it replaces and rewrite that one; the history stays in the letters it
+cites. A line that points at a date or an event still to come ends with
+`· due <date>`: the first body to read it after that date rewrites it from
+what happened, or drops it.
 
 ## who
 
