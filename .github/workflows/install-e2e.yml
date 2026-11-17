@@ -26,6 +26,11 @@ on:
 permissions:
   contents: read
 
+# bash, so pipefail holds: `install.sh | tee` fails when the installer does.
+defaults:
+  run:
+    shell: bash
+
 jobs:
   install:
     name: Install (${{ matrix.os }}, board via ${{ matrix.board }})
@@ -58,13 +63,13 @@ jobs:
         with:
           node-version: '22'
       - if: matrix.board == 'none'
-        name: Hide node and npm
+        name: Remove node and npm
         run: |
-          # spabuild finds them with shutil.which and reads their versions; a stub that
-          # fails is "npm unavailable or unsupported", the rung a machine without Node takes.
-          mkdir -p "$E/nonode"
-          for c in node npm; do printf '#!/bin/sh\nexit 127\n' > "$E/nonode/$c"; chmod +x "$E/nonode/$c"; done
-          echo "$E/nonode" >> "$GITHUB_PATH"
+          # A machine without Node has no npm at all. A stub that fails is not that: the
+          # installer's npm collision check rightly refuses when `npm root -g` fails.
+          # The runner is thrown away after the job.
+          while p=$(command -v npm || command -v node); do sudo rm -f "$p"; hash -r; done
+          ! command -v npm && ! command -v node
       - name: Install, three runs
         run: |
           export HOME=$E/home BRNRD_ROOT=$E/home/.brnrd BRNRD_DEV_DIR=$GITHUB_WORKSPACE
