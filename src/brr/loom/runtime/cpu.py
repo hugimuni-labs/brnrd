@@ -3,9 +3,12 @@
 On 2026-10-29 the loop ran at 83-92% for hours and nothing said so; a person
 noticed the fans. :class:`CpuWatch` reads the process's user and system time
 (every thread, no children) and, once a full window has passed, raises
-:class:`CpuHigh` at each tick while the window's share is past the limit. The
+:class:`CpuHigh` at each tick once the window's share goes past the limit, and keeps
+raising until it falls under the lower ``clear`` bar. The two bars are apart so a share
+hovering near one is one streak, not an alarm at each crossing: with one bar at 30%,
+315 of 359 alarms from 2026-10-31 to 11-17 read 30-31% (brnrd#2759). The
 guard turns that into ``loom.degraded`` for ``cpu`` and, past its notice delay,
-a notice to inbox, as it does for the disk floor; back under clears it. As a streak
+a notice to inbox, as it does for the disk floor; under ``clear`` clears it. As a streak
 starts, ``on_high`` (the in-loop sampler) profiles the loop, and the raise names the file.
 """
 
@@ -16,7 +19,10 @@ import time
 from collections import deque
 
 WINDOW = 600.0
-LIMIT = 0.30
+#: Past this share a streak starts; it ends only under CLEAR. The idle loom reads 20-23%,
+#: one with bodies working ~30%, which is accepted: the bars sit around it, not on it.
+LIMIT = 0.35
+CLEAR = 0.28
 #: Seconds between samples: a window holds ~60 of them, not one per tick.
 EVERY = 10.0
 
@@ -24,9 +30,11 @@ EVERY = 10.0
 class CpuHigh(Exception):
     """The window's share past the limit; ``grade`` counts the limits it is past beyond the first."""
 
-    def __init__(self, share: float, window: float, limit: float, profile=None):
+    def __init__(self, share: float, window: float, limit: float, profile=None, clear: float | None = None):
+        bar = (f"past {limit:.0%}" if share > limit or clear is None
+               else f"back under {limit:.0%}, not yet under {clear:.0%}")
         super().__init__(f"the loom used {share:.0%} of a core over the last {window / 60:g} min, "
-                         f"past {limit:.0%}" + (f"; profile {profile}" if profile else ""))
+                         f"{bar}" + (f"; profile {profile}" if profile else ""))
         self.share, self.grade = share, max(0, int(share / limit) - 1)
 
 
@@ -37,9 +45,9 @@ def used() -> float:
 
 class CpuWatch:
     def __init__(self, clock=time.monotonic, usage=used, window: float = WINDOW,
-                 limit: float = LIMIT, every: float = EVERY, on_high=None):
+                 limit: float = LIMIT, every: float = EVERY, on_high=None, clear: float = CLEAR):
         self.clock, self.usage = clock, usage
-        self.window, self.limit, self.every = window, limit, every
+        self.window, self.limit, self.every, self.clear = window, limit, every, clear
         self.samples: deque[tuple[float, float]] = deque()
         self.high: CpuHigh | None = None
         # Called once as a streak starts (the sampler's ``start``); what it returns is named in each raise.
@@ -55,11 +63,11 @@ class CpuWatch:
             start, begun = self.samples[0]
             span = now - start
             share = (self.samples[-1][1] - begun) / span if span >= self.window else 0.0
-            if share <= self.limit:
+            if share < self.clear or (self.high is None and share <= self.limit):
                 self.high = self.profile = None
             else:
                 if self.high is None and self.on_high is not None:
                     self.profile = self.on_high()
-                self.high = CpuHigh(share, self.window, self.limit, self.profile)
+                self.high = CpuHigh(share, self.window, self.limit, self.profile, self.clear)
         if self.high is not None:
             raise self.high
