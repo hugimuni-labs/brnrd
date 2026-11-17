@@ -310,3 +310,87 @@ def test_ci_uses_the_incumbent_and_refuses_missing_or_empty_scripts(tmp_path: Pa
     assert result.returncode != 0, result.stdout
     if incumbent is None or incumbent == "":
         assert "immune: core/immune missing at" in result.stderr
+
+
+def _ci_daily(tmp_path: Path, work: Path, *, event: str = "schedule", gh: str = "exit 1\n", start: str = ""):
+    """The seed workflow's script on a scheduled or hand-started run, with `gh` faked on PATH."""
+    workflow = (SEED / "ci/immune.yml").read_text(encoding="utf-8")
+    script = textwrap.dedent(workflow.split("        run: |\n", 1)[1])
+    new = git(work, "rev-parse", "HEAD").stdout.strip()
+    for expression, value in {"github.event_name": event, "github.sha": new, "github.event.before": "",
+                              "github.event.pull_request.base.sha": "", "github.event.pull_request.head.sha": ""}.items():
+        script = script.replace("${{ " + expression + " }}", value)
+    assert "${{" not in script, "an expression the test does not feed"
+    write(tmp_path, "bin/gh", "#!/bin/sh\n" + gh, exe=True)
+    env = _env()
+    env.update(RUNNER_TEMP=str(tmp_path), REPO="o/self", FROM=start, GH_TOKEN="t",
+               PATH=f"{tmp_path / 'bin'}{os.pathsep}{env['PATH']}")
+    return subprocess.run(["sh", "-c", script], cwd=work, env=env, capture_output=True, text=True)
+
+
+def _self_with(tmp_path: Path, incumbent: str) -> tuple[Path, str]:
+    work = tmp_path / "work"
+    git(None, "init", "-b", "main", os.fspath(work))
+    write(work, "core/immune", "#!/bin/sh\n" + incumbent, exe=True)
+    commit(work, "incumbent")
+    return work, git(work, "rev-parse", "HEAD").stdout.strip()
+
+
+def test_the_daily_run_judges_everything_since_the_last_green_run_by_its_incumbent(tmp_path: Path) -> None:
+    work, green = _self_with(tmp_path, 'echo "judged $1 $2"; exit 1\n')
+    write(work, "core/immune", "#!/bin/sh\nexit 0\n", exe=True)  # a permissive script pushed during the day
+    commit(work, "one")
+    write(work, "marker", "two\n")
+    commit(work, "two")
+    new = git(work, "rev-parse", "HEAD").stdout.strip()
+    result = _ci_daily(tmp_path, work, gh=f'echo "$*" > "$RUNNER_TEMP/gh.args"; echo {green}\n')
+    assert result.returncode != 0
+    assert f"judged {green} {new}" in result.stdout  # the whole day's range, by the script of the last green tip
+    asked = (tmp_path / "gh.args").read_text()
+    assert "repos/o/self/actions/workflows/immune.yml/runs" in asked and "branch=main" in asked and "status=success" in asked
+
+
+def test_the_daily_run_is_a_no_op_on_a_day_with_no_push(tmp_path: Path) -> None:
+    work, green = _self_with(tmp_path, "exit 1\n")  # would refuse if it ran
+    result = _ci_daily(tmp_path, work, gh=f"echo {green}\n")
+    assert result.returncode == 0, result.stderr
+    assert "nothing pushed since the last green run" in result.stdout
+
+
+def test_the_daily_run_refuses_when_the_last_green_run_cannot_be_read(tmp_path: Path) -> None:
+    work, _ = _self_with(tmp_path, "exit 0\n")
+    result = _ci_daily(tmp_path, work, gh="echo boom >&2; exit 1\n")
+    assert result.returncode != 0
+    assert "immune: cannot read the last green run" in result.stderr
+
+
+def test_the_daily_run_refuses_when_the_last_green_commit_is_gone(tmp_path: Path) -> None:
+    # History rewritten since the last green run: its commit is not in the clone, nothing can judge.
+    work, _ = _self_with(tmp_path, "exit 0\n")
+    result = _ci_daily(tmp_path, work, gh=f"echo {'a' * 40}\n")
+    assert result.returncode != 0
+    assert "immune: core/immune missing at " + "a" * 40 in result.stderr
+
+
+def test_the_first_daily_run_is_judged_as_a_first_push(tmp_path: Path) -> None:
+    work, new = _self_with(tmp_path, 'echo "judged $1 $2"\n')
+    result = _ci_daily(tmp_path, work, gh="exit 0\n")  # the lookup answers, with no run
+    assert result.returncode == 0, result.stderr
+    assert f"judged {'0' * 40} {new}" in result.stdout
+
+
+def test_a_hand_started_run_judges_from_the_commit_it_is_given(tmp_path: Path) -> None:
+    work, start = _self_with(tmp_path, 'echo "judged $1 $2"\n')
+    write(work, "marker", "x\n")
+    commit(work, "next")
+    new = git(work, "rev-parse", "HEAD").stdout.strip()
+    result = _ci_daily(tmp_path, work, event="workflow_dispatch", start=start)  # gh would fail if asked
+    assert result.returncode == 0, result.stderr
+    assert f"judged {start} {new}" in result.stdout
+
+
+def test_the_seed_workflow_does_not_run_on_every_push() -> None:
+    yaml = pytest.importorskip("yaml")
+    triggers = yaml.safe_load((SEED / "ci/immune.yml").read_text(encoding="utf-8"))[True]  # YAML reads `on` as True
+    assert set(triggers) == {"schedule", "workflow_dispatch", "pull_request"}
+    assert len(triggers["schedule"]) == 1

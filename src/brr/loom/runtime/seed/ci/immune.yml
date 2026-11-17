@@ -1,14 +1,28 @@
 # Copy this file to `.github/workflows/immune.yml` in the self.
-# The push command is the one the contract names. pull_request has no
-# github.event.before, so that event uses the PR's base and head — same
-# check, the shas that exist on that event. fetch-depth: 0 because
-# merge-base has to see <old>.
+# The self's own gate judges every push where it lands; this is the outside
+# witness. It runs once a day over everything pushed since its last green
+# run, not on every push: GitHub bills a private repository a full minute per
+# run, and a self that lands a hundred times a day spends its whole free
+# allowance on it. A day with no push is a no-op. pull_request has no
+# github.event.before, so that event uses the PR's base and head, the shas
+# that exist on that event. fetch-depth: 0 because merge-base has to see <old>.
+# A red run stays red until a range from the last green run passes; when the
+# range itself can never pass (history was rewritten and you accept it), run
+# the workflow by hand with `from` set to the commit to judge from.
 name: immune
 on:
-  push:
-    branches: [main]
+  schedule:
+    - cron: '17 3 * * *'
+  workflow_dispatch:
+    inputs:
+      from:
+        description: judge from this commit instead of the last green run
+        required: false
   pull_request:
     branches: [main]
+permissions:
+  contents: read
+  actions: read
 jobs:
   immune:
     runs-on: ubuntu-latest
@@ -17,13 +31,35 @@ jobs:
         with:
           fetch-depth: 0
       - name: immune
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          FROM: ${{ inputs.from }}
         run: |
           if [ "${{ github.event_name }}" = "pull_request" ]; then
             old="${{ github.event.pull_request.base.sha }}"
             new="${{ github.event.pull_request.head.sha }}"
-          else
+          elif [ "${{ github.event_name }}" = "push" ]; then
+            # Kept for a self that adds `push:` back and pays for it.
             old="${{ github.event.before }}"
             new="${{ github.sha }}"
+          else
+            new="${{ github.sha }}"
+            old=$FROM
+            if [ -z "$old" ]; then
+              # The last green run on main; a failed lookup refuses, it never reads as a first run.
+              if ! old=$(gh api "repos/$REPO/actions/workflows/immune.yml/runs?branch=main&status=success&per_page=1" \
+                         --jq '.workflow_runs[0].head_sha // empty'); then
+                printf 'immune: cannot read the last green run\n' >&2
+                exit 1
+              fi
+            fi
+            if [ "$old" = "$new" ]; then
+              printf 'immune: nothing pushed since the last green run at %s\n' "$new"
+              exit 0
+            fi
+            # No green run yet: judged as a first push, by the incoming script.
+            [ -n "$old" ] || old=0000000000000000000000000000000000000000
           fi
           # The incumbent judges; missing, empty or non-executable fails closed.
           tip=$old
