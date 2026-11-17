@@ -90,7 +90,7 @@ def test_refresh_if_stale_populates_both_channels_independently(tmp_path, monkey
     assert release_availability.npm_observation(repo).latest == "1.3.0"
 
 
-def test_npm_channel_failure_does_not_blank_pypi_channel(tmp_path, monkeypatch):
+def test_npm_channel_failure_does_not_blank_the_release_channel(tmp_path, monkeypatch):
     repo = _repo(tmp_path, monkeypatch)
     path = release_availability.cache_path(repo)
     path.write_text(
@@ -106,7 +106,7 @@ def test_npm_channel_failure_does_not_blank_pypi_channel(tmp_path, monkeypatch):
     )
 
     # A failed npm fetch keeps its own last-good value, exactly like the
-    # existing PyPI failure-preserves-last-good contract above — the two
+    # release channel's failure-preserves-last-good contract above — the two
     # channels' freshness clocks are shared, but their last-known-good
     # values are not allowed to clobber each other.
     assert release_availability.observation(repo).latest == "1.1.0"
@@ -116,3 +116,34 @@ def test_npm_channel_failure_does_not_blank_pypi_channel(tmp_path, monkeypatch):
 def test_npm_observation_absent_when_never_fetched(tmp_path, monkeypatch):
     repo = _repo(tmp_path, monkeypatch)
     assert release_availability.npm_observation(repo) is None
+
+
+def test_latest_release_is_read_from_the_repository_tags_not_pypi(monkeypatch):
+    import subprocess
+    asked = []
+
+    def run(args, **kwargs):
+        asked.append(args)
+        listing = "a\trefs/tags/v0.7.0\nb\trefs/tags/v0.7.1\nc\trefs/tags/v0.7.1^{}\nd\trefs/tags/v0.8.0rc1\n"
+        return subprocess.CompletedProcess(args, 0, listing, "")
+
+    monkeypatch.setattr(release_availability.subprocess, "run", run)
+    assert release_availability._fetch_latest(timeout=1) == "0.7.1"
+    assert asked == [["git", "ls-remote", "--tags", release_availability.REPOSITORY_URL, "refs/tags/v*"]]
+
+
+@pytest.mark.parametrize("failure", ["exit", "missing-git", "timeout", "no-releases"])
+def test_a_tag_read_that_fails_is_none_never_a_raise(monkeypatch, failure):
+    import subprocess
+
+    def run(args, **kwargs):
+        if failure == "missing-git":
+            raise FileNotFoundError("git")
+        if failure == "timeout":
+            raise subprocess.TimeoutExpired(args, 1)
+        if failure == "exit":
+            return subprocess.CompletedProcess(args, 128, "", "fatal: unable to access")
+        return subprocess.CompletedProcess(args, 0, "d\trefs/tags/board-builds\n", "")
+
+    monkeypatch.setattr(release_availability.subprocess, "run", run)
+    assert release_availability._fetch_latest(timeout=1) is None

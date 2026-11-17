@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import os
+import subprocess
 import threading
 import time
 from dataclasses import dataclass
@@ -14,15 +16,16 @@ from packaging.version import InvalidVersion, Version
 
 from . import __version__, account
 
-PACKAGE_NAME = "brnrd"
-PYPI_URL = f"https://pypi.org/pypi/{PACKAGE_NAME}/json"
+REPOSITORY_URL = "https://github.com/hugimuni-labs/brnrd"
+#: A release is a ``vX.Y.Z`` tag on the repository: what ``update = "stable"`` follows, read the same way
+#: (``git ls-remote``, no account, no rate limit). PyPI was the source until the packaged install went.
+RELEASES_URL = f"{REPOSITORY_URL}/releases"
 # npm is the other headline install channel (`npm install -g brnrd`,
 # packaging/npm/package.json) and, unlike PyPI, was never polled at all —
 # an install from npm never learned it was behind. The registry's own
 # metadata endpoint, no auth, same shape of identity check as PyPI below.
 NPM_PACKAGE_NAME = "brnrd"
 NPM_REGISTRY_URL = f"https://registry.npmjs.org/{NPM_PACKAGE_NAME}"
-REPOSITORY_URL = "https://github.com/hugimuni-labs/brnrd"
 # A published release's metadata is immutable, so the identity check matches
 # every URL this project has ever published under, not only its current one.
 # ``Gurio/brr`` is the pre-transfer name that 0.1.0 (2026-07-12) carries; PyPI
@@ -80,7 +83,7 @@ def observation(repo_root: Path, *, installed: str = __version__) -> Availabilit
 
 
 def npm_observation(repo_root: Path, *, installed: str = __version__) -> Availability | None:
-    """The npm channel's own last-known-good, independent of PyPI's.
+    """The npm channel's own last-known-good, independent of the release tags'.
 
     Which channel actually installed this copy is not knowable from here —
     see ``news_lane.release_producer`` — so both channels are tracked
@@ -131,32 +134,27 @@ def _repository_url_matches(url: object) -> bool:
 
 
 def _fetch_latest(*, timeout: float = REQUEST_TIMEOUT_SECONDS) -> str | None:
-    request = Request(PYPI_URL, headers={"Accept": "application/json"})
+    """The newest release tag's version (``0.7.1``), or None on any failure: no git, offline, a timeout."""
+    from .loom.runtime.update import newest_release
     try:
-        with urlopen(request, timeout=timeout) as response:  # noqa: S310 - fixed PyPI endpoint
-            raw = response.read(MAX_RESPONSE_BYTES + 1)
-    except (OSError, TimeoutError, ValueError):
+        result = subprocess.run(
+            ["git", "ls-remote", "--tags", REPOSITORY_URL, "refs/tags/v*"],
+            capture_output=True, text=True, timeout=timeout,
+            env={**os.environ, "GIT_TERMINAL_PROMPT": "0"},
+        )
+    except (OSError, subprocess.SubprocessError):
         return None
-    if len(raw) > MAX_RESPONSE_BYTES:
+    if result.returncode:
         return None
+    found = newest_release(result.stdout)
+    if found is None:
+        return None
+    latest = found[0].removeprefix("v")
     try:
-        data = json.loads(raw.decode("utf-8"))
-        info = data["info"]
-        if not isinstance(info, dict):
-            return None
-        project_urls = info.get("project_urls")
-        urls = project_urls.values() if isinstance(project_urls, dict) else ()
-        if info.get("name") != PACKAGE_NAME or not any(
-            _repository_url_matches(url) for url in urls
-        ):
-            return None
-        latest = info["version"]
-        if not isinstance(latest, str):
-            return None
         Version(latest)
-    except (KeyError, TypeError, UnicodeDecodeError, ValueError, InvalidVersion):
+    except InvalidVersion:
         return None
-    return str(latest)
+    return latest
 
 
 def _fetch_latest_npm(*, timeout: float = REQUEST_TIMEOUT_SECONDS) -> str | None:
@@ -202,7 +200,7 @@ def refresh_if_stale(
 ) -> Availability | None:
     """Refresh at most daily; failed fetches leave the last good observation intact.
 
-    One freshness clock governs both channels (PyPI's ``attempted_at`` also
+    One freshness clock governs both channels (the tags' ``attempted_at`` also
     gates the npm fetch) — two independent daily timers would double the
     request rate for no benefit, since both checks are cheap and a daemon
     tick that is due for one is due for the other.
