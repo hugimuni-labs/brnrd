@@ -2,15 +2,16 @@
 
 way: command `gh`
 key: the forge token, fetched by the stand-in at each call; the resident never holds it
+unlisted: do
 
 | row   | what                                                   | how                                     |
 |-------|--------------------------------------------------------|-----------------------------------------|
 | look  | view, list, diff, checks, status, api reads            | passes                                  |
 | do    | open a PR, comment, edit, close, merge on green        | passes, recorded as before              |
-| ask   | merge when the checks are not green · create a release | his word naming the PR or the tag       |
-| never | delete a repository                                    | refused: a person does it on github.com |
+| ask   | merge when the checks are not green · create or delete a release · change a repository's visibility · set or delete a secret · add or remove a collaborator · start a workflow | his word naming the PR, the tag, the repository, the secret, the person or the workflow |
+| never | delete a repository · print the forge token            | refused: a person does it on github.com |
 
-Whatever the small print does not match is `do`. The loom puts a command `gh` in front of the real one, made from this page: a `never` call stops before the key is fetched, an `ask` call goes to `brnrd runtime guard` for the owner's letter, every other call goes through.
+Whatever the small print does not match is `do` (the `unlisted:` line): GitHub's other acts are reversible or seen in review. The loom puts a command `gh` in front of the real one, made from this page: a `never` call stops before the key is fetched, an `ask` call goes to `brnrd runtime guard` for the owner's letter, every other call goes through.
 
 ## Small print
 
@@ -38,6 +39,50 @@ ask publish  gh release create  {tag}
   skip: -n --notes -F --notes-file -t --title --target --discussion-category --notes-start-tag -R --repo
   target: {tag}
   why: a release is public
+ask forge-delete  gh release delete  {tag}
+  skip: -R --repo
+  target: {tag}
+  why: a release others may have fetched is gone, and its tag with --cleanup-tag
+ask forge-delete  gh api  -X|--method=delete  @repos/*/*/releases/{release}
+  target: {release}
+  why: a release others may have fetched is gone
+
+never  gh auth token
+  say: brnrd does not hand out the forge token; its stand-in fetches the key at each call
+never  gh auth status  +-t|--show-token
+  say: brnrd does not hand out the forge token; its stand-in fetches the key at each call
+
+ask visibility  gh repo edit  {repo}  +--visibility
+  skip: -d --description -h --homepage --default-branch --add-topic --remove-topic --visibility
+  default repo: gh repo view --json nameWithOwner -q .nameWithOwner
+  target: {repo}
+  why: it changes who can see the repository
+ask visibility  gh api  -f|-F|--field|--raw-field=visibility=*  @repos/{repo}
+  target: {repo}
+  why: it changes who can see the repository
+ask visibility  gh api  -f|-F|--field|--raw-field=private=*  @repos/{repo}
+  target: {repo}
+  why: it changes who can see the repository
+
+ask secret  gh secret set|delete|remove  {name}
+  skip: -R --repo -e --env -o --org -a --app -b --body -f --env-file -r --repos -v --visibility
+  target: {name}
+  why: a secret is what the workflows act with
+ask secret  gh api  -X|--method=[pd]*  @{scope}/secrets/{name}
+  target: {name}
+  why: a secret is what the workflows act with
+
+ask access  gh api  -X|--method=[pd]*  @repos/*/*/collaborators/{user}
+  target: {user}
+  why: it changes who can reach the repository
+
+ask run  gh workflow run  {workflow}
+  skip: -R --repo -r --ref -f --raw-field -F --field
+  target: {workflow}
+  why: a workflow acts with the repository's secrets
+ask run  gh api  @repos/*/*/actions/workflows/{workflow}/dispatches
+  target: {workflow}
+  why: a workflow acts with the repository's secrets
 
 look  gh * view|list|diff|checks|status
 look  gh api  !-X|--method|-f|--raw-field|-F|--field|--input
@@ -58,6 +103,28 @@ e.g. ask    gh api -X PUT repos/o/r/pulls/2610/merge
 e.g. ask    gh api -X PUT https://api.github.com/repos/o/r/pulls/2610/merge
 e.g. ask    gh release create -t Title v0.9.1
 e.g. ask    gh release create --notes-file notes.md --target main v0.9.1
+e.g. ask    gh release delete v0.9.1 --yes --cleanup-tag
+e.g. ask    gh api -X DELETE repos/o/r/releases/123
+e.g. never  gh auth token
+e.g. never  gh auth status --show-token
+e.g. never  gh auth status -t
+e.g. look   gh auth status
+e.g. ask    gh repo edit --visibility public --accept-visibility-change-consequences
+e.g. ask    gh repo edit o/r --description "x y" --visibility private
+e.g. do     gh repo edit --description "x y"
+e.g. ask    gh api -X PATCH repos/o/r -f visibility=public
+e.g. ask    gh api -X PATCH repos/o/r -F private=false
+e.g. ask    gh secret set TOKEN --body x
+e.g. ask    gh secret delete TOKEN -R o/r
+e.g. look   gh secret list
+e.g. ask    gh api -X PUT repos/o/r/actions/secrets/TOKEN -f encrypted_value=x -f key_id=1
+e.g. look   gh api repos/o/r/actions/secrets/TOKEN
+e.g. ask    gh api -X PUT repos/o/r/collaborators/someone
+e.g. ask    gh api --method DELETE repos/o/r/collaborators/someone
+e.g. look   gh api repos/o/r/collaborators
+e.g. ask    gh workflow run deploy.yml --ref main -f env=prod
+e.g. ask    gh api -X POST repos/o/r/actions/workflows/deploy.yml/dispatches -f ref=main
+e.g. look   gh workflow list
 e.g. look   gh pr view 2610
 e.g. look   gh api repos/o/r
 e.g. do     gh api repos/o/r/issues -f title=x

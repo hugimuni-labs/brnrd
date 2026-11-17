@@ -35,6 +35,11 @@ CLASSES = {
     "delete-home": "delete under a home root",
     "merge-red": "merge without green",
     "publish": "publish",
+    "visibility": "change who can see a repository",
+    "secret": "set or delete a secret",
+    "access": "change who can reach a repository",
+    "forge-delete": "delete on the forge",
+    "run": "start a workflow",
 }
 
 # A letter grants a class only when it says one of these too: the target alone is a common word.
@@ -43,6 +48,11 @@ VERBS = {
     "delete-home": r"delet|remov|\brm\b|wipe|clean",
     "merge-red": r"merg",
     "publish": r"releas|publish|upload|post|tag",
+    "visibility": r"visib|public|private|internal",
+    "secret": r"secret",
+    "access": r"collaborat|access|invit|permission|add|remov",
+    "forge-delete": r"delet|remov",
+    "run": r"\brun|dispatch|trigger|start",
 }
 
 

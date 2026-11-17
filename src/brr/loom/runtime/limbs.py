@@ -33,7 +33,8 @@ PRODUCT = Path(__file__).resolve().parent / "limb_pages"
 SRC = str(Path(__file__).resolve().parents[3])
 # The guard verb's classes; kept here as words so this module imports nothing
 # of the runtime when the stand-in calls it at every gh call.
-CLASSES = ("force-push", "delete-home", "merge-red", "publish")
+CLASSES = ("force-push", "delete-home", "merge-red", "publish", "visibility", "secret", "access",
+           "forge-delete", "run")
 _KEYS = ("say", "skip", "take", "default", "unless", "target", "why")
 
 
@@ -65,6 +66,8 @@ class Page:
     examples: tuple[tuple[str, tuple[str, ...]], ...]
     source: str = "product"
     own_rows: tuple[str, ...] = field(default=())
+    # What a call no rule matches gets: a row, or ``ask <class>``; "" on a person's page that does not say.
+    unlisted: str = "do"
 
     @property
     def command(self) -> str:
@@ -116,6 +119,8 @@ def _rule(head: str, details: list[str], where: str) -> Rule:
             conds.append(("path", regex, names))
         elif word.startswith("!"):
             conds.append(("none", _opt_aliases(word[1:], where)))
+        elif word.startswith("+"):
+            conds.append(("some", _opt_aliases(word[1:], where)))
         elif word.startswith("-"):
             spec, eq, value = word.partition("=")
             if not eq or not value:
@@ -216,7 +221,12 @@ def parse(name: str, text: str, *, source: str = "product") -> Page:
     title = next((line[2:].strip() for line in text.splitlines() if line.startswith("# ")), "")
     if not title:
         raise LimbError(f"{where}: no '# ' title line")
-    head = dict(re.findall(r"^(way|key):[ \t]*(.+?)[ \t]*$", text, re.M))
+    head = dict(re.findall(r"^(way|key|unlisted):[ \t]*(.+?)[ \t]*$", text, re.M))
+    unlisted = " ".join(head.get("unlisted", "").split())
+    if not unlisted and source == "product":
+        raise LimbError(f"{where}: no 'unlisted:' line: a page states what a call it does not list gets")
+    if unlisted:
+        _unlisted_rule(unlisted, "x", where)
     table: dict[str, tuple[str, str, str]] = {}
     for line in text.splitlines():
         cells = [c.strip() for c in line.strip().strip("|").split("|")] if line.lstrip().startswith("|") else []
@@ -228,7 +238,8 @@ def parse(name: str, text: str, *, source: str = "product") -> Page:
     if len(blocks) != 1:
         raise LimbError(f"{where}: a page has one ```limb block of small print, found {len(blocks)}")
     rules, examples = _rules(blocks[0], where)
-    page = Page(name, title, head.get("way", ""), head.get("key", ""), table, tuple(rules), tuple(examples), source)
+    page = Page(name, title, head.get("way", ""), head.get("key", ""), table, tuple(rules), tuple(examples), source,
+                unlisted=unlisted or ("do" if source == "product" else ""))
     check(page)
     return page
 
@@ -249,11 +260,13 @@ def check(page: Page) -> None:
     for row in page.table:
         if row != "do" and not any(rule.row == row for rule in page.rules):
             raise LimbError(f"{where}: the table has a {row} row and the small print no {row} rule")
+    if page.unlisted not in ("", "do") and page.unlisted.split()[0] not in page.table:
+        raise LimbError(f"{where}: unlisted: {page.unlisted}, but the table has no {page.unlisted.split()[0]} row")
     decided: set[int] = set()
     for row, argv in page.examples:
         if row not in page.table and row != "do":
             raise LimbError(f"{where}: e.g. {row} {shlex.join(argv)}: the table has no {row} row")
-        got, rule = decide(page.rules, argv)
+        got, rule = decide(page.rules, argv, page.unlisted)
         if got != row:
             by = f" (by: {rule.text.splitlines()[0].strip()})" if rule else ""
             raise LimbError(f"{where}: e.g. {row} {shlex.join(argv)} lands in {got}{by}")
@@ -333,6 +346,9 @@ def match(rule: Rule, argv: list[str] | tuple[str, ...]) -> dict[str, str] | Non
         elif kind == "none":
             if _present(rest, cond[1]):
                 return None
+        elif kind == "some":
+            if not _present(rest, cond[1]):
+                return None
         else:
             hit = next((m for m in (cond[1].fullmatch(_path(a)) for a in rest) if m), None)
             if hit is None:
@@ -351,13 +367,35 @@ def match(rule: Rule, argv: list[str] | tuple[str, ...]) -> dict[str, str] | Non
     return found
 
 
-def decide(rules, argv) -> tuple[str, Rule | None]:
-    """The strictest row a rule matching ``argv`` names, and that rule; ``do`` when none matches."""
+def _unlisted_rule(spec: str, command: str, where: str = "unlisted") -> Rule | None:
+    """The rule a call no rule matches falls to: None for ``do``, else one that matches it whole."""
+    words = spec.split()
+    row = words[0] if words else ""
+    if row not in ROWS or (row == "ask") != (len(words) == 2) or len(words) > 2 \
+            or (row == "ask" and words[1] not in CLASSES):
+        raise LimbError(f"{where}: unlisted: {spec!r} is look, do, never, or ask <class> "
+                        f"(one of {', '.join(CLASSES)})")
+    if row == "do":
+        return None
+    details: dict = {"skip": (), "take": [], "default": {}}
+    if row == "never":
+        details["say"] = f"brnrd's page for {command} does not list this call, and refuses what it does not list"
+    if row == "ask":
+        details.update(target="{call}", why="the page does not list it")
+    return Rule(row, words[1] if row == "ask" else "", (command,), (), details, f"unlisted: {spec}")
+
+
+def decide(rules, argv, unlisted: str = "do") -> tuple[str, Rule | None]:
+    """The strictest row a rule matching ``argv`` names, and that rule; when none matches,
+    the page's ``unlisted`` row (``do`` unless the page says otherwise)."""
     best: Rule | None = None
     for rule in rules:
         if (best is None or RANK[rule.row] > RANK[best.row]) and match(rule, argv) is not None:
             best = rule
-    return (best.row, best) if best else ("do", None)
+    if best:
+        return best.row, best
+    fallback = _unlisted_rule(unlisted or "do", argv[0] if argv else "")
+    return (fallback.row, fallback) if fallback else ("do", None)
 
 
 def fill(template: str, found: dict[str, str], real: str) -> list[str]:
@@ -383,7 +421,8 @@ def _sub(template: str, found: dict[str, str]) -> str:
 def _call(page: Page, verb: str, extra: str = "") -> str:
     boot = f"import sys; sys.path.insert(0, {SRC!r}); from brr.loom.runtime.limbs import main; sys.exit(main())"
     return (f"{shlex.quote(sys.executable)} -I -c {shlex.quote(boot)} {verb} "
-            f"--name {shlex.quote(page.name)} --command {shlex.quote(page.command)} --rules {shlex.quote(page.small_print())}{extra} -- \"$@\"")
+            f"--name {shlex.quote(page.name)} --command {shlex.quote(page.command)} --unlisted {shlex.quote(page.unlisted)} "
+            f"--rules {shlex.quote(page.small_print())}{extra} -- \"$@\"")
 
 
 def refuse_shell(page: Page) -> str:
@@ -400,8 +439,8 @@ def gate_shell(page: Page) -> str:
             f"fi\nunset _brnrd_limb\n")
 
 
-def _first(rules: list[Rule], argv: list[str], command: str) -> int:
-    row, rule = decide(rules, argv)
+def _first(rules: list[Rule], argv: list[str], command: str, unlisted: str = "do") -> int:
+    row, rule = decide(rules, argv, unlisted)
     if row == "never":
         sys.stderr.write(f"{command}: {rule.details['say']}\n")
         return 1
@@ -409,11 +448,12 @@ def _first(rules: list[Rule], argv: list[str], command: str) -> int:
     return 0
 
 
-def _ask(rules: list[Rule], argv: list[str], real: str, brnrd: str) -> int:
-    row, rule = decide(rules, argv)
+def _ask(rules: list[Rule], argv: list[str], real: str, brnrd: str, unlisted: str = "do") -> int:
+    row, rule = decide(rules, argv, unlisted)
     if row != "ask":
         return 0
     found = match(rule, argv) or {}
+    found.setdefault("call", shlex.join(argv))
     for name, template in rule.details["default"].items():
         if not found.get(name):
             proc = subprocess.run(fill(template, found, real), capture_output=True, text=True)
@@ -446,9 +486,10 @@ def main(argv: list[str] | None = None) -> int:
                              "refused until its page is fixed\n")
             return 1
         argv_ = [command, *call]
+        unlisted = opts.get("unlisted", "do")
         if verb == "first":
-            return _first(rules, argv_, command)
-        return _ask(rules, argv_, opts["real"], opts["brnrd"])
+            return _first(rules, argv_, command, unlisted)
+        return _ask(rules, argv_, opts["real"], opts["brnrd"], unlisted)
     return cli(args)
 
 
@@ -520,10 +561,19 @@ def overlay(base: Page, own: Page, allows: Callable[[str], bool]) -> tuple[Page,
         rules += [r for r in own.rules if r.row == row]
         table[row] = own.table[row]
         taken.append(row)
+    unlisted = base.unlisted
+    if own.unlisted and own.unlisted != base.unlisted:
+        if RANK[own.unlisted.split()[0]] > RANK[base.unlisted.split()[0]]:
+            unlisted = own.unlisted
+            taken.append("unlisted")
+        else:
+            notes.append(f"limbs/{own.name}.md: unlisted: {own.unlisted} does not tighten the product's "
+                         f"unlisted: {base.unlisted}; the product's stands")
     if not taken:
         return base, notes
     rules.sort(key=lambda r: RANK[r.row])
-    return replace(base, table=table, rules=tuple(rules), source="person", own_rows=tuple(taken)), notes
+    return replace(base, table=table, rules=tuple(rules), source="person", own_rows=tuple(taken),
+                   unlisted=unlisted), notes
 
 
 def owner_letters(home) -> Callable[[str], bool]:
@@ -580,19 +630,22 @@ def _cell(text: str) -> str:
 
 
 def table(pages: list[Page]) -> str:
-    lines = ["| hand | way | ask | never | page |", "|---|---|---|---|---|"]
+    lines = ["| hand | way | ask | never | unlisted | page |", "|---|---|---|---|---|---|"]
     for page in pages:
         whose = "product" if page.source == "product" else "person's: " + ", ".join(page.own_rows)
         ask = page.table.get("ask", ("", "", ""))[0]
         never = page.table.get("never", ("", "", ""))[0]
-        lines.append(f"| [{page.title}]({page.name}.md) | {_cell(page.way)} | {_cell(ask)} | {_cell(never)} | {whose} |")
+        lines.append(f"| [{page.title}]({page.name}.md) | {_cell(page.way)} | {_cell(ask)} | {_cell(never)} "
+                     f"| {_cell(page.unlisted)} | {whose} |")
     return "\n".join(lines) + "\n"
 
 
 def readme(pages: list[Page]) -> str:
     return ("# Limbs\n\n"
             "One page per service the resident reaches: how it is reached and how far it goes, in four rows "
-            "(look, do, ask, never). Whatever a page does not list is `do`: it passes and is recorded as before. "
+            "(look, do, ask, never). What a call no rule matches gets is the page's own `unlisted:` line: "
+            "`do` for GitHub (it passes and is recorded as before), `ask` or `never` for a service where "
+            "the unlisted is the danger. "
             "A person's own page, `limbs/<name>.md` on the main branch of their self, adds to the rows it lists, "
             "which only tightens them; a row replaces (and so may loosen) one of these only when its table line "
             "cites the owner's letter naming the service. "

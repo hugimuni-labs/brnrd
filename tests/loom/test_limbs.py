@@ -38,6 +38,7 @@ def test_a_wheel_carries_the_same_pages():
 
 PAGE = """# Thing
 way: command `thing`
+unlisted: do
 
 | row   | what        | how     |
 |-------|-------------|---------|
@@ -82,6 +83,129 @@ def test_a_page_that_disagrees_with_itself_fails_at_load(change, error):
 
 
 GITHUB = limbs.product("github")
+
+
+def test_a_product_page_states_its_default_for_the_unlisted():
+    with pytest.raises(limbs.LimbError, match="no 'unlisted:' line"):
+        limbs.parse("thing", PAGE.replace("unlisted: do\n", ""))
+    with pytest.raises(limbs.LimbError, match="is look, do, never, or ask <class>"):
+        limbs.parse("thing", PAGE.replace("unlisted: do", "unlisted: ask"))
+    with pytest.raises(limbs.LimbError, match="the table has no look row"):
+        limbs.parse("thing", PAGE.replace("unlisted: do", "unlisted: look"))
+    assert GITHUB.unlisted == "do"
+
+
+def test_a_page_whose_unlisted_is_ask_or_never_catches_what_it_does_not_list():
+    """A bank's page: what the small print does not name is the danger, so it asks."""
+    asking = limbs.parse("thing", PAGE.replace("unlisted: do", "unlisted: ask publish")
+                         .replace("e.g. do     thing look", "e.g. ask    thing look"))
+    row, rule = limbs.decide(asking.rules, ["thing", "look"], asking.unlisted)
+    assert (row, rule.cls) == ("ask", "publish")
+    assert limbs.decide(asking.rules, ["thing", "burn"], asking.unlisted)[0] == "never"
+    refusing = limbs.parse("thing", PAGE.replace("unlisted: do", "unlisted: never")
+                           .replace("e.g. do     thing look", "e.g. never  thing look"))
+    assert limbs.decide(refusing.rules, ["thing", "look"], refusing.unlisted)[0] == "never"
+    assert limbs.decide(refusing.rules, ["thing", "ship", "v1"], refusing.unlisted)[0] == "ask"
+
+
+def test_the_stand_in_carries_the_pages_unlisted(tmp_path):
+    asking = limbs.parse("thing", PAGE.replace("unlisted: do", "unlisted: ask publish")
+                         .replace("e.g. do     thing look", "e.g. ask    thing look"))
+    log = tmp_path / "log"
+    brnrd = _tool(tmp_path / "brnrd", f'echo "brnrd $*" >> {log}\nexit 1\n')
+    shim = _tool(tmp_path / "shim", limbs.refuse_shell(asking)
+                 + limbs.gate_shell(asking).replace("{thing}", "/bin/true").replace("{brnrd}", str(brnrd))
+                 + f'echo "ran $*" >> {log}\n')
+    proc = subprocess.run([str(shim), "look", "at it"], capture_output=True, text=True)
+    assert proc.returncode == 1
+    assert log.read_text().splitlines() == [
+        "brnrd runtime guard publish thing look 'at it' --why the page does not list it"]
+    refusing = limbs.replace(asking, unlisted="never")
+    shim = _tool(tmp_path / "never", limbs.refuse_shell(refusing) + 'echo ran\n')
+    proc = subprocess.run([str(shim), "look"], capture_output=True, text=True)
+    assert proc.returncode == 1 and proc.stdout == "" and "does not list this call" in proc.stderr
+
+
+def test_a_persons_unlisted_only_tightens():
+    own = limbs.parse("github", OWN_NEVER_MERGE.format(cite="").replace("# GitHub\n", "# GitHub\nunlisted: never\n"),
+                      source="person")
+    page, notes = limbs.overlay(GITHUB, own, lambda letter: False)
+    assert page.unlisted == "never" and "unlisted" in page.own_rows and notes == []
+    assert limbs.decide(page.rules, ["gh", "frobnicate"], page.unlisted)[0] == "never"
+    strict = limbs.replace(GITHUB, unlisted="never")
+    page, notes = limbs.overlay(strict, limbs.replace(own, unlisted="do"), lambda letter: False)
+    assert page.unlisted == "never" and "does not tighten" in notes[0]
+    silent = limbs.parse("github", OWN_NEVER_MERGE.format(cite=""), source="person")
+    assert silent.unlisted == ""
+    page, notes = limbs.overlay(strict, silent, lambda letter: False)
+    assert page.unlisted == "never" and notes == []
+
+
+def test_the_stand_ins_classes_are_the_guards():
+    from brr.loom.runtime import grants
+    assert set(limbs.CLASSES) == set(grants.CLASSES) == set(grants.VERBS)
+
+
+# The calls inbox ran through limbs.decide at #2736's head (bg0cf), all `do` there.
+@pytest.mark.parametrize("argv,row,cls,target", [
+    (["gh", "repo", "edit", "--visibility", "public", "--accept-visibility-change-consequences"],
+     "ask", "visibility", ""),
+    (["gh", "repo", "edit", "o/r", "--visibility=private"], "ask", "visibility", "o/r"),
+    (["gh", "api", "-X", "PATCH", "repos/o/r", "-f", "visibility=public"], "ask", "visibility", "o/r"),
+    (["gh", "api", "--method", "PATCH", "/repos/o/r", "--field", "private=false"], "ask", "visibility", "o/r"),
+    (["gh", "secret", "set", "NPM_TOKEN", "--body", "x"], "ask", "secret", "NPM_TOKEN"),
+    (["gh", "secret", "set", "-e", "prod", "NPM_TOKEN"], "ask", "secret", "NPM_TOKEN"),
+    (["gh", "secret", "delete", "-R", "o/r", "NPM_TOKEN"], "ask", "secret", "NPM_TOKEN"),
+    (["gh", "api", "-X", "PUT", "repos/o/r/environments/prod/secrets/K", "-f", "key_id=1"], "ask", "secret", "K"),
+    (["gh", "api", "-XDELETE", "orgs/o/actions/secrets/K"], "ask", "secret", "K"),
+    (["gh", "api", "-X", "PUT", "repos/o/r/collaborators/someone", "-f", "permission=admin"],
+     "ask", "access", "someone"),
+    (["gh", "api", "-X", "DELETE", "/repos/o/r/collaborators/someone"], "ask", "access", "someone"),
+    (["gh", "release", "delete", "-R", "o/r", "v0.9.1", "--yes"], "ask", "forge-delete", "v0.9.1"),
+    (["gh", "api", "-X", "DELETE", "repos/o/r/releases/123"], "ask", "forge-delete", "123"),
+    (["gh", "workflow", "run", "-R", "o/r", "deploy.yml", "-f", "env=prod"], "ask", "run", "deploy.yml"),
+    (["gh", "api", "repos/o/r/actions/workflows/9/dispatches", "-f", "ref=main"], "ask", "run", "9"),
+    (["gh", "auth", "token"], "never", "", ""),
+    (["gh", "auth", "status", "--show-token"], "never", "", ""),
+    (["gh", "auth", "status", "-h", "github.com", "-t"], "never", "", ""),
+])
+def test_the_acts_that_were_unlisted_now_ask_or_stop(argv, row, cls, target):
+    got, rule = limbs.decide(GITHUB.rules, argv, GITHUB.unlisted)
+    assert (got, rule.cls) == (row, cls)
+    if row == "ask":
+        assert limbs._sub(rule.details["target"], limbs.match(rule, argv)) == target
+
+
+@pytest.mark.parametrize("argv,row", [
+    (["gh", "secret", "list"], "look"),
+    (["gh", "api", "repos/o/r/actions/secrets/K"], "look"),
+    (["gh", "api", "repos/o/r/collaborators/someone"], "look"),
+    (["gh", "auth", "status"], "look"),
+    (["gh", "release", "delete-asset", "v1", "a.tgz"], "do"),
+    (["gh", "api", "-X", "PATCH", "repos/o/r", "-f", "description=x"], "do"),
+])
+def test_their_neighbours_stay_where_they_were(argv, row):
+    assert limbs.decide(GITHUB.rules, argv, GITHUB.unlisted)[0] == row
+
+
+def test_the_stand_in_refuses_gh_auth_token_before_the_key(tmp_path):
+    shim = _tool(tmp_path / "shim", limbs.refuse_shell(GITHUB) + 'echo "key fetched"\n')
+    proc = subprocess.run([str(shim), "auth", "token"], capture_output=True, text=True)
+    assert proc.returncode == 1 and proc.stdout == "" and "does not hand out the forge token" in proc.stderr
+
+
+def test_the_stand_in_asks_for_a_visibility_change_naming_the_repository(tmp_path):
+    log = tmp_path / "log"
+    gh = _tool(tmp_path / "gh", f'echo "gh $*" >> {log}\n[ "$1 $2" = "repo view" ] && echo o/r\nexit 0\n')
+    brnrd = _tool(tmp_path / "brnrd", f'echo "brnrd $*" >> {log}\nexit 1\n')
+    shim = _tool(tmp_path / "shim", limbs.refuse_shell(GITHUB)
+                 + limbs.gate_shell(GITHUB).replace("{gh}", str(gh)).replace("{brnrd}", str(brnrd))
+                 + f'echo "ran $*" >> {log}\n')
+    proc = subprocess.run([str(shim), "repo", "edit", "--visibility", "public"], capture_output=True, text=True)
+    assert proc.returncode == 1
+    assert log.read_text().splitlines() == [
+        "gh repo view --json nameWithOwner -q .nameWithOwner",
+        "brnrd runtime guard visibility o/r --why it changes who can see the repository"]
 
 
 @pytest.mark.parametrize("argv,row", [
@@ -200,6 +324,7 @@ e.g. never  gh frobnicate
 
 
 OTHER_COMMAND = """# Thing
+unlisted: do
 
 | row  | what | how    |
 |------|------|--------|
