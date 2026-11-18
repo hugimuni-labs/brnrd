@@ -715,3 +715,51 @@ def test_grant_bucket_insert_order_survives_fk_enforcement():
     db.commit()
     assert bucket is not None
     db.close()
+
+
+# --- where Stripe sends the payer back ---------------------------------------
+
+
+def test_checkout_and_portal_return_to_the_account_page(monkeypatch):
+    """The ?billing= notice is read only by BillingPanel, which lives on
+    /account. A return to / lands on the board and confirms nothing, so every
+    URL handed to Stripe points at /account."""
+    client = _client()
+    headers = _account(client)
+    seen: dict[str, dict] = {}
+
+    def record(name, url):
+        def fake(settings, **kwargs):
+            seen[name] = kwargs
+            return {"url": url}
+
+        return fake
+
+    monkeypatch.setattr(
+        "brnrd.routers.billing.stripe_api.create_customer",
+        lambda settings, **kwargs: {"id": "cus_ret"},
+    )
+    monkeypatch.setattr(
+        "brnrd.routers.billing.stripe_api.create_subscription_checkout",
+        record("subscription", "https://checkout.stripe.example/s"),
+    )
+    monkeypatch.setattr(
+        "brnrd.routers.billing.stripe_api.create_topup_checkout",
+        record("topup", "https://checkout.stripe.example/t"),
+    )
+    monkeypatch.setattr(
+        "brnrd.routers.billing.stripe_api.create_portal_session",
+        record("portal", "https://billing.stripe.example/p"),
+    )
+
+    assert client.post("/v1/accounts/subscription/checkout", json={"cadence": "monthly"}, headers=headers).status_code == 200
+    assert client.post("/v1/accounts/wallet/checkout", json={"amount_usd": 20}, headers=headers).status_code == 200
+    portal = client.post("/v1/accounts/subscription/portal", headers=headers)
+    assert portal.status_code == 200, portal.text
+
+    base = client.app.state.settings.public_base_url
+    assert seen["subscription"]["success_url"] == f"{base}/account?billing=subscribed"
+    assert seen["subscription"]["cancel_url"] == f"{base}/account?billing=canceled"
+    assert seen["topup"]["success_url"] == f"{base}/account?billing=topup-complete"
+    assert seen["topup"]["cancel_url"] == f"{base}/account?billing=topup-canceled"
+    assert seen["portal"]["return_url"] == f"{base}/account"
