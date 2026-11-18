@@ -7,3 +7,4 @@ Generated from the pages by `brnrd limbs --write`; never edited by hand.
 | hand | way | ask | never | unlisted | page |
 |---|---|---|---|---|---|
 | [GitHub](github.md) | command `gh` | merge when the checks are not green · create or delete a release · change a repository's visibility · set or delete a secret · add or remove a collaborator · start a workflow | delete a repository · print the forge token | do | product |
+| [npm](npm.md) | command `npm` | publish a package | unpublish | do | product |

@@ -123,7 +123,8 @@ def _rule(head: str, details: list[str], where: str) -> Rule:
             conds.append(("none", _opt_aliases(word[1:], where)))
         elif word.startswith("+"):
             conds.append(("some", _opt_aliases(word[1:], where)))
-        elif word.startswith("-"):
+        elif word.startswith("-") and not (not conds and "*" in word and "=" not in word):
+            # (``-*`` before any condition is a command word: npm reads options before its command.)
             spec, eq, value = word.partition("=")
             if not eq or not value:
                 raise LimbError(f"{where}: {word!r} needs =VALUE or ={{name}}")
@@ -131,7 +132,7 @@ def _rule(head: str, details: list[str], where: str) -> Rule:
             conds.append(("opt", _opt_aliases(spec, where), capture, "" if capture else value.lower()))
         elif conds:
             raise LimbError(f"{where}: the word {word!r} comes after a condition; command words go first")
-        elif re.fullmatch(r"[\w.*-]+(?:\|[\w.-]+)*", word):
+        elif re.fullmatch(r"[\w.*-]+(?:\|[\w.*-]+)*", word):
             prefix.append(word)
         else:
             raise LimbError(f"{where}: {word!r} is not a command word")
@@ -170,6 +171,8 @@ def _rule(head: str, details: list[str], where: str) -> Rule:
         raise LimbError(f"{where}: unless:, target: and why: belong to an ask rule")
     names = {c[1] for c in conds if c[0] == "pos"} | {c[2] for c in conds if c[0] == "opt" and c[2]}
     names |= {n for c in conds if c[0] == "path" for n in c[2]}
+    # A default is a capture too, and {call} (the call as typed) is always there.
+    names |= set(parsed["default"]) | {"call"}
     for name, source, _regex in parsed["take"]:
         for used in filter(None, (name, source)):
             if used not in names:
@@ -329,7 +332,8 @@ def match(rule: Rule, argv: list[str] | tuple[str, ...]) -> dict[str, str] | Non
     if len(argv) < len(rule.prefix):
         return None
     for word, arg in zip(rule.prefix, argv):
-        if word != "*" and arg not in word.split("|"):
+        # An alternative may be a glob: npm takes any unique start of a command (`npm pub`).
+        if not any(fnmatch.fnmatchcase(arg, alt) for alt in word.split("|")):
             return None
     rest = argv[len(rule.prefix):]
     valued = set(rule.details["skip"]) | {a for c in rule.conds if c[0] == "opt" for a in c[1]}
@@ -460,6 +464,11 @@ def _ask(rules: list[Rule], argv: list[str], real: str, brnrd: str, unlisted: st
         if not found.get(name):
             proc = subprocess.run(fill(template, found, real), capture_output=True, text=True)
             found[name] = proc.stdout.strip() if proc.returncode == 0 else ""
+            # A take: shapes a default's output as it shapes the call's (npm prints a name in quotes).
+            for taken, source, regex in rule.details["take"]:
+                m = regex.match(found[name]) if taken == name and not source else None
+                if m:
+                    found[name] = m.group(1)
     if "unless" in rule.details:
         check_argv = fill(rule.details["unless"], found, real)
         if subprocess.run(check_argv, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode == 0:

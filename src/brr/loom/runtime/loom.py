@@ -184,6 +184,41 @@ def _forge_env(room: Path, env: dict[str, str]) -> None:
         return
 
 
+def _limb_env(room: Path, env: dict[str, str]) -> None:
+    """A stand-in for each product page but GitHub's, whose door _forge_env writes with its key:
+    the page's never calls stop, its ask calls go to ``guard``, the rest run the real command."""
+    if room.parent.name != "rooms":
+        return
+    home = Home(room.parent.parent)
+    bin_dir = room / "port" / "bin"
+    path = env.get("PATH", os.defpath)
+    from . import entry
+    for product in limbs.products():
+        if product.name == "github" or not product.way.startswith("command"):
+            continue
+        real = shutil.which(product.command, path=os.pathsep.join(
+            d for d in path.split(os.pathsep) if Path(d) != bin_dir))
+        if real is None:
+            continue
+        try:
+            page, notes = limbs.effective(home, product.name)
+        except Exception as exc:  # noqa: BLE001 - the door must still be written
+            page, notes = product, [f"limbs: the person's {product.name} page was not read: {exc}"]
+        for note in notes:
+            _log(home, note)
+        script = ("#!/bin/sh\n" + limbs.refuse_shell(page)
+                  + limbs.gate_shell(page).replace("{" + page.command + "}", shlex.quote(str(Path(real).absolute())))
+                                          .replace("{brnrd}", shlex.quote(str(entry.shim())))
+                  + f"exec {shlex.quote(str(Path(real).absolute()))} \"$@\"\n")
+        bin_dir.mkdir(parents=True, exist_ok=True)
+        shim = bin_dir / page.command
+        shim.write_text(script, encoding="utf-8")
+        shim.chmod(0o700)
+        if str(bin_dir) not in path.split(os.pathsep):
+            path = str(bin_dir) + os.pathsep + path
+    env["PATH"] = path
+
+
 def _env(room: Path) -> dict[str, str]:
     env = _env_without_pin()
     parts = [part for part in env.get("PYTHONPATH", "").split(os.pathsep) if part]
@@ -198,6 +233,7 @@ def _env(room: Path) -> dict[str, str]:
         env[f"GIT_{role}_NAME"] = name
         env[f"GIT_{role}_EMAIL"] = email
     _forge_env(room, env)
+    _limb_env(room, env)
     env["BRNRD_ROOM"] = str(room)
     # The room is a body's only scratch: mktemp, pytest and uv land where the
     # reaper's room rules already reach, never in a /tmp nothing reaps.

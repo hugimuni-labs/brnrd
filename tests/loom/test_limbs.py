@@ -19,7 +19,7 @@ REPO = Path(__file__).resolve().parents[2]
 
 def test_every_product_page_loads_and_passes_its_examples():
     pages = limbs.products()
-    assert [p.name for p in pages] == ["github"]
+    assert [p.name for p in pages] == ["github", "npm"]
     github = pages[0]
     assert github.command == "gh"
     assert set(github.table) == set(limbs.ROWS)
@@ -468,3 +468,103 @@ def test_a_target_with_no_word_is_named_by_no_letter():
     assert not grants.names("anything - really", "-")
     assert grants.names("set the secret from .env please", ".env")
     assert grants.names("ok to merge #2610", "#2610")
+
+
+# --- npm (threads/limbs): look for view, ask for publish, never for unpublish ---
+
+NPM = limbs.product("npm")
+
+
+@pytest.mark.parametrize("argv,row", [
+    # npm takes any unique start of a command, and options before it.
+    (["npm", "unpubl", "x"], "never"),
+    (["npm", "unpu", "x"], "never"),
+    (["npm", "-w", "pkg", "unpublish"], "never"),
+    (["npm", "pu"], "ask"),
+    (["npm", "publ", "--tag", "next"], "ask"),
+    (["npm", "--registry=https://registry.npmjs.org", "publish"], "ask"),
+    (["npm", "publish", "-ws"], "ask"),
+    (["npm", "-w", "pkg", "publish", "--dry-run"], "do"),
+    # Neighbours: not a registry write.
+    (["npm", "un", "left-pad"], "do"),
+    (["npm", "update"], "do"),
+    (["npm", "-g", "install", "typescript"], "do"),
+    (["npm", "info", "brnrd"], "look"),
+])
+def test_npm_rows(argv, row):
+    assert limbs.decide(NPM.rules, argv, NPM.unlisted)[0] == row
+
+
+def _fake_npm(tmp_path, log):
+    return _tool(tmp_path / "npm", f'echo "npm $*" >> {log}\n'
+                 'if [ "$1 $2" = "pkg get" ]; then\n'
+                 '  case "$3 $5" in "name ") echo \'"brnrd"\' ;; "version ") echo \'"0.9.1"\' ;;\n'
+                 '    "name sub") echo \'"@o/sub"\' ;; "version sub") echo \'"1.0.0"\' ;; esac\nfi\nexit 0\n')
+
+
+def _npm_shim(tmp_path, npm, brnrd, log):
+    return _tool(tmp_path / "shim", limbs.refuse_shell(NPM)
+                 + limbs.gate_shell(NPM).replace("{npm}", str(npm)).replace("{brnrd}", str(brnrd))
+                 + f'echo "ran $*" >> {log}\n')
+
+
+@pytest.mark.parametrize("argv,asked", [
+    (["publish", "--access", "public"], "guard publish brnrd@0.9.1 --why"),
+    (["pub", "sub", "--tag", "next"], "guard publish @o/sub@1.0.0 --why"),
+    # Named by workspace or by an option first: the call itself, which a letter must quote.
+    (["publish", "-w", "sub"], "guard publish npm publish -w sub --why"),
+    (["--prefix", "sub", "publish"], "guard publish npm --prefix sub publish --why"),
+])
+def test_the_npm_stand_in_asks_naming_the_package_and_version(tmp_path, argv, asked):
+    log = tmp_path / "log"
+    npm = _fake_npm(tmp_path, log)
+    brnrd = _tool(tmp_path / "brnrd", f'echo "brnrd $*" >> {log}\nexit 1\n')
+    proc = subprocess.run([str(_npm_shim(tmp_path, npm, brnrd, log)), *argv], capture_output=True, text=True)
+    lines = log.read_text().splitlines()
+    assert proc.returncode == 1
+    assert not any(line.startswith("ran ") for line in lines)
+    assert [line for line in lines if line.startswith("brnrd ")][0].startswith("brnrd runtime " + asked)
+
+
+def test_the_npm_stand_in_refuses_unpublish_without_running_npm(tmp_path):
+    log = tmp_path / "log"
+    npm = _fake_npm(tmp_path, log)
+    brnrd = _tool(tmp_path / "brnrd", f'echo "brnrd $*" >> {log}\nexit 0\n')
+    proc = subprocess.run([str(_npm_shim(tmp_path, npm, brnrd, log)), "unpub", "brnrd@0.9.1"],
+                          capture_output=True, text=True)
+    assert proc.returncode == 1 and "refuses to unpublish" in proc.stderr
+    assert not log.exists()
+
+
+def test_the_npm_stand_in_passes_a_build_and_a_dry_run(tmp_path):
+    log = tmp_path / "log"
+    npm = _fake_npm(tmp_path, log)
+    brnrd = _tool(tmp_path / "brnrd", f'echo "brnrd $*" >> {log}\nexit 1\n')
+    shim = _npm_shim(tmp_path, npm, brnrd, log)
+    for argv in (["run", "build"], ["--prefix", "src/frontend", "ci"], ["publish", "--dry-run"]):
+        assert subprocess.run([str(shim), *argv]).returncode == 0
+    assert log.read_text().splitlines() == ["ran run build", "ran --prefix src/frontend ci", "ran publish --dry-run"]
+
+
+def test_the_body_gets_an_npm_stand_in_without_a_forge_token(tmp_path, monkeypatch):
+    from brr.loom.runtime.loom import _env
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    called = tmp_path / "called"
+    _tool(bin_dir / "npm", f'echo "$*" >> "{called}"\n')
+    monkeypatch.setenv("PATH", str(bin_dir) + ":/usr/bin:/bin")
+    home = tmp_path / "home"
+    (home / "loom").mkdir(parents=True)
+    _repo(home / "self", {"README.md": "self\n"})
+    room = home / "rooms" / "s1"
+    (room / "port").mkdir(parents=True)
+    env = _env(room)
+    proc = subprocess.run(["npm", "unpublish", "x"], env=env, capture_output=True, text=True, timeout=10)
+    assert proc.returncode == 1 and "refuses to unpublish" in proc.stderr
+    assert not called.exists()
+    assert subprocess.run(["npm", "run", "build"], env=env, timeout=10).returncode == 0
+    assert called.read_text() == "run build\n"
+    # Written again at the next body, the stand-in finds the real npm, never itself.
+    env = _env(room)
+    assert subprocess.run(["npm", "ci"], env=env, timeout=10).returncode == 0
+    assert called.read_text() == "run build\nci\n"
