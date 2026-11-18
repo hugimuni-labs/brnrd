@@ -14,7 +14,7 @@ Irreversible acts without a grant are the misses: lines under ``## Misses`` in
 the thread READMEs on the self's main, which the stop's receipt check (cites.py)
 makes a body write for an act that cited nothing. ``guard.granted`` and
 ``guard.refused`` (grants.py) stand beside it: the acts that ran on a grant and
-the ones the never guards stopped. The number should read zero.
+the ones the one rule stopped (an act marked final with no letter of his, mark.py). The number should read zero.
 """
 
 from __future__ import annotations
@@ -184,7 +184,7 @@ def line(facts, self_repo: Path, days: float = 14, now: datetime | None = None) 
         for how, n in row.counts.items():
             total.counts[how] = total.counts.get(how, 0) + n
     acts = (f"{days:g}d: {u['misses']} irreversible acts without a grant "
-            f"({u['granted']} granted, {u['refused']} refused by the never guards)")
+            f"({u['granted']} granted, {u['refused']} refused: final acts and his letter)")
     if not total.asks:
         return acts + " · no asks"
     kinds = ", ".join(f"{k} {_rate(r.n('took'), r.classified)} of {r.classified}"

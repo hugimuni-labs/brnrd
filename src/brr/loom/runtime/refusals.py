@@ -87,7 +87,6 @@ VERB: dict[str, str] = {
     "lib": 'lib add <name> <url> --kind known --whose <person> --for "why"',
     "send-self": "send-self --room .",
     "publish": "publish <repo>",
-    "guard": "guard merge-red '#12'",
     "mark": 'mark "look · the Docs page · l-12"',
     "resume": "resume",
     "drop": "drop",

@@ -5,7 +5,7 @@ import json
 from brr.loom.runtime import trust
 from brr.loom.runtime.jack import execute
 from brr.loom.runtime.ledger import inject_letter, read_facts
-from test_never_guards import _room
+from test_final_rule import _room
 from test_waits import later, told
 from test_wake import cli
 from test_wishes import command, heard, ledger, view  # noqa: F401  (ledger is a fixture)
@@ -73,14 +73,15 @@ def test_refusals_grants_and_misses_make_the_acts_number(tmp_path, monkeypatch):
     monkeypatch.setenv("BRNRD_THREAD", "ta")
     room, home = _room(tmp_path)
     said = json.loads(execute("pre", room, json.dumps({
-        "tool_name": "Bash", "tool_input": {"command": "gh pr merge 2610 --squash"}, "cwd": str(room)})))
+        "tool_name": "Bash", "tool_input": {"command": 'BRNRD_SAY="final · v0.9.1 release · 2610" gh release create v0.9.1'},
+        "cwd": str(room)})))
     assert said["hookSpecificOutput"]["permissionDecision"] == "deny"
     [refused] = [f.data for f in read_facts(home) if f.kind == "guard.refused"]
-    assert (refused["class"], refused["target"], refused["thread"]) == ("merge-red", "2610", "ta")
+    assert (refused["class"], refused["target"], refused["thread"]) == ("final", "v0.9.1 release", "ta")
     counted = trust.ungranted(read_facts(home), home.root / "self")
     assert counted == {"misses": 0, "granted": 0, "refused": 1}
     assert trust.line(read_facts(home), home.root / "self").startswith(
-        "14d: 0 irreversible acts without a grant (0 granted, 1 refused by the never guards)")
+        "14d: 0 irreversible acts without a grant (0 granted, 1 refused: final acts and his letter)")
 
 
 def test_a_miss_on_main_counts_and_reads_only_its_section(tmp_path):

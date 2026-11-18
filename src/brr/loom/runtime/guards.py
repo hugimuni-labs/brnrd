@@ -2,9 +2,9 @@
 
 A guard is read from the self's main, never from a room's branch, so a
 strand cannot loosen its own guard by editing it. ``match`` warns at the
-tool boundary; one marked ``refuse`` denies the call before it runs, and one
-that also names a ``grant`` class lets it through when the owner's letter on
-the thread's wish names the call's ``(?P<target>…)`` (grants.py).
+tool boundary and never refuses: a call's judgement is its mark (mark.py),
+and the one rule is that a final act cites the owner's letter (grants.py).
+A ``refuse`` or ``grant`` key left in a file is read and ignored.
 ``paths`` blocks one stop and refuses the outward acts (send-self, publish,
 settle). A broken file is skipped whole
 and reported, never applied in part.
@@ -42,8 +42,6 @@ class Match:
     path: re.Pattern | None = None
     cwd: re.Pattern | None = None
     output: re.Pattern | None = None
-    refuse: bool = False
-    grant: str | None = None
 
 
 @dataclass(frozen=True)
@@ -121,6 +119,7 @@ def parse(ident: str, text: str) -> Guard:
     matches = []
     for n, entry in enumerate(data.get("match") or ()):
         where = f"match[{n}]"
+        # refuse and grant are read and ignored: guards by command class went with threads/judged-acts.
         keys = {"at", "tool", "input", "unless", "path", "cwd", "output", "refuse", "grant"}
         if not isinstance(entry, dict) or set(entry) - keys:
             raise GuardError(f"{ident}: {where} takes {', '.join(sorted(keys))}")
@@ -129,24 +128,11 @@ def parse(ident: str, text: str) -> Guard:
             raise GuardError(f"{ident}: {where}.at is pre or post")
         item = Match(at, _regex(ident, f"{where}.tool", entry.get("tool", ".*")),
                      *(_regex(ident, f"{where}.{key}", entry.get(key))
-                       for key in ("input", "unless", "path", "cwd", "output")),
-                     refuse=entry.get("refuse", False), grant=entry.get("grant"))
+                       for key in ("input", "unless", "path", "cwd", "output")))
         if item.input is None and item.path is None and item.output is None:
             raise GuardError(f"{ident}: {where} needs input, path or output")
         if item.output is not None and at != "post":
             raise GuardError(f"{ident}: {where}.output needs at = \"post\"")
-        if not isinstance(item.refuse, bool):
-            raise GuardError(f"{ident}: {where}.refuse is true or false")
-        if item.refuse and at != "pre":
-            raise GuardError(f"{ident}: {where}.refuse needs at = \"pre\": a call that ran cannot be refused")
-        if item.grant is not None:
-            from .grants import CLASSES
-            if item.grant not in CLASSES:
-                raise GuardError(f"{ident}: {where}.grant is one of {', '.join(CLASSES)}")
-            if not item.refuse:
-                raise GuardError(f"{ident}: {where}.grant needs refuse = true: only a refusal is granted")
-            if item.input is None or "target" not in item.input.groupindex:
-                raise GuardError(f"{ident}: {where}.grant needs (?P<target>...) in input: the letter names it")
         matches.append(item)
     if not paths and not matches:
         raise GuardError(f"{ident}: a guard needs [[paths]] or [[match]]")
@@ -371,10 +357,9 @@ def _response_text(response) -> str:
     return json.dumps(response, separators=(",", ":"))
 
 
-def trips(guards: list[Guard], room: Path, at: str, payload: dict
-          ) -> list[tuple[str, bool, tuple[str, str] | None]]:
-    """Each guard this call trips, in its own words, whether its match refuses the
-    call, and the ``(class, target)`` a grant would have to name to let it through."""
+def trips(guards: list[Guard], room: Path, at: str, payload: dict) -> list[str]:
+    """Each guard this call trips, in its own words. A guard warns; it never refuses
+    (threads/judged-acts: the one rule is the mark's, mark.py)."""
     tool = str(payload.get("tool_name") or "")
     tool_input = payload.get("tool_input") or {}
     text = _call_text(tool, tool_input)
@@ -384,7 +369,7 @@ def trips(guards: list[Guard], room: Path, at: str, payload: dict
     response = _response_text(payload.get("tool_response")) if at == "post" else ""
     out = []
     for guard in guards:
-        hit, refuse, asks = None, False, []
+        hit = None
         for m in guard.matches:
             if m.at != at or not m.tool.fullmatch(tool):
                 continue
@@ -398,19 +383,11 @@ def trips(guards: list[Guard], room: Path, at: str, payload: dict
                 continue
             if m.unless is not None and m.unless.search(text):
                 continue
-            if m.refuse:
-                found = m.input.search(text) if m.grant else None
-                target = (found.group("target") or "").strip() if found else ""
-                asks.append((m.grant, target) if target else None)
-            # Every entry, not the first: a warning entry listed first must
-            # not hide a refusing one in the same guard.
-            hit, refuse = guard.label, refuse or m.refuse
+            hit = guard.label
         if hit is None and at == "pre" and tool in _FILE_TOOLS and file_path:
             hit = _file_hit(guard, Path(room), Path(file_path))
         if hit:
-            # A refusal is granted only whole: one match that names no target, or another one, keeps it.
-            ask = asks[0] if asks and None not in asks and len(set(asks)) == 1 else None
-            out.append((hit, refuse, ask))
+            out.append(hit)
     return out
 
 

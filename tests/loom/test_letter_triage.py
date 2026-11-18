@@ -2,7 +2,7 @@
 import pytest
 
 from brr.loom.runtime.dispositions import disposed, held
-from brr.loom.runtime.grants import find
+from brr.loom.runtime.grants import letter_for
 from brr.loom.runtime.ledger import append, inject_letter, read_facts
 from brr.loom.runtime.loom import _reply_context
 from brr.loom.runtime.owners import unanswered_letters
@@ -84,16 +84,16 @@ def test_a_held_letter_grants_nothing_and_the_second_path_does(ledger):
     asked = inject_letter(home.root, to="thread:work", body="delete rooms/a now")
     assert send(seat, "--re", asked, "--wish", "new:Clear rooms/a", "on it").returncode == 0
     [wish] = [w for w in wishes(read_facts(home)).values() if w.line == "Clear rooms/a"]
-    assert find(read_facts(home), wish.thread, "delete-home", "rooms/a", owner).letter == asked
+    assert letter_for(read_facts(home), asked, owner).letter == asked
     _land(home, seat, send(seat, "--re", asked, "--hold", "out-of-pattern",
                            "Did you mean to delete rooms/a?").stdout.strip())
     facts = read_facts(home)
     assert asked in held(facts)
-    assert find(facts, wish.thread, "delete-home", "rooms/a", owner) is None
+    assert letter_for(facts, asked, owner) is None
     # His answer through the second path, stamped on the wish, is the grant.
     again = inject_letter(home.root, to="thread:work", body="yes, delete rooms/a")
     assert send(seat, "--re", again, "--wish", wish.id, "ok").returncode == 0
-    assert find(read_facts(home), wish.thread, "delete-home", "rooms/a", owner).letter == again
+    assert letter_for(read_facts(home), again, owner).letter == again
 
 
 def test_the_wake_marks_non_owner_text_as_data(ledger):

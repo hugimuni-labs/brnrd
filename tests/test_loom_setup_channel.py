@@ -981,13 +981,11 @@ def test_the_first_word_lands_the_house_rules_and_the_first_reply_offers_the_int
         inputs.close()
     assert result == {'strand': 's-1'}, said
     cited = f"letter:{letter.data['id']}"
-    # The owner can grant, is no stranger, and the three never guards cite the first word.
+    # The owner can grant and is no stranger; no guard is landed (threads/judged-acts: the floor is the mark's rule).
     assert grants.owners(self_dir) == {'person:ada'}
     assert labels.is_stranger('person:ada', self_dir) is False
     found, errors = guards.load(self_dir)
-    assert errors == []
-    assert sorted(g.id for g in found) == ['never-delete-home', 'never-force-push', 'never-publish']
-    assert {g.set_by for g in found} == {cited}
+    assert errors == [] and found == []
     main = lambda path: subprocess.run(['git', '-C', str(self_dir), 'show', f'main:{path}'],
                                        capture_output=True, text=True, check=True).stdout
     assert f"[{letter.data['id']}]" in main('people/ada/agreement.md')

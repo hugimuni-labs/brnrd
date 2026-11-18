@@ -37,8 +37,8 @@ tool = "Bash"
 output = '''error code: 1010'''
 """
 
-# The backtick guard (m8479) with refuse on, to test the mechanism. It lands in
-# the self as warn until Arseni picks warn or refuse.
+# The backtick guard (m8479) with a refuse key left in: read and ignored since
+# threads/judged-acts, so it warns like any other.
 BACKTICK = r"""
 says = "A backtick inside double quotes runs in your own shell: single-quote the text, or write it to a file and pass the file."
 set-by = "scar:shell.md#a-backtick-inside-a-double-quoted---body-executes-in-your-own-shell"
@@ -217,8 +217,6 @@ def test_globs(glob, yes, no):
     ('says = "x"\nset-by = "letter:1"\n[[match]]\noutput = "x"\n', 'needs at = "post"'),
     ('says = "x"\nset-by = "letter:1"\nscope = "everyone"\n[[match]]\ninput = "x"\n', "scope is"),
     ('says = "x"\nset-by = "letter:1"\nwhen = 1\n[[match]]\ninput = "x"\n', "unknown keys when"),
-    ('says = "x"\nset-by = "letter:1"\n[[match]]\nat = "post"\ninput = "x"\nrefuse = true\n', 'refuse needs at = "pre"'),
-    ('says = "x"\nset-by = "letter:1"\n[[match]]\ninput = "x"\nrefuse = "yes"\n', "refuse is true or false"),
 ])
 def test_parse_names_the_field(text, error):
     with pytest.raises(GuardError, match=error.replace("[", r"\[").replace("]", r"\]")):
@@ -270,7 +268,7 @@ def test_a_post_warning_and_the_budget_line_both_reach_a_quiet_boundary(tmp_path
     assert said == ["guard stash-pop (scar:git.md#stash-pop): Worktrees share one stash list: pop by name.", over]
 
 
-@pytest.mark.parametrize("command,refused", [
+@pytest.mark.parametrize("command,warned", [
     ('gh pr create --body "see `x`"', True),
     ('echo "a" && git commit -m "fix `foo`"', True),
     ('echo "a \\"b `c`"', True),
@@ -279,44 +277,33 @@ def test_a_post_warning_and_the_budget_line_both_reach_a_quiet_boundary(tmp_path
     ('echo `date` "plain"', False),
     ("cat <<'EOF'\nsay \"`x`\"\nEOF", False),
 ])
-def test_a_refusing_guard_denies_the_call_before_it_runs(tmp_path, monkeypatch, command, refused):
+def test_a_guard_with_refuse_left_in_only_warns(tmp_path, monkeypatch, command, warned):
+    """Guards by command class went with threads/judged-acts: a refuse key is read and ignored."""
     monkeypatch.setenv("BRNRD_THREAD", "ta")
     room = _home(tmp_path, {"backtick": BACKTICK, "stash-pop": STASH})
     out = execute("pre", room, _call("Bash", command=command))
-    if not refused:
+    if not warned:
         assert out == ""
         return
     said = json.loads(out)["hookSpecificOutput"]
-    assert said["permissionDecision"] == "deny"
-    assert "A backtick inside double quotes runs in your own shell" in said["permissionDecisionReason"]
+    assert "permissionDecision" not in said
+    assert "A backtick inside double quotes runs in your own shell" in said["additionalContext"]
 
 
-def test_a_forged_guard_file_in_the_port_does_not_silence_a_refusal(tmp_path, monkeypatch):
+def test_a_forged_guard_file_in_the_port_does_not_silence_a_warning(tmp_path, monkeypatch):
     monkeypatch.setenv("BRNRD_THREAD", "ta")
     room = _home(tmp_path, {"backtick": BACKTICK})
     from brr.loom.runtime.lifecycle import main_tip
     tip = main_tip(tmp_path / "self")
     (room / "port" / "guards.json").write_text(json.dumps({"tip": tip, "files": {}}))
     said = json.loads(execute("pre", room, _call("Bash", command='echo "`x`"')))["hookSpecificOutput"]
-    assert said["permissionDecision"] == "deny"
+    assert "A backtick" in said["additionalContext"]
 
 
-def test_a_warning_entry_listed_first_does_not_hide_a_refusing_one(tmp_path, monkeypatch):
-    monkeypatch.setenv("BRNRD_THREAD", "ta")
-    both = BACKTICK.replace("[[match]]", '[[match]]\ntool = "Bash"\ninput = \'\'\'echo\'\'\'\n\n[[match]]', 1)
-    room = _home(tmp_path, {"backtick": both})
-    said = json.loads(execute("pre", room, _call("Bash", command='echo "`x`"')))["hookSpecificOutput"]
-    assert said["permissionDecision"] == "deny"
-    assert said["permissionDecisionReason"].count("A backtick") == 1
-
-
-def test_a_warning_guard_beside_a_refusing_one_is_said_in_the_refusal(tmp_path, monkeypatch):
+def test_two_guards_on_one_call_are_both_said(tmp_path, monkeypatch):
     monkeypatch.setenv("BRNRD_THREAD", "ta")
     room = _home(tmp_path, {"backtick": BACKTICK, "stash-pop": STASH})
     said = json.loads(execute("pre", room, _call("Bash", command='git stash pop; echo "`x`"')))["hookSpecificOutput"]
-    assert said["permissionDecision"] == "deny"
-    assert "Worktrees share" in said["permissionDecisionReason"]
-    # Without refuse the same match only warns.
-    room = _home(tmp_path / "b", {"backtick": BACKTICK.replace("refuse = true", "")})
-    out = json.loads(execute("pre", room, _call("Bash", command='echo "`x`"')))["hookSpecificOutput"]
-    assert "permissionDecision" not in out and "A backtick" in out["additionalContext"]
+    assert "permissionDecision" not in said
+    assert "Worktrees share" in said["additionalContext"] and "A backtick" in said["additionalContext"]
+

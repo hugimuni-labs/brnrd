@@ -1,59 +1,43 @@
-"""Grants: the owner's letter that lets a never guard's act through (threads/trust-guards).
+"""Grants: the owner's sentence an act that cannot be undone points at (threads/judged-acts).
 
-A never guard refuses an irreversible act (a merge without green, a delete
-under the home, a release) unless the owner said it. The owner says it in a
-letter stamped on an open wish of the thread the act serves, and the letter
-names the act's target literally (the PR, the path, the tag) and one of
-the class's verbs, so "merge to main when green" grants no force-push to
-main. A letter a body held (``send --hold``: out of the person's pattern, or
-not them) grants nothing: the café's ask waits for the second path, and the
-owner's answer there is the grant. Only the owner grants: Sasha's or Nastya's letter does not, by design
-(Part D's provenance answers who else may say what). The body's own
-word never grants: a strand's letter carries ``from: <strand>``, written by
-the port, never ``person:``.
+The one rule: a call marked ``final`` (mark.py) runs only when its ``for``
+names a letter of the owner's: its id, or the number it ends with. A letter a
+body held (``send --hold``: out of the person's pattern, or not them) grants
+nothing: the café's ask waits for the second path, and the owner's answer
+there is the grant. Only the owner grants: Sasha's or Nastya's letter does
+not, by design. The body's own word never grants: a strand's letter carries
+``from: <strand>``, written by the port, never ``person:``. A standing
+sentence ("merge green ones yourself") is a letter like any other: the mark
+cites the letter it was said in.
 
 The owner is a person with ``people/<name>/agreement.md`` on the self's main,
-read from git like the guards, so a room cannot enrol one. A grant that lets
-an act through is written as ``guard.granted``: the act's receipt, which the
-stop's receipt check reads.
+read from git, so a room cannot enrol one. A final act that ran is written as
+``guard.granted`` with the letter it leaned on, one that did not as
+``guard.refused``: ``trust`` counts both. One act is one fact: the hook and the
+door both judge the same call, and the ``stand-in``'s check and its door both
+judge the same gh act, so :func:`note` writes a judgement only when the same
+strand has not written the same one (class, target, letter) in the last
+:data:`SAME_ACT` seconds. The hook writes only once nothing else refuses the call.
+
+A bare number is the end of a letter id only for a letter of the last
+:data:`RECENT_DAYS` days: his Telegram letters ran through the numbers pull
+requests carry now, and "for 2771" meaning the PR must not lean on his letter
+2771 of last spring. An older or standing letter is cited by its full id.
 """
 
 from __future__ import annotations
 
 import re
 from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Iterable
 
 from brr.daemon2.facts import Fact
 
-from .wishes import wishes
 
-# The classes a refusal can name, in the words the refusal says.
-CLASSES = {
-    "force-push": "force-push to a branch not this strand's own",
-    "delete-home": "delete under a home root",
-    "merge-red": "merge without green",
-    "publish": "publish",
-    "visibility": "change who can see a repository",
-    "secret": "set or delete a secret",
-    "access": "change who can reach a repository",
-    "forge-delete": "delete on the forge",
-    "run": "start a workflow",
-}
-
-# A letter grants a class only when it says one of these too: the target alone is a common word.
-VERBS = {
-    "force-push": r"force|push\s+-f",
-    "delete-home": r"delet|remov|\brm\b|wipe|clean",
-    "merge-red": r"merg",
-    "publish": r"releas|publish|upload|post|tag",
-    "visibility": r"visib|public|private|internal",
-    "secret": r"secret",
-    "access": r"collaborat|access|invit|permission|add|remov",
-    "forge-delete": r"delet|remov",
-    "run": r"\brun|dispatch|trigger|start",
-}
+RECENT_DAYS = 30
+SAME_ACT = 600
 
 
 @dataclass(frozen=True)
@@ -61,6 +45,33 @@ class Grant:
     letter: str
     wish: str
     person: str
+    at: str = ""
+    words: str = ""
+
+    def said(self) -> str:
+        """The letter as the body sees it at the moment it leans on it: its date and first words."""
+        when = _when(self.at)
+        stamp = when.strftime("%Y-%m-%d %H:%MZ") if when else "an unknown date"
+        words = " ".join(self.words.split())
+        words = words if len(words) <= 60 else words[:59].rstrip() + "…"
+        return f"{self.letter} ({stamp}: \"{words}\")" if words else f"{self.letter} ({stamp})"
+
+
+@dataclass(frozen=True)
+class Judged:
+    """One final act's verdict, not yet written (:func:`note` writes it)."""
+    granted: bool
+    line: str
+    what: str
+    grant: Grant | None = None
+
+
+def _when(at: str) -> datetime | None:
+    try:
+        when = datetime.fromisoformat(str(at).replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return when if when.tzinfo else when.replace(tzinfo=timezone.utc)
 
 
 _OWNERS: dict[Path, tuple[str, frozenset[str]]] = {}
@@ -85,54 +96,41 @@ def owners(self_repo: Path) -> set[str]:
     return set(found)
 
 
-def names(text: str, target: str) -> bool:
-    """``target`` stands in ``text`` as a word: ``#2610`` and ``2610`` name PR 2610,
-    ``main`` does not stand in ``maintain``, a path is not the start of a longer one."""
-    target = target.strip()
-    if not re.search(r"\w", target):
-        # "?" or "-": no letter names nothing, however it is punctuated.
-        return False
-    forms = {target, target.lstrip("#")} if target.startswith("#") else {target}
-    # People write a release without its v: "Publish 0.7.0" names the tag v0.7.0.
-    if re.fullmatch(r"v\d+(?:\.\d+)+", target):
-        forms.add(target[1:])
-    # A sentence's full stop ends a word; a dot before more of a name does not.
-    return any(re.search(rf"(?<![\w/.-]){'#?' if f.isdigit() else ''}{re.escape(f)}(?![\w/-]|\.[\w/])", text)
-               for f in forms)
-
-
-def find(facts: Iterable[Fact], thread: str, cls: str, target: str, owner: set[str]) -> Grant | None:
-    """The newest owner letter on an open wish of ``thread`` that names ``target`` and a ``cls`` verb."""
-    facts = list(facts)
+def letter_for(facts: Iterable[Fact], cited: str, owner: set[str], now: datetime | None = None) -> Grant | None:
+    """The newest owner letter ``cited`` names (a full id, or the number an id of the last
+    :data:`RECENT_DAYS` days ends with), unheld."""
     from .dispositions import held
-    letters = {str(f.data.get("id", f.id)): f for f in facts if f.kind == "letter"}
+    facts = list(facts)
+    since = (now or datetime.now(timezone.utc)) - timedelta(days=RECENT_DAYS)
+    words = {w.strip(".,;()[]") for w in re.split(r"[\s,]+", cited or "") if w.strip(".,;()[]")}
+    if not words:
+        return None
     waiting = held(facts)
+    stamped = {}
+    for f in facts:
+        if f.kind == "wish":
+            for say in f.data.get("says") or ():
+                if isinstance(say, dict) and say.get("letter"):
+                    stamped.setdefault(str(say["letter"]), str(f.data.get("wish") or ""))
     best: tuple[str, Grant] | None = None
-    for wish in wishes(facts).values():
-        if wish.thread != thread or not wish.open:
+    for f in facts:
+        if f.kind != "letter":
             continue
-        cited = {say.letter for say in wish.says}
-        cited |= {ident for ident, f in letters.items() if f.data.get("wish") == wish.id}
-        for ident in cited:
-            letter = letters.get(ident)
-            if letter is None or ident in waiting:
+        ident = str(f.data.get("id", f.id))
+        tail = re.split(r"[:/]", ident)[-1]
+        if ident not in words:
+            if not (tail.isdigit() and tail in words):
                 continue
-            person = str(letter.data.get("from") or "")
-            body = str(letter.data.get("body") or "")
-            if person not in owner or not names(body, target) or not re.search(VERBS[cls], body, re.I):
+            when = _when(f.at)
+            if when is None or when < since:
                 continue
-            if best is None or letter.at > best[0]:
-                best = (letter.at, Grant(ident, wish.id, person))
+        person = str(f.data.get("from") or "")
+        if person not in owner or ident in waiting:
+            continue
+        if best is None or f.at > best[0]:
+            best = (f.at, Grant(ident, stamped.get(ident, str(f.data.get("wish") or "")), person,
+                                f.at, str(f.data.get("body") or "")))
     return best[1] if best else None
-
-
-def refusal(cls: str, target: str, why: str, owner: set[str]) -> str:
-    """What was refused, that no owner letter grants it, and the override: facts, no question."""
-    who = " or ".join(sorted(o.partition(":")[2] for o in owner)) or "the owner"
-    what = CLASSES.get(cls, cls)
-    return (f"refused: {what} ({target}{': ' + why if why else ''}); "
-            f"no letter from {who} on this thread's open wishes names {target}.\n"
-            f"override: a letter from {who} naming {target} and the act, stamped on the wish it serves.")
 
 
 def record(home, strand: str, gen: int | None, thread: str, cls: str, target: str, grant: Grant) -> Fact:
@@ -144,56 +142,66 @@ def record(home, strand: str, gen: int | None, thread: str, cls: str, target: st
 
 
 def refused(home, strand: str, gen: int | None, thread: str, cls: str, target: str) -> Fact:
-    """A never guard stopped an act: the other side of ``guard.granted``, counted by ``trust``."""
+    """A final act stopped for want of his sentence: the other side of ``guard.granted``, counted by ``trust``."""
     from .ledger import append
     from .home import mint
     return append(home, Fact(kind="guard.refused", by=f"strand:{strand}", id="guard.refused:" + mint(12),
                              data={"strand": strand, "gen": gen, "thread": thread, "class": cls, "target": target}))
 
 
-def judge(room: Path, asks: list[tuple[str, str] | None], why: str = "") -> tuple[bool, list[str]]:
-    """``(granted, lines)`` for one call's refusals in this room's thread.
+def judge(room: Path, what: str, cited: str) -> Judged:
+    """The verdict for one act marked final in ``room``; nothing is written."""
+    from .home import home_of_room
+    from .ledger import read_facts
+    room = Path(room)
+    home = home_of_room(room)
+    owner = owners(home.root / "self")
+    facts = read_facts(home)
+    grant = letter_for(facts, cited, owner)
+    who = " or ".join(sorted(o.partition(":")[2] for o in owner)) or "the owner"
+    if grant is None:
+        return Judged(False, (f"refused: {what} cannot be undone, and {cited or 'its mark'} names no letter of {who}'s "
+                              f"(a bare number names only a letter of the last {RECENT_DAYS} days; an older one, "
+                              f"its full id). Ask: `brnrd runtime ask \"{what}?\" --for <w-id> --rec \"yes\"`; "
+                              f"his answer is the letter the mark then cites."), what)
+    return Judged(True, f"granted: {what} (final) by {grant.said()}", what, grant)
 
-    An ask of None is a refusal no letter can lift. Grants are recorded only
-    when every refusal is granted, so a call still denied leaves no receipt.
-    """
+
+def _written(facts: list, kind: str, strand: str, target: str, letter: str | None, now: datetime) -> bool:
+    for f in reversed(facts):
+        if f.kind != kind or f.data.get("strand") != strand or f.data.get("class") != "final":
+            continue
+        if f.data.get("target") != target or (letter is not None and f.data.get("letter") != letter):
+            continue
+        when = _when(f.at)
+        if when is not None and (now - when).total_seconds() <= SAME_ACT:
+            return True
+    return False
+
+
+def note(room: Path, judged: Judged) -> Fact | None:
+    """Write one final act's verdict, once per act (:data:`SAME_ACT`); None when already written."""
     import os
     from .home import home_of_room, strand_of_room
     from .ledger import read_facts
-    if not asks or None in asks:
-        return False, []
+    from .publish import _gen
     room = Path(room)
     home = home_of_room(room)
     thread = os.environ.get("BRNRD_THREAD", "")
-    owner = owners(home.root / "self")
-    facts = read_facts(home) if thread else []
-    found = {ask: find(facts, thread, *ask, owner) if thread else None for ask in dict.fromkeys(asks)}
-    missing = [ask for ask, grant in found.items() if grant is None]
-    from .publish import _gen
     strand = strand_of_room(room)
+    facts = read_facts(home)
+    kind = "guard.granted" if judged.granted else "guard.refused"
+    letter = judged.grant.letter if judged.grant else None
+    if _written(facts, kind, strand, judged.what, letter, datetime.now(timezone.utc)):
+        return None
     gen = _gen(facts, strand)
-    if missing:
-        for cls, target in missing:
-            refused(home, strand, gen, thread, cls, target)
-        return False, [refusal(cls, target, why, owner) for cls, target in missing]
-    lines = []
-    for (cls, target), grant in found.items():
-        record(home, strand, gen, thread, cls, target, grant)
-        lines.append(f"granted: {CLASSES[cls]} ({target}) by {grant.letter} on {grant.wish}")
-    return True, lines
+    if judged.grant is None:
+        return refused(home, strand, gen, thread, "final", judged.what)
+    return record(home, strand, gen, thread, "final", judged.what, judged.grant)
 
 
-def main(argv: list[str]) -> int:
-    """``guard <class> <target>``: a gate's question (the gh shim's), answered by exit code.
-    0 and the grant on stdout; 1 and the refusal on stderr."""
-    import sys
-    from .verbs_loom import Parser, _room
-    parser = Parser(verb="guard", prog="brnrd runtime guard")
-    parser.add_argument("cls", choices=sorted(CLASSES))
-    parser.add_argument("target")
-    parser.add_argument("--why", default="")
-    parser.add_argument("--room")
-    args = parser.parse_args(argv)
-    granted, lines = judge(_room(args.room), [(args.cls, args.target)], args.why)
-    (sys.stdout if granted else sys.stderr).write("\n".join(lines) + "\n")
-    return 0 if granted else 1
+def final(room: Path, what: str, cited: str) -> tuple[bool, str]:
+    """``(granted, line)`` for one act marked final at a door that does it; the verdict is written once."""
+    judged = judge(room, what, cited)
+    note(room, judged)
+    return judged.granted, judged.line

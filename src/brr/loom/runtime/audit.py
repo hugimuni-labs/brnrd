@@ -669,7 +669,7 @@ def main(argv=None) -> int:
         if not (args.room and args.door and args.act):
             return refuse("audit", ValueError("pass needs --room, --door and --act"))
         from .mark import door_refusal
-        refusal = door_refusal()
+        refusal = door_refusal(args.room)
         if refusal:
             # Exit 3 is the door's own refusal; the gh shim stops on it and on nothing else.
             sys.stderr.write(f"{args.door}: {refusal}\n")
