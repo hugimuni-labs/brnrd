@@ -148,49 +148,119 @@ def shell_mark(command: str) -> str | None:
 
 
 _PIPE_TAIL = re.compile(r"\A(?:tail|head)(?:\s+-n)?(?:\s+-?\d+)?\Z")
-_SHELLY = re.compile(r"<<|\$\(|`|<\(|>\(")
+_QUIET = (">&1", ">/dev/null")
+
+
+def _stages(command: str) -> list[tuple[str, bool]] | None:
+    """The simple commands a shell line runs, as the shell splits them: ``(text, piped)`` each.
+
+    Read by quotes, not by raw text: a ``;``, ``>``, ``<`` or backtick inside single quotes
+    is a letter's words, and so are ``;``, ``>`` and ``<`` inside double quotes. None when
+    the shell would run code of its own: a substitution (backtick or ``$(``) outside single
+    quotes, a heredoc or other redirection than ``2>&1`` and ``>/dev/null``, a background
+    ``&``, or a quote left open."""
+    stages: list[tuple[str, bool]] = []
+    cur: list[str] = []
+    piped, quote, i, n = False, None, 0, len(command)
+
+    def cut(next_piped: bool) -> None:
+        nonlocal cur, piped
+        stages.append(("".join(cur).strip(), piped))
+        cur, piped = [], next_piped
+
+    while i < n:
+        c = command[i]
+        if quote == "'":
+            cur.append(c)
+            quote = None if c == "'" else quote
+            i += 1
+            continue
+        if c == "\\":
+            cur.append(command[i:i + 2])
+            i += 2
+            continue
+        if c == "`" or command.startswith("$(", i):
+            return None
+        if quote == '"':
+            cur.append(c)
+            quote = None if c == '"' else quote
+            i += 1
+            continue
+        if c in "'\"":
+            quote = c
+            cur.append(c)
+            i += 1
+            continue
+        if command.startswith(("<(", ">("), i) or c == "<":
+            return None
+        if c == ">":
+            if cur and cur[-1] == "2" and command.startswith(">&1", i):
+                cur.pop()
+                i += 3
+                continue
+            if command.startswith(">/dev/null", i):
+                if cur and cur[-1] == "2":
+                    cur.pop()
+                i += len(">/dev/null")
+                continue
+            return None
+        if command.startswith(("&&", "||"), i):
+            cut(False)
+            i += 2
+            continue
+        if c in ";\n":
+            cut(False)
+            i += 1
+            continue
+        if c == "|":
+            cut(True)
+            i += 1
+            continue
+        if c == "&":
+            return None
+        cur.append(c)
+        i += 1
+    if quote:
+        return None
+    cut(False)
+    return stages
 
 
 def loom_verbs_only(command: str) -> bool:
     """True when every command the shell would run is ``cd <dir>`` or one of the loom's own verbs,
-    with env prefixes, ``2>&1`` and a trailing ``| tail``/``| head`` allowed, and nothing that
-    runs code of its own (a heredoc, a substitution, a redirection to a file)."""
-    if not command.strip() or _SHELLY.search(command):
-        return False
-    text = re.sub(r"\s(?:2>&1|2>/dev/null|>/dev/null)(?=\s|$|[;&|])", " ", command)
-    if ">" in text or "<" in text:
+    with the loom's env words, ``2>&1`` and a trailing ``| tail``/``| head`` allowed, and nothing
+    that runs code of its own (:func:`_stages`). A letter's text in quotes is never read as shell."""
+    stages = _stages(command) if command.strip() else None
+    if stages is None:
         return False
     verbs = 0
-    for chain in re.split(r"&&|\|\||;|\n", text):
-        stages = chain.split("|")
-        for n, stage in enumerate(stages):
-            stage = stage.strip()
-            if not stage:
-                if len(stages) > 1:
-                    return False
-                continue
-            if n:
-                if not _PIPE_TAIL.match(stage):
-                    return False
-                continue
-            try:
-                words = shlex.split(stage)
-            except ValueError:
+    for n, (stage, piped) in enumerate(stages):
+        if not stage:
+            if piped or (n + 1 < len(stages) and stages[n + 1][1]):
                 return False
-            # Only the loom's own env words: a PATH= or PYTHONPATH= could make "brnrd" another program.
-            while words and re.fullmatch(r"BRNRD_[A-Z0-9_]*=.*", words[0], re.S):
-                words = words[1:]
-            if not words:
-                continue
-            if words[0] == "cd" and len(words) <= 2:
-                continue
-            if words[0] in _verb_paths() and words[1:2] == ["runtime"]:
-                verbs += 1
-                continue
-            if re.fullmatch(r"python3?", words[0]) and words[1:3] == ["-m", "brr.loom.runtime"]:
-                verbs += 1
-                continue
+            continue
+        if piped:
+            if not _PIPE_TAIL.match(stage):
+                return False
+            continue
+        try:
+            words = shlex.split(stage)
+        except ValueError:
             return False
+        # Only the loom's own env words: a PATH= or PYTHONPATH= could make "brnrd" another program.
+        while words and re.fullmatch(r"BRNRD_[A-Z0-9_]*=.*", words[0], re.S):
+            words = words[1:]
+        if not words:
+            continue
+        if words[0] == "cd" and len(words) <= 2:
+            continue
+        if words[0] in _verb_paths() and words[1:2] == ["runtime"]:
+            verbs += 1
+            continue
+        if re.fullmatch(r"python3?", words[0]) and words[1:3] == ["-m", "brr.loom.runtime"]:
+            verbs += 1
+            continue
+        return False
     return verbs > 0
 
 

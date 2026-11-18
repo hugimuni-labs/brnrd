@@ -58,6 +58,16 @@ def test_what_is_no_mark(text, why):
     ("brnrd runtime send --to thread:x hi > out.txt", False),
     ("brnrd runtime send --to thread:x hi | sh", False),
     ("cd /tmp", False),
+    # A letter's text in quotes is words, not shell (s-ae66-orcd5h/xrdar).
+    ("brnrd runtime send --to thread:x 'fix `foo` > bar; and <this>'", True),
+    ('brnrd runtime send --to thread:x "a; b > c < d | e"', True),
+    ("brnrd runtime send --to thread:x 'it'\\''s fine'", True),
+    ("brnrd runtime send x >/dev/null 2>&1", True),
+    # A backtick in double quotes runs, as the shell reads it: that is code, not a letter.
+    ('brnrd runtime send --to thread:x "fix `foo`"', False),
+    ("brnrd runtime send x &", False),
+    ("brnrd runtime send 'open", False),
+    ("brnrd runtime send x <<'EOF'\nhi\nEOF", False),
     # Only the loom's env words, and brnrd as PATH finds it: anything else could be another program.
     ("PATH=/x:$PATH brnrd runtime send --to thread:x hi", False),
     ("PYTHONPATH=/x python3 -m brr.loom.runtime wish w-1 --left same", False),
