@@ -101,7 +101,7 @@ _FORGE_TOKEN_VARS = ("GH_TOKEN", "GITHUB_TOKEN", "GH_ENTERPRISE_TOKEN", "GITHUB_
 # sensor never costs the call. The stand-in judges nothing else.
 _FORGE_DOOR = r"""if [ "${BRNRD_MARKS-}" = 1 ] && [ "${BRNRD_WALL-}" != 1 ]; then
   # No wall around this body (mark.py): the stand-in is the wall for gh, every call is marked.
-  {brnrd} runtime mark --check --room {room} >/dev/null
+  {brnrd} runtime mark --check --look --room {room} >/dev/null
   [ $? -ne 3 ] || exit 1
 fi
 case "$1 $2" in

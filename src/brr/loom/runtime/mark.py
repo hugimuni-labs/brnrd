@@ -390,14 +390,14 @@ HIT = ("the wall held this call: it reaches outside the room (the network, or a 
        "a look needs only BRNRD_SAY=look.")
 
 
-def door_refusal(room: Path | str | None = None) -> str | None:
+def door_refusal(room: Path | str | None = None, look: bool = False) -> str | None:
     """At a door that leaves (a send to a person, a publish, a gh act): why it does not go, or None.
 
     Only behind the marks switch (``BRNRD_MARKS``, set at launch from ``doors = on``)."""
     if os.environ.get(MARKS) != "1":
         return None
     mark, why = parse(os.environ.get(SAY))
-    if mark is not None and mark.reach == "look":
+    if mark is not None and mark.reach == "look" and not look:
         return ("refused at the door: this act is never a look (a letter sent, a branch pushed, "
                 "a forge act done): mark it change or final, naming the thing and the letter it serves")
     if mark is not None:
@@ -456,9 +456,10 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("mark", nargs="?")
     parser.add_argument("--room", default=os.environ.get("BRNRD_ROOM"))
     parser.add_argument("--check", action="store_true", help="a door's question, answered by exit code")
+    parser.add_argument("--look", action="store_true", help="with --check: a look passes (a wall, not a door)")
     args = parser.parse_args(argv)
     if args.check:
-        refusal = door_refusal(args.room)
+        refusal = door_refusal(args.room, look=args.look)
         if refusal:
             sys.stderr.write(refusal + "\n")
             return 3
