@@ -308,7 +308,7 @@ def test_later_reply_and_source_citation_do_not_change_old_letter_projections(tm
         equivalent(view, seen, main, tmp_path)
         assert (reply_channels(view)[old.id], letter_attachments(tmp_path, view)[old.id], letter_replies(view)[old.id]) == expected
     assert letter_replies(view)[later.id].startswith('replying to your old:')
-    assert letter_attachments(tmp_path, view)[later.id] == (expected[1] if shared_source else [f'attachment: image/png · 3 bytes · {tmp_path.resolve() / "blobs/new"}'])
+    assert letter_attachments(tmp_path, view)[later.id] == (expected[1] if shared_source else [f'attachment: photo (image/png · 3 bytes) · {tmp_path.resolve() / "blobs/new"} · part of this letter: open it before answering'])
 
 
 def test_local_append_repo_pairs_equal_the_next_production_refresh(tmp_path):
