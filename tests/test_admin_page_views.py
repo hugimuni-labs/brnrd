@@ -94,3 +94,41 @@ def test_the_env_list_is_read_comma_separated_and_lowercased(monkeypatch):
     monkeypatch.delenv("BRNRD_ADMIN_GITHUB_LOGINS")
     assert config._env_csv_lower("BRNRD_ADMIN_GITHUB_LOGINS") == ()
     assert Settings.__dataclass_fields__["admin_github_logins"].default == ()
+
+
+def test_metrics_uses_operator_gate_and_renders_fourteen_utc_days(tmp_path):
+    client = _client(tmp_path, ("gurio",))
+    assert client.get("/metrics").status_code == 404
+    _sign_in(client, "stranger", github_id="3")
+    assert client.get("/metrics").status_code == 404
+
+    _sign_in(client, "Gurio")
+    today = dt.datetime.now(dt.timezone.utc).date()
+    oldest = today - dt.timedelta(days=13)
+    with client.app.state.SessionLocal() as db:
+        db.add(PageViewCount(day=oldest, path="/learn/oldest", referer_host="", ua_family="chrome", status=200, views=1))
+        db.add(PageViewCount(day=oldest - dt.timedelta(days=1), path="/learn/outside", referer_host="", ua_family="chrome", status=200, views=1))
+        db.commit()
+    for ua in ("Chrome/120", "Twitterbot/1.0"):
+        client.get(
+            "/hi", headers={"referer": "https://t.co/private", "user-agent": ua},
+            follow_redirects=False,
+        )
+
+    response = client.get("/metrics")
+    assert response.status_code == 200
+    assert response.headers["cache-control"] == "private, no-store"
+    assert response.text.count("<th scope='row'>") == 14
+    assert f"<th scope='row'>{today}</th><td>1</td><td>2</td><td>0</td>" in response.text
+    assert f"<th scope='row'>{oldest}</th><td>0</td><td>0</td><td>0</td>" in response.text
+    assert "<td>/hi</td><td>t.co</td><td>1</td><td>1</td>" in response.text
+    assert "<td>/learn/oldest</td><td>(direct)</td>" in response.text
+    assert "/learn/outside" not in response.text
+
+
+def test_metrics_is_closed_when_operator_list_is_empty(tmp_path):
+    client = _client(tmp_path, ())
+    _sign_in(client, "Gurio")
+    response = client.get("/metrics")
+    assert response.status_code == 404
+    assert response.headers["cache-control"] == "private, no-store"
