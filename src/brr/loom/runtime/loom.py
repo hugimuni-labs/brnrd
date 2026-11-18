@@ -126,14 +126,16 @@ def _marks_env(room: Path, env: dict[str, str]) -> None:
         env[MARKS] = "1"
 
 
-def _forge_env(room: Path, env: dict[str, str]) -> None:
-    """Keep a configured forge identity isolated even when a shell bypasses the shim."""
+def _forge_env(room: Path, env: dict[str, str], *, resolve: bool = True) -> bool:
+    """Keep a configured forge identity isolated even when a shell bypasses the shim.
+
+    ``True`` when it wrote the gh stand-in; ``resolve=False`` writes it without fetching a key."""
     from .config import ConfigError, load_config, resolve_secret, secret_shell
     config = load_config(room.parent.parent) if room.parent.name == "rooms" else None
     mode = config.gh if config is not None else "auto"
     spec = config.forge_token if config is not None else None
     if mode == "auto" and not spec:
-        return
+        return False
     # An env source can itself name one of the machine token variables.
     source_var = spec.removeprefix("env: ") if spec and spec.startswith("env: ") else None
     source_token = env.get(source_var, "") if source_var in _FORGE_TOKEN_VARS else None
@@ -149,14 +151,15 @@ def _forge_env(room: Path, env: dict[str, str]) -> None:
         # verb is asked for most of an hour, not the 10 min its cache keeps.
         from .gates import MIN_LIFE_ENV
         try:
-            env["GH_TOKEN"] = resolve_secret(spec, env={**os.environ, MIN_LIFE_ENV: "3000"})
+            if resolve:
+                env["GH_TOKEN"] = resolve_secret(spec, env={**os.environ, MIN_LIFE_ENV: "3000"})
         except ConfigError:
             _log(Home(room.parent.parent), "forge_token unavailable at body start; gh remains signed out")
         path = env.get("PATH", os.defpath)
         real_gh = shutil.which("gh", path=path)
         if real_gh is None:
             _log(Home(room.parent.parent), "forge_token configured but gh not found on body PATH; no gh shim")
-            return
+            return False
         real_gh = str(Path(real_gh).absolute())
         bin_dir = room / "port" / "bin"
         bin_dir.mkdir(parents=True, exist_ok=True)
@@ -185,7 +188,23 @@ def _forge_env(room: Path, env: dict[str, str]) -> None:
         shim.write_text(script, encoding="utf-8")
         shim.chmod(0o700)
         env["PATH"] = str(bin_dir) + os.pathsep + path
-        return
+        return True
+    return False
+
+
+def _refresh_stand_ins(home: Home) -> None:
+    """Rewrite every room's gh stand-in from this code, or remove it when this code writes none.
+
+    A body keeps the PATH it booted with, so it keeps calling the stand-in its loom wrote then.
+    After a re-exec onto moved code that file can import a module that is gone (#2771 deleted
+    limbs.py, and every gh call in a running room died with ModuleNotFoundError)."""
+    for shim in sorted((home.root / "rooms").glob("*/port/bin/gh")):
+        room = shim.parents[2]
+        try:
+            if not _forge_env(room, _env_without_pin(), resolve=False):
+                shim.unlink(missing_ok=True)  # the body's PATH falls through to the real gh
+        except Exception as exc:  # one room's config never stops the loom starting
+            _log(home, f"gh stand-in in {room.name} not refreshed: {type(exc).__name__}: {exc}")
 
 
 def _write_jack(room: Path, line: str) -> Path:
@@ -2807,6 +2826,7 @@ def run(root: Path | str, *, adapter: str = "fake", core: str = "haiku",
         _PAUSED.update((port.parent, home) for port in (home.root / "rooms").glob("*/port/.paused.json"))
         _migrate_gates(home)
         _converge_forge_token(home)
+        _refresh_stand_ins(home)
         from .config import ConfigError, load_config, tick_config
         from . import usage
         config = load_config(home.root)

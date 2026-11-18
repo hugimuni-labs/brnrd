@@ -193,3 +193,41 @@ def test_a_bodys_scratch_is_its_room(tmp_path):
     out = subprocess.run([sys.executable, "-c", "import tempfile; print(tempfile.gettempdir())"],
                          env=env, capture_output=True, text=True, check=True).stdout.strip()
     assert Path(out).resolve() == (room / "tmp").resolve()
+
+
+_OLD_STAND_IN = """#!/bin/sh
+_brnrd_limb=$(python3 -I -c 'from brr.loom.runtime.limbs import main' 2>&1) || { echo "$_brnrd_limb" >&2; exit 1; }
+"""
+
+
+def _boot_on_old_code(tmp_path, monkeypatch, token):
+    """A body booted before a re-exec: its env leads with port/bin, whose gh is the old shape."""
+    _fake_gh(tmp_path, monkeypatch)
+    room = _room(tmp_path, token)
+    env = _env(room)
+    shim = room / "port" / "bin" / "gh"
+    shim.parent.mkdir(parents=True, exist_ok=True)
+    shim.write_text(_OLD_STAND_IN)
+    shim.chmod(0o700)
+    env["PATH"] = str(shim.parent) + ":" + env["PATH"]
+    assert "ModuleNotFoundError" in _call_gh(env).stderr
+    return room, env
+
+
+def test_loom_start_rewrites_a_stale_stand_in_for_a_running_body(tmp_path, monkeypatch):
+    from brr.loom.runtime.loom import Home, _refresh_stand_ins
+    room, env = _boot_on_old_code(tmp_path, monkeypatch, "home-token")
+    _refresh_stand_ins(Home(room.parent.parent))
+    proc = _call_gh(env)
+    assert (proc.returncode, proc.stdout) == (0, "home-token\n"), proc.stderr
+
+
+def test_loom_start_removes_a_stand_in_this_code_would_not_write(tmp_path, monkeypatch):
+    from brr.loom.runtime.loom import Home, _refresh_stand_ins
+    room, env = _boot_on_old_code(tmp_path, monkeypatch, "home-token")
+    (room.parent.parent / "loom" / "config.toml").write_text('name = "t"\n')
+    monkeypatch.setenv("GH_TOKEN", "machine-token")
+    env["GH_TOKEN"] = "machine-token"
+    _refresh_stand_ins(Home(room.parent.parent))
+    assert not (room / "port" / "bin" / "gh").exists()
+    assert _call_gh(env).stdout == "machine-token\n"
