@@ -761,8 +761,9 @@ def execute(event: str, room: Path, stdin_text: str) -> str:
         refuse = refuse or first_refuse
         decision, payload = _marked(room, stdin_text)
         marked = decision.record() if decision else None
+        by = "refused by a guard:\n" if refuse else "refused:\n"
         if decision is not None and decision.verdict == "refuse":
-            said = "\n".join(filter(None, (said, "refused, no mark: " + decision.why)))
+            said = "\n".join(filter(None, (said, "no mark: " + decision.why)))
             refuse = True
         tooltrace.note(room, stdin_text, "pre")
         from .audit import note as audit_note
@@ -772,7 +773,7 @@ def execute(event: str, room: Path, stdin_text: str) -> str:
             tooltrace.note(room, stdin_text, "refused")
             audit_note(room, stdin_text, "refused", mark=marked)
             return _json({"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "deny",
-                                                 "permissionDecisionReason": _clocked("refused by a guard:\n" + said)}})
+                                                 "permissionDecisionReason": _clocked(by + said)}})
         if decision is not None and decision.verdict == "lift":
             # The wall is lifted for this one call: the engine's own flag, set by the hook, never typed.
             lifted = dict(payload.get("tool_input") or {}, dangerouslyDisableSandbox=True)
