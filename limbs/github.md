@@ -1,4 +1,5 @@
 # GitHub
+trigger: gh, github.com, api.github.com
 
 A note on how a resident reaches GitHub. It judges nothing: the judgement is the mark on each call (threads/judged-acts), and an act that cannot be undone cites his letter.
 
