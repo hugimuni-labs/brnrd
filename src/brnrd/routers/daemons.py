@@ -1688,7 +1688,8 @@ def event_attachment(event_id: str, index: int, request: Request, principal: Pri
     except RuntimeError as e:
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=_safe_detail(f"telegram file unavailable: {e}")) from e
     _touch_daemon(db, principal)
-    media_type = mimetypes.guess_type(str(pointer.get("filename") or ""))[0] or "application/octet-stream"
+    media_type = (str(pointer.get("mime_type") or "")
+                  or mimetypes.guess_type(str(pointer.get("filename") or ""))[0] or "application/octet-stream")
     return Response(content=content, media_type=media_type)
 
 

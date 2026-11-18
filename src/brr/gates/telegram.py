@@ -217,7 +217,7 @@ def _pick_image_file_id(msg: dict) -> tuple[str, str] | None:
     Anything else (voice, video, sticker, a non-image document) returns
     ``None``: this is image support, not a general attachment pipeline.
     """
-    attachments = transport.extract_attachments(msg)
+    attachments = transport.extract_attachments(msg, images_only=True)
     if not attachments:
         return None
     pointer = attachments[0]

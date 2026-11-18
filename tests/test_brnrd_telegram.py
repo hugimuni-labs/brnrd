@@ -903,8 +903,7 @@ def test_concurrent_album_webhooks_do_not_lose_attachments(monkeypatch, tmp_path
     code = _tg_pair_code(client, acc, rid)
     client.post("/v1/webhooks/telegram", json=_message(555, f"/start {code}"), headers=_HDR)
 
-    N = 5  # photo items per album
-    _VIDEO_MARKER = "attached media not ingested"
+    N = 5  # photo items per album, and one video item beside them
     TRIALS = 20
     lost_trials = 0
     total_lost = 0
@@ -961,18 +960,20 @@ def test_concurrent_album_webhooks_do_not_lose_attachments(monkeypatch, tmp_path
             for e in matching
             for p in json.loads(e.attachments_json or "[]")
         }
-        if len(seen_ids) != N:
+        if len(seen_ids) != N + 1:
             lost_trials += 1
-            total_lost += N - len(seen_ids)
-        if not any(_VIDEO_MARKER in (e.body or "") for e in matching):
+            total_lost += N + 1 - len(seen_ids)
+        # The video item is the only one with text: a racing photo item's
+        # stale-body write would wipe its caption.
+        if not any(f"trial {trial} video" in (e.body or "") for e in matching):
             lost_video_annotation_trials += 1
 
     assert lost_trials == 0, (
         f"lost an attachment in {lost_trials}/{TRIALS} trials "
-        f"({total_lost} attachments lost total, {N} items/album)"
+        f"({total_lost} attachments lost total, {N + 1} items/album)"
     )
     assert lost_video_annotation_trials == 0, (
-        f"a racing photo item wiped the video's annotated body in "
+        f"a racing photo item wiped the video's caption in "
         f"{lost_video_annotation_trials}/{TRIALS} trials — the CAS hole #1396 "
         "finding 2 named"
     )
@@ -1028,12 +1029,14 @@ def test_image_document_pointer_keeps_filename(env):
         from brnrd import inbox as inbox_service
         event = db.execute(select(Event).where(Event.source == "telegram")).scalar_one()
         assert inbox_service.attachments_of(event) == [
-            {"file_id": "d1", "filename": "shot.png", "kind": "document"}
+            {"file_id": "d1", "filename": "shot.png", "kind": "document", "mime_type": "image/png"}
         ]
 
 
-def test_non_image_media_keeps_annotation_and_captionless_still_replies(env, monkeypatch):
-    """Non-image media stays annotated-not-fetched (#553 behavior)."""
+def test_every_medium_is_a_pointer_and_a_captionless_voice_is_a_letter(env, monkeypatch):
+    """His 11354: a voice, a video or a PDF on the cloud relay was annotated
+    'not ingested', and a captionless one got "can't see attached media".
+    Every medium is now a file of the letter, in Telegram's update shape."""
     app, client, _ = env
     sent: list[str] = []
     monkeypatch.setattr(
@@ -1045,26 +1048,34 @@ def test_non_image_media_keeps_annotation_and_captionless_still_replies(env, mon
     code = _tg_pair_code(client, acc, rid)
     client.post("/v1/webhooks/telegram", json=_message(555, f"/start {code}"), headers=_HDR)
 
-    # Voice note with a caption → enqueue annotated, no pointer.
-    update = _message(555, "listen to this", message_id=46)
-    msg = update["message"]
-    del msg["text"]
-    msg["caption"] = "listen to this"
-    msg["voice"] = {"file_id": "v1", "duration": 3}
-    client.post("/v1/webhooks/telegram", json=update, headers=_HDR)
+    media = [
+        ("voice", {"file_id": "v1", "file_unique_id": "u1", "duration": 3, "mime_type": "audio/ogg", "file_size": 9000},
+         {"filename": "voice.ogg", "kind": "voice", "mime_type": "audio/ogg", "file_size": 9000}),
+        ("video", {"file_id": "vid1", "file_unique_id": "u2", "width": 640, "height": 360, "duration": 4,
+                   "mime_type": "video/mp4"},
+         {"filename": "video.mp4", "kind": "video", "mime_type": "video/mp4"}),
+        ("video_note", {"file_id": "vn1", "file_unique_id": "u3", "length": 240, "duration": 5},
+         {"filename": "video_note.mp4", "kind": "video_note", "mime_type": "video/mp4"}),
+        ("document", {"file_id": "d2", "file_unique_id": "u4", "file_name": "notes.pdf",
+                      "mime_type": "application/pdf", "file_size": 12000},
+         {"filename": "notes.pdf", "kind": "document", "mime_type": "application/pdf", "file_size": 12000}),
+        ("sticker", {"file_id": "s1", "file_unique_id": "u5", "type": "regular", "width": 512, "height": 512,
+                     "is_animated": False, "is_video": False},
+         {"filename": "sticker.webp", "kind": "sticker", "mime_type": "image/webp"}),
+    ]
+    for number, (kind, field, want) in enumerate(media):
+        update = _message(555, "", message_id=60 + number)
+        msg = update["message"]
+        del msg["text"]  # no caption: the file is the whole letter
+        msg[kind] = field
+        client.post("/v1/webhooks/telegram", json=update, headers=_HDR)
     with app.state.SessionLocal() as db:
         from brnrd import inbox as inbox_service
-        event = db.execute(select(Event).where(Event.source == "telegram")).scalar_one()
-        assert "[attached media not ingested" in (event.body or "")
-        assert inbox_service.attachments_of(event) == []
-
-    # Captionless video → still the honest "can't see media" reply.
-    update2 = _message(555, "", message_id=47)
-    msg2 = update2["message"]
-    del msg2["text"]
-    msg2["video"] = {"file_id": "vid1"}
-    client.post("/v1/webhooks/telegram", json=update2, headers=_HDR)
-    assert any("can't see attached media" in t for t in sent)
+        events = list(db.execute(select(Event).where(Event.source == "telegram")).scalars())
+        got = [inbox_service.attachments_of(e) for e in events]
+        assert got == [[{"file_id": field["file_id"], **want}] for _kind, field, want in media]
+        assert not any("not ingested" in (e.body or "") for e in events)
+    assert not any("can't see attached media" in t for t in sent)
 
 
 # ── #409 default-closed authorization gate ───────────────────────────
