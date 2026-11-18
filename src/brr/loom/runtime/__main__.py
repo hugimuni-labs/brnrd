@@ -37,6 +37,7 @@ VERBS = {
     "update": ("update", "main"),
     "forge-token": ("gates", "main"),
     "guard": ("grants", "main"),
+    "mark": ("mark", "main"),
     "reap": ("reap", "main"),
     "merge-driver": ("merge_driver", "main"),
 }
@@ -72,6 +73,7 @@ SUMMARY = {
     "trust": "the two trust numbers: irreversible acts without a grant, took-rec per ask kind (--days 14)",
     "forge-token": "print the forge token bodies use",
     "guard": "whether the owner's letter grants an act a never guard refuses (loom machinery)",
+    "mark": 'a one-shot mark for the next MCP call: mark "change · what · for · back"',
     "reap": "remove a finished strand's room",
     "loom": "the loom process itself (loom machinery)",
     "jack": "a body's hook (loom machinery)",

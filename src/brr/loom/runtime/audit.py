@@ -148,7 +148,7 @@ def _door_problem(event: object) -> str | None:
         return "invalid door time"
     if event.get("sentence") is not None and not isinstance(event["sentence"], str):
         return "invalid door sentence"
-    return None
+    return _mark_problem(event.get("mark"))
 
 
 def _event_problem(event: object) -> str | None:
@@ -161,6 +161,19 @@ def _event_problem(event: object) -> str | None:
         value = event.get(name)
         if not isinstance(value, str) or len(value) != 64 or any(c not in "0123456789abcdef" for c in value):
             return "invalid payload digest"
+    return _mark_problem(event.get("mark"))
+
+
+def _mark_problem(mark: object) -> str | None:
+    """A mark (mark.py) is the body's own words about the call, never the call's arguments."""
+    if mark is None:
+        return None
+    if (not isinstance(mark, dict) or set(mark) != {"reach", "what", "for", "back", "inferred", "crossed"}
+            or mark["reach"] not in ("look", "change", "final")
+            or not all(isinstance(mark[k], str) for k in ("what", "for", "back"))
+            or not isinstance(mark["inferred"], list) or not all(isinstance(k, str) for k in mark["inferred"])
+            or not isinstance(mark["crossed"], bool)):
+        return "invalid mark"
     return None
 
 
@@ -486,7 +499,7 @@ def _warn(home: Home) -> None:
         pass  # Even reporting a failed append must not fail the caller.
 
 
-def note(room: Path, stdin_text: str, phase: str) -> None:
+def note(room: Path, stdin_text: str, phase: str, mark: dict | None = None) -> None:
     home = None
     try:
         home = home_of_room(room)
@@ -517,6 +530,8 @@ def note(room: Path, stdin_text: str, phase: str) -> None:
                  "outcome": "refused" if phase == "refused" else
                      "failed" if payload.get("hook_event_name") == "PostToolUseFailure" else
                      "reported" if phase == "post" else "pending"}
+        if mark is not None:
+            event["mark"] = mark
         endpoint = json.loads(endpoint_raw)
         raw = canonical({"token": endpoint["token"], "event": event}) + b"\n"
         deadline = time.monotonic() + DEADLINE
@@ -551,6 +566,10 @@ def passage(room: Path, door: str, act: str, target: str = "") -> None:
                  "target": target, "sentence": sentence, "strand": room.name,
                  "thread": os.environ.get("BRNRD_THREAD", ""),
                  "engine": os.environ.get("BRNRD_BODY_SHELL", "unknown")}
+        from .mark import parse
+        marked = parse(sentence, what=f"{act} {target}".strip())[0]
+        if marked is not None:
+            event["mark"] = marked.record(True)
         try:
             raw = canonical({"token": endpoint["token"], "door": event}) + b"\n"
             # A door is a whole process already, never a hot path: a wider budget than a hook's.
@@ -602,6 +621,29 @@ def doors(base: Path, since_ns: int = 0, until_ns: int | None = None) -> dict:
     return counts
 
 
+def marks(base: Path, since_ns: int = 0, until_ns: int | None = None) -> dict:
+    """Marks over a period, from committed bytes: per reach, crossed or not, and calls seen."""
+    counts = {"calls": 0, "marked": {r: 0 for r in ("look", "change", "final")}, "crossed": 0, "inferred": 0}
+    for name in _manifest(base):
+        head = _head(base / name)
+        if not head:
+            continue
+        for row in _rows(base / name / "entries.jsonl", head["bytes"]):
+            event = row.get("event") if row.get("kind") == "tool" else None
+            if not event or event.get("phase") != "pre":
+                continue
+            at = event.get("at_ns", 0)
+            if at < since_ns or (until_ns is not None and at >= until_ns):
+                continue
+            counts["calls"] += 1
+            mark = event.get("mark")
+            if mark:
+                counts["marked"][mark["reach"]] += 1
+                counts["crossed"] += mark["crossed"]
+                counts["inferred"] += bool(mark["inferred"])
+    return counts
+
+
 def _ns(text: str | None) -> int | None:
     if text is None:
         return None
@@ -614,7 +656,7 @@ def _ns(text: str | None) -> int | None:
 
 def main(argv=None) -> int:
     parser = Parser(verb="audit", description="Verify the local record-only tool journal (no witness).")
-    parser.add_argument("action", choices=["verify", "doors", "pass"])
+    parser.add_argument("action", choices=["verify", "doors", "marks", "pass"])
     parser.add_argument("--home")
     parser.add_argument("--room")
     parser.add_argument("--since", help="doors: ISO time, e.g. 2026-11-16T00:00Z")
@@ -626,14 +668,21 @@ def main(argv=None) -> int:
     if args.action == "pass":
         if not (args.room and args.door and args.act):
             return refuse("audit", ValueError("pass needs --room, --door and --act"))
+        from .mark import door_refusal
+        refusal = door_refusal()
+        if refusal:
+            # Exit 3 is the door's own refusal; the gh shim stops on it and on nothing else.
+            sys.stderr.write(f"{args.door}: {refusal}\n")
+            return 3
         passage(Path(args.room), args.door, args.act, args.target)
         return 0
     home = home_for(args.home, args.room)
-    if args.action == "doors":
+    if args.action in ("doors", "marks"):
         try:
-            counts = doors(home.root / "audit" / home.install_id(), _ns(args.since) or 0, _ns(args.until))
+            count = doors if args.action == "doors" else marks
+            counts = count(home.root / "audit" / home.install_id(), _ns(args.since) or 0, _ns(args.until))
         except (OSError, ValueError, KeyError, TypeError) as exc:
-            return refuse("audit", exc, prefix="audit: doors unreadable: ")
+            return refuse("audit", exc, prefix=f"audit: {args.action} unreadable: ")
         print(json.dumps(counts, sort_keys=True))
         return 0
     try:
