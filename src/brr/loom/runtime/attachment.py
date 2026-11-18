@@ -30,7 +30,7 @@ _MAGIC: tuple[tuple[bytes, int, str, str], ...] = (
     (b"PK\x03\x04", 0, "application/zip", "zip"),
 )
 _EXT = {"image/jpeg": "jpg", "image/png": "png", "image/gif": "gif", "image/webp": "webp",
-        "image/heic": "heic", "application/pdf": "pdf", "audio/ogg": "ogg", "audio/mpeg": "mp3",
+        "image/heic": "heic", "image/avif": "avif", "application/pdf": "pdf", "audio/ogg": "ogg", "audio/mpeg": "mp3",
         "audio/wav": "wav", "audio/mp4": "m4a", "video/mp4": "mp4", "video/quicktime": "mov",
         "video/webm": "webm", "application/zip": "zip", "text/plain": "txt"}
 
@@ -46,6 +46,8 @@ def sniff(head: bytes) -> str:
         return "audio/wav"
     if head[4:8] == b"ftyp":
         brand = head[8:12]
+        if brand in (b"avif", b"avis"):
+            return "image/avif"
         if brand in (b"heic", b"heix", b"mif1", b"msf1"):
             return "image/heic"
         if brand == b"qt  ":
@@ -174,9 +176,11 @@ def path_of(text: str) -> str:
 def unopened(room: Path, letter_id: str) -> list[str]:
     """The files of ``letter_id`` no call in this room has touched, by the boundary's lines.
 
-    A call touches a file when its traced ``arg`` (a file tool's basename) or
-    ``cmd`` (a command's first line) names the file. A room is one strand, so
-    a successor that inherits the room inherits what was opened in it."""
+    A call touches a file when its traced ``blobs`` (the home's blob shas its
+    whole input named, ``tooltrace.blobs_named``) hold the file's sha, or its
+    ``arg`` (a file tool's basename) names it. A room is one strand: a
+    reincarnation gets a new room, so a successor is refused once for a file
+    its predecessor opened. One retry is the price."""
     from . import tooltrace
     from .port import parse_boundary
     try:
@@ -190,5 +194,8 @@ def unopened(room: Path, letter_id: str) -> list[str]:
     if not paths:
         return []
     calls = tooltrace.read(Path(room), limit=0)
-    return [path for path in paths
-            if not any(Path(path).name in (call["arg"] + " " + call["cmd"]) for call in calls)]
+    def opened(path: str) -> bool:
+        name = Path(path).name
+        sha = name.partition(".")[0]
+        return any(sha in call.get("blobs", ()) or name in call["arg"] for call in calls)
+    return [path for path in paths if not opened(path)]

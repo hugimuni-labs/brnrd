@@ -210,3 +210,34 @@ def test_a_reply_after_opening_the_file_is_not_refused(home, tmp_path):
         tooltrace.note(room, json.dumps({"tool_name": "Read", "tool_use_id": "t1",
                                          "tool_input": {"file_path": path}, "tool_response": "ok"}), phase)
     assert unopened(room, ident) == []
+
+
+@pytest.mark.parametrize("padding", [0, 200])
+def test_a_file_opened_by_shell_counts_as_opened(home, tmp_path, padding):
+    """cmd masks a 64-hex name and cuts at 120: the trace names the blob beside it."""
+    import json
+    from brr.loom.runtime import tooltrace
+    from brr.loom.runtime.attachment import unopened
+    blob = tmp_path / "0"
+    blob.write_bytes(_jpeg(4, 3))
+    ingest(home, "fake", dict(id="page", kind="letter", to="channel:fake/42", body="look"), [blob])
+    facts = read_facts(home)
+    room = _prepare(home, STRAND, "inbox", 1, mail(home.root, facts, "inbox"),
+                    sender_threads(facts), facts, "hand")
+    ident = next(v.id for v in parse_boundary((room / "port/in/boundary.md").read_text()).letters)
+    [path] = unopened(room, ident)
+    command = f"cd {'x' * padding} ; file {path} && sips -g pixelWidth {path}"
+    assert path not in tooltrace.cmd_of(command)
+    stranger = "ab" * 32  # a 64-hex token that names no blob stays out of the trace
+    for phase in ("pre", "post"):
+        tooltrace.note(room, json.dumps({"tool_name": "Bash", "tool_use_id": "b1",
+                                         "tool_input": {"command": command + " " + stranger,
+                                                        "description": "look at the page"},
+                                         "tool_response": "ok"}), phase)
+    assert unopened(room, ident) == []
+    assert stranger not in (room / "port/tools.jsonl").read_text()
+
+
+def test_avif_reads_as_an_image():
+    from brr.loom.runtime.attachment import sniff
+    assert sniff(b"\x00\x00\x00\x1cftypavif" + b"\x00" * 16) == "image/avif"

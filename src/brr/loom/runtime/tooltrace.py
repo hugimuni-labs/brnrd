@@ -112,6 +112,26 @@ def self_path(room: Path, given: object, cwd: object = None) -> str:
     return ""
 
 
+_SHA_RE = re.compile(r"(?<![0-9a-f])[0-9a-f]{64}(?![0-9a-f])")
+
+
+def blobs_named(room: Path, given: object) -> list[str]:
+    """The home's stored blobs a call's whole input names, by sha.
+
+    ``cmd`` masks a 64-hex name as a secret and cuts at ``CMD_MAX``, so a file
+    opened by shell would read as never opened (attachment.unopened). Only a
+    sha that is a blob of this home is kept: it is a name here, not a secret."""
+    try:
+        text = given if isinstance(given, str) else json.dumps(given)
+    except (TypeError, ValueError):
+        return []
+    found = dict.fromkeys(_SHA_RE.findall(text))
+    if not found:
+        return []
+    store = Path(room).parent.parent / "blobs"
+    return [sha for sha in list(found)[:16] if (store / sha).is_file()]
+
+
 def _masked(text: str) -> str:
     text = _USERINFO_RE.sub("://<redacted>@", redact_detail(text))
     text = _USERPASS_RE.sub(r"\1<redacted>", text)
@@ -230,6 +250,9 @@ def note(room: Path, stdin_text: str, phase: str = "post") -> None:
         if phase == "pre":
             if tool == "Bash" and isinstance(given, dict):
                 row["cmd"] = cmd_of(given.get("command"))
+            named = blobs_named(room, given)
+            if named:
+                row["blobs"] = named
             where = self_path(room, given, payload.get("cwd"))
             if where:
                 row["path"] = where
@@ -270,7 +293,8 @@ def note(room: Path, stdin_text: str, phase: str = "post") -> None:
 def _call(at: float, row: dict) -> dict:
     return {"at": at, "end": None, "ms": None, "tool": str(row.get("tool", "")), "arg": str(row.get("arg", "")),
             "cmd": str(row.get("cmd", "")), "say": str(row.get("say", "")), "by": str(row.get("by", "")),
-            "failed": False, "w": bool(row.get("w")), "out": None, "path": str(row.get("path", ""))}
+            "failed": False, "w": bool(row.get("w")), "out": None, "path": str(row.get("path", "")),
+            "blobs": [str(sha) for sha in row.get("blobs") or () if isinstance(sha, str)]}
 
 
 def _close(call: dict, at: float, row: dict) -> None:
@@ -430,7 +454,8 @@ def _codex_step(state: dict, record: dict) -> None:
                 return
         command = _codex_command(name, given)
         call = _call(at, {"tool": name, "cmd": cmd_of(command) if command else "",
-                          "w": produces(name, {"command": command}) if command else name in _PRODUCE_TOOLS})
+                          "w": produces(name, {"command": command}) if command else name in _PRODUCE_TOOLS,
+                          "blobs": blobs_named(state["room"], given) if "room" in state else []})
         if state.pop("said", False):
             call["say"] = state["say"]
         state["calls"].append(call)
@@ -453,7 +478,7 @@ def _codex(room: Path) -> tuple[list[dict], str]:
         return [], ""
     offset, state = _parsed.get(path, (0, None))
     if state is None:
-        state = {"calls": [], "open": {}, "cells": {}, "say": ""}
+        state = {"calls": [], "open": {}, "cells": {}, "say": "", "room": Path(room)}
     try:
         with open(path, "rb") as handle:
             handle.seek(offset)
