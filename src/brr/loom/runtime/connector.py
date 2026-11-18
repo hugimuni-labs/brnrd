@@ -128,6 +128,11 @@ def ingest(home, name, fm, attachments, authorize=None):
     source_id = f'source:{name}:{ident}'
     facts = read_facts(home)
     source = next((f for f in facts if f.id == source_id), None)
+    # The same message through a twin door, or a new lead's stale cursor, is held already.
+    from .connector_ownership import twins
+    held = {f'source:{twin}:{ident}' for twin in twins(home, name)}
+    if source is None and held and any(f.id in held for f in facts):
+        return
     binding = reply_for_message(facts, source.data['channel'] if source else fm['to'],
                                 source.data.get('re') if source else fm.get('re'))
     if source is None:
