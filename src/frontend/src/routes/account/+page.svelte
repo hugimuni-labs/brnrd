@@ -4,40 +4,173 @@
 	import AccountDeletion from '$lib/AccountDeletion.svelte';
 	import BillingPanel from '$lib/BillingPanel.svelte';
 	import { ACCOUNT_PATH, loginFor, readAccount, type AccountRead } from '$lib/accountPage';
+	import '$lib/board/ui/board.css';
 
 	// The subscription and the account, reachable from every signed-in page
 	// (the board, the empty loom, the old dashboard). Anonymous → sign in,
 	// then back here.
+	//
+	// It wears the board's look (his 11408: the old style was the dashboard's
+	// dark panels): the board's header bar, one column with its top rule, mono
+	// ink on white. BillingPanel and AccountDeletion are shared with the old
+	// dashboard and keep its classes; the skin below restyles them here only.
 	let account = $state<AccountRead | null>(null);
 
-	onMount(async () => {
-		account = await readAccount();
-		if (account.kind === 'anon') window.location.replace(loginFor(ACCOUNT_PATH));
+	onMount(() => {
+		// the board's page drops the layout's dark scanline overlay the same way
+		document.documentElement.classList.add('board');
+		void readAccount().then((a) => {
+			account = a;
+			if (a.kind === 'anon') window.location.replace(loginFor(ACCOUNT_PATH));
+		});
+		return () => document.documentElement.classList.remove('board');
 	});
 </script>
 
 <svelte:head><title>account · brnrd</title></svelte:head>
 
-<main class="mx-auto max-w-2xl px-5 pt-6 pb-16 sm:px-6" data-testid="account">
-	<div class="flex items-baseline justify-between gap-3">
-		<div>
-			<p class="eyebrow eyebrow--asis">brnrd · account</p>
-			<h1 class="mt-2 font-mono text-lg font-semibold text-amber-100">subscription</h1>
-		</div>
-		<nav class="flex gap-4 font-mono text-[10px] tracking-wide text-ink-quiet uppercase">
-			<a href={resolve('/')} class="hover:text-stone-300">board</a>
-			<a href={resolve('/pricing')} class="hover:text-stone-300">pricing</a>
-		</nav>
-	</div>
+<div class="brd acct" data-testid="account">
+	<header>
+		<a class="topics-link" href={resolve('/')}>← board</a>
+		<b>account</b>
+		<a class="topics-link" href={resolve('/pricing')}>pricing</a>
+		{#if account?.kind === 'authed' && account.githubLogin}
+			<span class="dim" id="at">as {account.githubLogin}</span>
+		{/if}
+	</header>
+	<main>
+		<section class="sheet">
+			<h2>subscription</h2>
+			{#if account === null || account.kind === 'anon'}
+				<p class="dim">reading the account…</p>
+			{:else if account.kind === 'error'}
+				<p class="warn">{account.message}</p>
+			{:else}
+				<BillingPanel />
+				<AccountDeletion githubLogin={account.githubLogin} />
+			{/if}
+		</section>
+	</main>
+</div>
 
-	{#if account === null || account.kind === 'anon'}
-		<p class="mt-4 text-sm text-ink-quiet">reading the account…</p>
-	{:else if account.kind === 'error'}
-		<p class="mt-4 text-sm text-red-400">{account.message}</p>
-	{:else}
-		<div class="mt-4">
-			<BillingPanel />
-		</div>
-		<AccountDeletion githubLogin={account.githubLogin} />
-	{/if}
-</main>
+<style>
+	.acct main {
+		flex: 1;
+		overflow-y: auto;
+		background: #fafafa;
+	}
+	.sheet {
+		max-width: 640px;
+		margin: 0 auto;
+		min-height: 100%;
+		padding: 14px 18px 40px;
+		background: #fff;
+		border-left: 1px solid #aaa;
+		border-right: 1px solid #aaa;
+		border-top: 5px solid var(--amber);
+	}
+	@media (max-width: 799px) {
+		.sheet {
+			border-left: 0;
+			border-right: 0;
+		}
+	}
+
+	/* The shared panels in the board's ink: no brackets or glow, mono at the board's sizes, the board's buttons. */
+	.acct :global(.panel) {
+		padding: 0;
+		border: 0;
+		background: none;
+		box-shadow: none;
+		animation: none;
+	}
+	.acct :global(.subpanel) {
+		border: 1px solid #ddd;
+		border-left: 3px solid var(--amber);
+		background: #fffaf0;
+	}
+	.acct :global(p),
+	.acct :global(label),
+	.acct :global(strong),
+	.acct :global(input) {
+		font-family: inherit;
+	}
+	.acct :global(.text-sm) {
+		font-size: 12px;
+		line-height: 1.45;
+	}
+	.acct :global(.text-amber-100),
+	.acct :global(.text-amber-200),
+	.acct :global(.text-stone-200),
+	.acct :global(.text-stone-300) {
+		color: #171717;
+	}
+	.acct :global(.text-stone-400) {
+		color: #555;
+	}
+	.acct :global(.text-ink-quiet) {
+		color: #777;
+	}
+	.acct :global(.text-red-400) {
+		color: #b00;
+	}
+	.acct :global(button) {
+		font: inherit;
+		font-size: 11px;
+		letter-spacing: 0;
+		text-transform: none;
+		line-height: 20px;
+		padding: 1px 10px;
+		background: none;
+		color: #171717;
+		border: 1px solid #bbb;
+		cursor: pointer;
+	}
+	.acct :global(button:hover:not(:disabled)) {
+		background: none;
+		border-color: #333;
+	}
+	.acct :global(button:disabled) {
+		opacity: 0.3;
+		cursor: default;
+	}
+	/* the act the panel exists for (subscribe, resume): the board's filled `done` button */
+	.acct :global(button.border-amber-700) {
+		background: var(--ember);
+		border-color: var(--ember);
+		color: #fff;
+		font-weight: 600;
+	}
+	.acct :global(button.border-amber-700:hover:not(:disabled)) {
+		background: #c94a20;
+		border-color: #c94a20;
+	}
+	.acct :global(button.border-red-800) {
+		border-color: #b00;
+		color: #b00;
+	}
+	.acct :global(button.border-red-800:hover:not(:disabled)) {
+		background: #b00;
+		border-color: #b00;
+		color: #fff;
+	}
+	.acct :global(button:not([class*='border'])) {
+		border-color: transparent;
+	}
+	.acct :global(input) {
+		background: #fff;
+		color: #171717;
+		border: 1px solid #bbb;
+		font-size: 12px;
+	}
+	.acct :global(input:focus) {
+		border-color: #b00;
+	}
+	/* the deletion block: a rule above, as the board separates a column's parts */
+	.acct :global(.border-stone-800) {
+		border: 0;
+		border-top: 1px solid #ccc;
+		padding: 14px 0 0;
+		margin-top: 28px;
+	}
+</style>

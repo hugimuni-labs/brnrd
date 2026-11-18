@@ -37,7 +37,14 @@
 </script>
 
 <main class="mx-auto max-w-2xl px-5 pt-6 pb-16 sm:px-6" data-testid="loom-empty">
-	<p class="eyebrow eyebrow--asis">brnrd · the loom</p>
+	<div class="flex items-baseline justify-between gap-3">
+		<p class="eyebrow eyebrow--asis">brnrd · the loom</p>
+		<a
+			href={resolve('/account')}
+			class="font-mono text-[10px] tracking-wide text-ink-quiet uppercase hover:text-amber-200"
+			>account</a
+		>
+	</div>
 	<h1 class="mt-2 font-mono text-lg font-semibold text-amber-100">nothing on the loom yet</h1>
 	<p class="mt-1 text-sm text-stone-400">
 		This board shows the loom running on your own machine. Three words are all it uses.
@@ -81,7 +88,5 @@
 			href={resolve('/dashboard/bridge')}
 			class="text-ink-quiet hover:text-amber-200">the bridge →</a
 		>
-		·
-		<a href={resolve('/account')} class="text-ink-quiet hover:text-amber-200">account</a>
 	</p>
 </main>

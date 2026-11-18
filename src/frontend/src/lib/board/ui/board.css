@@ -85,6 +85,11 @@
 .brd #lead {
 	cursor: help;
 }
+.brd #me {
+	display: inline-flex;
+	align-items: center;
+	gap: 8px;
+}
 .brd #lead b {
 	color: #171717;
 }
@@ -495,6 +500,16 @@
 	}
 	.brd #at,
 	.brd #internal {
+		display: none;
+	}
+	/* the header scrolls on a phone: the account goes up beside topics, where a thumb finds it */
+	.brd header > .topics-link:first-child {
+		order: -2;
+	}
+	.brd #me {
+		order: -1;
+	}
+	.brd #me:not(:has(#account)) {
 		display: none;
 	}
 	.brd footer {
