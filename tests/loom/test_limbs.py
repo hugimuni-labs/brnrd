@@ -484,8 +484,21 @@ NPM = limbs.product("npm")
     (["npm", "publ", "--tag", "next"], "ask"),
     (["npm", "--registry=https://registry.npmjs.org", "publish"], "ask"),
     (["npm", "publish", "-ws"], "ask"),
-    (["npm", "-w", "pkg", "publish", "--dry-run"], "do"),
-    # Neighbours: not a registry write.
+    (["npm", "-w", "pkg", "pu"], "ask"),
+    (["npm", "-C", "pkg", "pub"], "ask"),
+    (["npm", "--tag", "next", "pub"], "ask"),
+    # A dry run asks too: npm reads its flag's value, and `--dry-run false` uploads.
+    (["npm", "publish", "--dry-run"], "ask"),
+    (["npm", "publish", "--dry-run", "false"], "ask"),
+    (["npm", "publish", "--dry-run=false"], "ask"),
+    (["npm", "publish", "--dry-run", "--no-dry-run"], "ask"),
+    (["npm", "-w", "pkg", "publish", "--dry-run"], "ask"),
+    # Neighbours: not a registry write, an option's value never read as the command.
+    (["npm", "-g", "install", "puppeteer"], "do"),
+    (["npm", "--prefix", "public-site", "run", "build"], "do"),
+    (["npm", "--prefix", "unpacked", "run", "build"], "do"),
+    (["npm", "-w", "publisher", "test"], "do"),
+    (["npm", "pack", "--dry-run"], "do"),
     (["npm", "un", "left-pad"], "do"),
     (["npm", "update"], "do"),
     (["npm", "-g", "install", "typescript"], "do"),
@@ -536,14 +549,14 @@ def test_the_npm_stand_in_refuses_unpublish_without_running_npm(tmp_path):
     assert not log.exists()
 
 
-def test_the_npm_stand_in_passes_a_build_and_a_dry_run(tmp_path):
+def test_the_npm_stand_in_passes_a_build_and_a_pack(tmp_path):
     log = tmp_path / "log"
     npm = _fake_npm(tmp_path, log)
     brnrd = _tool(tmp_path / "brnrd", f'echo "brnrd $*" >> {log}\nexit 1\n')
     shim = _npm_shim(tmp_path, npm, brnrd, log)
-    for argv in (["run", "build"], ["--prefix", "src/frontend", "ci"], ["publish", "--dry-run"]):
+    for argv in (["run", "build"], ["--prefix", "src/frontend", "ci"], ["pack", "--dry-run"]):
         assert subprocess.run([str(shim), *argv]).returncode == 0
-    assert log.read_text().splitlines() == ["ran run build", "ran --prefix src/frontend ci", "ran publish --dry-run"]
+    assert log.read_text().splitlines() == ["ran run build", "ran --prefix src/frontend ci", "ran pack --dry-run"]
 
 
 def test_the_body_gets_an_npm_stand_in_without_a_forge_token(tmp_path, monkeypatch):

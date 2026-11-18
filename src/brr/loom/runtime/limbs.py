@@ -329,14 +329,22 @@ def _path(arg: str) -> str:
 def match(rule: Rule, argv: list[str] | tuple[str, ...]) -> dict[str, str] | None:
     """The rule's captures when it matches ``argv`` (the command's name first), else None."""
     argv = list(argv)
-    if len(argv) < len(rule.prefix):
-        return None
-    for word, arg in zip(rule.prefix, argv):
-        # An alternative may be a glob: npm takes any unique start of a command (`npm pub`).
-        if not any(fnmatch.fnmatchcase(arg, alt) for alt in word.split("|")):
-            return None
-    rest = argv[len(rule.prefix):]
     valued = set(rule.details["skip"]) | {a for c in rule.conds if c[0] == "opt" for a in c[1]}
+    words, at = [], 0
+    for word in rule.prefix:
+        if word == "-*":
+            # Any options before the next word, the value of each skip: names skipped with it:
+            # npm reads options before its command (`npm --prefix dir publish`).
+            while at < len(argv) and argv[at].startswith("-") and len(argv[at]) > 1:
+                at += 2 if argv[at] in valued else 1
+            continue
+        # An alternative may be a glob: npm takes any unique start of a command (`npm pub`).
+        if at >= len(argv) or not any(fnmatch.fnmatchcase(argv[at], alt) for alt in word.split("|")):
+            return None
+        words.append(at)
+        at += 1
+    # The options before the command count with the rest: `-w pkg` names a workspace wherever it stands.
+    rest = [arg for i, arg in enumerate(argv) if i not in words]
     positionals = iter(_positionals(rest, valued))
     found: dict[str, str] = {}
     for cond in rule.conds:
