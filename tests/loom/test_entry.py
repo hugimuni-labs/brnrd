@@ -2,6 +2,7 @@
 
 import json
 import os
+import shlex
 import subprocess
 import sys
 from pathlib import Path
@@ -153,6 +154,10 @@ def test_a_room_made_before_the_shim_converges_at_its_next_wake(home, tmp_path):
     commands = [h["command"] for group in json.loads(text)["hooks"].values()
                 for entry_ in group for h in entry_["hooks"]]
     assert len(commands) == 6
-    assert all(c.startswith(f"{entry.shim()} runtime jack --room ") for c in commands)
+    # Every hook runs the room's jack script, and the script runs the shim.
+    jack = prepared / "port" / "jack"
+    assert all(shlex.split(c)[0] == str(jack) for c in commands)
+    script = jack.read_text()
+    assert f"exec {entry.shim()} runtime jack --room " in script
     for leak in (OLD_PYTHON, sys.executable, str(entry.prefix())):
-        assert leak not in text
+        assert leak not in text and leak not in script

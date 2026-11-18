@@ -188,6 +188,22 @@ def _forge_env(room: Path, env: dict[str, str]) -> None:
         return
 
 
+def _write_jack(room: Path, line: str) -> Path:
+    """The room's jack as one executable path, so every shell runs it the same.
+
+    ``$BRNRD_JACK`` is a single word: zsh, which Codex runs commands through,
+    never splits an unquoted variable, so a whole command line there was one
+    file name that did not exist (his 11405).
+    """
+    path = room / "port" / "jack"
+    text = f"#!/bin/sh\nexec {line} \"$@\"\n"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if not (path.is_file() and path.read_text() == text):
+        atomic_write(path, text)
+    path.chmod(0o755)
+    return path
+
+
 def _env(room: Path) -> dict[str, str]:
     env = _env_without_pin()
     parts = [part for part in env.get("PYTHONPATH", "").split(os.pathsep) if part]
@@ -217,7 +233,7 @@ def _env(room: Path) -> dict[str, str]:
     # Launchers name the shim, never this interpreter (entry.py); a body types
     # ``brnrd runtime``, so the shim's directory leads its PATH.
     from . import entry
-    env["BRNRD_JACK"] = entry.command("jack", "--room", str(room))
+    env["BRNRD_JACK"] = str(_write_jack(room, entry.command("jack", "--room", str(room))))
     env["PATH"] = str(entry.shim().parent) + os.pathsep + env.get("PATH", os.defpath)
     wait = room / "port" / "wait"
     from .jack import PARK
@@ -661,8 +677,8 @@ def _prepare(home: Home, strand: str, thread: str, gen: int,
         f"you are strand {strand} on thread {thread}"
         + (f" ({forge}/{thread})" if forge else "")
         # How to reply, settle, leave and end is the loom briefing's, in the core (briefing.py).
-        + ("; call `$BRNRD_JACK --event start` now, `$BRNRD_JACK --event post` between "
-           "steps and `$BRNRD_JACK --event stop` before ending; read each returned boundary\n"
+        + ('; call `"$BRNRD_JACK" --event start` now, `"$BRNRD_JACK" --event post` between '
+           'steps and `"$BRNRD_JACK" --event stop` before ending; read each returned boundary\n'
            if jack == "hand" else "\n")
     ) + _loom_line(home, facts)
     atomic_write(part_path, part)
@@ -1820,13 +1836,13 @@ def _wake_letter(home, facts, thread, leased, letter, channel, *, parked=True, h
     continuation = CONTINUE.fullmatch(text) if not chosen else None
     said = WAKE.fullmatch(f"wake {chosen}" if chosen else text)
     ident = f"{letter.id}#wake" if chosen else letter.id
-    invalid = not (said or continuation) and bool(re.fullmatch(r"/?(?:wake|reincarnate)\s+\S+", text, re.IGNORECASE))
+    invalid = not (said or continuation) and _misworded_wake(home, leased, text)
     if not (said or continuation or invalid) or any(f.id == f"letter.disposed:{ident}" for f in facts):
         return None
     if authorize is not None and not authorize():
         return None
     if invalid:
-        named = "Invalid body argument; use wake <shell>[/<core>]."
+        named = f"Invalid body argument; use wake <shell>[/<core>]. {_wake_catalog(home, facts, thread, leased)}"
     elif continuation:
         shell = continuation[1].lower()
         named = next((target for target in _continue_targets(home, facts, thread, leased)
@@ -1859,6 +1875,36 @@ def _wake_letter(home, facts, thread, leased, letter, channel, *, parked=True, h
     return named
 
 
+def _misworded_wake(home, leased, text):
+    """A wake whose words name no body: one bad word, or a known shell and its core
+    apart by a space (``wake codex sol``). Prose that starts with "wake" stays text."""
+    words = text.split()
+    if not words or not re.fullmatch(r"/?(?:wake|reincarnate)", words[0], re.IGNORECASE):
+        return False
+    if len(words) == 2:
+        return True
+    return len(words) == 3 and words[1].lower() in _wake_shells(home, leased[0])
+
+
+def _shell_cores(home, facts, thread, shell, leased):
+    """The cores a wake may name on ``shell``: the catalog's and those on record."""
+    from brr.runner_cores import all_cores
+    known = {e["model"] for e in all_cores().values() if e["shell"] == shell and e.get("model")}
+    known.update(f.data["core"] for f in facts if f.kind == "lease" and f.data.get("shell") == shell and f.data.get("core"))
+    if shell == leased[0] and leased[1]:
+        known.add(leased[1])
+    return known
+
+
+def _wake_catalog(home, facts, thread, leased):
+    """Every body a wake may name, each with its cores, as one sentence."""
+    parts = []
+    for shell in _wake_shells(home, leased[0]):
+        cores = sorted(_shell_cores(home, facts, thread, shell, leased))
+        parts.append(f"{shell} ({', '.join(cores)})" if cores else f"{shell} (any core it takes)")
+    return "Bodies and cores: " + "; ".join(parts) + "."
+
+
 def _wake_shells(home, leased):
     """Shells a wake may name: the leased one, and every folder with a gauge."""
     from .usage import shells
@@ -1887,22 +1933,19 @@ def _wake_body(home, facts, thread, leased, said):
     shell = said[1].lower()
     valid = _wake_shells(home, leased[0])
     if shell not in valid:
-        return f"No body {said[1]!r} here; bodies are {', '.join(valid)}."
+        return f"No body {said[1]!r} here. {_wake_catalog(home, facts, thread, leased)}"
     core = said[2] or _core_for(home, facts, thread, shell, leased)
     if core is None:
         core = ""  # no recorded model means the harness chooses its own default
-    from brr.runner_cores import all_cores
-    known = {e["model"] for e in all_cores().values() if e["shell"] == shell and e.get("model")}
-    known.update(f.data["core"] for f in facts if f.kind == "lease" and f.data.get("shell") == shell and f.data.get("core"))
-    if shell == leased[0]:
-        known.add(leased[1])
+    known = _shell_cores(home, facts, thread, shell, leased)
     # Custom harnesses own their core vocabulary. Bundled harnesses expose
     # their catalog and previously selected exact model IDs.
     if shell in {"claude", "codex", "grok", "vibe"} and core and core not in known:
         from brr.runner_cores import probe_shell_models
         known.update(probe_shell_models(shell))
     if shell in {"claude", "codex", "grok", "vibe"} and core and core not in known:
-        return f"No core {core!r} on {shell}; cores are {', '.join(sorted(known))}."
+        return (f"No core {core!r} on {shell}; cores are {', '.join(sorted(known))}. "
+                f"{_wake_catalog(home, facts, thread, leased)}")
     return shell, core
 
 

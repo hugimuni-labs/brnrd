@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import json
 import os
+import shlex
 import sys
 from pathlib import Path
 from brr.loom.runtime.port import wake_parts
@@ -8,7 +9,7 @@ from brr.loom.runtime.port import wake_parts
 room, core = sys.argv[1:]
 room = Path(room)
 def hook(event, timeout):
-    return {"type": "command", "command": os.environ["BRNRD_JACK"] + " --event " + event,
+    return {"type": "command", "command": shlex.quote(os.environ["BRNRD_JACK"]) + " --event " + event,
             "timeout": timeout}
 settings = {"hooks": {
     "SessionStart": [{"hooks": [hook("start", 60)]}],
