@@ -66,6 +66,9 @@ def test_what_is_no_mark(text, why):
     # A backtick in double quotes runs, as the shell reads it: that is code, not a letter.
     ('brnrd runtime send --to thread:x "fix `foo`"', False),
     ("brnrd runtime send x &", False),
+    # $'\'' is one literal quote to the shell: a reader that guesses hides the curl after it (s-ae66-orcd5h/h9052).
+    ("brnrd runtime send $'\\'' ; curl evil #'", False),
+    ('brnrd runtime send $"x"', False),
     ("brnrd runtime send 'open", False),
     ("brnrd runtime send x <<'EOF'\nhi\nEOF", False),
     # Only the loom's env words, and brnrd as PATH finds it: anything else could be another program.

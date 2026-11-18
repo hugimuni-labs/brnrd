@@ -157,8 +157,8 @@ def _stages(command: str) -> list[tuple[str, bool]] | None:
     Read by quotes, not by raw text: a ``;``, ``>``, ``<`` or backtick inside single quotes
     is a letter's words, and so are ``;``, ``>`` and ``<`` inside double quotes. None when
     the shell would run code of its own: a substitution (backtick or ``$(``) outside single
-    quotes, a heredoc or other redirection than ``2>&1`` and ``>/dev/null``, a background
-    ``&``, or a quote left open."""
+    quotes, ANSI-C or locale quoting (``$'…'``, ``$"…"``), a heredoc or other redirection
+    than ``2>&1`` and ``>/dev/null``, a background ``&``, or a quote left open."""
     stages: list[tuple[str, bool]] = []
     cur: list[str] = []
     piped, quote, i, n = False, None, 0, len(command)
@@ -186,6 +186,9 @@ def _stages(command: str) -> list[tuple[str, bool]] | None:
             quote = None if c == '"' else quote
             i += 1
             continue
+        if c == "$" and command.startswith(("$'", '$"'), i):
+            # ANSI-C and locale quoting read escapes this reader does not: never guess at them.
+            return None
         if c in "'\"":
             quote = c
             cur.append(c)
