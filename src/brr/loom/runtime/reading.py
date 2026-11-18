@@ -5,10 +5,14 @@
     max_chars = 600          # the whole body
     max_line_chars = 120     # any one line
     max_questions = 1        # lines ending in a question mark
-    no_repeat_minutes = 10   # the body the channel got last, again, within N minutes
+    no_repeat_minutes = 10   # the channel's last body again within N minutes: the same,
+                             # or one holding the other when the shorter is over 200 chars
 
-A body writes the file at the person's word; the person never manages it. No
-file, no check. Only a letter to that person's own direct channel is checked
+A body writes the file at the person's word; the person never manages it. It
+is read from the self's ``main`` tip, never from ``home/self``'s work tree: that
+tree follows a landing (``updateInstead``) but also holds files main does not
+(an untracked ``channels.toml`` on 2026-11-18), so a limit holds from the next
+send after it lands, and only once it has landed. No file on main, no check. Only a letter to that person's own direct channel is checked
 (``connector.person_dm`` says whose it is); a ``--note`` and a thread letter
 never are. A refusal is one line naming every limit broken and how to split;
 there is no override: a body that needs more sends more messages.
@@ -24,15 +28,22 @@ from pathlib import Path
 KEYS = ("max_chars", "max_line_chars", "max_questions", "no_repeat_minutes")
 
 
+#: A body that holds the last one, or sits in it, is a repeat when the shorter is longer than this.
+REPEAT_SPAN = 200
+
+
 def limits(self_dir: Path, person: str) -> dict[str, int]:
-    """The person's limits, ``{}`` without a file; a malformed file raises ValueError."""
-    from .config import ConfigError, read_values
-    path = Path(self_dir) / "people" / person / "reading.toml"
-    if not path.is_file():
-        return {}
+    """The person's limits on the self's main, ``{}`` without a file; a malformed file raises ValueError."""
+    from .config import ConfigError, parse_values
+    from .selfrepo import git
     where = f"people/{person}/reading.toml"
+    if not (Path(self_dir) / ".git").exists():
+        return {}
+    shown = git(Path(self_dir), "show", f"main:{where}", check=False)
+    if shown.returncode != 0:
+        return {}
     try:
-        values = read_values(path)
+        values = parse_values(shown.stdout, where)
     except ConfigError as exc:
         raise ValueError(f"reading: {where}: {exc}") from exc
     unknown = sorted(set(values) - set(KEYS))
@@ -100,16 +111,25 @@ def broken(body: str, rules: dict[str, int], name: str, *, last: tuple[float, st
                     else f"send the ones past the {_ordinal(limit)} as their own messages")
             said.append(f"{asked} questions, {name}'s limit is {limit}; {rest}")
     limit = rules.get("no_repeat_minutes")
-    if limit is not None and last is not None and last[1].strip() == text:
+    if limit is not None and last is not None and repeats(text, last[1]):
         ago = (time.time() if now is None else now) - last[0]
         if ago < limit * 60:
             minutes = max(0, int(ago // 60))
-            said.append(f"this is the body the channel got {minutes} min ago, {name}'s limit is no repeat "
-                        f"within {limit} min; say what is new, or nothing")
+            said.append(f"this repeats what the channel got {minutes} min ago, {name}'s limit is no repeat "
+                        f"within {limit} min; send only what is new, or nothing")
     return said
 
 
-def check(room: Path, home, facts, channel: str, body: str) -> None:
+def repeats(body: str, last: str) -> bool:
+    """The same body, or one holding the other once both are long enough to be a message and not an 'ok'."""
+    body, last = body.strip(), last.strip()
+    if body == last:
+        return True
+    short, long = sorted((body, last), key=len)
+    return len(short) > REPEAT_SPAN and short in long
+
+
+def check(room: Path, home, channel: str, body: str) -> None:
     """Refuse a letter to a person's own channel that breaks how they read; silent where no limits apply."""
     from .connector import person_dm
     sender = person_dm(home, channel)
@@ -119,7 +139,10 @@ def check(room: Path, home, facts, channel: str, body: str) -> None:
     rules = limits(home.root / "self", name)
     if not rules:
         return
-    last = last_sent(room, facts, channel) if "no_repeat_minutes" in rules else None
+    last = None
+    if "no_repeat_minutes" in rules:
+        from .ledger import read_facts
+        last = last_sent(room, read_facts(home), channel)
     said = broken(body, rules, name, last=last)
     if said:
         raise ValueError("reading: " + " · ".join(said))

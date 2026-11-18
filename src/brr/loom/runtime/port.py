@@ -708,17 +708,17 @@ def write_send(room: Path, *, to: str, sender: str, body: str = "",
                    'choose an enabled channel and write a fresh letter',
                    thread=sender_threads(facts).get(sender))
             raise PortError(str(exc)) from exc
-        if note is None and reincarnate is None and not body.strip() and not attach:
-            # brnrd#2774: a $(cat …) that failed sent a blank message to a person.
+        if note is None and reincarnate is None and not clean and not body.strip() and not attach:
+            # brnrd#2774: a $(cat …) that failed sent a blank message to a person. A --clean
+            # letter's words are its schema (kind and refs), and a file is a message of its own.
             raise PortError(f"send: the body is empty; nothing goes to {to}. A body read from "
                             "a file or a command is checked to be there in the same call")
         body = forge_paths(Path(room), home, body)
         if note is None and reincarnate is None:
             # brnrd#2776: how the person reads, checked before any wish or ask is written.
-            from .ledger import read_facts
             from .reading import check as check_reading
             try:
-                check_reading(Path(room), home, read_facts(home), to, body)
+                check_reading(Path(room), home, to, body)
             except ValueError as exc:
                 raise PortError(f"send: {exc}") from exc
     else:

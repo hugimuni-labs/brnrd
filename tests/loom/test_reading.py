@@ -8,6 +8,7 @@ import pytest
 from brr.loom.runtime import audit
 from brr.loom.runtime.ledger import append, inject_letter
 from brr.loom.runtime.port import fact_from_port, parse_frontmatter
+from brr.loom.runtime.selfrepo import git
 
 from test_wishes import command, ledger  # noqa: F401  (ledger is a fixture)
 
@@ -24,8 +25,12 @@ def person(ledger, monkeypatch):
     return home, seat
 
 
-def reads(home, text):
+def reads(home, text, *, land=True):
+    """The body writes the file at the person's word; it counts once it is on the self's main."""
     (home.root / "self/people/ada/reading.toml").write_text(text)
+    if land:
+        git(home.root / "self", "add", "people/ada/reading.toml")
+        git(home.root / "self", "commit", "-qm", "ada's reading")
 
 
 def send(home, seat, body, *flags, ok=True):
@@ -78,7 +83,7 @@ def test_the_same_body_again_inside_the_window_is_refused_and_after_it_passes(pe
     reads(home, "no_repeat_minutes = 10\n")
     send(home, seat, "The build is green.")
     said = send(home, seat, "The build is green.", ok=False)
-    assert "reading: this is the body the channel got 0 min ago, ada's limit is no repeat within 10 min" in said
+    assert "reading: this repeats what the channel got 0 min ago, ada's limit is no repeat within 10 min" in said
     send(home, seat, "Merged.")
     assert len(sent(seat)) == 2
     # Only the last letter counts, and only inside the window.
@@ -141,3 +146,33 @@ def test_an_empty_body_goes_to_no_channel(person, body):
         said = command(home, seat, "send", "--to", to, body, ok=False)
         assert f"send: the body is empty; nothing goes to {to}" in said
     assert sent(seat) == []
+
+
+def test_a_long_body_sent_again_with_a_line_on_top_is_a_repeat(person):
+    """2026-11-18: the same ~1,900-char message reached him twice, the second with one line added."""
+    home, seat = person
+    reads(home, "no_repeat_minutes = 10\n")
+    long = "\n".join(f"Step {i}: open the page and press the green button." for i in range(8))
+    assert len(long) > 200
+    send(home, seat, long)
+    assert "this repeats what the channel got" in send(home, seat, "One more thing first.\n" + long, ok=False)
+    assert "this repeats what the channel got" in send(home, seat, long.rsplit("\n", 1)[0], ok=False)
+    assert len(sent(seat)) == 1
+
+
+def test_a_short_body_is_a_repeat_only_when_it_is_the_same(person):
+    home, seat = person
+    reads(home, "no_repeat_minutes = 10\n")
+    send(home, seat, "ok")
+    assert "this repeats what the channel got" in send(home, seat, " ok\n", ok=False)
+    send(home, seat, "ok, merged")
+    assert len(sent(seat)) == 2
+
+
+def test_a_file_in_the_work_tree_that_is_not_on_main_is_not_read(person):
+    home, seat = person
+    reads(home, "max_chars = 3\n", land=False)
+    send(home, seat, "longer than three")
+    git(home.root / "self", "add", "people/ada/reading.toml")
+    git(home.root / "self", "commit", "-qm", "ada's reading")
+    assert "ada's limit is 3" in send(home, seat, "longer than three, again", ok=False)
