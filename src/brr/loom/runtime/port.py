@@ -145,7 +145,8 @@ def letter_attachments(root: Path, facts: list[Fact]) -> dict[str, list[str]]:
     """Resolve a letter's cited source into lines both body deliveries can use.
 
     Bodies share the host filesystem: name the stored blob, without copying
-    it into each room or putting binary data in the wake.
+    it into each room or putting binary data in the wake. The line says what
+    the file is, read from its bytes (``attachment.line``).
     """
     if isinstance(facts, LedgerView):
         return facts.project_letters("attachments", str(root.resolve()),
@@ -172,7 +173,8 @@ def _letter_attachments(root, facts, selected=None):
             blob_fact = blobs.get(ref)
             blob = blob_fact.data if blob_fact is not None and blob_fact.kind == "blob" else None
             if blob is not None and blob["sha"] in source.data.get("blobs", ()):
-                lines.append(f"attachment: {blob['mime']} · {blob['size']} bytes · {folder / blob['sha']}")
+                from .attachment import line
+                lines.append(line(folder / blob["sha"], blob["mime"], blob["size"]))
         lines.extend(f"attachment {number} could not be fetched"
                      for number in source.data.get("blobs_missing", ()))
         result[letter.id] = lines
@@ -278,8 +280,9 @@ def _letter_lines(letter: Fact, reply: str, compact: bool,
     ]
     if not compact:
         lines.extend(f"  {extra}" for extra in rest)
-    lines.extend(f"  {line}" for line in context.splitlines())
+    # The file is the letter's content: it sits under the text, before the conversation tail.
     lines.extend(f"  {attachment}" for attachment in attachments)
+    lines.extend(f"  {line}" for line in context.splitlines())
     return lines
 
 
@@ -619,6 +622,23 @@ def _latest_between(facts, sender: str, to: str) -> str | None:
     return latest
 
 
+def _refuse_unopened(room: Path, re: str) -> None:
+    """The first answer to a letter whose file this body never opened is refused, once.
+
+    His 11349 was a photo of a notebook page; the body answered the caption.
+    The refusal names the file; a second send goes as written."""
+    from .attachment import unopened
+    from .jack import _set_state, _state
+    missed = unopened(room, re)
+    said = set(_state(room).get("attachments_said") or ())
+    if not missed or re in said:
+        return
+    _set_state(room, attachments_said=sorted(said | {re}))
+    raise PortError(
+        f"send: {re} carries a file this body never opened: " + ", ".join(missed)
+        + ". It is part of the letter: open it, then send again (a second send goes as written).")
+
+
 def write_send(room: Path, *, to: str, sender: str, body: str = "",
                re: str | None = None, note: str | None = None,
                clean: bool = False, kind: str | None = None,
@@ -730,6 +750,8 @@ def write_send(room: Path, *, to: str, sender: str, body: str = "",
         _check_grant(home, to, sender, opening, note, reincarnate)
     if re:
         re = _full_re(Path(room), re)
+        if note is None and reincarnate is None:
+            _refuse_unopened(Path(room), re)
     if note is not None and body:
         raise PortError("send: --note is the whole no-answer; drop the body")
     asked = [wish] if isinstance(wish, (str, dict)) else list(wish or ())
