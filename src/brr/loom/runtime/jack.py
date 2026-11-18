@@ -592,9 +592,8 @@ def _guards(room: Path):
 
 
 def _guard_warnings(room: Path, at: str, stdin_text: str) -> tuple[str, bool]:
-    """A call that trips a guard hears the guard's own words, and whether a
-    ``refuse`` match among them denies it. Warn unless the guard says refuse;
-    a refusal the owner's letter grants (grants.py) runs, and says so."""
+    """A call that trips a guard hears the guard's own words. A guard never refuses
+    (threads/judged-acts); the second value stays for the callers' shape."""
     from .guards import trips
     try:
         payload = json.loads(stdin_text) if stdin_text and stdin_text.strip() else {}
@@ -603,14 +602,7 @@ def _guard_warnings(room: Path, at: str, stdin_text: str) -> tuple[str, bool]:
     if not isinstance(payload, dict) or not payload.get("tool_name"):
         return "", False
     guards, _errors = _guards(room)
-    hits = trips(guards, room, at, payload)
-    said = [label for label, _, _ in hits]
-    asks = [ask for _, refuse, ask in hits if refuse]
-    if not asks:
-        return "\n".join(said), False
-    from .grants import judge
-    granted, lines = judge(room, asks)
-    return "\n".join(said + lines), not granted
+    return "\n".join(trips(guards, room, at, payload)), False
 
 
 def _marked(room: Path, stdin_text: str):
@@ -626,7 +618,7 @@ def _marked(room: Path, stdin_text: str):
             owed = tuple(parse_boundary(_boundary_text(room)).ids)
         except PortError:
             owed = ()
-        return mark.judge(payload, room, owed), payload
+        return mark.rule(mark.judge(payload, room, owed), room), payload
     except Exception:  # noqa: BLE001 - fail open to the wall, never to a crossing
         return None, {}
 
@@ -763,8 +755,10 @@ def execute(event: str, room: Path, stdin_text: str) -> str:
         marked = decision.record() if decision else None
         by = "refused by a guard:\n" if refuse else "refused:\n"
         if decision is not None and decision.verdict == "refuse":
-            said = "\n".join(filter(None, (said, "no mark: " + decision.why)))
+            said = "\n".join(filter(None, (said, decision.why if decision.mark else "no mark: " + decision.why)))
             refuse = True
+        elif decision is not None and decision.why:
+            said = "\n".join(filter(None, (said, decision.why)))
         tooltrace.note(room, stdin_text, "pre")
         from .audit import note as audit_note
         audit_note(room, stdin_text, "pre", mark=marked)

@@ -1579,13 +1579,6 @@ def main(argv: list[str] | None = None) -> None:
             if code:
                 raise SystemExit(code)
             return
-        if raw[:1] == ["limbs"]:
-            # The table of hands (limbs/README.md): one line per service.
-            from .loom.runtime.limbs import cli as limbs
-            code = limbs(raw[1:])
-            if code:
-                raise SystemExit(code)
-            return
         if raw[:2] == ["loom", "check"]:
             from .loom.runtime.check import run
             return run(raw[2:])

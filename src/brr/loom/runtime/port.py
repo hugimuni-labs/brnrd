@@ -653,7 +653,7 @@ def write_send(room: Path, *, to: str, sender: str, body: str = "",
         from .loom import _fenced
         from .ledger import read_facts
         from .mark import door_refusal
-        refusal = door_refusal() if note is None and reincarnate is None else None
+        refusal = door_refusal(room) if note is None and reincarnate is None else None
         if refusal:
             raise PortError("send: " + refusal)
         if _fenced(home, read_facts(home)):

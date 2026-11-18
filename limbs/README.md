@@ -1,9 +1,5 @@
 # Limbs
 
-One page per service the resident reaches: how it is reached and how far it goes, in four rows (look, do, ask, never). What a call no rule matches gets is the page's own `unlisted:` line: `do` for GitHub (it passes and is recorded as before), `ask` or `never` for a service where the unlisted is the danger. A person's own page, `limbs/<name>.md` on the main branch of their self, adds to the rows it lists, which only tightens them; a row replaces (and so may loosen) one of these only when its table line cites the owner's letter naming the service. `brnrd limbs` prints this table for an install, with the person's rows in place.
+Notes on how a resident reaches each service: the way in, what tends to be final there, and what blocked before. They judge nothing. Since threads/judged-acts, each call that reaches outside the room carries a mark (look, change or final), and an act marked final cites the owner's letter. These pages used to be tables a stand-in refused by; what they knew is kept here as prose.
 
-Generated from the pages by `brnrd limbs --write`; never edited by hand.
-
-| hand | way | ask | never | unlisted | page |
-|---|---|---|---|---|---|
-| [GitHub](github.md) | command `gh` | merge when the checks are not green · create or delete a release · change a repository's visibility · set or delete a secret · add or remove a collaborator · start a workflow | delete a repository · print the forge token | do | product |
+- [GitHub](github.md): the command `gh`, behind a stand-in that fetches the key at each call.

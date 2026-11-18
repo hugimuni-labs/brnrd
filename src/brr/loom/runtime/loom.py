@@ -27,7 +27,6 @@ from brr.daemon2.facts import Fact
 from .adapters import body_label, resolve
 from .bodies import COMMANDS, TABLE, Observation, decide, fact_for, row_for, state_of
 from .faces import propose, proposal_line
-from . import limbs
 from .health import Health, degraded_line
 from .roomsense import room_line
 from .library import problem_line
@@ -94,20 +93,18 @@ def _commit_identity(room: Path) -> tuple[str, str]:
 _FORGE_TOKEN_VARS = ("GH_TOKEN", "GITHUB_TOKEN", "GH_ENTERPRISE_TOKEN", "GITHUB_ENTERPRISE_TOKEN")
 
 
-# The gh door is made from limbs/github.md (threads/limbs): a never call
-# (deleting a repository) stops before the key is fetched; a merge whose
-# checks are not green and a release go to ``guard`` for the owner's letter,
-# after GH_TOKEN is set, since reading the checks needs it. It guards this
-# stand-in only; the minted token can still act through any other client
-# (threads/forge-auth). {gh} is the real gh, {brnrd} the shim.
-_NEVER_GATE = limbs.gate_shell(limbs.product("github"))
-
 # The forge door's sensor (threads/act-chain, doors and sensors): after the
 # gates, so a refused call is no passage. Capture off is one file test; the
 # verb reads the endpoint's doors switch and BRNRD_SAY. Behind the marks
-# switch (mark.py) a forge act with no mark stops here: exit 3 is that refusal,
-# any other failure of the sensor never costs the call.
-_FORGE_DOOR = r"""case "$1 $2" in
+# switch (mark.py) a forge act with no mark stops here, and on a body with no
+# wall every gh call does: exit 3 is that refusal, any other failure of the
+# sensor never costs the call. The stand-in judges nothing else.
+_FORGE_DOOR = r"""if [ "${BRNRD_MARKS-}" = 1 ] && [ "${BRNRD_WALL-}" != 1 ]; then
+  # No wall around this body (mark.py): the stand-in is the wall for gh, every call is marked.
+  {brnrd} runtime mark --check --room {room} >/dev/null
+  [ $? -ne 3 ] || exit 1
+fi
+case "$1 $2" in
   "pr merge"|"pr close"|"pr comment"|"issue close"|"issue comment"|"release create")
     if [ -f {endpoint} ] || [ "${BRNRD_MARKS-}" = 1 ]; then
       {brnrd} runtime audit pass --room {room} --door forge --act "$1 $2" --target="${3-}" >/dev/null
@@ -169,25 +166,16 @@ def _forge_env(room: Path, env: dict[str, str]) -> None:
             env["BRNRD_GH_SECRET_SOURCE"] = source_token
             snippet = (f'{source_var}=${{{source_var}-$BRNRD_GH_SECRET_SOURCE}}; '
                        f'export {source_var}; ' + snippet)
-        # The person's own rows count only from the self's main; a page that
-        # cannot be read leaves the product's, never no stand-in at all.
-        try:
-            page, notes = limbs.effective(Home(room.parent.parent), "github")
-        except Exception as exc:  # noqa: BLE001 - the gh door must still be written
-            page, notes = limbs.product("github"), [f"limbs: the person's github page was not read: {exc}"]
-        for note in notes:
-            _log(Home(room.parent.parent), note)
-        # Restore the original PATH while resolving, so command: gh auth token
+        # The stand-in judges nothing (threads/judged-acts): it fetches the key at each call and
+        # keeps the forge door. Restore the original PATH while resolving, so command: gh auth token
         # calls the real gh rather than recursing through this shim.
         script = (
             "#!/bin/sh\n"
-            + limbs.refuse_shell(page) +
             f"GH_TOKEN=$(PATH={shlex.quote(path)} sh -c {shlex.quote(snippet)} 2>/dev/null) || "
             "{ echo 'gh: forge_token source failed' >&2; exit 1; }\n"
             "[ -n \"$GH_TOKEN\" ] || { echo 'gh: forge_token source gave nothing' >&2; exit 1; }\n"
             "export GH_TOKEN\n"
             "unset BRNRD_GH_SECRET_SOURCE\n"
-            + limbs.gate_shell(page).replace("{gh}", shlex.quote(real_gh)).replace("{brnrd}", shlex.quote(str(entry.shim())))
             + _FORGE_DOOR.replace("{brnrd}", shlex.quote(str(entry.shim())))
                          .replace("{endpoint}", shlex.quote(str(room.parent.parent / "loom" / "audit-endpoint.json")))
                          .replace("{room}", shlex.quote(str(room))) +

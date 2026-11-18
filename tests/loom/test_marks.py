@@ -222,12 +222,16 @@ def test_a_send_to_a_person_refuses_without_a_mark(person, monkeypatch):
         # A letter sent is never a look.
         monkeypatch.setenv(audit.SAY, "look")
         assert "never a look" in command(home, seat, "send", "--to", "channel:mine/42", "a look", ok=False)
+        # Final: the one rule wants a letter of the owner's, and l-1 is none.
         monkeypatch.setenv(audit.SAY, "final · letter to Ada · l-1")
+        said = command(home, seat, "send", "--to", "channel:mine/42", "no letter", ok=False)
+        assert "names no letter" in said and "brnrd runtime ask" in said
+        monkeypatch.setenv(audit.SAY, "change · letter to Ada · l-1 · say sorry")
         command(home, seat, "send", "--to", "channel:mine/42", "marked")
     finally:
         writer.close()
     [passage] = _passages(home)
-    assert passage["mark"] == {"reach": "final", "what": "letter to Ada", "for": "l-1", "back": "",
+    assert passage["mark"] == {"reach": "change", "what": "letter to Ada", "for": "l-1", "back": "say sorry",
                                "inferred": [], "crossed": True}
 
 
@@ -260,6 +264,7 @@ def test_the_gh_stand_in_refuses_a_forge_act_without_a_mark(tmp_path, monkeypatc
     real, room, home = _shim_home(tmp_path, monkeypatch)
     env = _env(room)
     env[mark.MARKS] = "1"
+    env[mark.WALL] = "1"
     env.pop(audit.SAY, None)
     proc = subprocess.run(["gh", "pr", "comment", "12", "--body", "x"], env=env, capture_output=True,
                           text=True, timeout=60)
@@ -276,7 +281,30 @@ def test_the_gh_stand_in_refuses_a_forge_act_without_a_mark(tmp_path, monkeypatc
     env[audit.SAY] = "final · comment on #12 · l-3"
     proc = subprocess.run(["gh", "pr", "comment", "12", "--body", "x"], env=env, capture_output=True,
                           text=True, timeout=60)
+    assert proc.returncode == 1 and "names no letter" in proc.stderr
+    env[audit.SAY] = "change · comment on #12 · l-3 · delete it"
+    proc = subprocess.run(["gh", "pr", "comment", "12", "--body", "x"], env=env, capture_output=True,
+                          text=True, timeout=60)
     assert (proc.returncode, proc.stdout) == (0, "home-token\n"), proc.stderr
+
+
+def test_with_no_wall_the_stand_in_is_the_wall_for_gh(tmp_path, monkeypatch):
+    real, room, home = _shim_home(tmp_path, monkeypatch)
+    env = _env(room)
+    env[mark.MARKS] = "1"
+    env.pop(audit.SAY, None)
+    env.pop(mark.WALL, None)
+    # Codex runs no pre-tool hook: without a wall, every gh call through the stand-in is marked.
+    proc = subprocess.run(["gh", "repo", "delete", "o/r", "--yes"], env=env, capture_output=True, text=True, timeout=60)
+    assert proc.returncode == 1 and "refused at the door" in proc.stderr
+    env[audit.SAY] = "look"
+    proc = subprocess.run(["gh", "repo", "view", "o/r"], env=env, capture_output=True, text=True, timeout=60)
+    assert proc.returncode == 0, proc.stderr
+    # Behind a wall the hook is what asks; the stand-in lets an unmarked look through.
+    env.pop(audit.SAY)
+    env[mark.WALL] = "1"
+    proc = subprocess.run(["gh", "repo", "view", "o/r"], env=env, capture_output=True, text=True, timeout=60)
+    assert proc.returncode == 0, proc.stderr
 
 
 @pytest.mark.parametrize("marks, available", [("1", True), ("1", False), ("", True)])

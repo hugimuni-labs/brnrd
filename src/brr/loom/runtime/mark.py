@@ -17,7 +17,8 @@ so the door process reads the string the hook read.
 
 The loom's own verbs cross without a mark: they write the home by design, and
 the ones that leave (a send to a person, a publish) judge themselves at their
-door (:func:`door_refusal`). Reads are never acts. A file tool writing outside
+door (:func:`door_refusal`). The one rule (:func:`rule`): a mark that says
+final runs only on a letter of the owner's that its for cites (grants.py). Reads are never acts. A file tool writing outside
 the room is refused; web tools can only look and mark themselves; an MCP tool
 takes a one-shot mark from ``brnrd runtime mark`` given just before it.
 
@@ -33,7 +34,7 @@ import json
 import os
 import re
 import shlex
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 
 SAY = "BRNRD_SAY"
@@ -361,6 +362,17 @@ def judge(payload: dict, room: Path, owed: tuple[str, ...] = (), walled: bool | 
     return Decision("pass")
 
 
+def rule(decision: Decision, room: Path) -> Decision:
+    """The one rule: a call marked final runs only on a letter of the owner's its mark cites (grants.final).
+
+    Wherever a mark is given, walled or not: honouring it costs a call nothing it was not going to pay."""
+    if decision.mark is None or decision.mark.reach != "final" or decision.verdict == "refuse":
+        return decision
+    from .grants import final
+    granted, line = final(room, decision.mark.what, decision.mark.for_)
+    return replace(decision, why=line) if granted else Decision("refuse", decision.mark, line)
+
+
 def wall_hit(payload: dict) -> bool:
     """A walled shell call that the wall stopped, by the OS's own words in its result."""
     if payload.get("tool_name") != "Bash" or os.environ.get(WALL) != "1":
@@ -378,7 +390,7 @@ HIT = ("the wall held this call: it reaches outside the room (the network, or a 
        "a look needs only BRNRD_SAY=look.")
 
 
-def door_refusal() -> str | None:
+def door_refusal(room: Path | str | None = None) -> str | None:
     """At a door that leaves (a send to a person, a publish, a gh act): why it does not go, or None.
 
     Only behind the marks switch (``BRNRD_MARKS``, set at launch from ``doors = on``)."""
@@ -389,7 +401,14 @@ def door_refusal() -> str | None:
         return ("refused at the door: this act is never a look (a letter sent, a branch pushed, "
                 "a forge act done): mark it change or final, naming the thing and the letter it serves")
     if mark is not None:
-        return None
+        if mark.reach != "final":
+            return None
+        room = room or os.environ.get("BRNRD_ROOM")
+        if not room:
+            return "refused at the door: a final act needs its room to find his letter (BRNRD_ROOM is unset)"
+        from .grants import final
+        granted, line = final(Path(room), mark.what, mark.for_)
+        return None if granted else "refused at the door: " + line
     return (f"refused at the door: {why}. This act leaves the room: "
             'prefix it with BRNRD_SAY="reach · what · for · back" (e.g. '
             'BRNRD_SAY="final · letter to Ada · l-12"), then run it again.')
@@ -429,15 +448,23 @@ def sandbox(room: Path) -> dict:
 
 
 def main(argv: list[str] | None = None) -> int:
-    """``mark "reach · what · for · back"``: kept for the next MCP call of this room."""
+    """``mark "reach · what · for · back"``: kept for the next MCP call of this room.
+    ``mark --check``: whether this process's BRNRD_SAY lets it through a door; exit 3 when not."""
     import sys
     from .refusals import Parser, refuse
     parser = Parser(verb="mark", description="A one-shot mark for the next MCP tool call.")
-    parser.add_argument("mark")
+    parser.add_argument("mark", nargs="?")
     parser.add_argument("--room", default=os.environ.get("BRNRD_ROOM"))
+    parser.add_argument("--check", action="store_true", help="a door's question, answered by exit code")
     args = parser.parse_args(argv)
-    if not args.room:
-        return refuse("mark", ValueError("mark needs --room, or BRNRD_ROOM from the loom"))
+    if args.check:
+        refusal = door_refusal(args.room)
+        if refusal:
+            sys.stderr.write(refusal + "\n")
+            return 3
+        return 0
+    if not args.room or not args.mark:
+        return refuse("mark", ValueError("mark needs the mark, and --room or BRNRD_ROOM from the loom"))
     try:
         print(give(Path(args.room), args.mark))
     except ValueError as exc:

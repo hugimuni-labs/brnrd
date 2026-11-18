@@ -458,7 +458,7 @@ def publish(room: Path | str, name: str, *, worker: str | None = None,
         )
 
     from .mark import door_refusal
-    refusal = door_refusal()
+    refusal = door_refusal(who.room)
     if refusal:
         raise PublishError("publish: " + refusal)
     args, env, lane, note = push_command(source, branch,
