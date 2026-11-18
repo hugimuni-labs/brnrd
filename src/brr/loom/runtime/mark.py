@@ -85,7 +85,7 @@ def parse(text: str | None, *, what: str = "", owed: tuple[str, ...] = ()) -> tu
     if not given_what:
         if reach != "look":
             return None, f"a {reach} mark names the thing it touches"
-        given_what, inferred = what[:200], inferred + ["what"]
+        given_what, inferred = what, inferred + ["what"]
     if not given_for:
         if reach == "final":
             return None, "a final mark names the letter or standing sentence it serves"
@@ -97,6 +97,37 @@ def parse(text: str | None, *, what: str = "", owed: tuple[str, ...] = ()) -> tu
     if reach != "change":
         back = ""
     return Mark(reach, given_what, given_for, back, tuple(inferred)), ""
+
+
+def program(command: str) -> str:
+    """The first program a shell command runs, by name only: what an inferred look records.
+
+    The journal holds digests, never a call's arguments (VALUES 5): a curl with a token in
+    a header is a look, so its arguments stay out, and the row's digest ties it to the call."""
+    try:
+        words = shlex.split(command.split("<<", 1)[0], comments=True)
+    except ValueError:
+        words = command.split()
+    skip = False
+    for word in words:
+        if skip:
+            skip = False
+            continue
+        if word == "cd":
+            skip = True
+            continue
+        if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*=.*", word, re.S) or word in ("&&", ";", "env", "||"):
+            continue
+        return Path(word).name[:60]
+    return ""
+
+
+def host(url: str) -> str:
+    from urllib.parse import urlsplit
+    try:
+        return urlsplit(url).hostname or ""
+    except ValueError:
+        return ""
 
 
 _ASSIGN = re.compile(r"(?:^|[;&|(\n]|\s)" + SAY + r"""=("(?:[^"\\]|\\.)*"|'[^']*'|[^\s;&|]*)""")
@@ -146,21 +177,32 @@ def loom_verbs_only(command: str) -> bool:
                 words = shlex.split(stage)
             except ValueError:
                 return False
-            while words and re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*=.*", words[0], re.S):
+            # Only the loom's own env words: a PATH= or PYTHONPATH= could make "brnrd" another program.
+            while words and re.fullmatch(r"BRNRD_[A-Z0-9_]*=.*", words[0], re.S):
                 words = words[1:]
             if not words:
                 continue
-            name = Path(words[0]).name
-            if name == "cd" and len(words) <= 2:
+            if words[0] == "cd" and len(words) <= 2:
                 continue
-            if name == "brnrd" and words[1:2] == ["runtime"]:
+            if words[0] in _verb_paths() and words[1:2] == ["runtime"]:
                 verbs += 1
                 continue
-            if re.fullmatch(r"python3?(?:\.\d+)?", name) and words[1:3] == ["-m", "brr.loom.runtime"]:
+            if re.fullmatch(r"python3?", words[0]) and words[1:3] == ["-m", "brr.loom.runtime"]:
                 verbs += 1
                 continue
             return False
     return verbs > 0
+
+
+def _verb_paths() -> set[str]:
+    """``brnrd`` as PATH finds it (the shim leads a body's PATH), or the shim by its full path."""
+    paths = {"brnrd"}
+    try:
+        from . import entry
+        paths.add(str(entry.shim()))
+    except Exception:  # noqa: BLE001 - an install with no shim still has the bare word
+        pass
+    return paths
 
 
 def _inside(path: str, room: Path) -> bool:
@@ -214,7 +256,8 @@ def judge(payload: dict, room: Path, owed: tuple[str, ...] = (), walled: bool | 
         command = str(args.get("command") or "")
         said = shell_mark(command)
         if said is not None:
-            mark, why = parse(said, what=command, owed=owed)
+            found = _ASSIGN.search(command.split("<<", 1)[0])
+            mark, why = parse(said, what=program(command[found.end():] if found else command), owed=owed)
             if mark is None:
                 return Decision("refuse" if walled else "pass", None, f"{why}. {FORM}")
             return Decision("lift" if walled else "pass", mark)
@@ -232,8 +275,9 @@ def judge(payload: dict, room: Path, owed: tuple[str, ...] = (), walled: bool | 
         return Decision("refuse", None, f"{tool} writes outside the room ({path}). "
                         "Do it through a shell call with a mark: " + FORM)
     if tool in LOOKS:
-        what = str(args.get(LOOKS[tool]) or "")
-        return Decision("pass", Mark("look", what[:200], " ".join(owed), "", ("what", "for")))
+        # The host for a fetch, nothing for a search: the query is the call's argument.
+        what = host(str(args.get("url") or "")) if tool == "WebFetch" else ""
+        return Decision("pass", Mark("look", what, " ".join(owed), "", ("what", "for")))
     if tool.startswith("mcp__"):
         said = _one_shot(room)
         mark, why = parse(said, what=tool, owed=owed)
@@ -268,6 +312,9 @@ def door_refusal() -> str | None:
     if os.environ.get(MARKS) != "1":
         return None
     mark, why = parse(os.environ.get(SAY))
+    if mark is not None and mark.reach == "look":
+        return ("refused at the door: this act is never a look (a letter sent, a branch pushed, "
+                "a forge act done): mark it change or final, naming the thing and the letter it serves")
     if mark is not None:
         return None
     return (f"refused at the door: {why}. This act leaves the room: "

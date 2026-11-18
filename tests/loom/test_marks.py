@@ -22,7 +22,7 @@ from test_wishes import command, ledger  # noqa: F401  (ledger is a fixture)
 
 
 @pytest.mark.parametrize("text, reach, what, for_, back, inferred", [
-    ("look", "look", "gh pr checks 12", "l-9", "", ("what", "for")),
+    ("look", "look", "gh", "l-9", "", ("what", "for")),
     ("look · PR 12 checks", "look", "PR 12 checks", "l-9", "", ("for",)),
     ("change · brnrd#12 title · l-3 · edit it back", "change", "brnrd#12 title", "l-3", "edit it back", ()),
     ("change | branch loom/x | l-3 | delete it", "change", "branch loom/x", "l-3", "delete it", ()),
@@ -31,7 +31,7 @@ from test_wishes import command, ledger  # noqa: F401  (ledger is a fixture)
     ("cannot be undone · the release · l-4", "final", "the release", "l-4", "", ()),
 ])
 def test_a_mark_reads(text, reach, what, for_, back, inferred):
-    got, why = mark.parse(text, what="gh pr checks 12", owed=("l-9",))
+    got, why = mark.parse(text, what="gh", owed=("l-9",))
     assert why == ""
     assert (got.reach, got.what, got.for_, got.back, got.inferred) == (reach, what, for_, back, inferred)
 
@@ -58,6 +58,10 @@ def test_what_is_no_mark(text, why):
     ("brnrd runtime send --to thread:x hi > out.txt", False),
     ("brnrd runtime send --to thread:x hi | sh", False),
     ("cd /tmp", False),
+    # Only the loom's env words, and brnrd as PATH finds it: anything else could be another program.
+    ("PATH=/x:$PATH brnrd runtime send --to thread:x hi", False),
+    ("PYTHONPATH=/x python3 -m brr.loom.runtime wish w-1 --left same", False),
+    ("./x/brnrd runtime send --to thread:x hi", False),
     ("gh pr view 1", False),
 ])
 def test_the_loom_verbs_alone(command, only):
@@ -116,7 +120,8 @@ def test_a_marked_call_crosses_the_wall_and_the_mark_is_on_the_record(walled):
     assert out["updatedInput"]["dangerouslyDisableSandbox"] is True
     [(phase, look), (_, change)] = _marks(home)
     assert phase == "pre"
-    assert look == {"reach": "look", "what": "BRNRD_SAY=look gh pr checks 12", "for": "", "back": "",
+    # An inferred what is the program's name only: the journal never holds a call's arguments.
+    assert look == {"reach": "look", "what": "gh", "for": "", "back": "",
                     "inferred": ["what", "for"], "crossed": True}
     assert change["reach"] == "change" and change["back"] == "edit it back" and change["inferred"] == []
     assert audit.main(["verify", "--home", str(home.root)]) == 0
@@ -165,9 +170,11 @@ def test_file_web_and_mcp_tools(walled, monkeypatch):
     assert jack.execute("pre", place, _tool("mcp__docs__update", ref={})) == ""
     # One shot: the next MCP call needs its own.
     assert _out(jack.execute("pre", place, _tool("mcp__docs__update", ref={})))["permissionDecision"] == "deny"
+    assert jack.execute("pre", place, _tool("WebSearch", query="my secret plan")) == ""
     marked = [m for _, m in _marks(home) if m]
-    assert [(m["reach"], m["what"]) for m in marked] == [("look", "https://example.com"),
-                                                         ("change", "the Docs page")]
+    # The host for a fetch, nothing for a search: never the call's own words.
+    assert [(m["reach"], m["what"]) for m in marked] == [("look", "example.com"),
+                                                         ("change", "the Docs page"), ("look", "")]
 
 
 def test_with_no_wall_a_mark_is_recorded_and_never_required(walled, monkeypatch):
@@ -199,6 +206,9 @@ def test_a_send_to_a_person_refuses_without_a_mark(person, monkeypatch):
         # The old door sentence is no mark either.
         monkeypatch.setenv(audit.SAY, "telling ada, she asked (l-1)")
         command(home, seat, "send", "--to", "channel:mine/42", "old sentence", ok=False)
+        # A letter sent is never a look.
+        monkeypatch.setenv(audit.SAY, "look")
+        assert "never a look" in command(home, seat, "send", "--to", "channel:mine/42", "a look", ok=False)
         monkeypatch.setenv(audit.SAY, "final · letter to Ada · l-1")
         command(home, seat, "send", "--to", "channel:mine/42", "marked")
     finally:
@@ -221,6 +231,9 @@ def test_publish_refuses_before_the_push_without_a_mark(tmp_path, monkeypatch):
         commit = _tip(checkout, "HEAD")
         proc = _verb(room, "widget")
         assert proc.returncode != 0 and "refused at the door" in proc.stderr
+        monkeypatch.setenv(audit.SAY, "look")
+        proc = _verb(room, "widget")
+        assert proc.returncode != 0 and "never a look" in proc.stderr
         assert _tip(bare, "refs/heads/loom/work") != commit
         monkeypatch.setenv(audit.SAY, "change · loom/work on widget · l-2 · force it back")
         proc = _verb(room, "widget")
@@ -238,6 +251,12 @@ def test_the_gh_stand_in_refuses_a_forge_act_without_a_mark(tmp_path, monkeypatc
     proc = subprocess.run(["gh", "pr", "comment", "12", "--body", "x"], env=env, capture_output=True,
                           text=True, timeout=60)
     assert proc.returncode == 1 and "refused at the door" in proc.stderr and proc.stdout == ""
+    # A forge act is never a look.
+    env[audit.SAY] = "look"
+    proc = subprocess.run(["gh", "pr", "comment", "12", "--body", "x"], env=env, capture_output=True,
+                          text=True, timeout=60)
+    assert proc.returncode == 1 and "never a look" in proc.stderr
+    env.pop(audit.SAY)
     # A look is no forge door.
     proc = subprocess.run(["gh", "repo", "view", "o/r"], env=env, capture_output=True, text=True, timeout=60)
     assert proc.returncode == 0

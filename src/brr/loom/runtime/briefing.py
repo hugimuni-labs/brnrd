@@ -51,7 +51,8 @@ DOORS = (
     "final; a look needs only the word (`look`); a change names the thing and its "
     "way back; a final act names the thing and the letter it serves. The mark lifts the wall for that call "
     "and goes on the record. No mark, no run: a send to a person, a `publish` and a `gh` act refuse "
-    "without one. The loom's own verbs and every read need none.\n"
+    "without one, and never take a look. The loom's own verbs and every read need none. The engine's own "
+    "memory folder is outside the room: the self is your memory.\n"
 )
 
 
