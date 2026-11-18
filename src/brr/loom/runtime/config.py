@@ -255,23 +255,19 @@ def _without_comment(line: str) -> str:
 def read_values(path: Path | str) -> dict[str, object]:
     """Read the shared flat TOML grammar, without applying a key registry."""
     path = Path(path)
-    return parse_values(path.read_text(encoding="utf-8"), path) if path.is_file() else {}
-
-
-def parse_values(text: str, where: Path | str) -> dict[str, object]:
-    """The flat TOML grammar of ``read_values``, for text that is not a file (a blob on main)."""
     found: dict[str, object] = {}
-    for line in text.splitlines():
-        line = _without_comment(line).strip()
-        if not line or "=" not in line:
-            continue
-        key, _, raw = line.partition("=")
-        key = key.strip()
-        if key in found:
-            # The last line used to win, so a hand edit above an appended
-            # line was silently ignored. Writers fold; a reader refuses.
-            raise ConfigError(f"{where}: {key} is set twice; keep one line")
-        found[key] = _literal(raw.strip())
+    if path.is_file():
+        for line in path.read_text(encoding="utf-8").splitlines():
+            line = _without_comment(line).strip()
+            if not line or "=" not in line:
+                continue
+            key, _, raw = line.partition("=")
+            key = key.strip()
+            if key in found:
+                # The last line used to win, so a hand edit above an appended
+                # line was silently ignored. Writers fold; a reader refuses.
+                raise ConfigError(f"{path}: {key} is set twice; keep one line")
+            found[key] = _literal(raw.strip())
     return found
 
 

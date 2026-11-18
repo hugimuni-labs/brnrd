@@ -714,13 +714,6 @@ def write_send(room: Path, *, to: str, sender: str, body: str = "",
             raise PortError(f"send: the body is empty; nothing goes to {to}. A body read from "
                             "a file or a command is checked to be there in the same call")
         body = forge_paths(Path(room), home, body)
-        if note is None and reincarnate is None:
-            # brnrd#2776: how the person reads, checked before any wish or ask is written.
-            from .reading import check as check_reading
-            try:
-                check_reading(Path(room), home, to, body)
-            except ValueError as exc:
-                raise PortError(f"send: {exc}") from exc
     else:
         thread = thread_of(to)
         if home.routable(thread):
