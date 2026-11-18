@@ -613,6 +613,33 @@ def _guard_warnings(room: Path, at: str, stdin_text: str) -> tuple[str, bool]:
     return "\n".join(said + lines), not granted
 
 
+def _marked(room: Path, stdin_text: str):
+    """``(decision, payload)`` for one call's mark (mark.py); ``(None, {})`` when it cannot be read.
+
+    A mark that cannot be judged never costs the call: the wall still holds it."""
+    from . import mark
+    try:
+        payload = json.loads(stdin_text) if stdin_text and stdin_text.strip() else {}
+        if not isinstance(payload, dict) or not payload.get("tool_name"):
+            return None, {}
+        try:
+            owed = tuple(parse_boundary(_boundary_text(room)).ids)
+        except PortError:
+            owed = ()
+        return mark.judge(payload, room, owed), payload
+    except Exception:  # noqa: BLE001 - fail open to the wall, never to a crossing
+        return None, {}
+
+
+def _wall_hit(stdin_text: str) -> str:
+    from . import mark
+    try:
+        payload = json.loads(stdin_text)
+        return mark.HIT if isinstance(payload, dict) and mark.wall_hit(payload) else ""
+    except Exception:  # noqa: BLE001
+        return ""
+
+
 def _guard_miss(room: Path) -> str:
     """A broken path guard, as one section of the stop's block."""
     from .guards import violations
@@ -732,18 +759,32 @@ def execute(event: str, room: Path, stdin_text: str) -> str:
         first, first_refuse = _first_word(room, stdin_text, refuse=True)
         said = "\n".join(filter(None, (first, said)))
         refuse = refuse or first_refuse
+        decision, payload = _marked(room, stdin_text)
+        marked = decision.record() if decision else None
+        if decision is not None and decision.verdict == "refuse":
+            said = "\n".join(filter(None, (said, "refused, no mark: " + decision.why)))
+            refuse = True
         tooltrace.note(room, stdin_text, "pre")
         from .audit import note as audit_note
-        audit_note(room, stdin_text, "pre")
+        audit_note(room, stdin_text, "pre", mark=marked)
         if refuse:
             # A refused call gets no post hook; its end is written here.
             tooltrace.note(room, stdin_text, "refused")
-            audit_note(room, stdin_text, "refused")
+            audit_note(room, stdin_text, "refused", mark=marked)
             return _json({"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "deny",
                                                  "permissionDecisionReason": _clocked("refused by a guard:\n" + said)}})
+        if decision is not None and decision.verdict == "lift":
+            # The wall is lifted for this one call: the engine's own flag, set by the hook, never typed.
+            lifted = dict(payload.get("tool_input") or {}, dangerouslyDisableSandbox=True)
+            out = {"hookEventName": "PreToolUse", "permissionDecision": "allow", "updatedInput": lifted}
+            if said:
+                out["additionalContext"] = said
+            return _json({"hookSpecificOutput": out})
         return _json({"hookSpecificOutput": {"hookEventName": "PreToolUse",
                                              "additionalContext": said}}) if said else ""
     guarded = _guard_warnings(room, "post", stdin_text)[0] if event == "post" else ""
+    if event == "post":
+        guarded = "\n".join(filter(None, (guarded, _wall_hit(stdin_text))))
     if event == "post":
         guarded = "\n".join(filter(None, (_first_word(room)[0], guarded)))
     if event == "post":

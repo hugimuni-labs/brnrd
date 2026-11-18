@@ -104,14 +104,30 @@ _NEVER_GATE = limbs.gate_shell(limbs.product("github"))
 
 # The forge door's sensor (threads/act-chain, doors and sensors): after the
 # gates, so a refused call is no passage. Capture off is one file test; the
-# verb reads the endpoint's doors switch and BRNRD_SAY, and never refuses.
+# verb reads the endpoint's doors switch and BRNRD_SAY. Behind the marks
+# switch (mark.py) a forge act with no mark stops here: exit 3 is that refusal,
+# any other failure of the sensor never costs the call.
 _FORGE_DOOR = r"""case "$1 $2" in
   "pr merge"|"pr close"|"pr comment"|"issue close"|"issue comment"|"release create")
-    if [ -f {endpoint} ]; then
-      {brnrd} runtime audit pass --room {room} --door forge --act "$1 $2" --target="${3-}" >/dev/null || :
+    if [ -f {endpoint} ] || [ "${BRNRD_MARKS-}" = 1 ]; then
+      {brnrd} runtime audit pass --room {room} --door forge --act "$1 $2" --target="${3-}" >/dev/null
+      [ $? -ne 3 ] || exit 1
     fi ;;
 esac
 """
+
+def _marks_env(room: Path, env: dict[str, str]) -> None:
+    """The marks switch (mark.py) rides ``doors = on`` with ``audit = on``: the wall, and no mark no run."""
+    from .config import ConfigError, load_config
+    from .mark import MARKS
+    env.pop(MARKS, None)
+    try:
+        config = load_config(room.parent.parent) if room.parent.name == "rooms" else None
+    except (ConfigError, OSError):
+        return
+    if config is not None and config.audit == "on" and config.doors == "on":
+        env[MARKS] = "1"
+
 
 def _forge_env(room: Path, env: dict[str, str]) -> None:
     """Keep a configured forge identity isolated even when a shell bypasses the shim."""
@@ -199,6 +215,7 @@ def _env(room: Path) -> dict[str, str]:
         env[f"GIT_{role}_EMAIL"] = email
     _forge_env(room, env)
     env["BRNRD_ROOM"] = str(room)
+    _marks_env(room, env)
     # The room is a body's only scratch: mktemp, pytest and uv land where the
     # reaper's room rules already reach, never in a /tmp nothing reaps.
     scratch = room / "tmp"

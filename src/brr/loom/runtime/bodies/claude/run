@@ -20,6 +20,12 @@ settings = {"hooks": {
     "SubagentStop": [{"hooks": [hook("subagent-stop", 60)]}],
     "Stop": [{"hooks": [hook("stop", int(os.environ.get("BRNRD_STOP_TIMEOUT") or float(os.environ["BRNRD_WAIT"]) + 60))]}],
 }}
+# The wall (mark.py): behind the marks switch, a shell call stays in the room
+# unless the pre-tool hook lifts the sandbox for it, which it does for a mark.
+from brr.loom.runtime import mark
+if os.environ.get(mark.MARKS) == "1" and mark.wall_available():
+    settings["sandbox"] = mark.sandbox(room.parent if room.name == "self" else room)
+    os.environ[mark.WALL] = "1"
 path = room / ".claude/settings.json"
 path.parent.mkdir(parents=True, exist_ok=True)
 path.write_text(json.dumps(settings) + "\n")

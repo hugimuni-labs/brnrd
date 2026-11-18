@@ -457,6 +457,10 @@ def publish(room: Path | str, name: str, *, worker: str | None = None,
             + "Rewrite them under this home's author, or leave them out."
         )
 
+    from .mark import door_refusal
+    refusal = door_refusal()
+    if refusal:
+        raise PublishError("publish: " + refusal)
     args, env, lane, note = push_command(source, branch,
                                          load_config(who.home.root).forge_token)
     try:
@@ -478,7 +482,7 @@ def publish(room: Path | str, name: str, *, worker: str | None = None,
         data["gen"] = gen
     append(who.home, Fact(kind="branch.published", by=f"strand:{strand}", data=data,
                           id=f"published:{thread}:{name}:{commit}"))
-    # The publish door, after the push it records: recorded, never judged (audit.passage).
+    # The publish door, after the push it records, with its mark (refused before the push without one).
     from .audit import passage
     passage(who.room, "publish", "push", f"{name} {branch} {commit}")
     # Work landed in a place: the library page's record reads this (library.record).

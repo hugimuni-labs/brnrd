@@ -652,6 +652,10 @@ def write_send(room: Path, *, to: str, sender: str, body: str = "",
     if is_channel(to):
         from .loom import _fenced
         from .ledger import read_facts
+        from .mark import door_refusal
+        refusal = door_refusal() if note is None and reincarnate is None else None
+        if refusal:
+            raise PortError("send: " + refusal)
         if _fenced(home, read_facts(home)):
             raise PortError(
                 "send: this machine lost the inbox lease; a letter to a person "
@@ -984,7 +988,7 @@ def write_send(room: Path, *, to: str, sender: str, body: str = "",
         for result in results:
             append(home, result)
     if is_channel(to) and note is None:
-        # The send door: a letter to a person's channel. Recorded, never judged (audit.passage).
+        # The send door: a letter to a person's channel, recorded with its mark (refused above without one).
         from .audit import passage
         passage(Path(room), "send", "letter", to)
     return letter_id
