@@ -53,6 +53,7 @@ def test_the_delivery_letter_names_the_file_and_stamps_it(monkeypatch, tmp_path)
                                f"file: report.pdf · 1.2 MB · sha256 {sha}\n"
                                "Reply ok to accept, or say what is off.\n")
     assert sent[0]["attach"] == f"{sha} report.pdf"
+    assert sent[0]["receipt"] is True  # it passes the door under the wish's grant
 
 
 def test_the_loom_takes_a_file_only_on_a_channel_letter_from_its_store(tmp_path):

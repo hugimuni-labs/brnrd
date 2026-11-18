@@ -650,8 +650,12 @@ def write_send(room: Path, *, to: str, sender: str, body: str = "",
                budget: int | None = None, chatter: list[str] | None = None,
                echo: list[str] | None = None, reopen: bool = False,
                ask_for: str | None = None, attach: str | None = None,
-               triage: tuple[str, str] | None = None) -> str:
+               triage: tuple[str, str] | None = None, receipt: bool = False) -> str:
     """Write one letter (or note) into port/out, with the wish stamps it carries.
+
+    ``receipt`` is the loom's own letter for a verified delivery (verbs_wishes): its words are
+    the loom's, it goes to the chat the person asked in, and it passes the door under the
+    wish's grant with no mark. The fence still holds it.
 
     ``attach`` is ``<sha256> <name>``: a file from the home's blob store that a
     channel which carries files sends beside the text (a ``host:`` delivery).
@@ -673,7 +677,7 @@ def write_send(room: Path, *, to: str, sender: str, body: str = "",
         from .loom import _fenced
         from .ledger import read_facts
         from .mark import door_refusal
-        refusal = door_refusal(room) if note is None and reincarnate is None else None
+        refusal = door_refusal(room) if note is None and reincarnate is None and not receipt else None
         if refusal:
             raise PortError("send: " + refusal)
         if _fenced(home, read_facts(home)):

@@ -359,7 +359,7 @@ def _tell_delivered(home, args, wish, result) -> None:
         body += f"file: {result['name']} · {_size(result['size'])} · sha256 {result['sha256']}\n"
         attach = f"{result['sha256']} {result['name']}"
     body += "Reply ok to accept, or say what is off.\n"
-    write_send(room, to=chat, sender=strand_of_room(room), body=body,
+    write_send(room, to=chat, sender=strand_of_room(room), body=body, receipt=True,
                **({"attach": attach} if attach else {}))
 
 
