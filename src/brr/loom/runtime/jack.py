@@ -759,6 +759,13 @@ def execute(event: str, room: Path, stdin_text: str) -> str:
             refuse = True
         elif decision is not None and decision.why:
             said = "\n".join(filter(None, (said, decision.why)))
+        if decision is not None and decision.judged is not None and (not refuse or not decision.judged.granted):
+            # One final act, one fact (grants.note): a grant only for a call that goes on to run.
+            from .grants import note as note_final
+            try:
+                note_final(room, decision.judged)
+            except Exception:  # noqa: BLE001 - a lost receipt never costs the call; the door writes its own
+                pass
         tooltrace.note(room, stdin_text, "pre")
         from .audit import note as audit_note
         audit_note(room, stdin_text, "pre", mark=marked)

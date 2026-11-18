@@ -8,16 +8,20 @@ import subprocess
 import pytest
 
 from brr.daemon2.facts import Fact
-from brr.loom.runtime.grants import letter_for, names
+from datetime import datetime, timedelta, timezone
+
+from brr.loom.runtime.grants import letter_for
 from brr.loom.runtime.home import Home
 from brr.loom.runtime.jack import execute
 from brr.loom.runtime.ledger import append, read_facts
 from test_guards import STRAND, _call, _repo
+from test_doors import ledger, person  # noqa: F401  (fixtures)
 
 
 
-def _letter(ident, body, sender="person:arseni"):
-    return Fact(kind="letter", by="loom:aaaa", id=ident,
+def _letter(ident, body, sender="person:arseni", days=0):
+    at = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
+    return Fact(kind="letter", by="loom:aaaa", id=ident, at=at,
                 data={"id": ident, "body": body, "from": sender, "to": "thread:inbox"})
 
 
@@ -34,26 +38,6 @@ def _wish(ident, thread, says, verdict=None):
 OWNER = {"person:arseni"}
 
 
-@pytest.mark.parametrize("text,target,named", [
-    ("go, merge 2610", "#2610", True),
-    ("merge #2610.", "#2610", True),
-    ("merge 26100", "#2610", False),
-    ("merge to main when green", "main", True),
-    ("maintain it", "main", False),
-    ("see main.py", "main", False),
-    ("rm rooms/a", "rooms/a", True),
-    ("rm rooms/a/b", "rooms/a", False),
-    ("v0.9.10 is out", "v0.9.1", False),
-    ("Publish 0.7.0 then 🥳", "v0.7.0", True),
-    ("publish v0.7.0", "v0.7.0", True),
-    ("publish 0.7.01", "v0.7.0", False),
-    ("publish 10.7.0", "v0.7.0", False),
-    ("release 0.7", "v0.7.0", False),
-])
-def test_a_target_is_named_as_a_word(text, target, named):
-    assert names(text, target) is named
-
-
 @pytest.mark.parametrize("facts,cited,granted", [
     ([_letter("cloud:telegram:1:2610", "go, merge 2610")], "2610", True),
     ([_letter("cloud:telegram:1:2610", "go, merge 2610")], "cloud:telegram:1:2610", True),
@@ -65,6 +49,10 @@ def test_a_target_is_named_as_a_word(text, target, named):
     ([_letter("cloud:telegram:2:77", "merge 2610", sender="person:sasha")], "77", False),
     ([], "2610", False),
     ([_letter("cloud:telegram:1:2610", "go")], "", False),
+    # A bare number is only a letter of the last 30 days: "2771" for the PR is not his letter of spring.
+    ([_letter("cloud:telegram:1:2771", "hi", days=200)], "2771", False),
+    ([_letter("cloud:telegram:1:2771", "hi", days=200)], "cloud:telegram:1:2771", True),
+    ([_letter("cloud:telegram:1:2771", "hi", days=29)], "2771", True),
 ])
 def test_a_final_act_cites_a_letter_of_the_owners(facts, cited, granted):
     assert (letter_for(facts, cited, OWNER) is not None) is granted
@@ -106,7 +94,8 @@ def test_his_letter_lets_the_final_act_through_and_leaves_its_receipt(tmp_path, 
     said = json.loads(execute("pre", room, _call(
         "Bash", command='BRNRD_SAY="final · v0.9.1 release · 2610" gh release create v0.9.1')))["hookSpecificOutput"]
     assert said["permissionDecision"] == "allow" and said["updatedInput"]["dangerouslyDisableSandbox"] is True
-    assert "granted: v0.9.1 release (final) by cloud:telegram:1:2610" in said["additionalContext"]
+    assert "granted: v0.9.1 release (final) by cloud:telegram:1:2610 (20" in said["additionalContext"]
+    assert ': "ship 0.9.1")' in said["additionalContext"]
     receipts = [f for f in read_facts(home) if f.kind == "guard.granted"]
     assert [(f.data["class"], f.data["target"], f.data["letter"], f.data["wish"]) for f in receipts] == [
         ("final", "v0.9.1 release", "cloud:telegram:1:2610", "w-1")]
@@ -140,3 +129,52 @@ def test_under_the_allocation_nothing_is_refused_for_spend(tmp_path, monkeypatch
     room, _home = _room(tmp_path)
     (room / "port" / "in" / "boundary.md").write_text("status: strand x\n")
     assert execute("pre", room, _call("Bash", command="uv run pytest")) == ""
+
+
+def test_a_grant_the_first_word_then_refuses_leaves_no_receipt(tmp_path, monkeypatch):
+    """The hook writes a grant only for a call that goes on to run."""
+    from brr.loom.runtime import jack
+    monkeypatch.setenv("BRNRD_THREAD", "ta")
+    monkeypatch.setenv("BRNRD_WALL", "1")
+    room, home = _room(tmp_path, [_letter("cloud:telegram:1:2610", "ship 0.9.1")])
+    monkeypatch.setattr(jack, "_first_word", lambda *a, **k: ("first word owed", True))
+    said = json.loads(execute("pre", room, _call(
+        "Bash", command='BRNRD_SAY="final · v0.9.1 release · 2610" gh release create v0.9.1')))["hookSpecificOutput"]
+    assert said["permissionDecision"] == "deny"
+    assert not [f for f in read_facts(home) if f.kind.startswith("guard.")]
+
+
+def test_one_final_send_through_the_hook_and_the_door_is_one_receipt(person, monkeypatch):
+    """The real pre hook, then the real send verb: both judge the act, one fact is written."""
+    from test_wishes import command
+    home, seat = person
+    append(home, _letter("cloud:telegram:1:4242", "tell the café yes", sender="person:test"))
+    mark = "final · letter to the café · 4242"
+    monkeypatch.setenv("BRNRD_THREAD", "work")
+    monkeypatch.setenv("BRNRD_WALL", "1")
+    monkeypatch.setenv("BRNRD_MARKS", "1")
+    said = json.loads(execute("pre", seat, _call(
+        "Bash", command=f'BRNRD_SAY="{mark}" brnrd runtime send --to channel:mine/42 yes')))["hookSpecificOutput"]
+    assert said["permissionDecision"] == "allow", said
+    monkeypatch.setenv("BRNRD_SAY", mark)
+    command(home, seat, "send", "--to", "channel:mine/42", "yes")
+    receipts = [f for f in read_facts(home) if f.kind == "guard.granted"]
+    assert [(f.data["target"], f.data["letter"]) for f in receipts] == [
+        ("letter to the café", "cloud:telegram:1:4242")]
+    assert not [f for f in read_facts(home) if f.kind == "guard.refused"]
+
+
+def test_one_final_gh_act_with_no_wall_is_one_receipt(tmp_path, monkeypatch):
+    """The stand-in's check and its forge door both judge a final gh act: one fact."""
+    from test_doors import _shim_home
+    from brr.loom.runtime.loom import _env
+    _real, room, home = _shim_home(tmp_path, monkeypatch)
+    _repo(home.root / "self", {"people/arseni/agreement.md": "a\n", "README.md": "self\n"})
+    append(home, _letter("cloud:telegram:1:2610", "merge it"))
+    env = _env(room)
+    env.update(BRNRD_MARKS="1", BRNRD_SAY="final · merge of 12 · 2610", BRNRD_ROOM=str(room))
+    env.pop("BRNRD_WALL", None)
+    proc = subprocess.run(["gh", "pr", "merge", "12"], env=env, capture_output=True, text=True, timeout=60)
+    assert proc.returncode == 0, proc.stderr
+    receipts = [f for f in read_facts(home) if f.kind == "guard.granted"]
+    assert [(f.data["target"], f.data["letter"]) for f in receipts] == [("merge of 12", "cloud:telegram:1:2610")]

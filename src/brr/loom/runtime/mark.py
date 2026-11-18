@@ -306,6 +306,7 @@ class Decision:
     verdict: str
     mark: Mark | None = None
     why: str = ""
+    judged: object = None  # grants.Judged, for a final mark: written by the hook once the call's verdict stands
 
     def record(self) -> dict | None:
         return self.mark.record(self.verdict == "lift") if self.mark else None
@@ -365,12 +366,15 @@ def judge(payload: dict, room: Path, owed: tuple[str, ...] = (), walled: bool | 
 def rule(decision: Decision, room: Path) -> Decision:
     """The one rule: a call marked final runs only on a letter of the owner's its mark cites (grants.final).
 
-    Wherever a mark is given, walled or not: honouring it costs a call nothing it was not going to pay."""
+    Wherever a mark is given, walled or not: honouring it costs a call nothing it was not going to pay.
+    Nothing is written here: the hook writes the verdict once the call's own verdict stands (jack.execute)."""
     if decision.mark is None or decision.mark.reach != "final" or decision.verdict == "refuse":
         return decision
-    from .grants import final
-    granted, line = final(room, decision.mark.what, decision.mark.for_)
-    return replace(decision, why=line) if granted else Decision("refuse", decision.mark, line)
+    from .grants import judge as judge_final
+    judged = judge_final(room, decision.mark.what, decision.mark.for_)
+    if judged.granted:
+        return replace(decision, why=judged.line, judged=judged)
+    return Decision("refuse", decision.mark, judged.line, judged)
 
 
 def wall_hit(payload: dict) -> bool:

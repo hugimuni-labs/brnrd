@@ -19,5 +19,5 @@ A note on how a resident reaches GitHub. It judges nothing: the judgement is the
 **Looks.** view, list, diff, checks, status, and `gh api` GETs.
 
 **What blocked before.**
-- `gh auth token` gives nothing inside the stand-in: the key is fetched per call. To see which identity acts, run `gh auth status`.
+- `gh auth token` inside the stand-in prints the room's forge key: the stand-in fetches it at each call and exports it as `GH_TOKEN` before the real gh runs. The key is what a body acts with, so it stays in the room; to see which identity acts, run `gh auth status`.
 - A PR's checks lag a push by a minute or two: `gh pr checks` reports "no checks" before the run starts.
