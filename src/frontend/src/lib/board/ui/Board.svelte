@@ -191,12 +191,19 @@
 			>
 		{/if}
 		<span id="open" style="color:#d33">{b.letters.filter((l) => l.open).length} open</span>
-		<span class="dim" id="at"
-			>loom {b.heard.slice(11, 19)}Z · {b.letters.length} letters · as {personLabel(
-				'person:' + (b.model?.person || ''),
-				b.model?.person_names
-			) || '?'}</span
-		>
+		<!-- who is reading, and on brnrd.dev their account beside the name (his 11408: not trailing after
+		     everything); a local loom has no subscription, so no link -->
+		<span id="me">
+			<span class="dim" id="at"
+				>loom {b.heard.slice(11, 19)}Z · {b.letters.length} letters · as {personLabel(
+					'person:' + (b.model?.person || ''),
+					b.model?.person_names
+				) || '?'}</span
+			>
+			{#if $site?.deployment === 'cloud'}
+				<a id="account" class="topics-link" href={resolve('/account')}>account</a>
+			{/if}
+		</span>
 		<span id="live" class="dim" class:off={b.live === 'offline'}>{b.error || b.live}</span>
 		{#if b.newer}<button
 				id="update"
@@ -207,11 +214,6 @@
 		<label id="internal" class="dim"
 			><input type="checkbox" bind:checked={b.showAll} onchange={() => b.persist()} /> show internal</label
 		>
-		{#if $site?.deployment === 'cloud'}
-			<!-- last, so a phone's scrolling header keeps the fuel first; the
-			     subscription lives on brnrd.dev only, a local loom has none -->
-			<a class="topics-link" href={resolve('/account')}>account</a>
-		{/if}
 	</header>
 	{#if view === 'board'}
 		<nav id="rail" aria-label="strands">
