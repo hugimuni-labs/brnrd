@@ -19,7 +19,8 @@ a daily file would be lost at the next rollout; a counter row survives it.
 
 Only a closed allowlist of public routes is counted (``/``, ``/pricing``,
 ``/learn*``, ``/log*``), only ``GET``, and only a 200/304 — a scanner walking
-``/learn/<junk>`` cannot mint rows. Signed-in surfaces are never touched.
+``/learn/<junk>`` cannot mint rows. The /hi campaign redirect counts only its 302.
+Signed-in surfaces are never touched.
 
 Limit, stated: a CDN in front of the origin can answer a cacheable page
 without this process ever seeing the request, so counts are a floor on
@@ -40,7 +41,9 @@ from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from .db import Base
 
-_EXACT = frozenset({"/", "/pricing", "/learn", "/log"})
+PROMO_PATH = "/hi"
+PROMO_STATUS = 302
+_EXACT = frozenset({"/", "/pricing", "/learn", "/log", PROMO_PATH})
 _PREFIXES = ("/learn/", "/log/")
 _MAX_PATH = 64
 _MAX_SEGMENTS = 3
@@ -160,7 +163,8 @@ class PageViewMiddleware:
             await send(message)
 
         await self.app(scope, receive, capture)
-        if status not in _COUNTED_STATUS:
+        counted_statuses = (PROMO_STATUS,) if path == PROMO_PATH else _COUNTED_STATUS
+        if status not in counted_statuses:
             return
         headers = {k: v for k, v in scope.get("headers") or ()}
         try:

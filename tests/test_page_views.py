@@ -118,3 +118,20 @@ def test_funnel_script_table(tmp_path, capsys):
     assert out[3].split()[:3] == ["2026-09-19", "/learn/install", "1"]
     funnel.main(["--database-url", f"sqlite:///{tmp_path}/pv.db", "--day", "2026-09-19", "--include-bots"])
     assert " 14 " in capsys.readouterr().out
+
+
+def test_promo_redirect_counts_get_once_and_keeps_only_referrer_host(tmp_path):
+    app = _app(tmp_path)
+    with TestClient(app) as c:
+        headers = {"referer": "https://t.co/private?query=secret", "user-agent": CHROME}
+        response = c.get("/hi?click=secret", headers=headers, follow_redirects=False)
+        assert response.status_code == 302
+        assert response.headers["location"] == "/"
+        assert response.headers["cache-control"] == "no-store"
+        assert "set-cookie" not in response.headers
+        assert c.head("/hi", headers=headers, follow_redirects=False).status_code == 302
+        assert c.post("/hi", headers=headers).status_code >= 400
+
+    assert [(r.path, r.referer_host, r.ua_family, r.status, r.views) for r in _rows(app)] == [
+        ("/hi", "t.co", "chrome", 302, 1),
+    ]
