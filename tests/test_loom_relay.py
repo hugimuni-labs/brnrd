@@ -379,13 +379,14 @@ def test_every_medium_arrives_typed_and_a_capped_one_says_its_size(home):
         {"file_id": "vid", "filename": "video.mp4", "kind": "video", "file_size": 31_457_280},
     ]
     client = FakeClient([event(body="", attachments=pointers)], cursor=1)
-    real = client.download_attachment
+    real, asked = client.download_attachment, []
 
     def download(ident, index, dest):
-        client.too_large = index == 2
-        return False if client.too_large else real(ident, index, dest)
+        asked.append(index)
+        return real(ident, index, dest)
     client.download_attachment = download
     relay.pull_once(home, client, 0)
+    assert asked == [0, 1]  # the pointer's own size says the video is past a bot's getFile
     assert relay.read_cursor(home) == 1  # a file too big is no reason to retry the event
     assert [f.data["mime"] for f in kinds(home, "blob")] == ["audio/ogg", "application/pdf"]
     [source] = kinds(home, "source")
@@ -393,8 +394,43 @@ def test_every_medium_arrives_typed_and_a_capped_one_says_its_size(home):
     [lines] = letter_attachments(home.root, read_facts(home)).values()
     assert lines[0].startswith("attachment 1 of 3: voice message (audio/ogg")
     assert lines[1].startswith("attachment 2 of 3: PDF document (application/pdf")
-    assert lines[2] == ("attachment 3 (30.0 MB) is past the size the connector may fetch and did not come: "
+    assert lines[2] == ("attachment 3 of 3 (30.0 MB) is past the size the connector may fetch and did not come: "
                         "ask for it smaller, or as a link")
+
+
+def test_every_line_carries_its_own_place_in_the_message(home):
+    """The inbox's y514f: fetched, missing and large alike say which of how
+    many they are, by their place in the message, not by the order they came."""
+    from brr.loom.runtime.port import letter_attachments
+    big = {"file_id": "big", "filename": "video.mp4", "kind": "video", "file_size": 31_457_280}
+    photo = {"file_id": "p", "filename": "photo.jpg", "kind": "photo", "mime_type": "image/jpeg"}
+    pdf = {"file_id": "d", "filename": "notes.pdf", "kind": "document", "mime_type": "application/pdf"}
+    client = FakeClient([event(body="", attachments=[big, photo, pdf])], cursor=1)
+    relay.pull_once(home, client, 0)
+    [lines] = letter_attachments(home.root, read_facts(home)).values()
+    assert [line.split(":")[0].split(" (")[0] for line in lines] == [
+        "attachment 2 of 3", "attachment 3 of 3", "attachment 1 of 3"]
+    assert lines[2].startswith("attachment 1 of 3 (30.0 MB) is past")
+
+
+def test_a_missing_file_in_the_middle_keeps_the_places_around_it(home):
+    from brr.loom.runtime.port import letter_attachments
+    pointers = [{"file_id": f"f{i}", "filename": f"{i}.pdf", "kind": "document",
+                 "mime_type": "application/pdf"} for i in range(3)]
+    client = FakeClient([event(body="", attachments=pointers)], cursor=1)
+    real = client.download_attachment
+    client.download_attachment = lambda ident, index, dest: index != 1 and real(ident, index, dest)
+    failures = {}
+    for _ in range(2):
+        with pytest.raises(RuntimeError, match="attachment download failed"):
+            relay.pull_once(home, client, 0, failures=failures)
+    relay.pull_once(home, client, 0, failures=failures)
+    [source] = kinds(home, "source")
+    assert source.data["blobs_missing"] == [1]
+    [lines] = letter_attachments(home.root, read_facts(home)).values()
+    assert lines[0].startswith("attachment 1 of 3: PDF document")
+    assert lines[1].startswith("attachment 3 of 3: PDF document")
+    assert lines[2] == "attachment 2 of 3 could not be fetched"
 
 
 def test_a_413_from_the_cloud_reads_as_too_large(monkeypatch, tmp_path):

@@ -1700,7 +1700,7 @@ def test_card_relay_unknown_event_is_404(env, monkeypatch):
 # ── #525 attachment read-through proxy ───────────────────────────────
 
 
-def _bound_photo_event(app, client, *, message_id=88, caption="see this"):
+def _bound_photo_event(app, client, *, message_id=88, caption="see this", media=None):
     """Pair a chat, deliver a photo webhook, return (acc, rid, event dict
     as the daemon inbox pull sees it)."""
     acc = _account(client)
@@ -1712,7 +1712,7 @@ def _bound_photo_event(app, client, *, message_id=88, caption="see this"):
     del msg["text"]
     if caption:
         msg["caption"] = caption
-    msg["photo"] = [{"file_id": "photo-big", "width": 900, "height": 600}]
+    msg.update(media or {"photo": [{"file_id": "photo-big", "width": 900, "height": 600}]})
     client.post("/v1/webhooks/telegram", json=update, headers=_HDR)
     dmn = _daemon_headers(client, acc, rid)
     drained = client.get(
@@ -1800,6 +1800,42 @@ def test_attachment_proxy_over_cap_is_413(env, monkeypatch):
     r = client.get(f"/v1/daemons/events/{event['event_id']}/attachments/0", headers=dmn)
     assert r.status_code == 413
     assert fetched == []  # declared size rejected before any bytes moved
+
+
+def test_attachment_proxy_past_a_bots_getfile_is_413_not_502(env, monkeypatch):
+    """Past 20 MB a bot's getFile fails outright: the pointer's own size is
+    the only place the file reads as too large rather than missing."""
+    app, client, _ = env
+
+    def refuses(token, file_id, **kw):
+        raise RuntimeError("telegram getFile failed: file is too big")
+
+    monkeypatch.setattr("brnrd.platforms.telegram.resolve_file", refuses)
+    video = {"video": {"file_id": "vid", "mime_type": "video/mp4", "file_size": 30 * 1024 * 1024}}
+    _, _, dmn, event = _bound_photo_event(app, client, media=video)
+    assert event["attachments"][0]["file_size"] == 30 * 1024 * 1024
+    r = client.get(f"/v1/daemons/events/{event['event_id']}/attachments/0", headers=dmn)
+    assert r.status_code == 413
+
+
+@pytest.mark.parametrize("declared,served", [
+    ("application/pdf", "application/pdf"),
+    ("text/html; charset=utf-8", "application/pdf"),
+    ("image/svg+xml\r\nX-Evil: 1", "application/pdf"),
+    ("", "application/pdf"),
+])
+def test_attachment_proxy_keeps_only_a_plain_declared_type(env, monkeypatch, declared, served):
+    """The pointer's mime_type is the sender's client's word: kept only as a
+    bare type/subtype, else the name's guess."""
+    app, client, _ = env
+    monkeypatch.setattr("brnrd.platforms.telegram.resolve_file",
+                        lambda token, file_id, **kw: {"file_path": "d", "file_size": 3})
+    monkeypatch.setattr("brnrd.platforms.telegram.fetch_file_bytes", lambda *a, **k: b"PDF")
+    doc = {"document": {"file_id": "doc", "file_name": "notes.pdf", "mime_type": declared}}
+    _, _, dmn, event = _bound_photo_event(app, client, media=doc)
+    r = client.get(f"/v1/daemons/events/{event['event_id']}/attachments/0", headers=dmn)
+    assert r.status_code == 200
+    assert r.headers["content-type"].split(";")[0] == served
 
 
 def test_attachment_proxy_unknown_index_is_404(env):

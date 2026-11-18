@@ -111,7 +111,7 @@ def test_every_medium_arrives_as_a_typed_file(tin, monkeypatch, tmp_path):
     assert lines["letter:fake:42:3"][0].startswith("attachment: video (video/mp4")
     assert lines["letter:fake:42:5"][0].startswith("attachment: photo (image/webp")
     assert lines["letter:fake:42:6"] == [
-        "attachment 1 (30.0 MB) is past the size the connector may fetch and did not come: ask for it smaller, or as a link"]
+        "attachment (30.0 MB) is past the size the connector may fetch and did not come: ask for it smaller, or as a link"]
 
 
 def album(first_update, group="g1"):

@@ -1617,6 +1617,18 @@ def post_card(request: Request, payload: schemas.CardPost, principal: Principal 
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=_safe_detail(f"card relay failed: {e}")) from e
 
 
+_PLAIN_MEDIA_TYPE = re.compile(r"[A-Za-z0-9][A-Za-z0-9.+-]*/[A-Za-z0-9][A-Za-z0-9.+-]*")
+
+
+def _pointer_media_type(pointer: dict) -> str:
+    """The pointer's mime_type comes from the sender's client: keep it only
+    when it is a plain type/subtype, else guess from the name."""
+    declared = str(pointer.get("mime_type") or "").strip()
+    if _PLAIN_MEDIA_TYPE.fullmatch(declared):
+        return declared
+    return mimetypes.guess_type(str(pointer.get("filename") or ""))[0] or "application/octet-stream"
+
+
 @router.get("/events/{event_id}/attachments/{index}")
 def event_attachment(event_id: str, index: int, request: Request, principal: Principal = Depends(require_daemon), db: Session = Depends(get_db)):
     """#525 — read-through proxy for a queued event's image attachment.
@@ -1674,6 +1686,12 @@ def event_attachment(event_id: str, index: int, request: Request, principal: Pri
     if not settings.telegram_bot_token:
         raise HTTPException(status_code=503, detail="telegram is not configured")
     from ..platforms import telegram as tg
+    # A bot's getFile fails outright past 20 MB, so the size the pointer
+    # already carries is the only place a too-large file can be told from a
+    # missing one: answer 413 before asking.
+    pointed = pointer.get("file_size")
+    if isinstance(pointed, int) and pointed > max_bytes:
+        raise HTTPException(status_code=413, detail=f"attachment exceeds the {settings.telegram_media_max_mb} MB cap")
     try:
         info = tg.resolve_file(settings.telegram_bot_token, str(pointer.get("file_id") or ""))
     except RuntimeError as e:
@@ -1688,9 +1706,7 @@ def event_attachment(event_id: str, index: int, request: Request, principal: Pri
     except RuntimeError as e:
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=_safe_detail(f"telegram file unavailable: {e}")) from e
     _touch_daemon(db, principal)
-    media_type = (str(pointer.get("mime_type") or "")
-                  or mimetypes.guess_type(str(pointer.get("filename") or ""))[0] or "application/octet-stream")
-    return Response(content=content, media_type=media_type)
+    return Response(content=content, media_type=_pointer_media_type(pointer))
 
 
 _MAX_PACK_BYTES = 4 * 1024 * 1024

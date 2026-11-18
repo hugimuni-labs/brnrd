@@ -13,6 +13,9 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
 from common import RelayClient, atomic_write, cloud, message_id, read, settings
+
+#: A bot's getFile stops at 20 MB; a pointer past it is large without asking.
+FETCH_MAX = 20 * 2**20
 from brr.gates.relay_lock import RelayLock
 from brr.loom.runtime.port import _front
 
@@ -82,13 +85,17 @@ def pull_once(drop, state, client, cursor, failures=None):
                 tmp = attachments / f'.{index}.tmp'
                 if dest.exists():
                     continue
+                pointer = pointers[index] if index < len(pointers) and isinstance(pointers[index], dict) else {}
+                size = pointer.get('file_size')
+                if type(size) is int and size > FETCH_MAX:
+                    # A bot's getFile fails past 20 MB: asking only reads as missing.
+                    large.append(f'{index}:{size}')
+                    continue
                 if client.download_attachment(event_id, index, tmp):
                     tmp.replace(dest)
                 else:
                     tmp.unlink(missing_ok=True)
                     if getattr(client, 'too_large', False):
-                        pointer = pointers[index] if index < len(pointers) and isinstance(pointers[index], dict) else {}
-                        size = pointer.get('file_size')
                         large.append(f'{index}:{size if type(size) is int else "?"}')
                     else:
                         missing.append(index)

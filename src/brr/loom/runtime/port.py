@@ -176,15 +176,21 @@ def _letter_attachments(root, facts, selected=None):
                 from .attachment import line
                 lines.append(line(folder / blob["sha"], blob["mime"], blob["size"]))
         from .attachment import too_large
-        missing = source.data.get("blobs_missing", ())
-        large = source.data.get("blobs_large", ())
-        if len(lines) > 1:
-            # Several files: each line says which of how many it is.
-            total = len(lines) + len(missing) + len(large)
-            lines = [line.replace("attachment: ", f"attachment {n} of {total}: ", 1)
-                     for n, line in enumerate(lines, 1)]
-        lines.extend(f"attachment {number} could not be fetched" for number in missing)
-        lines.extend(too_large(number + 1, size) for number, size in large)
+        missing = list(source.data.get("blobs_missing", ()))
+        large = list(source.data.get("blobs_large", ()))
+        # One rule for every line: the file's own place in the message,
+        # 1-based, "k of N" when N > 1. Missing and large carry their index;
+        # the fetched files fill the places left over, in the order they came.
+        taken = set(missing) | {index for index, _ in large}
+        total = max(len(lines) + len(missing) + len(large), max(taken, default=-1) + 1)
+        free = [index for index in range(total) if index not in taken]
+
+        def label(index):
+            return f"attachment {index + 1} of {total}" if total > 1 else "attachment"
+
+        lines = [line.replace("attachment: ", f"{label(index)}: ", 1) for index, line in zip(free, lines)]
+        lines.extend(f"{label(index)} could not be fetched" for index in missing)
+        lines.extend(too_large(label(index), size) for index, size in large)
         result[letter.id] = lines
     return result
 
