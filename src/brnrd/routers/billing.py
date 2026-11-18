@@ -20,6 +20,12 @@ from ..models import Account, BillingLedgerEntry, Subscription
 
 router = APIRouter(prefix="/v1/accounts", tags=["billing"])
 
+# Where a payer comes back from Stripe (checkout success/cancel, the portal).
+# The page that reads ?billing= is BillingPanel, which lives on /account
+# (src/frontend/src/lib/accountPage.ts ACCOUNT_PATH); / is the board and
+# shows no notice, so a return there confirmed nothing.
+ACCOUNT_PATH = "/account"
+
 
 def _settings(request: Request):
     return request.app.state.settings
@@ -108,8 +114,8 @@ def subscription_checkout(
             customer_id=customer_id,
             price_id=price_id,
             account_id=account.id,
-            success_url=f"{settings.public_base_url}/?billing=subscribed",
-            cancel_url=f"{settings.public_base_url}/?billing=canceled",
+            success_url=f"{settings.public_base_url}{ACCOUNT_PATH}?billing=subscribed",
+            cancel_url=f"{settings.public_base_url}{ACCOUNT_PATH}?billing=canceled",
         )
     except stripe_api.StripeError as exc:
         raise HTTPException(status_code=exc.status_code, detail=exc.detail)
@@ -166,7 +172,7 @@ def customer_portal(
         session = stripe_api.create_portal_session(
             settings,
             customer_id=account.stripe_customer_id,
-            return_url=f"{settings.public_base_url}/",
+            return_url=f"{settings.public_base_url}{ACCOUNT_PATH}",
         )
     except stripe_api.StripeError as exc:
         raise HTTPException(status_code=exc.status_code, detail=exc.detail)
@@ -205,8 +211,8 @@ def wallet_checkout(
             customer_id=account.stripe_customer_id,
             credits=usd * 100,  # $0.01/credit
             account_id=account.id,
-            success_url=f"{settings.public_base_url}/?billing=topup-complete",
-            cancel_url=f"{settings.public_base_url}/?billing=topup-canceled",
+            success_url=f"{settings.public_base_url}{ACCOUNT_PATH}?billing=topup-complete",
+            cancel_url=f"{settings.public_base_url}{ACCOUNT_PATH}?billing=topup-canceled",
         )
     except stripe_api.StripeError as exc:
         raise HTTPException(status_code=exc.status_code, detail=exc.detail)
