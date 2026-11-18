@@ -9,8 +9,9 @@ is empty) gets the same 404 an unknown route gets, so the surface is not
 discoverable by probing it. The page that reads this (``/account/views``)
 is linked from nowhere.
 
-Only one read-out today: the page-view counters ``brnrd.page_views`` writes,
-the last 30 days by day, path and referrer host. Read-only.
+Two read-outs, both read-only: the page-view counters ``brnrd.page_views``
+writes, the last 30 days by day, path and referrer host; and the first paying
+subscribers, who holds an install-session seat and why the rest do not.
 """
 
 from __future__ import annotations
@@ -23,6 +24,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from .. import billing
 from ..auth import account_id_from_session_cookie, get_db
 from ..models import Account
 from ..page_views import PageViewCount
@@ -64,3 +66,26 @@ def page_views(request: Request, db: Session = Depends(get_db)) -> dict[str, Any
         for (day, path, host), (v, b) in order
     ]
     return {"since": since.isoformat(), "until": today.isoformat(), "rows": rows}
+
+
+@router.get("/first-subscribers")
+def first_subscribers(request: Request, db: Session = Depends(get_db)) -> dict[str, Any]:
+    """Every paying account in the order its first subscription started, with
+    ``seat`` true for the ones shown the install-session link (while they stay
+    subscribed) and ``skipped`` saying why the others are not."""
+    _admin_or_404(request, db)
+    settings = request.app.state.settings
+    rows = billing.first_subscribers(db, settings)
+    return {
+        "seats": settings.first_subscribers_seats,
+        "link": settings.first_subscribers_link,
+        "rows": [
+            {
+                "github_login": r.github_login,
+                "started_at": r.started_at.isoformat() if r.started_at else None,
+                "seat": not r.skipped,
+                "skipped": r.skipped,
+            }
+            for r in rows
+        ],
+    }

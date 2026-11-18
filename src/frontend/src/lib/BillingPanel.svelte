@@ -6,6 +6,8 @@
 		cancelSubscription,
 		dateLabel,
 		fetchSubscription,
+		installSessionOffer,
+		RETURN_REFETCH_MS,
 		resumeSubscription,
 		startBillingPortal,
 		startSubscriptionCheckout,
@@ -39,6 +41,10 @@
 	let figure = $state<PriceFigure | null | undefined>(undefined);
 	let offer = $derived(subscribeOffer(figure));
 	let hasSubscription = $derived(subscription !== null && subscription.status !== null);
+	let installOffer = $derived(installSessionOffer(subscription));
+	// Right after checkout the offer rides in the notice; otherwise it sits
+	// with the subscription, for as long as the subscription is live.
+	let offerInNotice = $derived(notice?.kind === 'success' && installOffer !== null);
 	let periodEndLabel = $derived(
 		subscription?.current_period_end ? dateLabel(subscription.current_period_end) : null
 	);
@@ -63,9 +69,22 @@
 			// Strip the param so a reload doesn't re-announce a stale result.
 			history.replaceState(history.state, '', withoutBillingParam(window.location.href));
 		}
-		void refresh();
+		void refresh().then(() => {
+			if (notice?.kind === 'success') void awaitWebhook();
+		});
 		void fetchPricing().then((p) => (figure = p?.public_monthly ?? null));
 	});
+
+	// The return from Stripe usually beats the webhook that records the
+	// subscription; reread a few times so the payer sees it (and, for a first
+	// subscriber, the install-session link) without reloading.
+	async function awaitWebhook() {
+		for (const ms of RETURN_REFETCH_MS) {
+			if (hasSubscription) return;
+			await new Promise((r) => setTimeout(r, ms));
+			await refresh();
+		}
+	}
 
 	async function act(name: string, run: () => Promise<void>) {
 		if (busy) return;
@@ -105,6 +124,14 @@
 			role="status"
 		>
 			{notice.text}
+			{#if offerInNotice && installOffer}
+				<span class="install-offer mt-1 block text-amber-100">
+					{installOffer.lead}
+					<a href={installOffer.url} target="_blank" rel="noopener" class="underline">
+						{installOffer.link}</a
+					>.
+				</span>
+			{/if}
 		</p>
 	{/if}
 
@@ -186,6 +213,14 @@
 					</button>
 				{/if}
 			</div>
+			{#if installOffer && !offerInNotice}
+				<p class="install-offer mt-3 text-sm text-amber-100">
+					{installOffer.lead}
+					<a href={installOffer.url} target="_blank" rel="noopener" class="underline">
+						{installOffer.link}</a
+					>.
+				</p>
+			{/if}
 			<p class="mt-2 font-mono text-[10px] text-ink-quiet">
 				thank you — this funds the engine you're running, and you're early enough to shape it
 			</p>

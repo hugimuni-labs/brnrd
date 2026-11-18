@@ -6,6 +6,7 @@ import {
 	SUBSCRIBE_PITCH,
 	billingReturnNotice,
 	dateLabel,
+	installSessionOffer,
 	subscribeOffer,
 	withoutBillingParam
 } from './billing.ts';
@@ -66,4 +67,30 @@ test('dateLabel renders compact UTC dates and degrades to empty', () => {
 	assert.equal(dateLabel('2026-07-21T10:15:00Z'), '2026-07-21');
 	assert.equal(dateLabel('2026-12-31T23:59:59Z'), '2026-12-31');
 	assert.equal(dateLabel('not a date'), '');
+});
+
+test('installSessionOffer is the server-set link with the seat count, or nothing', () => {
+	const base = {
+		tier: 'subscribed',
+		status: 'active',
+		cohort: 'public',
+		cadence: 'monthly',
+		cancel_at_period_end: false,
+		current_period_end: null
+	};
+	assert.equal(installSessionOffer(null), null);
+	assert.equal(installSessionOffer(base), null);
+	assert.equal(installSessionOffer({ ...base, install_session_url: null }), null);
+	assert.deepEqual(
+		installSessionOffer({ ...base, install_session_url: 'https://cal.example/x', first_subscribers_seats: 20 }),
+		{
+			lead: "You're one of our first 20 subscribers.",
+			link: 'Book a free install session with us',
+			url: 'https://cal.example/x'
+		}
+	);
+	assert.equal(
+		installSessionOffer({ ...base, install_session_url: 'https://cal.example/x' })?.lead,
+		"You're one of our first subscribers."
+	);
 });

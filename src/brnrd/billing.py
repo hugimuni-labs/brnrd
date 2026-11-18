@@ -260,6 +260,101 @@ def _cohort_for_price(settings: Settings, price_id: str) -> str:
     return Subscription.COHORT_SUPPORTER
 
 
+# --- first subscribers ------------------------------------------------------
+
+# The ledger op a full refund of a subscription charge writes; an account
+# carrying one never holds a first-subscriber seat.
+OP_REFUND_SUBSCRIPTION = "refund_subscription"
+
+
+@dataclass(frozen=True)
+class FirstSubscriber:
+    account_id: str
+    github_login: str
+    started_at: datetime
+    # "" for a seat holder; otherwise why the account holds none.
+    skipped: str = ""
+
+
+def first_subscribers(db: Session, settings: Settings) -> list[FirstSubscriber]:
+    """Every account that has paid for a subscription, in the order its first
+    subscription started, each marked with a seat or the reason it has none.
+
+    Read from our own tables only, never from Stripe:
+
+    - paid: the account holds a subscriber allowance bucket, which only
+      ``invoice.paid`` grants. A checkout abandoned at the card leaves a
+      ``Subscription`` row and no bucket.
+    - started: the earliest ``Subscription.created_at`` of the account.
+    - skipped: an admin login (``BRNRD_ADMIN_GITHUB_LOGINS``), a login on
+      ``BRNRD_FIRST_SUBSCRIBERS_EXCLUDE``, a full refund of a subscription
+      charge (``OP_REFUND_SUBSCRIPTION``), or past the seat count. A skipped
+      account never moves a later one down: seats go to the first N unskipped.
+
+    An account that cancels keeps its place in the order: it was one of the
+    first, so a later subscriber does not inherit its seat.
+    """
+    paid = select(CreditBucket.account_id).where(
+        CreditBucket.source == CreditBucket.SOURCE_SUBSCRIBER_MONTHLY
+    )
+    refunded = set(
+        db.execute(
+            select(BillingLedgerEntry.account_id).where(
+                BillingLedgerEntry.op == OP_REFUND_SUBSCRIPTION
+            )
+        ).scalars()
+    )
+    rows = db.execute(
+        select(
+            Subscription.account_id,
+            Account.github_login,
+            func.min(Subscription.created_at).label("started_at"),
+        )
+        .join(Account, Account.id == Subscription.account_id)
+        .where(Subscription.account_id.in_(paid))
+        .group_by(Subscription.account_id, Account.github_login)
+        .order_by(func.min(Subscription.created_at), Subscription.account_id)
+    ).all()
+    admins = set(settings.admin_github_logins)
+    excluded = set(settings.first_subscribers_exclude)
+    out: list[FirstSubscriber] = []
+    seated = 0
+    for account_id, login, started_at in rows:
+        key = (login or "").lower()
+        if key in admins:
+            skipped = "admin"
+        elif key in excluded:
+            skipped = "excluded"
+        elif account_id in refunded:
+            skipped = "refunded"
+        elif seated >= settings.first_subscribers_seats:
+            skipped = "past the seats"
+        else:
+            skipped = ""
+            seated += 1
+        out.append(FirstSubscriber(account_id, login or "", started_at, skipped))
+    return out
+
+
+def install_session_link(db: Session, settings: Settings, account_id: str) -> str | None:
+    """The install-session link, for a first subscriber whose subscription is
+    live; ``None`` for everyone else, and while the offer is off."""
+    if settings.first_subscribers_seats <= 0 or not settings.first_subscribers_link:
+        return None
+    live = db.execute(
+        select(func.count()).select_from(Subscription).where(
+            Subscription.account_id == account_id,
+            Subscription.status != Subscription.STATUS_CANCELED,
+        )
+    ).scalar_one()
+    if not live:
+        return None
+    for row in first_subscribers(db, settings):
+        if row.account_id == account_id:
+            return settings.first_subscribers_link if not row.skipped else None
+    return None
+
+
 # --- webhook state machine ----------------------------------------------------
 
 
@@ -610,7 +705,7 @@ def _on_charge_refunded(db: Session, settings: Settings, obj: dict) -> str:
         select(CreditBucket).where(CreditBucket.stripe_ref == payment_intent)
     ).scalar_one_or_none()
     if bucket is None:
-        return "no-bucket"
+        return _on_subscription_charge_refunded(db, obj)
     refunded_cents = obj.get("amount_refunded") or 0
     clawback = min(int(refunded_cents), bucket.remaining_credits)
     if clawback > 0:
@@ -624,6 +719,33 @@ def _on_charge_refunded(db: Session, settings: Settings, obj: dict) -> str:
         metadata={"payment_intent": payment_intent, "amount_refunded_cents": refunded_cents},
     )
     return "refund-applied"
+
+
+def _on_subscription_charge_refunded(db: Session, obj: dict) -> str:
+    """A refunded charge that bought no credits, on a customer with a
+    subscription: a subscription payment was refunded. Recorded in the
+    ledger, so a refunded buyer (a test purchase) holds no first-subscriber
+    seat. Only a full refund (``refunded: true``) costs the seat."""
+    account = _account_for_event(db, metadata=obj.get("metadata"), customer_id=obj.get("customer"))
+    if account is None:
+        return "no-bucket"
+    has_subscription = db.execute(
+        select(func.count()).select_from(Subscription).where(Subscription.account_id == account.id)
+    ).scalar_one()
+    if not has_subscription:
+        return "no-bucket"
+    full = obj.get("refunded") is True
+    ledger_append(
+        db,
+        account.id,
+        OP_REFUND_SUBSCRIPTION if full else "refund_subscription_partial",
+        metadata={
+            "charge": obj.get("id"),
+            "payment_intent": obj.get("payment_intent"),
+            "amount_refunded_cents": obj.get("amount_refunded") or 0,
+        },
+    )
+    return "subscription-refund-recorded"
 
 
 # The dispatch table ``handle_stripe_event`` reads — the one structure that

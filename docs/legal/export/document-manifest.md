@@ -13,7 +13,7 @@ Hash snapshot:
 
 - Date: 2026-11-18
 - Source revision (parent of this export-only change):
-  `e3dccd9b249e3c81a0ebffee78960691981639cc`
+  `d9a0991a9ae80fe54fc9ff2c01dcaaf75c153f71`
 - Algorithm: SHA-256 over raw repository file bytes
 - Machine-readable list: [`SHA256SUMS`](SHA256SUMS)
 - Verification from the repository root:
@@ -60,8 +60,8 @@ factual statements in the pack.
 | Evidence | What it establishes | SHA-256 |
 |---|---|---|
 | [`src/brnrd/account_deletion.py`](../../../src/brnrd/account_deletion.py) | Article 17 deletion/anonymisation sweep, subscription cancellation, retained billing ledger | `947521f87bfd20bfc4a3018978b4ab7f2091ad49c8517c819845245ee866ae6a` |
-| [`src/frontend/src/lib/billing.ts`](../../../src/frontend/src/lib/billing.ts) | Browser sends cadence and follows a Stripe-hosted checkout URL; no brnrd waiver control | `52cbf4455c158d0d1a031d08cc886e94b37491b6ff976601b517abd0efe52f23` |
-| [`src/brnrd/routers/billing.py`](../../../src/brnrd/routers/billing.py) | Authenticated checkout endpoint and server-side cohort/price selection | `1dd1d7719b628996029a8082ce2897f3764b68618d02185a09497a0f59d57e3a` |
+| [`src/frontend/src/lib/billing.ts`](../../../src/frontend/src/lib/billing.ts) | Browser sends cadence and follows a Stripe-hosted checkout URL; no brnrd waiver control | `2e7d71e7285980f7228ac8a4c0d4d18d402ed00d8c14a015cc5030f6a2276601` |
+| [`src/brnrd/routers/billing.py`](../../../src/brnrd/routers/billing.py) | Authenticated checkout endpoint and server-side cohort/price selection | `3088fa0c1512a51efa3af6e62d7b2250bcb443f95744a33de7c6231098185458` |
 | [`src/brnrd/stripe_api.py`](../../../src/brnrd/stripe_api.py) | Stripe Checkout payload and Managed Payments / merchant-of-record behavior | `dda318565da597f6c808151c265991b59b2f0b9581e0a6a478811d8d3181ce1f` |
 | [`src/brnrd/terms.py`](../../../src/brnrd/terms.py) | Immutable legal-text pins, versions, and SHA-256 acceptance evidence | `3196627add4fd431e74eafa88ba1a67a6ff5c35fa98f00a910185e015ed60526` |
 | [`src/brnrd/routers/_session.py`](../../../src/brnrd/routers/_session.py) | Per-document acceptance status, re-consent predicate, and mirror deletion on last disconnect | `87ca31d40a5471c01a9a39ee7f794db9e0c46e023cc1f7cf67d469b09e52b44b` |
