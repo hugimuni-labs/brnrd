@@ -32,12 +32,12 @@ When something can be a setting, a file or a sentence between a person and their
 - rules out: a new configuration key for a preference a person could simply state; a new file kind where an existing one will do; a preference or a permission that cannot be traced to the sentence that gave it.
 - today: letters are kept and cited by their number where work answers them. Finding one by what it said, and following it forward to what was done, is by hand.
 
-## 5 · Trust comes from standing permission and a record, not from a cage
+## 5 · Trust comes from the person's own words and a record, not from a cage
 
-A resident acts on what its person has said yes to, and leaves a record of what it did that neither of them can quietly rewrite. It checks itself against that record and faces the ugliest failures first. This has to work with no server.
+The resident judges each act itself, and marks it before it runs: what it reaches, what it touches, which words of its person it serves, and how it is put back. An act that cannot be undone points at a sentence its person said; where there is none, the resident asks. It leaves a record of what it did that neither of them can quietly rewrite, checks itself against that record and faces the ugliest failures first. This has to work with no server.
 
-- rules out: safety that only exists while our cloud is reachable; counting misses by a list of forbidden commands; a number the resident can edit.
-- today: guards for a few classes of act; the record is designed, not built.
+- rules out: safety that only exists while our cloud is reachable; counting misses by a list of forbidden commands; a number the resident can edit; a table of commands that decides for the resident; a grant that is anything other than a sentence the person said.
+- today: since 2026-11-16 a journal on the machine records each tool call, as digests only, when the person turns it on (`audit`, off by default). Since 2026-11-17 three doors (a letter to a person, a publish, a merge, close, comment or release on GitHub) write their passage and its `BRNRD_SAY` sentence into it, also off by default; they refuse nothing. Guards still decide for a few classes of act, and one service, GitHub, has a command table (`limbs/`) that refuses or asks before the call runs. The mark was decided 2026-11-18 and is not built.
 
 ## 6 · The owner's hardware, files and keys beat our convenience
 
