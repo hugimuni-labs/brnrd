@@ -35,6 +35,11 @@ CLASSES = {
     "delete-home": "delete under a home root",
     "merge-red": "merge without green",
     "publish": "publish",
+    "visibility": "change who can see a repository",
+    "secret": "set or delete a secret",
+    "access": "change who can reach a repository",
+    "forge-delete": "delete on the forge",
+    "run": "start a workflow",
 }
 
 # A letter grants a class only when it says one of these too: the target alone is a common word.
@@ -43,6 +48,11 @@ VERBS = {
     "delete-home": r"delet|remov|\brm\b|wipe|clean",
     "merge-red": r"merg",
     "publish": r"releas|publish|upload|post|tag",
+    "visibility": r"visib|public|private|internal",
+    "secret": r"secret",
+    "access": r"collaborat|access|invit|permission|add|remov",
+    "forge-delete": r"delet|remov",
+    "run": r"\brun|dispatch|trigger|start",
 }
 
 
@@ -79,7 +89,8 @@ def names(text: str, target: str) -> bool:
     """``target`` stands in ``text`` as a word: ``#2610`` and ``2610`` name PR 2610,
     ``main`` does not stand in ``maintain``, a path is not the start of a longer one."""
     target = target.strip()
-    if not target:
+    if not re.search(r"\w", target):
+        # "?" or "-": no letter names nothing, however it is punctuated.
         return False
     forms = {target, target.lstrip("#")} if target.startswith("#") else {target}
     # People write a release without its v: "Publish 0.7.0" names the tag v0.7.0.
