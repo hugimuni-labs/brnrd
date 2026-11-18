@@ -1280,9 +1280,9 @@ def _room_kept(home: Home, strand: str) -> list[str]:
 
 def _home_streak(facts, thread: str, gen: int) -> int:
     """The first generation of the home-caused failures that end at ``gen``."""
-    ends = sorted((int(f.data["gen"]), f) for f in kind_facts(facts, "attempt.ended")
-                  if f.data.get("thread") == thread
-                  and int(f.data["gen"]) < gen)
+    ends = sorted(((int(f.data["gen"]), f) for f in kind_facts(facts, "attempt.ended")
+                   if f.data.get("thread") == thread
+                   and int(f.data["gen"]) < gen), key=lambda pair: pair[0])
     start = gen
     for prior, fact in reversed(ends):
         if not fact.data.get("evidence", {}).get("home_failure"):

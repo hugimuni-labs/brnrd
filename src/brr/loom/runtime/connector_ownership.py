@@ -121,6 +121,27 @@ def conflict(data, rows):
     return None
 
 
+def twins(home, name):
+    """Other connector names on this name's transport, on any install.
+
+    One relay is one account's door, whatever each install calls it; a direct
+    bot is its public identity. A message one twin admitted is held already.
+    Without shared leasing every name is its own door.
+    """
+    if not load_config(home.root).lease_remote:
+        return ()
+    rows = claims(home)
+
+    def door(row):
+        if row.get('identity'):
+            return 'identity', row['identity']
+        if row.get('scope') == 'global':
+            return 'global', row.get('kind')
+        return 'name', row.get('owner'), row.get('name')
+    mine = {door(r) for r in rows if r.get('name') == name}
+    return tuple(sorted({r['name'] for r in rows if r.get('name') != name and door(r) in mine}))
+
+
 def migrate_if_due(home):
     """Startup, local changes and a slow repair pace, including on followers."""
     from .connector import instances
