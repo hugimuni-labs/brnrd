@@ -117,7 +117,8 @@ def test_composer_body_the_wake_refuses_gets_its_words_and_the_seat(tmp_path, mo
         _Composer(loom.home).says("w1", "second", "start here", body="codex")
         wait_until(lambda: any(m["to"] == "loom:ada" for m in home.sent), 10, loom.dump)
         refused = next(m for m in home.sent if m["to"] == "loom:ada")
-        assert "No body 'codex' here; bodies are claude, spare. Nothing was started." in refused["body"]
+        assert "No body 'codex' here. Bodies and cores: claude (" in refused["body"]
+        assert "spare (y). Nothing was started." in refused["body"]
         assert _leases(loom, "second") == [("spare", "y")]
     finally:
         loom.halt()

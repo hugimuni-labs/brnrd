@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import json
 import os
+import shlex
 import sys
 from pathlib import Path
 from brr.grok_runner import command
@@ -8,7 +9,7 @@ from brr.loom.runtime.port import wake_parts
 
 room, core = sys.argv[1:]
 def hook(event, timeout):
-    return {"hooks": [{"type": "command", "command": os.environ["BRNRD_JACK"] + " --event " + event,
+    return {"hooks": [{"type": "command", "command": shlex.quote(os.environ["BRNRD_JACK"]) + " --event " + event,
                        "timeout": timeout}]}
 path = Path(room) / "self/.claude/settings.local.json"
 path.parent.mkdir(parents=True, exist_ok=True)

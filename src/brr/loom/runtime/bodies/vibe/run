@@ -17,7 +17,7 @@ if sys.argv[1] == "hook":
     if event is None:
         raise SystemExit(0)
     payload = json.loads(sys.stdin.read() or "{}")
-    result = subprocess.run(shlex.split(os.environ["BRNRD_JACK"]) + ["--event", event],
+    result = subprocess.run([os.environ["BRNRD_JACK"], "--event", event],
                             input=json.dumps(_vibe_as_claude_tool(payload)), text=True, capture_output=True)
     if result.stdout.strip():
         payload = json.loads(result.stdout)

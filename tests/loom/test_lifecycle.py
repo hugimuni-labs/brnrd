@@ -381,12 +381,39 @@ def test_wake_naming_no_enabled_body_is_refused_with_the_list(tmp_path, monkeypa
         home.person.says("nope", "wake codex")
         wait_until(lambda: any(m["re"] == "telegram:42:nope" for m in home.sent), 10, loom.dump)
         refused = next(m for m in home.sent if m["re"] == "telegram:42:nope")
-        assert "No body 'codex' here; bodies are claude, spare. Nothing was started." in refused["body"]
+        assert ("No body 'codex' here. Bodies and cores: claude (echo, fable, haiku, opus, sonnet); "
+                "spare (any core it takes). Nothing was started.") in refused["body"]
         assert "wake spare: spare session 70%" in refused["body"]
         time.sleep(0.5)
         assert not _started(loom)
         assert _leases(loom) == [(1, "claude", "echo")]
         assert "letter:relay:telegram:42:nope" not in {str(l.data["id"]) for l in mail(home.root, loom.facts(), "inbox")}
+    finally:
+        loom.halt()
+        kill_bodies(loom)
+    assert not loom.errors
+
+
+def test_wake_with_its_core_apart_by_a_space_is_refused_with_the_list(tmp_path, monkeypatch):
+    home = _parked_home(tmp_path, monkeypatch)
+    loom = Loom(home.root)
+    loom.start()
+    try:
+        wait_until(lambda: any(f.kind == "body.parked" for f in loom.facts()), 10, loom.dump)
+        home.person.says("spaced", "wake spare x")
+        home.person.says("prose", "wake me up when it lands")
+        wait_until(lambda: any(m["re"] == "telegram:42:spaced" for m in home.sent), 10, loom.dump)
+        refused = next(m for m in home.sent if m["re"] == "telegram:42:spaced")
+        assert ("Invalid body argument; use wake <shell>[/<core>]. Bodies and cores: "
+                "claude (echo, fable, haiku, opus, sonnet); spare (any core it takes).") in refused["body"]
+        time.sleep(0.5)
+        assert not _started(loom)
+        assert _leases(loom) == [(1, "claude", "echo")]
+        inbox = {str(l.data["id"]) for l in mail(home.root, loom.facts(), "inbox")}
+        assert "letter:relay:telegram:42:spaced" not in inbox
+        # Prose that opens with "wake" is a letter like any other.
+        assert "letter:relay:telegram:42:prose" in inbox
+        assert not any(m["re"] == "telegram:42:prose" and "Invalid body" in m["body"] for m in home.sent)
     finally:
         loom.halt()
         kill_bodies(loom)
