@@ -175,8 +175,16 @@ def _letter_attachments(root, facts, selected=None):
             if blob is not None and blob["sha"] in source.data.get("blobs", ()):
                 from .attachment import line
                 lines.append(line(folder / blob["sha"], blob["mime"], blob["size"]))
-        lines.extend(f"attachment {number} could not be fetched"
-                     for number in source.data.get("blobs_missing", ()))
+        from .attachment import too_large
+        missing = source.data.get("blobs_missing", ())
+        large = source.data.get("blobs_large", ())
+        if len(lines) > 1:
+            # Several files: each line says which of how many it is.
+            total = len(lines) + len(missing) + len(large)
+            lines = [line.replace("attachment: ", f"attachment {n} of {total}: ", 1)
+                     for n, line in enumerate(lines, 1)]
+        lines.extend(f"attachment {number} could not be fetched" for number in missing)
+        lines.extend(too_large(number + 1, size) for number, size in large)
         result[letter.id] = lines
     return result
 

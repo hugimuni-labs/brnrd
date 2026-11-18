@@ -178,6 +178,10 @@ def ingest(home, name, fm, attachments, authorize=None):
                 data[key] = fm[key]
         if fm.get('missing'):
             data['blobs_missing'] = [int(n) for n in fm['missing'].split()]
+        if fm.get('large'):
+            # ``index:bytes`` (bytes ``?`` when unknown): past the connector's cap, never fetched.
+            data['blobs_large'] = [[int(i), int(b) if b.isdecimal() else None]
+                                   for i, _, b in (item.partition(':') for item in fm['large'].split())]
         if clean:
             data.update(clean=fm['kind'], refs=fm['refs'].split())
         # A ref that names nothing never refuses his letter: it lands without that link.
@@ -302,6 +306,8 @@ def drain(home, name, drop, failures=None, authorize=None):
                 raise ValueError('kind must be letter or a clean letter with valid refs')
             if fm.get('missing') and not all(n.isdecimal() for n in fm['missing'].split()):
                 raise ValueError('missing must contain attachment numbers')
+            if fm.get('large') and not all(re.fullmatch(r'\d+:(\d+|\?)', n) for n in fm['large'].split()):
+                raise ValueError('large must contain <attachment number>:<bytes or ?>')
             files = sorted(attachments.iterdir()) if attachments.exists() else []
             for file in files:
                 if not file.is_file() or file.is_symlink():

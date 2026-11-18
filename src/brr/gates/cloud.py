@@ -1239,7 +1239,8 @@ def _origin_meta(reply_to: dict) -> dict:
 _MAX_ATTACHMENT_BYTES = 20 * 1024 * 1024
 
 
-def _download_attachment(base_url: str, token: str, event_id: str, index: int, dest: Path) -> bool:
+def _download_attachment(base_url: str, token: str, event_id: str, index: int, dest: Path,
+                         status: list | None = None) -> bool:
     """Fetch one attachment via the proxy into *dest*. Returns success.
 
     Best-effort by design, like the local gate's ``_download_telegram_file``:
@@ -1251,6 +1252,8 @@ def _download_attachment(base_url: str, token: str, event_id: str, index: int, d
     url = base_url.rstrip("/") + f"/v1/daemons/events/{event_id}/attachments/{index}"
     try:
         resp = _send("GET", url, headers={"Authorization": f"Bearer {token}"}, timeout=_HTTP_TIMEOUT_S, stream=True)
+        if status is not None:
+            status.append(resp.status_code)
         if not 200 <= resp.status_code < 300:
             print(f"[brnrd:cloud] attachment {event_id}[{index}] -> {resp.status_code}: {resp.text[:120]}")
             return False
@@ -1259,6 +1262,8 @@ def _download_attachment(base_url: str, token: str, event_id: str, index: int, d
             for chunk in resp.iter_content(65536):
                 size += len(chunk)
                 if size > _MAX_ATTACHMENT_BYTES:
+                    if status is not None:
+                        status.append(413)
                     return False
                 fh.write(chunk)
     except requests.RequestException as exc:

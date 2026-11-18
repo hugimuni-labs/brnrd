@@ -8,31 +8,43 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
 from common import call, download, message_id, state
-from brr.channels.telegram import parse_update
+from brr.channels.telegram import extract_attachments, parse_update
 from brr.loom.runtime.home import atomic_write
 from brr.loom.runtime.port import _front
 
 
-def receive(drop, update):
+# A bot may fetch a file of at most 20 MB: https://core.telegram.org/bots/api#getfile
+FETCH_MAX = 20 * 2**20
+
+
+def receive(drop, update, more=()):
+    """One letter from an update, with the files of ``more``: the rest of its album."""
     parsed = parse_update(update)
     if parsed is None or parsed.is_edit:
         return
-    msg = update['message']
     ident = message_id(parsed.chat_id, parsed.message_id)
     if (drop / f'{ident}.md').exists():
         return
+    texts = [parsed.text] if parsed.text else []
     pointers = []
-    if msg.get('photo'):
-        pointers.append((msg['photo'][-1]['file_id'], '.jpg'))
-    for kind in ('document', 'audio', 'voice', 'video', 'video_note', 'animation', 'sticker'):
-        media = msg.get(kind)
-        if isinstance(media, dict) and media.get('file_id'):
-            suffix = Path(media.get('file_name', '')).suffix
-            pointers.append((media['file_id'], suffix if suffix.lstrip('.').isalnum() else ''))
-    missing = []
-    for index, (file_id, suffix) in enumerate(pointers):
+    for item in (update, *more):
+        msg = item.get('message') or {}
+        if item is not update:
+            extra = parse_update(item)
+            if extra is not None and extra.text:
+                texts.append(extra.text)
+        for pointer in extract_attachments(msg):
+            # The name extract_attachments gives carries the extension (a voice has no file_name).
+            suffix = Path(pointer['filename']).suffix
+            pointers.append((pointer['file_id'], suffix if suffix[1:].isalnum() else '',
+                             pointer.get('file_size')))
+    missing, large = [], []
+    for index, (file_id, suffix, size) in enumerate(pointers):
         dest = drop / f'{ident}.d' / f'{index}{suffix}'
         if dest.exists():
+            continue
+        if isinstance(size, int) and size > FETCH_MAX:
+            large.append(f'{index}:{size}')
             continue
         for attempt in range(3):
             try:
@@ -48,7 +60,26 @@ def receive(drop, update):
         fields['re'] = message_id(parsed.chat_id, parsed.reply_to_message_id)
     if missing:
         fields['missing'] = ' '.join(missing)
-    atomic_write(drop / f'{ident}.md', _front(fields, parsed.text))
+    if large:
+        fields['large'] = ' '.join(large)
+    atomic_write(drop / f'{ident}.md', _front(fields, '\n'.join(texts)))
+
+
+def batch(updates):
+    """Updates as ``(first, rest)``: the items of one album in this batch go with its first.
+
+    An album split across two batches stays two letters: nothing is held back,
+    so nothing is lost when the poll stops between them."""
+    groups, order = {}, []
+    for update in updates:
+        msg = update.get('message') if isinstance(update, dict) else None
+        group = msg.get('media_group_id') if isinstance(msg, dict) else None
+        key = (str((msg.get('chat') or {}).get('id')), str(group)) if group is not None else id(update)
+        if key not in groups:
+            groups[key] = []
+            order.append(key)
+        groups[key].append(update)
+    return [(groups[key][0], groups[key][1:]) for key in order]
 
 
 def poll(drop, stop):
@@ -57,10 +88,10 @@ def poll(drop, stop):
     delay = 1
     while not stop.is_set():
         try:
-            for update in call('getUpdates', dict(offset=offset, timeout=25,
-                                                   allowed_updates=['message'])):
-                receive(drop, update)
-                offset = update['update_id'] + 1
+            updates = call('getUpdates', dict(offset=offset, timeout=25, allowed_updates=['message']))
+            for first, rest in batch(updates):
+                receive(drop, first, rest)
+                offset = max(u['update_id'] for u in (first, *rest)) + 1
                 atomic_write(cursor, str(offset))
             delay = 1
         except Exception as exc:

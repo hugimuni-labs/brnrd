@@ -234,8 +234,8 @@ def test_same_blob_twice_one_file_two_exact_facts(home):
     assert (home.root / "blobs" / digest).read_bytes() == b"JPEG!"
     blobs = kinds(home, "blob")
     assert [f.data for f in blobs] == [
-        {"sha": digest, "mime": "application/octet-stream", "size": 5, "origin": "relay:telegram:555:ev_a#0"},
-        {"sha": digest, "mime": "application/octet-stream", "size": 5, "origin": "relay:telegram:555:ev_b#0"},
+        {"sha": digest, "mime": "image/jpeg", "size": 5, "origin": "relay:telegram:555:ev_a#0"},
+        {"sha": digest, "mime": "image/jpeg", "size": 5, "origin": "relay:telegram:555:ev_b#0"},
     ]
     assert [f.data["blobs"] for f in kinds(home, "source")] == [[digest], [digest]]
     before = (home.root / "blobs" / digest).stat().st_mtime_ns
@@ -254,7 +254,7 @@ def test_download_failure_keeps_cursor_and_retry_stores_bytes(home):
     assert not (home.root / "blobs").exists()
     client.fail_download = False
     relay.pull_once(home, client, 0)
-    assert kinds(home, "blob")[0].data["mime"] == "application/octet-stream"
+    assert kinds(home, "blob")[0].data["mime"] == "image/jpeg"
     assert relay.read_cursor(home) == 1
 
 
@@ -289,7 +289,7 @@ def test_client_uses_existing_cloud_state_request_and_download(tmp_path, monkeyp
                           "timeout": cloud._POLL_TIMEOUT_S}
         return {"events": [], "cursor": 2}
     monkeypatch.setattr(cloud, "_request", request)
-    def download(url, token, event_id, index, dest):
+    def download(url, token, event_id, index, dest, status=None):
         assert (url, token, event_id, index) == ("https://relay.invalid", "test-token", "ev_1", 0)
         dest.write_bytes(b"x")
         return True
@@ -367,3 +367,46 @@ def test_github_repository_chat_uses_the_same_folder_and_source_step(home):
     assert source.data['channel'] == 'channel:relay/github:owner/repo#17'
     assert letter.data['from'] == 'stranger:relay:'
     assert letter.data['label']['taint']
+
+
+def test_every_medium_arrives_typed_and_a_capped_one_says_its_size(home):
+    """His 11354: the relay dropped each file as a bare index, so a photo was
+    octet-stream; past the cloud's cap a file is too big, not lost."""
+    from brr.loom.runtime.port import letter_attachments
+    pointers = [
+        {"file_id": "v1", "filename": "voice.ogg", "kind": "voice", "mime_type": "audio/ogg"},
+        {"file_id": "d1", "filename": "notes.pdf", "kind": "document", "mime_type": "application/pdf"},
+        {"file_id": "vid", "filename": "video.mp4", "kind": "video", "file_size": 31_457_280},
+    ]
+    client = FakeClient([event(body="", attachments=pointers)], cursor=1)
+    real = client.download_attachment
+
+    def download(ident, index, dest):
+        client.too_large = index == 2
+        return False if client.too_large else real(ident, index, dest)
+    client.download_attachment = download
+    relay.pull_once(home, client, 0)
+    assert relay.read_cursor(home) == 1  # a file too big is no reason to retry the event
+    assert [f.data["mime"] for f in kinds(home, "blob")] == ["audio/ogg", "application/pdf"]
+    [source] = kinds(home, "source")
+    assert source.data["blobs_large"] == [[2, 31_457_280]]
+    [lines] = letter_attachments(home.root, read_facts(home)).values()
+    assert lines[0].startswith("attachment 1 of 3: voice message (audio/ogg")
+    assert lines[1].startswith("attachment 2 of 3: PDF document (application/pdf")
+    assert lines[2] == ("attachment 3 (30.0 MB) is past the size the connector may fetch and did not come: "
+                        "ask for it smaller, or as a link")
+
+
+def test_a_413_from_the_cloud_reads_as_too_large(monkeypatch, tmp_path):
+    """The real client over the real download: the cloud's cap answer is ``too_large``, a 502 is not."""
+    monkeypatch.setattr(relay.RelayClient, "_state", lambda self: {"brnrd_url": "https://relay.invalid", "token": "t"})
+    codes = iter([413, 502])
+
+    class Response:
+        def __init__(self):
+            self.status_code = next(codes)
+            self.text = "no"
+    monkeypatch.setattr(cloud, "_send", lambda *a, **k: Response())
+    client = relay.RelayClient(tmp_path)
+    assert client.download_attachment("ev_1", 0, tmp_path / "blob") is False and client.too_large
+    assert client.download_attachment("ev_1", 0, tmp_path / "blob") is False and not client.too_large

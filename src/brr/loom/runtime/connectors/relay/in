@@ -73,9 +73,12 @@ def pull_once(drop, state, client, cursor, failures=None):
                 raise ValueError('relay: unreadable attachments')
             attachments = drop / f'{ident}.d'
             attachments.mkdir(parents=True, exist_ok=True)
-            missing = []
-            for index, _name in enumerate(names):
-                dest = attachments / str(index)
+            pointers = event.get('attachments') if isinstance(event.get('attachments'), list) else []
+            missing, large = [], []
+            for index, name in enumerate(names):
+                # The name's extension types the file (his 11349 came as a bare index).
+                suffix = Path(name).suffix
+                dest = attachments / (f'{index}{suffix}' if suffix[1:].isalnum() else str(index))
                 tmp = attachments / f'.{index}.tmp'
                 if dest.exists():
                     continue
@@ -83,7 +86,12 @@ def pull_once(drop, state, client, cursor, failures=None):
                     tmp.replace(dest)
                 else:
                     tmp.unlink(missing_ok=True)
-                    missing.append(index)
+                    if getattr(client, 'too_large', False):
+                        pointer = pointers[index] if index < len(pointers) and isinstance(pointers[index], dict) else {}
+                        size = pointer.get('file_size')
+                        large.append(f'{index}:{size if type(size) is int else "?"}')
+                    else:
+                        missing.append(index)
             if missing and failures.get(key, 0) < 2:
                 raise RuntimeError(f'relay: attachment download failed: {event_id}#{missing[0]} '
                                    f'(attempt {failures.get(key, 0) + 1} of 3)')
@@ -105,6 +113,9 @@ def pull_once(drop, state, client, cursor, failures=None):
                 fields['wish'], fields['verdict'] = wish, verdict
             if missing:
                 fields['missing'] = ' '.join(map(str, missing))
+            if large:
+                # Past the relay's cap: no retry fetches it, and the letter says so.
+                fields['large'] = ' '.join(large)
             atomic_write(drop / f'{ident}.md', _front(fields, event.get('body') or ''))
             mapping[ident] = event_id
             atomic_write(state / 'messages.json', json.dumps(mapping))

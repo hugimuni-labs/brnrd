@@ -60,5 +60,9 @@ class RelayClient:
                               token=state['token'], json=chats, retry=False, timeout=5)
 
     def download_attachment(self, event_id, index, dest):
+        """True once the bytes are in ``dest``; ``too_large`` says whether a miss was the cap."""
         state = self._state()
-        return cloud._download_attachment(state['brnrd_url'], state['token'], event_id, index, dest)
+        status = []
+        ok = cloud._download_attachment(state['brnrd_url'], state['token'], event_id, index, dest, status)
+        self.too_large = not ok and 413 in status
+        return ok
