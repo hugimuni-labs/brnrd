@@ -15,8 +15,22 @@ Two kinds of line, kept apart. The body writes what it thinks, in the note.
 The loom writes what happened, in ``hands.json`` beside the journal: for each
 program or host a marked call reached (mark.py), when it last worked and
 when it last blocked, and why. A note with no success behind it for 30 days
-is shown as unverified. When something blocked, the stop asks one line for
-its note, once. No upkeep pass: everything here runs at a call or a stop.
+is shown as unverified. When something blocked, a stop that already holds for
+another reason adds one line asking for its note; the line never holds a stop
+alone (a hook shows a fact or refuses, never demands). No upkeep pass:
+everything here runs at a call or a stop.
+
+A scar (``memory/scars/``) is shown with its text, up to :data:`SCAR_LINES`
+lines after its title, trigger and date, read from the self's tip at show
+time: a path one read away is the reflex that failed (the empty sends of
+2026-11-18). Other notes show their path and head.
+
+A phrase that ends in ``:`` or ``/`` is a prefix: ``telegram:`` opens at
+``telegram:155783668``.
+
+``hands.json`` is read, changed and replaced by every room with no lock: two
+rooms ending a call in the same instant can lose one line, which costs a
+stamp, never a call.
 """
 
 from __future__ import annotations
@@ -36,6 +50,7 @@ STALE = 30 * 86400
 # At most this many notes at one call: the rest open at a later call that names them.
 AT_ONCE = 5
 MIN = 2
+SCAR_LINES = 15
 
 
 @dataclass(frozen=True)
@@ -95,6 +110,14 @@ def _from_product() -> list[Note]:
     return notes
 
 
+def _product_stamp() -> float:
+    """The product notes' newest change: a loom update that edits one is seen at once."""
+    try:
+        return max((p.stat().st_mtime for p in PRODUCT.glob("*.md")), default=0.0)
+    except OSError:
+        return 0.0
+
+
 def load(room: Path) -> list[Note]:
     """Every note, cached in the room's port by the self's main tip."""
     from .home import home_of_room
@@ -107,13 +130,13 @@ def load(room: Path) -> list[Note]:
     cache = Path(room) / "port" / CACHE
     try:
         kept = json.loads(cache.read_text())
-        if kept.get("tip") == tip:
+        if kept.get("tip") == tip and kept.get("product") == _product_stamp():
             return [Note(n["path"], n["head"], tuple(n["phrases"])) for n in kept["notes"]]
     except (OSError, ValueError, KeyError, TypeError):
         pass
     notes = (_from_self(self_repo, tip) if tip else []) + _from_product()
     try:
-        cache.write_text(json.dumps({"tip": tip, "notes": [n.__dict__ | {"phrases": list(n.phrases)}
+        cache.write_text(json.dumps({"tip": tip, "product": _product_stamp(), "notes": [n.__dict__ | {"phrases": list(n.phrases)}
                                                            for n in notes]}) + "\n")
     except OSError:
         pass
@@ -128,7 +151,9 @@ def call_text(payload: dict) -> str:
 
 
 def _phrase(phrase: str) -> re.Pattern:
-    return re.compile(rf"(?<![\w-]){re.escape(phrase)}(?![\w-])", re.I)
+    # A phrase ending in ":" or "/" is a prefix: "telegram:" names "telegram:155783668".
+    tail = "" if phrase[-1:] in (":", "/") else r"(?![\w-])"
+    return re.compile(rf"(?<![\w-]){re.escape(phrase)}{tail}", re.I)
 
 
 def touched(notes: list[Note], text: str) -> list[tuple[Note, str]]:
@@ -228,7 +253,29 @@ def shown_at(room: Path, payload: dict, already: set[str]) -> tuple[str, list[st
         where = note.path if note.path.startswith("brnrd:") else f"self/{note.path}"
         said = stamp(note, record)
         lines.append(f"note ({phrase}): {where}: {note.head}" + (f" [{said}]" if said else ""))
+        if note.path.startswith("memory/scars/"):
+            lines.extend("  " + ln for ln in scar_text(room, note.path))
     return "\n".join(lines), [n.path for n, _ in found]
+
+
+def scar_text(room: Path, path: str) -> list[str]:
+    """A scar's rule, read from the self's tip now: the lines after its title, trigger and date."""
+    from .home import home_of_room
+    from .lifecycle import main_tip
+    self_repo = home_of_room(Path(room)).root / "self"
+    try:
+        shown = _git(self_repo, "show", f"{main_tip(self_repo)}:{path}")
+    except Exception:  # noqa: BLE001 - the head was shown; the text is a bonus
+        return []
+    if shown.returncode != 0:
+        return []
+    lines = shown.stdout.splitlines()
+    start = 0
+    for i, ln in enumerate(lines[:10]):
+        if ln.startswith("#") or re.match(r"(?i)(trigger|date):", ln):
+            start = i + 1
+    body = [ln for ln in lines[start:] if ln.strip()][:SCAR_LINES]
+    return body
 
 
 def blocked_since(room: Path, since: float) -> list[tuple[str, str]]:

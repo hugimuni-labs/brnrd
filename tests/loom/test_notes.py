@@ -59,6 +59,9 @@ def test_a_note_opens_at_the_call_that_names_its_trigger_once_per_body(tmp_path,
     try:
         said = _context(execute("pre", room, _call("gh pr checks 12 --watch")))
         assert "note (gh pr checks): self/memory/scars/git/a-merge-gated.md: A merge gated on grepped" in said
+        # A scar shows its rule, not only its path: one read away is the reflex that failed.
+        assert "  Read the exit code of `gh pr checks`, never its text." in said
+        assert "trigger:" not in said and "date:" not in said
         # Once per body: the same body does not hear it again.
         assert "a-merge-gated" not in _context(execute("pre", room, _call("gh pr merge 12")))
         # A word, not a substring: "gh pr checksum" names nothing.
@@ -87,10 +90,16 @@ def test_the_loom_writes_what_worked_and_what_blocked_and_the_stop_asks_one_line
         assert record["worked"] and record["blocked"] and record["why"] == "HTTP 401: Bad credentials"
         said = _context(execute("pre", room, _call("gh pr checks 14", session="s9")))
         assert "last worked " in said and "last blocked " in said and "(HTTP 401: Bad credentials)" in said
+        # The line rides a stop that already holds (here: the owed letter), once per body.
         first = json.loads(execute("stop", room, "{}"))
-        assert first["decision"] == "block"
         assert "something blocked you this wake" in first["reason"] and "- gh: HTTP 401" in first["reason"]
-        # Asked once per body.
+        assert "something blocked" not in execute("stop", room, "{}")
+        # Alone, a blocked call never holds a stop: the line is a fact, never a demand.
+        from brr.loom.runtime import jack
+        for name in ("_letter_miss", "_left", "_end_miss", "_guard_miss", "_kept_miss", "_receipt_miss",
+                     "_readme_miss", "_mark_miss", "_known_miss"):  # nothing else holds this stop
+            monkeypatch.setattr(jack, name, lambda *a, **k: "")
+        execute("post", room, _call("BRNRD_SAY=look npm view brnrd", event="PostToolUseFailure", error="Exit code 1"))
         assert "something blocked" not in execute("stop", room, "{}")
     finally:
         _kill(read_facts(home))
@@ -112,3 +121,10 @@ def test_the_product_notes_ship_with_their_triggers():
     assert {"brnrd:limbs/github.md", "brnrd:limbs/npm.md"} <= set(found)
     assert "npm" in found["brnrd:limbs/npm.md"].phrases and "gh" in found["brnrd:limbs/github.md"].phrases
     assert Path(notes.PRODUCT, "npm.md").is_file()
+
+
+def test_a_phrase_ending_in_a_colon_or_slash_is_a_prefix():
+    note = notes.Note("memory/scars/x.md", "x", ("telegram:", "rooms/"))
+    assert notes.touched([note], "send --to telegram:155783668 hi")
+    assert notes.touched([note], "ls rooms/s-ab")
+    assert not notes.touched([notes.Note("m.md", "m", ("telegram",))], "telegramx")

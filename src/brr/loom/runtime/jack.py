@@ -1022,7 +1022,10 @@ def _stop_block(room: Path, text: str, plan: str) -> str:
         # Stopped again with nothing done since the same list: let it through.
         _asked(room, parsed, [ident for ident, _ in lefts])
         return ""
-    known = "\n\n".join(filter(None, (_known_miss(room), _hand_miss(room, state))))
+    known = _known_miss(room)
+    if sections or known:
+        # The hand line rides a stop that already holds; alone it never holds one (notes.py).
+        known = "\n\n".join(filter(None, (known, _hand_miss(room, state))))
     if not sections and not known:
         return ""
     sections = [*sections, known] if known else sections
