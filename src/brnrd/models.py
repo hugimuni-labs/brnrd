@@ -872,3 +872,18 @@ class StripeEvent(Base):
     stripe_event_id: Mapped[str] = mapped_column(String(64), primary_key=True)
     event_type: Mapped[str] = mapped_column(String(64), default="")
     processed_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
+
+
+class LoomConfirmation(Base):
+    __tablename__ = "loom_confirmations"
+
+    account_id: Mapped[str] = mapped_column(ForeignKey("accounts.id", ondelete="CASCADE"), primary_key=True)
+    id: Mapped[str] = mapped_column(String(14), primary_key=True)
+    install: Mapped[str] = mapped_column(String(4))
+    thread: Mapped[str] = mapped_column(String(255))
+    digest: Mapped[str] = mapped_column(String(64))
+    request: Mapped[str] = mapped_column(Text)
+    status: Mapped[str] = mapped_column(String(16))
+    created: Mapped[datetime] = mapped_column(DateTime)
+    expires: Mapped[datetime] = mapped_column(DateTime)
+    pressed_at: Mapped[str | None] = mapped_column(String(40), nullable=True)

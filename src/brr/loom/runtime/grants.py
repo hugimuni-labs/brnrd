@@ -1,7 +1,7 @@
 """Grants: the owner's sentence an act that cannot be undone points at (threads/judged-acts).
 
-The one rule: a call marked ``final`` (mark.py) runs only when its ``for``
-names a letter of the owner's: its id, or the number it ends with. A letter a
+A call marked ``final`` (mark.py) uses a dashboard confirmation or its
+``for`` names a letter of the owner's: its id, or the number it ends with. A letter a
 body held (``send --hold``: out of the person's pattern, or not them) grants
 nothing: the café's ask waits for the second path, and the owner's answer
 there is the grant. Only the owner grants: Sasha's or Nastya's letter does
@@ -64,6 +64,8 @@ class Judged:
     line: str
     what: str
     grant: Grant | None = None
+    confirm_id: str = ""
+    call: dict | None = None
 
 
 def _when(at: str) -> datetime | None:
@@ -149,12 +151,39 @@ def refused(home, strand: str, gen: int | None, thread: str, cls: str, target: s
                              data={"strand": strand, "gen": gen, "thread": thread, "class": cls, "target": target}))
 
 
-def judge(room: Path, what: str, cited: str) -> Judged:
+def judge(room: Path, what: str, cited: str, *, call=None) -> Judged:
     """The verdict for one act marked final in ``room``; nothing is written."""
     from .home import home_of_room
     from .ledger import read_facts
+    import os
     room = Path(room)
     home = home_of_room(room)
+    thread = os.environ.get("BRNRD_THREAD", "")
+    if not cited or cited == "confirm":
+        from . import confirm
+        if not thread or call is None:
+            return Judged(False, "A dashboard confirmation needs the thread and the exact call.", what)
+        from .wishes import told
+        candidates = [w for w in told(read_facts(home)).values() if w.thread == thread]
+        wish = max(candidates, key=lambda w: (w.ranked_at, w.at), default=None)
+        wish_id = wish.id if wish else ""
+        ident = confirm.ask(home, thread, what, wish_id, call, why=wish.line if wish else "")
+        return Judged(False, f'Waiting for his press {ident}: brnrd runtime wish {wish_id or "<w-id>"} '
+                      f'--read "waiting: his confirm {ident}" --wait confirm:{ident}, '
+                      f'then run the same call with "· confirm:{ident}".', what)
+    if cited.startswith("confirm:"):
+        from . import confirm
+        ident = cited.removeprefix("confirm:")
+        facts = read_facts(home)
+        row = confirm.entry(facts, ident)
+        if row is not None and call is not None:
+            req = row["request"]
+            if (req["thread"] == thread and req["what"] == what
+                    and req["digest"] == confirm.digest(home.install_id(), thread, what, call)
+                    and confirm.state(home, facts, req, confirm.now())[0] == "given"):
+                return Judged(True, f"granted: {what} by confirmation {ident}", what,
+                              Grant(ident, req["for"], ""), ident, call)
+        return Judged(False, f"Confirmation {ident} is unavailable for this call.", what)
     owner = owners(home.root / "self")
     facts = read_facts(home)
     grant = letter_for(facts, cited, owner)
@@ -179,7 +208,7 @@ def _written(facts: list, kind: str, strand: str, target: str, letter: str | Non
     return False
 
 
-def note(room: Path, judged: Judged) -> Fact | None:
+def note(room: Path, judged: Judged, *, door=False) -> Fact | None:
     """Write one final act's verdict, once per act (:data:`SAME_ACT`); None when already written."""
     import os
     from .home import home_of_room, strand_of_room
@@ -189,6 +218,17 @@ def note(room: Path, judged: Judged) -> Fact | None:
     home = home_of_room(room)
     thread = os.environ.get("BRNRD_THREAD", "")
     strand = strand_of_room(room)
+    if judged.confirm_id and judged.grant is not None:
+        from . import confirm
+        with confirm.locked(home):
+            fresh = judge(room, judged.what, "confirm:" + judged.confirm_id, call=judged.call)
+            if not fresh.granted:
+                raise ValueError(fresh.line)
+            facts = read_facts(home)
+            gen = _gen(facts, strand)
+            confirm.put(home, "used", judged.confirm_id, {"id": judged.confirm_id, "strand": strand,
+                        "thread": thread, "gen": gen, "stage": "door" if door else "hook"})
+            return record(home, strand, gen, thread, "final", judged.what, judged.grant)
     facts = read_facts(home)
     kind = "guard.granted" if judged.granted else "guard.refused"
     letter = judged.grant.letter if judged.grant else None

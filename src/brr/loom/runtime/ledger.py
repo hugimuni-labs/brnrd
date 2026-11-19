@@ -67,7 +67,7 @@ def fact_filename(fact: Fact) -> str:
         return "loom.jsonl"
     if resource_of(fact.kind) == "wish" and fact.by.startswith(("person:", "loom:")):
         return "loom.jsonl"
-    if fact.kind in _LOOM_KINDS:
+    if fact.kind in _LOOM_KINDS or resource_of(fact.kind) == "confirm":
         return "loom.jsonl"
     if fact.kind == "letter" and "gen" not in fact.data:
         return "loom.jsonl"

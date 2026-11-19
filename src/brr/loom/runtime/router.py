@@ -142,6 +142,8 @@ class Router:
         self.home = home
         self.reader = shared_reader(home)
         self.projections = {}
+        from .confirm import Notifications
+        self.confirmations = Notifications(home)
         self.projection_revision = -1
         self.config = config if config is not None else load_config(home.root)
         self.clock = loom_clock
@@ -775,12 +777,13 @@ class Router:
                         tell("speech-refused",
                              "was refused: that is not a known person's direct chat", fresh)
                         continue
-                    body = f"{_header(state, fact, facts, home=self.home)}\n\n{body}"
-                    from .firstword import pending
-                    person = person_dm(self.home, str(to)).removeprefix("person:")
-                    interview = pending(facts, person)
-                    if interview:  # once, on the first message after setup saw the person's first word
-                        body = f"{body}\n\n{interview}"
+                    if not (fact.by.startswith("loom:") and key.startswith("loom/confirm-")):
+                        body = f"{_header(state, fact, facts, home=self.home)}\n\n{body}"
+                        from .firstword import pending
+                        person = person_dm(self.home, str(to)).removeprefix("person:")
+                        interview = pending(facts, person)
+                        if interview:  # once, after setup saw the person's first word
+                            body = f"{body}\n\n{interview}"
                     event_id = _answers_event(state, fact)
                     from .project import reply_channels
                     if event_id and reply_channels(facts).get(fact.data.get("re")) == to:

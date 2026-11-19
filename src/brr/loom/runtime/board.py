@@ -1128,14 +1128,14 @@ def handler(parts: Parts, port: int, spa=spa_root):
         def log_message(self, *args):
             pass
 
-        def _json(self, payload, etag: str | None = None):
+        def _json(self, payload, etag: str | None = None, *, status=None):
             if etag and self.headers.get("If-None-Match") == f'"{etag}"':
                 self.send_response(HTTPStatus.NOT_MODIFIED)
                 self.send_header("ETag", f'"{etag}"')
                 self.end_headers()
                 return
             raw = json.dumps(payload, separators=(",", ":")).encode()
-            self.send_response(HTTPStatus.OK if etag or "error" not in payload else HTTPStatus.NOT_FOUND)
+            self.send_response(status or (HTTPStatus.OK if etag or "error" not in payload else HTTPStatus.NOT_FOUND))
             self.send_header("Content-Type", "application/json")
             if len(raw) > 4096 and "gzip" in (self.headers.get("Accept-Encoding") or ""):
                 raw = gzip.compress(raw, 5)
@@ -1159,6 +1159,10 @@ def handler(parts: Parts, port: int, spa=spa_root):
             path = url.path.removeprefix("/v1/loom/")
             with parts.changed:
                 held, hashes, deltas = parts.parts, parts.hashes, parts.bead_deltas
+            if path.startswith("confirms/"):
+                from .confirm import local_page
+                status, data = local_page(parts.home, path.removeprefix("confirms/"))
+                return self._json(data, status=status)
             if url.path == "/v1/loom/events":
                 return self._events()
             if path == "beads" and query.get("since"):
@@ -1216,6 +1220,15 @@ def handler(parts: Parts, port: int, spa=spa_root):
             if (self.headers.get("Content-Type") or "").split(";")[0].strip() != "application/json":
                 self.send_error(HTTPStatus.UNSUPPORTED_MEDIA_TYPE)
                 return
+            if self.path.startswith("/v1/loom/confirms/"):
+                from .confirm import local_page
+                try:
+                    data = json.loads(self.rfile.read(min(int(self.headers.get("Content-Length") or 0), 4096)))
+                    status, response = local_page(parts.home, self.path.removeprefix("/v1/loom/confirms/"),
+                                                  data.get("decision", "") if isinstance(data, dict) else "")
+                except (ValueError, TypeError):
+                    status, response = 400, {"error": "Expected a JSON decision"}
+                return self._json(response, status=status)
             if self.path != "/v1/loom/letters":
                 self.send_error(HTTPStatus.NOT_FOUND)
                 return

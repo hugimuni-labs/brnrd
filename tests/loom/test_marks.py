@@ -27,6 +27,7 @@ from test_wishes import command, ledger  # noqa: F401  (ledger is a fixture)
     ("change · brnrd#12 title · l-3 · edit it back", "change", "brnrd#12 title", "l-3", "edit it back", ()),
     ("change | branch loom/x | l-3 | delete it", "change", "branch loom/x", "l-3", "delete it", ()),
     ("final · v0.9.0 to PyPI · 11337", "final", "v0.9.0 to PyPI", "11337", "", ()),
+    ("final · v1", "final", "v1", "", "", ()),
     ("final · letter to Ada · l-12 · none", "final", "letter to Ada", "l-12", "", ()),
     ("cannot be undone · the release · l-4", "final", "the release", "l-4", "", ()),
 ])
@@ -41,7 +42,6 @@ def test_a_mark_reads(text, reach, what, for_, back, inferred):
     ("pushing the fix, his letter asked (l-2)", "opens with its reach"),
     ("change", "names the thing"),
     ("change · branch x · l-3", "how it is put back"),
-    ("final · v1", "names the letter"),
     ("final · v1 · l-4 · yank it", "it is a change"),
 ])
 def test_what_is_no_mark(text, why):

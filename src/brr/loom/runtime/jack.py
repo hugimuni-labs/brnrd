@@ -618,7 +618,7 @@ def _marked(room: Path, stdin_text: str):
             owed = tuple(parse_boundary(_boundary_text(room)).ids)
         except PortError:
             owed = ()
-        return mark.rule(mark.judge(payload, room, owed), room), payload
+        return mark.rule(mark.judge(payload, room, owed), room, payload), payload
     except Exception:  # noqa: BLE001 - fail open to the wall, never to a crossing
         return None, {}
 
@@ -820,7 +820,9 @@ def execute(event: str, room: Path, stdin_text: str) -> str:
             try:
                 note_final(room, decision.judged)
             except Exception:  # noqa: BLE001 - a lost receipt never costs the call; the door writes its own
-                pass
+                if decision.judged.confirm_id and decision.judged.granted:
+                    refuse = True
+                    said = "The confirmation could not be consumed. The call was stopped."
         tooltrace.note(room, stdin_text, "pre")
         from .audit import note as audit_note
         audit_note(room, stdin_text, "pre", mark=marked)

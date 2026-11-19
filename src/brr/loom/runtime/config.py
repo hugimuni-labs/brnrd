@@ -138,6 +138,11 @@ KEYS: tuple[Key, ...] = (
         "contested: a holder that cannot reach lease_remote keeps routing unless a peer's "
         "ledger moved there in the last 10 minutes; strict: it stops at the end of its ttl.",
         choices=("contested", "strict")),
+    Key("confirm_key", "text", None,
+        "Hex Ed25519 confirmation public key for a self-hosted dashboard."),
+    Key("confirm_local", "choice", "off",
+        "Allow loopback confirmation when a cloud dashboard is connected.",
+        choices=("on", "off")),
     Key("board_port", "text", None,
         "Loopback port the board's parts are served on (127.0.0.1); unset, the board is off. Read at start."),
 )

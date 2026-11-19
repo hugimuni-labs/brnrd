@@ -16,7 +16,7 @@ from .inbox import Forwarder, make_default_forwarder
 from .migrations import run_startup_migrations
 from .pack_relay import PackRelayStore
 from .page_views import PROMO_PATH, PROMO_STATUS, PageViewMiddleware
-from .routers import accounts, admin, billing, config_approval, daemons, dev, github_app, pairing, render, stats, webhooks
+from .routers import accounts, admin, billing, config_approval, confirms, daemons, dev, github_app, pairing, render, stats, webhooks
 from .routers import dashboard as dashboard_router
 from .routers import loom as loom_router
 from .routers import repo_actions as repo_actions_router
@@ -163,6 +163,7 @@ def create_app(
         pairing.router,
         config_approval.router,
         daemons.router,
+        confirms.router,
         render.router,
         webhooks.router,
         github_app.router,

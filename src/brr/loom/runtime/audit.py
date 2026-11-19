@@ -664,12 +664,15 @@ def main(argv=None) -> int:
     parser.add_argument("--door", choices=DOORS, help="pass: the door (the gh shim's sensor)")
     parser.add_argument("--act", help="pass: what went through")
     parser.add_argument("--target", default="")
-    args = parser.parse_args(argv)
+    words = list(sys.argv[1:] if argv is None else argv)
+    end = words.index("--") if "--" in words else len(words)
+    args = parser.parse_args(words[:end])
+    forge_argv = words[end + 1:]
     if args.action == "pass":
         if not (args.room and args.door and args.act):
             return refuse("audit", ValueError("pass needs --room, --door and --act"))
         from .mark import door_refusal
-        refusal = door_refusal(args.room)
+        refusal = door_refusal(args.room, command=["gh", *forge_argv] if forge_argv else None)
         if refusal:
             # Exit 3 is the door's own refusal; the gh shim stops on it and on nothing else.
             sys.stderr.write(f"{args.door}: {refusal}\n")

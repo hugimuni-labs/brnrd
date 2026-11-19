@@ -17,8 +17,8 @@ so the door process reads the string the hook read.
 
 The loom's own verbs cross without a mark: they write the home by design, and
 the ones that leave (a send to a person, a publish) judge themselves at their
-door (:func:`door_refusal`). The one rule (:func:`rule`): a mark that says
-final runs only on a letter of the owner's that its for cites (grants.py). Reads are never acts. A file tool writing outside
+door (:func:`door_refusal`). A final mark needs an owner letter or a dashboard
+confirmation (:func:`rule`). Reads are never acts. A file tool writing outside
 the room is refused; web tools can only look and mark themselves; an MCP tool
 takes a one-shot mark from ``brnrd runtime mark`` given just before it.
 
@@ -88,9 +88,8 @@ def parse(text: str | None, *, what: str = "", owed: tuple[str, ...] = ()) -> tu
             return None, f"a {reach} mark names the thing it touches"
         given_what, inferred = what, inferred + ["what"]
     if not given_for:
-        if reach == "final":
-            return None, "a final mark names the letter or standing sentence it serves"
-        given_for, inferred = " ".join(owed), inferred + ["for"]
+        if reach != "final":
+            given_for, inferred = " ".join(owed), inferred + ["for"]
     if reach == "change" and back.lower() in _NONE:
         return None, "a change says how it is put back; if it cannot be, it is final"
     if reach == "final" and back.lower() not in _NONE:
@@ -363,15 +362,30 @@ def judge(payload: dict, room: Path, owed: tuple[str, ...] = (), walled: bool | 
     return Decision("pass")
 
 
-def rule(decision: Decision, room: Path) -> Decision:
-    """The one rule: a call marked final runs only on a letter of the owner's its mark cites (grants.final).
+def rule(decision: Decision, room: Path, payload: dict | None = None) -> Decision:
+    """Judge a final mark against an owner letter or a dashboard confirmation.
 
     Wherever a mark is given, walled or not: honouring it costs a call nothing it was not going to pay.
     Nothing is written here: the hook writes the verdict once the call's own verdict stands (jack.execute)."""
     if decision.mark is None or decision.mark.reach != "final" or decision.verdict == "refuse":
         return decision
     from .grants import judge as judge_final
-    judged = judge_final(room, decision.mark.what, decision.mark.for_)
+    call = None
+    if payload is not None:
+        args = payload.get("tool_input") or {}
+        if payload["tool_name"] == "Bash":
+            command = args.get("command", "")
+            found = _ASSIGN.search(command.split("<<", 1)[0])
+            if found and not command[:found.start()].strip() and "\n" not in command[:found.start(1)]:
+                call = {"command": command[found.end():].lstrip(" \t")}
+        else:
+            call = {"tool": payload["tool_name"], "input": args}
+    try:
+        judged = judge_final(room, decision.mark.what, decision.mark.for_, call=call)
+    except Exception:
+        if not (decision.mark.for_ in ("", "confirm") or decision.mark.for_.startswith("confirm:")):
+            raise
+        return Decision("refuse", decision.mark, "Dashboard confirmation is unavailable. The call was stopped.")
     if judged.granted:
         return replace(decision, why=judged.line, judged=judged)
     return Decision("refuse", decision.mark, judged.line, judged)
@@ -394,7 +408,7 @@ HIT = ("the wall held this call: it reaches outside the room (the network, or a 
        "a look needs only BRNRD_SAY=look.")
 
 
-def door_refusal(room: Path | str | None = None, look: bool = False) -> str | None:
+def door_refusal(room: Path | str | None = None, look: bool = False, *, command=None) -> str | None:
     """At a door that leaves (a send to a person, a publish, a gh act): why it does not go, or None.
 
     Only behind the marks switch (``BRNRD_MARKS``, set at launch from ``doors = on``)."""
@@ -410,6 +424,15 @@ def door_refusal(room: Path | str | None = None, look: bool = False) -> str | No
         room = room or os.environ.get("BRNRD_ROOM")
         if not room:
             return "refused at the door: a final act needs its room to find his letter (BRNRD_ROOM is unset)"
+        if (not mark.for_ or mark.for_ == "confirm" or mark.for_.startswith("confirm:")):
+            if look:
+                return None
+            import sys
+            from .confirm import at_door
+            try:
+                return at_door(Path(room), mark, command or ["brnrd", *sys.argv[1:]])
+            except Exception:
+                return "Dashboard confirmation is unavailable. The call was stopped."
         from .grants import final
         granted, line = final(Path(room), mark.what, mark.for_)
         return None if granted else "refused at the door: " + line

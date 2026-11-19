@@ -107,7 +107,7 @@ fi
 case "$1 $2" in
   "pr merge"|"pr close"|"pr comment"|"issue close"|"issue comment"|"release create")
     if [ -f {endpoint} ] || [ "${BRNRD_MARKS-}" = 1 ]; then
-      {brnrd} runtime audit pass --room {room} --door forge --act "$1 $2" --target="${3-}" >/dev/null
+      {brnrd} runtime audit pass --room {room} --door forge --act "$1 $2" --target="${3-}" -- "$@" >/dev/null
       [ $? -ne 3 ] || exit 1
     fi ;;
 esac
@@ -471,7 +471,7 @@ def notice(home: Home, facts: list[Fact], kind: str, subject: str, what: str, ca
         if stands:
             data["stands"] = str(about.data["id"])
             lines.append(f"settling this notice settles {about.data['id']} too")
-    else:
+    elif can:
         lines.append(can)
     if channel is None:
         lines.append("passive: shown once, owed by nobody" if passive
@@ -2631,6 +2631,8 @@ def tick_once(home: Home, bodies: dict[str, Body], adapter: str, core: str,
             watcher.owners = claims(claimed)
             facts = observe_comments(home, facts, True, watcher.take()) if router.armed() else facts
         facts = router.route(facts, bodies, (adapter, core))
+        if router.armed() and getattr(router, "confirmations", None) is not None:
+            router.confirmations.step(router, facts)
         facts = router.speak_out(facts)
 
 

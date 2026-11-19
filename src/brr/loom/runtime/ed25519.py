@@ -91,6 +91,8 @@ def verify(public_key: bytes, message: bytes, signature: bytes) -> bool:
         return False
     if not isinstance(signature, (bytes, bytearray)) or len(signature) != 64:
         return False
+    if not isinstance(message, (bytes, bytearray)):
+        return False
     public_key, signature = bytes(public_key), bytes(signature)
     a = _decode(public_key)
     if a is None:
