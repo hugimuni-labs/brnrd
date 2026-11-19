@@ -127,9 +127,11 @@
 			{#if offerInNotice && installOffer}
 				<span class="install-offer mt-1 block text-amber-100">
 					{installOffer.lead}
+					<!-- eslint-disable svelte/no-navigation-without-resolve -- an external booking link -->
 					<a href={installOffer.url} target="_blank" rel="noopener" class="underline">
 						{installOffer.link}</a
 					>.
+					<!-- eslint-enable svelte/no-navigation-without-resolve -->
 				</span>
 			{/if}
 		</p>
@@ -216,9 +218,11 @@
 			{#if installOffer && !offerInNotice}
 				<p class="install-offer mt-3 text-sm text-amber-100">
 					{installOffer.lead}
+					<!-- eslint-disable svelte/no-navigation-without-resolve -- an external booking link -->
 					<a href={installOffer.url} target="_blank" rel="noopener" class="underline">
 						{installOffer.link}</a
 					>.
+					<!-- eslint-enable svelte/no-navigation-without-resolve -->
 				</p>
 			{/if}
 			<p class="mt-2 font-mono text-[10px] text-ink-quiet">
