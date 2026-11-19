@@ -1004,6 +1004,11 @@ class Pusher:
         self.attempted: float | None = None
         self.worker: threading.Thread | None = None
         self.failing: tuple[Exception, object] | None = None
+        #: The home gate's refusal while it stands (cloud.HomeSubscriptionNeeded), and the monotonic instant
+        #: its Retry-After ends: no push before then, and the loom is told once, not a degraded step.
+        self.refused = None
+        self.refused_until = 0.0
+        self.told: str | None = None
 
     def step(self, config) -> None:
         from .gates import state_dir
@@ -1016,7 +1021,10 @@ class Pusher:
         now = time.monotonic()
         busy = self.worker is not None and self.worker.is_alive()
         wait = self.RETRY if self.failing else self.EVERY
-        if hashes and hashes != self.sent and not busy and (self.attempted is None or now - self.attempted >= wait):
+        if self.refused is not None:
+            self._tell_refused(self.refused)
+        if hashes and hashes != self.sent and not busy and now >= self.refused_until and (
+                self.attempted is None or now - self.attempted >= wait):
             self.attempted = now
             self.worker = threading.Thread(target=self._put, args=(gate, held, hashes),
                                            name="loom-parts", daemon=True)
@@ -1051,11 +1059,18 @@ class Pusher:
             for body in self.batches(held, hashes):
                 resp = cloud._send("PUT", url, data=body, headers=headers, timeout=60)
                 if not 200 <= resp.status_code < 300:
+                    if (refused := cloud.home_refusal(resp)) is not None:
+                        refused.retry_after = cloud._retry_after_s(resp)
+                        raise refused
                     err = RuntimeError(f"PUT /v1/daemons/loom/parts -> {resp.status_code}: {resp.text[:200]}")
                     err.status_code = resp.status_code  # type: ignore[attr-defined]
                     raise err
                 self.sent = dict(resp.json().get("hashes") or {})
-            self.failing = None
+            self.failing, self.refused, self.told = None, None, None
+        except cloud.HomeSubscriptionNeeded as exc:
+            # A state only the person changes: no degraded step, one notice, the next push after Retry-After.
+            self.failing, self.refused = None, exc
+            self.refused_until = time.monotonic() + (exc.retry_after or self.RETRY)
         except Exception as exc:
             from .snapshot import withheld
             if withheld(exc):
@@ -1063,6 +1078,21 @@ class Pusher:
                 exc = BoardWithheld("board withheld: the person has not said yes to showing it on brnrd.dev;"
                                     " they answer there, signed in")
             self.failing = (exc, exc.__traceback__)
+
+
+    def _tell_refused(self, refused) -> None:
+        """One passive notice per refusal (its text names the trial's end and the account page)."""
+        said = str(refused)
+        if self.told == said:
+            return
+        from .ledger import read_facts
+        from .loom import notice
+        home = self.parts.home
+        notice(home, read_facts(home), "home-subscription", said,
+               f"brnrd.dev holds the hosted board, phone messages and the relay for this account: {said}",
+               "the loom keeps working on this computer; the board's push asks again after the server's "
+               "Retry-After and lands on its own once the account subscribes", passive=True)
+        self.told = said
 
 
 def person_channel(home: Home, person: str | None) -> tuple[str, str]:
