@@ -1,6 +1,7 @@
 """Connector attachments must reach both the waking and the live body."""
 
 import hashlib
+import re
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -45,18 +46,23 @@ def receive(home, tmp_path, *, attached=True, missing=""):
 
 
 def assert_attachment(text, home, facts):
-    rows = [line.strip() for line in text.splitlines() if line.strip().startswith("attachment:")]
+    rows = [line.strip() for line in text.splitlines()
+            if re.match(r"attachment( \d+ of \d+)?: ", line.strip())]
     assert len(rows) == 1
     blob = next(f for f in facts if f.kind == "blob")
-    assert rows[0].startswith(f"attachment: photo (image/jpeg · {blob.data['size']} bytes) · ")
+    assert re.sub(r"^attachment \d+ of \d+: ", "attachment: ", rows[0]).startswith(f"attachment: photo (image/jpeg · {blob.data['size']} bytes) · ")
     path = Path(path_of(rows[0]))
     assert path.is_absolute()
     assert path == home.root / "blobs" / (blob.data["sha"] + ".jpg")
     assert hashlib.sha256(path.read_bytes()).hexdigest() == blob.data["sha"]
 
 
-@pytest.mark.parametrize("attached,missing", [(True, ""), (True, "1 3"), (False, "0")])
-def test_source_attachments_reach_wake_and_initial_boundary(home, tmp_path, attached, missing):
+@pytest.mark.parametrize("attached,missing,lines", [
+    (True, "", ()),
+    (True, "1 2", ("attachment 2 of 3 could not be fetched", "attachment 3 of 3 could not be fetched")),
+    (False, "0", ("attachment could not be fetched",)),
+])
+def test_source_attachments_reach_wake_and_initial_boundary(home, tmp_path, attached, missing, lines):
     facts, letter = receive(home, tmp_path, attached=attached, missing=missing)
     room = _prepare(home, STRAND, "inbox", 1, mail(home.root, facts, "inbox"),
                     sender_threads(facts), facts, "hand")
@@ -69,8 +75,8 @@ def test_source_attachments_reach_wake_and_initial_boundary(home, tmp_path, atta
             assert_attachment(text, home, facts)
         else:
             assert "attachment:" not in text
-        for number in missing.split():
-            assert text.count(f"attachment {number} could not be fetched") == 1
+        for row in lines:
+            assert text.count(row) == 1
     parsed = parse_boundary(boundary)
     assert letter.id in parsed.ids
     assert "second caption line" in next(f.body for f in parsed.letters if f.id == letter.id)
@@ -92,11 +98,11 @@ def test_new_boundary_letter_and_compact_redelivery_keep_attachments(home, tmp_p
     assert parsed.compact is compact
     assert ("second caption line" in parsed.body) is not compact
     assert_attachment(text, home, facts)
-    assert "attachment 1 could not be fetched" in parsed.body
+    assert "attachment 2 of 2 could not be fetched" in parsed.body
     # The jack must deliver it, rather than fail open on attachment continuations.
     delivered = execute("post", room, "{}")
-    assert "attachment: photo (image/jpeg" in delivered
-    assert "attachment 1 could not be fetched" in delivered
+    assert "attachment 1 of 2: photo (image/jpeg" in delivered
+    assert "attachment 2 of 2 could not be fetched" in delivered
 
 
 def test_same_blob_in_another_source_does_not_replace_mime(home, tmp_path):
@@ -241,3 +247,34 @@ def test_a_file_opened_by_shell_counts_as_opened(home, tmp_path, padding):
 def test_avif_reads_as_an_image():
     from brr.loom.runtime.attachment import sniff
     assert sniff(b"\x00\x00\x00\x1cftypavif" + b"\x00" * 16) == "image/avif"
+
+
+def test_an_album_reaches_wake_and_boundary_and_a_reply_names_the_file_left_unopened(home, tmp_path):
+    """The inbox's y514f: three photos in one letter are numbered in the wake
+    and the boundary, and a send that opened two of them names the third."""
+    import json
+    from brr.loom.runtime import tooltrace
+    from brr.loom.runtime.port import PortError, write_send
+    paths = []
+    for index, size in enumerate([(4, 3), (5, 3), (6, 3)]):
+        photo = tmp_path / f"{index}.jpg"
+        photo.write_bytes(_jpeg(*size))
+        paths.append(photo)
+    ingest(home, "fake", dict(id="album", kind="letter", to="channel:fake/42", body="three pages"), paths)
+    facts = read_facts(home)
+    room = _prepare(home, STRAND, "inbox", 1, mail(home.root, facts, "inbox"),
+                    sender_threads(facts), facts, "hand")
+    rows = {}
+    for text in ((room / "port/wake.md").read_text(), (room / "port/in/boundary.md").read_text()):
+        found = [line.strip() for line in text.splitlines() if line.strip().startswith("attachment ")]
+        assert [row.split(":")[0] for row in found] == ["attachment 1 of 3", "attachment 2 of 3", "attachment 3 of 3"]
+        assert [row.split(" · ")[1] for row in found] == ["4x3", "5x3", "6x3"]
+        rows = [path_of(row) for row in found]
+    ident = next(v.id for v in parse_boundary((room / "port/in/boundary.md").read_text()).letters)
+    for path in rows[:2]:
+        for phase in ("pre", "post"):
+            tooltrace.note(room, json.dumps({"tool_name": "Read", "tool_use_id": path[-8:],
+                                             "tool_input": {"file_path": path}, "tool_response": "ok"}), phase)
+    with pytest.raises(PortError, match="never opened: .*" + re.escape(Path(rows[2]).name)) as refused:
+        write_send(room, to="channel:fake/42", sender=STRAND, body="nice pages", re=ident, chatter=[])
+    assert Path(rows[0]).name not in str(refused.value) and Path(rows[1]).name not in str(refused.value)

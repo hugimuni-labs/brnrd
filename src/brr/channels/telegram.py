@@ -71,8 +71,35 @@ def _safe_filename(name: str, fallback: str) -> str:
     return cleaned[:128]
 
 
-def extract_attachments(msg: dict) -> list[dict]:
-    """Return image pointers, preferring the largest photo over a document."""
+#: The media a message can carry besides a photo, in Telegram's field names.
+MEDIA_KINDS = ("document", "voice", "audio", "video", "video_note", "animation", "sticker")
+
+#: A kind with no ``file_name`` of its own: its name is the kind and the MIME type's extension.
+_DEFAULT_MIME = {"voice": "audio/ogg", "video_note": "video/mp4", "video": "video/mp4",
+                 "animation": "video/mp4", "audio": "audio/mpeg"}
+_EXT = {"audio/ogg": ".ogg", "audio/mpeg": ".mp3", "audio/mp4": ".m4a", "video/mp4": ".mp4",
+        "video/quicktime": ".mov", "video/webm": ".webm", "image/webp": ".webp", "image/jpeg": ".jpg",
+        "image/png": ".png", "application/pdf": ".pdf", "application/x-tgsticker": ".tgs"}
+
+
+def _media_name(kind: str, media: dict, mime: str) -> str:
+    given = str(media.get("file_name") or "")
+    if given:
+        return _safe_filename(given, kind)
+    if kind == "sticker":
+        ext = ".tgs" if media.get("is_animated") else ".webm" if media.get("is_video") else ".webp"
+    else:
+        ext = _EXT.get(mime, "")
+    return f"{kind}{ext}"
+
+
+def extract_attachments(msg: dict, images_only: bool = False) -> list[dict]:
+    """Every file a message carries, as ``{file_id, filename, kind, mime_type[, file_size]}``.
+
+    A photo is the largest of its sizes. A message carries one medium; a
+    voice, a video, a PDF or a sticker is a file of the letter like a photo
+    (his 11354: on the cloud relay only images arrived). ``images_only``
+    keeps the old gate's image pipeline (a photo, or an image document)."""
     photo = msg.get("photo")
     if isinstance(photo, list) and photo:
         largest = photo[-1]
@@ -85,20 +112,27 @@ def extract_attachments(msg: dict) -> list[dict]:
             if isinstance(largest.get("file_size"), int):
                 pointer["file_size"] = largest["file_size"]
             return [pointer]
-    document = msg.get("document")
-    if isinstance(document, dict):
-        mime = str(document.get("mime_type") or "")
-        if mime.startswith("image/") and document.get("file_id"):
-            pointer = {
-                "file_id": str(document["file_id"]),
-                "filename": _safe_filename(
-                    str(document.get("file_name") or ""), "image"
-                ),
-                "kind": "document",
-            }
-            if isinstance(document.get("file_size"), int):
-                pointer["file_size"] = document["file_size"]
-            return [pointer]
+    for kind in MEDIA_KINDS:
+        media = msg.get(kind)
+        if not isinstance(media, dict) or not media.get("file_id"):
+            continue
+        mime = str(media.get("mime_type") or _DEFAULT_MIME.get(kind, ""))
+        if kind == "sticker" and not mime:
+            mime = ("application/x-tgsticker" if media.get("is_animated")
+                    else "video/webm" if media.get("is_video") else "image/webp")
+        if images_only and not (kind == "document" and mime.startswith("image/")):
+            return []
+        pointer = {
+            "file_id": str(media["file_id"]),
+            "filename": _media_name(kind, media, mime) if kind != "document"
+                        else _safe_filename(str(media.get("file_name") or ""), "document" + _EXT.get(mime, "")),
+            "kind": kind,
+        }
+        if mime:
+            pointer["mime_type"] = mime
+        if isinstance(media.get("file_size"), int):
+            pointer["file_size"] = media["file_size"]
+        return [pointer]
     return []
 
 

@@ -161,10 +161,17 @@ def line(blob: Path, mime: str, size: int) -> str:
     return f"attachment: {what} ({detail}) · {path} · part of this letter: open it before answering"
 
 
+def too_large(label: str, size: int | None) -> str:
+    """A file past the connector's cap: it is not lost, it is too big, and the letter says so."""
+    shown = f" ({_human(size)})" if size else ""
+    return (f"{label}{shown} is past the size the connector may fetch and did not come: "
+            "ask for it smaller, or as a link")
+
+
 def path_of(text: str) -> str:
     """The file an attachment line names, or ``""``."""
     text = text.strip()
-    if not text.startswith("attachment:"):
+    if not text.startswith("attachment") or ": " not in text or " · " not in text:
         return ""
     parts = text.split(" · ")
     for part in parts[1:]:
