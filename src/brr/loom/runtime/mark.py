@@ -99,6 +99,11 @@ def parse(text: str | None, *, what: str = "", owed: tuple[str, ...] = ()) -> tu
     return Mark(reach, given_what, given_for, back, tuple(inferred)), ""
 
 
+def confirmation_mark(mark: Mark | None) -> bool:
+    return bool(mark and mark.reach == "final" and
+                (mark.for_ in ("", "confirm") or mark.for_.startswith("confirm:")))
+
+
 def program(command: str) -> str:
     """The first program a shell command runs, by name only: what an inferred look records.
 
@@ -383,7 +388,7 @@ def rule(decision: Decision, room: Path, payload: dict | None = None) -> Decisio
     try:
         judged = judge_final(room, decision.mark.what, decision.mark.for_, call=call)
     except Exception:
-        if not (decision.mark.for_ in ("", "confirm") or decision.mark.for_.startswith("confirm:")):
+        if not confirmation_mark(decision.mark):
             raise
         return Decision("refuse", decision.mark, "Dashboard confirmation is unavailable. The call was stopped.")
     if judged.granted:
@@ -424,7 +429,7 @@ def door_refusal(room: Path | str | None = None, look: bool = False, *, command=
         room = room or os.environ.get("BRNRD_ROOM")
         if not room:
             return "refused at the door: a final act needs its room to find his letter (BRNRD_ROOM is unset)"
-        if (not mark.for_ or mark.for_ == "confirm" or mark.for_.startswith("confirm:")):
+        if confirmation_mark(mark):
             if look:
                 return None
             import sys
@@ -484,9 +489,16 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--room", default=os.environ.get("BRNRD_ROOM"))
     parser.add_argument("--check", action="store_true", help="a door's question, answered by exit code")
     parser.add_argument("--look", action="store_true", help="with --check: a look passes (a wall, not a door)")
-    args = parser.parse_args(argv)
+    parser.add_argument("--only-confirm", action="store_true", help="with --check: check dashboard confirmations only")
+    words = list(sys.argv[1:] if argv is None else argv)
+    end = words.index("--") if "--" in words else len(words)
+    args = parser.parse_args(words[:end])
     if args.check:
-        refusal = door_refusal(args.room, look=args.look)
+        final = confirmation_mark(parse(os.environ.get(SAY))[0])
+        if args.only_confirm and not final:
+            return 0
+        command = ["gh", *words[end + 1:]] if end < len(words) else None
+        refusal = door_refusal(args.room, look=args.look and not (command and final), command=command)
         if refusal:
             sys.stderr.write(refusal + "\n")
             return 3

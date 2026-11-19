@@ -99,16 +99,25 @@ _FORGE_TOKEN_VARS = ("GH_TOKEN", "GITHUB_TOKEN", "GH_ENTERPRISE_TOKEN", "GITHUB_
 # switch (mark.py) a forge act with no mark stops here, and on a body with no
 # wall every gh call does: exit 3 is that refusal, any other failure of the
 # sensor never costs the call. The stand-in judges nothing else.
-_FORGE_DOOR = r"""if [ "${BRNRD_MARKS-}" = 1 ] && [ "${BRNRD_WALL-}" != 1 ]; then
-  # No wall around this body (mark.py): the stand-in is the wall for gh, every call is marked.
-  {brnrd} runtime mark --check --look --room {room} >/dev/null
-  [ $? -ne 3 ] || exit 1
-fi
-case "$1 $2" in
+_FORGE_DOOR = r"""case "$1 $2" in
   "pr merge"|"pr close"|"pr comment"|"issue close"|"issue comment"|"release create")
+    if [ "${BRNRD_MARKS-}" = 1 ] && [ "${BRNRD_WALL-}" != 1 ]; then
+      {brnrd} runtime mark --check --look --room {room} >/dev/null
+      [ $? -ne 3 ] || exit 1
+    fi
     if [ -f {endpoint} ] || [ "${BRNRD_MARKS-}" = 1 ]; then
       {brnrd} runtime audit pass --room {room} --door forge --act "$1 $2" --target="${3-}" -- "$@" >/dev/null
       [ $? -ne 3 ] || exit 1
+    fi ;;
+  *)
+    if [ "${BRNRD_MARKS-}" = 1 ]; then
+      if [ "${BRNRD_WALL-}" != 1 ]; then
+        {brnrd} runtime mark --check --look --room {room} -- "$@" >/dev/null
+        [ $? -ne 3 ] || exit 1
+      elif [ -n "${BRNRD_SAY-}" ]; then
+        {brnrd} runtime mark --check --only-confirm --room {room} -- "$@" >/dev/null
+        [ $? -ne 3 ] || exit 1
+      fi
     fi ;;
 esac
 """

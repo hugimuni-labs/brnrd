@@ -164,7 +164,7 @@ def judge(room: Path, what: str, cited: str, *, call=None) -> Judged:
         if not thread or call is None:
             return Judged(False, "A dashboard confirmation needs the thread and the exact call.", what)
         from .wishes import told
-        candidates = [w for w in told(read_facts(home)).values() if w.thread == thread]
+        candidates = [w for w in told(read_facts(home)).values() if w.thread == thread and w.open]
         wish = max(candidates, key=lambda w: (w.ranked_at, w.at), default=None)
         wish_id = wish.id if wish else ""
         ident = confirm.ask(home, thread, what, wish_id, call, why=wish.line if wish else "")

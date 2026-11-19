@@ -27,7 +27,10 @@ router = APIRouter(tags=["confirmations"])
 @router.post("/v1/daemons/confirms")
 def ask(payload: dict, principal: Principal = Depends(home_access.daemon_gate), db: Session = Depends(get_db)):
     req, call = payload.get("request"), payload.get("call")
-    if not request_valid(req) or not isinstance(call, dict):
+    shell = isinstance(call, dict) and set(call) == {"command"} and isinstance(call["command"], str)
+    tool = (isinstance(call, dict) and set(call) == {"tool", "input"}
+            and isinstance(call["tool"], str) and isinstance(call["input"], dict))
+    if not request_valid(req) or not (shell or tool):
         raise HTTPException(422, "Invalid confirmation request")
     try:
         encoded = canon(payload)

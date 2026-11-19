@@ -251,3 +251,26 @@ def test_typed_reply_lands_as_letter_and_points_back_to_page(seat):
     assert response.data["to"] == channel
     assert response.data["body"] == "Press it on the page: a message can't confirm this."
     assert not kind_facts(facts, "confirm.given")
+
+
+def test_forge_stand_in_asks_for_final_calls_outside_its_audited_verbs(tmp_path, monkeypatch):
+    _, room, home = _shim_home(tmp_path, monkeypatch)
+    argv = ["gh", "repo", "archive", "example/test"]
+    env = {**_env(room), "BRNRD_THREAD": "work", "BRNRD_MARKS": "1",
+           "BRNRD_SAY": "final · archive example/test · confirm"}
+    env.pop("BRNRD_WALL", None)
+
+    def invoke():
+        return subprocess.run(argv, env=env, capture_output=True, text=True, timeout=20)
+
+    blocked = invoke()
+    assert blocked.returncode != 0
+    asked, = kind_facts(read_facts(home), "confirm.asked")
+    ident = asked.data["request"]["id"]
+    assert f"--wait confirm:{ident}" in blocked.stderr
+    assert confirm.local_page(home, ident, "approve")[0] == 200
+    env["BRNRD_SAY"] = f"final · archive example/test · confirm:{ident}"
+    allowed = invoke()
+    assert allowed.returncode == 0, allowed.stderr
+    assert invoke().returncode != 0
+    assert len(kind_facts(read_facts(home), "guard.granted")) == 1
