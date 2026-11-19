@@ -17,6 +17,7 @@
 		BOARD_STATES,
 		bst,
 		byThread,
+		DEFAULT_STATES,
 		SETTLED,
 		sortThreads,
 		STATE_LABEL,
@@ -239,7 +240,11 @@
 	{#if view === 'board'}
 		<div id="filters" role="group" aria-label="Thread filters">
 			{#each BOARD_STATES as state (state)}
-				<button type="button" aria-pressed={b.filters.has(state)} onclick={() => b.filter(state)}>
+				<button
+					type="button"
+					aria-pressed={b.filters.size ? b.filters.has(state) : DEFAULT_STATES.includes(state)}
+					onclick={() => b.filter(state)}
+				>
 					{STATE_LABEL[state]} <span>{counts[state]}</span>
 				</button>
 			{/each}

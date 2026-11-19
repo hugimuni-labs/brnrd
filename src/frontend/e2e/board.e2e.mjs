@@ -78,17 +78,27 @@ test('the counted filters select a union, persist on reload and return to the de
 		'Quiet 1',
 		'Settled 2'
 	]);
+	const pressed = () => filters.getByRole('button', { pressed: true }).allInnerTexts();
+	const defaults = ['Working 1', 'Your call 1', 'Waiting 1', 'Stuck 2'];
+	assert.deepEqual(await pressed(), defaults);
 	const quiet = filters.getByRole('button', { name: 'Quiet 1' });
 	const working = filters.getByRole('button', { name: 'Working 1' });
 	const columns = () =>
 		page.locator('#board > .column').evaluateAll((cs) => cs.map((c) => c.dataset.column));
 	const active = ['inbox', 'alpha', 'bravo', 'charlie', 'echo', 'delta'];
+	await working.click();
+	assert.deepEqual(await pressed(), ['Working 1']);
+	assert.deepEqual(await columns(), ['inbox', 'alpha']);
+	await working.click();
+	assert.deepEqual(await pressed(), defaults);
 	await quiet.click();
+	assert.deepEqual(await pressed(), ['Quiet 1']);
 	assert.deepEqual(await columns(), ['inbox', 'foxtrot']);
 	const quietCard = page.locator('[data-column="foxtrot"] .lg-row');
 	await quietCard.getByText('not marked', { exact: true }).waitFor();
 	assert.equal(await quietCard.locator('.pip.wait').count(), 0);
 	await working.click();
+	assert.deepEqual(await pressed(), ['Working 1', 'Quiet 1']);
 	assert.deepEqual((await columns()).sort(), ['alpha', 'foxtrot', 'inbox']);
 	await quiet.click();
 	assert.deepEqual(await columns(), ['inbox', 'alpha']);
@@ -97,6 +107,7 @@ test('the counted filters select a union, persist on reload and return to the de
 	assert.equal(await working.getAttribute('aria-pressed'), 'true');
 	assert.deepEqual(await columns(), ['inbox', 'alpha']);
 	await working.click();
+	assert.deepEqual(await pressed(), defaults);
 	assert.deepEqual(await columns(), active);
 	B.loom.set(fixture());
 });

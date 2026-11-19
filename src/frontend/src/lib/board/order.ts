@@ -24,7 +24,7 @@ export const STATE_LABEL = {
 } satisfies Record<BoardState, string>;
 
 export const BOARD_STATES = Object.keys(STATE_LABEL) as BoardState[];
-const DEFAULT_STATES: BoardState[] = ['seated', 'your-call', 'waiting', 'mine'];
+export const DEFAULT_STATES: BoardState[] = ['seated', 'your-call', 'waiting', 'mine'];
 
 export function readFilters(saved: string): BoardState[] {
 	try {
