@@ -50,6 +50,14 @@
 		onRefused?: () => void;
 	} = $props();
 	const b = provide(untrack(() => new Board(get, held, onRefused)));
+	const stateDescription = {
+		seated: 'Work in progress',
+		'your-call': 'Needs your reply',
+		waiting: 'Waiting on a step',
+		mine: 'Work is blocked',
+		quiet: 'No work underway',
+		settled: 'Thread closed'
+	};
 
 	const by = $derived(byThread(b.letters));
 	const sorted = $derived(sortThreads(b.model?.threads || [], by));
@@ -237,10 +245,19 @@
 		>
 	</header>
 	{#if view === 'board'}
-		<div id="filters" role="group" aria-label="Thread filters">
+		<div id="filters" role="group" aria-labelledby="filter-label">
+			<span id="filter-label">Show threads</span>
 			{#each BOARD_STATES as state (state)}
-				<button type="button" aria-pressed={b.filters.has(state)} onclick={() => b.filter(state)}>
+				<button
+					type="button"
+					aria-label={`${STATE_LABEL[state]} ${counts[state]}`}
+					aria-describedby={`filter-description-${state}`}
+					title={stateDescription[state]}
+					aria-pressed={b.filters.has(state)}
+					onclick={() => b.filter(state)}
+				>
 					{STATE_LABEL[state]} <span>{counts[state]}</span>
+					<small id={`filter-description-${state}`}>{stateDescription[state]}</small>
 				</button>
 			{/each}
 		</div>

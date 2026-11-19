@@ -256,8 +256,8 @@ def board_state(t: dict, calls: list[dict], left: int = 0, end: tuple | None = N
                 parked_wish: str | None = None, *, now: float | None = None) -> dict:
     """A column's state from one rule table (your-call.md), first match wins; the page only renders it.
 
-    settled: status is closed. seated: a held strand works or holds, or the turn is mine (a body or the
-    loom is on owed letters). your call: a call names his action (red when one is an ask). Old verdicts
+    settled: status is closed. seated: a held strand works or holds, or the resident has the turn
+    and an open wish still needs work. your call: a call names his action (red when one is an ask). Old verdicts
     stay on the card without making a call. mine: the resident owes a move the loom will not make
     (a parked or failed strand, a letter owed by the
     operator, or an open thread with work left and no body that declared its end: wake or settle).
@@ -281,7 +281,7 @@ def board_state(t: dict, calls: list[dict], left: int = 0, end: tuple | None = N
     calls = [c for c in cards if not c.get("closed") and not c.get("stale")]
     # Whose move is apart from motion (4909): open calls badge the column, seated or not.
     calling = {"open": len(calls), "red": any(c["kind"] == "ask" for c in calls)} if calls else {}
-    if held or t.get("turn") == "mine":
+    if held or (left and t.get("turn") == "mine"):
         word = held["state"] if held else (t.get("strands") or [{}])[-1].get("state") or "starting"
         return {"state": "seated", "strand": word, **shown, **calling}
     if calls:

@@ -55,6 +55,20 @@ def test_parts_are_hashed_stably_and_a_letter_moves_only_its_thread(parts):
     assert [r["body"] for r in parts.parts["thread/web"]["letters"]] == ["first", "second"]
 
 
+def test_owed_loom_letters_alone_do_not_make_an_unseated_thread_working(parts):
+    ident = "loom/test"
+    append(parts.home, Fact(kind="letter", by="loom:test", id=ident, data={
+        "id": ident, "from": "loom", "to": "thread:web", "body": "An old loom notice",
+    }))
+
+    assert parts.step()
+    web = parts.parts["thread/web"]
+    assert web["turn"] == "mine"
+    assert web["owed"] == 1
+    assert not web.get("strands")
+    assert web["board"]["state"] == "quiet"
+
+
 def test_the_looms_own_heartbeat_recomputes_nothing(parts, monkeypatch):
     from brr.loom.runtime import board
     root = parts.home.root
