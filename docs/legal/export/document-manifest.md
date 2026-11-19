@@ -11,9 +11,9 @@ population was empty of third parties, so no re-acceptance was owed).
 
 Hash snapshot:
 
-- Date: 2026-11-18
+- Date: 2026-11-19
 - Source revision (parent of this export-only change):
-  `e3dccd9b249e3c81a0ebffee78960691981639cc`
+  `7c0e843de18f3497f13bbb31f624b739d7aaca20`
 - Algorithm: SHA-256 over raw repository file bytes
 - Machine-readable list: [`SHA256SUMS`](SHA256SUMS)
 - Verification from the repository root:
@@ -59,7 +59,7 @@ factual statements in the pack.
 
 | Evidence | What it establishes | SHA-256 |
 |---|---|---|
-| [`src/brnrd/account_deletion.py`](../../../src/brnrd/account_deletion.py) | Article 17 deletion/anonymisation sweep, subscription cancellation, retained billing ledger | `947521f87bfd20bfc4a3018978b4ab7f2091ad49c8517c819845245ee866ae6a` |
+| [`src/brnrd/account_deletion.py`](../../../src/brnrd/account_deletion.py) | Article 17 deletion/anonymisation sweep, subscription cancellation, retained billing ledger | `71d6500bbf106c98bae2d94b60b3e9648e689cc3b8006a78c9aaa5e5734018e1` |
 | [`src/frontend/src/lib/billing.ts`](../../../src/frontend/src/lib/billing.ts) | Browser sends cadence and follows a Stripe-hosted checkout URL; no brnrd waiver control | `52cbf4455c158d0d1a031d08cc886e94b37491b6ff976601b517abd0efe52f23` |
 | [`src/brnrd/routers/billing.py`](../../../src/brnrd/routers/billing.py) | Authenticated checkout endpoint and server-side cohort/price selection | `1dd1d7719b628996029a8082ce2897f3764b68618d02185a09497a0f59d57e3a` |
 | [`src/brnrd/stripe_api.py`](../../../src/brnrd/stripe_api.py) | Stripe Checkout payload and Managed Payments / merchant-of-record behavior | `dda318565da597f6c808151c265991b59b2f0b9581e0a6a478811d8d3181ce1f` |
