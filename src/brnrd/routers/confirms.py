@@ -78,7 +78,7 @@ def _page(row):
                          "can_press": status == "pending"}, headers={"Cache-Control": "no-store"})
 
 
-@router.get("/v1/dashboard/loom/confirms/{ident}")
+@router.get("/v1/dashboard/loom/confirms/{ident}", dependencies=[Depends(home_access.session_gate)])
 def read(ident: str, request: Request, db: Session = Depends(get_db)):
     return _page(_row(db, request, ident))
 
@@ -90,7 +90,7 @@ def signing_key():
         raise HTTPException(503, "The confirmation signing key is unavailable") from None
 
 
-@router.post("/v1/dashboard/loom/confirms/{ident}")
+@router.post("/v1/dashboard/loom/confirms/{ident}", dependencies=[Depends(home_access.session_gate)])
 def press(ident: str, request: Request, payload: dict, db: Session = Depends(get_db)):
     row = _row(db, request, ident)
     origin = request.headers.get("origin")
