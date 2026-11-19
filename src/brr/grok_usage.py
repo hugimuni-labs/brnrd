@@ -203,6 +203,11 @@ def parse_billing(raw: bytes | str) -> dict[str, Any]:
     onDemandCap, onDemandUsed and prepaidBalance are monetary amounts, not
     the subscription limit: all three can be zero while weekly usage is 10%.
     Their presence alone cannot supply a weekly percentage.
+
+    The service speaks proto3 JSON, which omits a field at its zero value:
+    a weekly period with no ``creditUsagePercent`` is a 0% week (seen
+    2026-11-19 while Grok's own /usage panel read 0%). A present value that
+    is not a percentage is still an error.
     """
     data = json.loads(raw)
     config = data.get("config") if isinstance(data, dict) else None
@@ -211,7 +216,7 @@ def parse_billing(raw: bytes | str) -> dict[str, Any]:
     period = config.get("currentPeriod")
     if not isinstance(period, dict) or period.get("type") != "USAGE_PERIOD_TYPE_WEEKLY":
         raise _ReadingError("grok billing response has no weekly period")
-    used = config.get("creditUsagePercent")
+    used = config.get("creditUsagePercent", 0)
     if (isinstance(used, bool) or not isinstance(used, (int, float))
             or not math.isfinite(used) or not 0 <= used <= 100):
         raise _ReadingError("grok billing response has no valid usage percentage")
