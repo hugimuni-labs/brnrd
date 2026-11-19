@@ -129,7 +129,7 @@ test('order: seated by freshest letter, your-call by since, quiet by opened newe
 		sorted.map((t) => t.id),
 		['seat-2', 'seat-1', 'call-a', 'call-b', 'wait', 'stall', 'q-new', 'q-old', 'done']
 	);
-	deepEqual(wanted(sorted, new Set(['done']), new Set()), [
+	deepEqual(wanted(sorted, new Set(['done']), new Set(readFilters('[]'))), [
 		'inbox',
 		'seat-2',
 		'seat-1',
@@ -146,7 +146,7 @@ test('order: seated by freshest letter, your-call by since, quiet by opened newe
 		'done'
 	]);
 	deepEqual(readFilters('["quiet","quiet","retired","waiting"]'), ['waiting', 'quiet']);
-	deepEqual(readFilters('{'), []);
+	deepEqual(readFilters('{'), ['seated', 'your-call', 'waiting', 'mine']);
 });
 
 test('order moves at most once per REORDER; a new column lands at once; a hold keeps the screen', () => {

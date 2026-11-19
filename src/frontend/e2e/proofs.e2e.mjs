@@ -97,8 +97,8 @@ test('a thread’s steps sit under the wish they cite, none loose, no unplanned 
 
 test('the order holds for 10 s, then moves once; the same data moves nothing (proof-order, proof-hold)', async () => {
 	// Include the quiet column so its move tests the reorder hold on an existing column.
-	await B.page.getByRole('button', { name: 'Working 1' }).click();
-	await B.page.getByRole('button', { name: 'Waiting 1' }).click();
+	await B.page.getByRole('button', { name: 'Your call 1' }).click();
+	await B.page.getByRole('button', { name: 'Stuck 2' }).click();
 	await B.page.getByRole('button', { name: 'Quiet 1' }).click();
 	const first = await order();
 	assert.equal(first.indexOf('foxtrot'), 3);

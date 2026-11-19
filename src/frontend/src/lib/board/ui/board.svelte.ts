@@ -9,7 +9,7 @@ import { allCalls, armedVerdict, correctDraft, verdictLetter } from '../calls.ts
 import { byAt, dated, refTokens } from '../text.ts';
 import { unechoed } from '../ledger.ts';
 import { forget, remembering, type Held } from '../cache.ts';
-import { readFilters } from '../order.ts';
+import { DEFAULT_STATES, readFilters } from '../order.ts';
 import { EMPTY, PLACE, paneScroll, readPlace, type Place } from '../place.ts';
 
 const KEY = Symbol('board');
@@ -42,6 +42,8 @@ export class Board {
 	filters = new SvelteSet<BoardState>(readFilters(local('board.filters', '[]')));
 	filter(state: BoardState) {
 		if (!this.filters.delete(state)) this.filters.add(state);
+		if (!this.filters.size)
+			for (const defaultState of DEFAULT_STATES) this.filters.add(defaultState);
 		try {
 			localStorage.setItem('board.filters', JSON.stringify([...this.filters]));
 		} catch {

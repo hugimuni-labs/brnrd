@@ -24,14 +24,17 @@ export const STATE_LABEL = {
 } satisfies Record<BoardState, string>;
 
 export const BOARD_STATES = Object.keys(STATE_LABEL) as BoardState[];
-export const DEFAULT_STATES: BoardState[] = ['seated', 'your-call', 'waiting', 'mine'];
+export const DEFAULT_STATES: readonly BoardState[] = ['seated', 'your-call', 'waiting', 'mine'];
 
-export function readFilters(saved: string): BoardState[] {
+export function readFilters(saved: string): readonly BoardState[] {
 	try {
 		const values: unknown = JSON.parse(saved);
-		return Array.isArray(values) ? BOARD_STATES.filter((state) => values.includes(state)) : [];
+		const selected = Array.isArray(values)
+			? BOARD_STATES.filter((state) => values.includes(state))
+			: [];
+		return selected.length ? selected : DEFAULT_STATES;
 	} catch {
-		return [];
+		return DEFAULT_STATES;
 	}
 }
 
@@ -76,8 +79,7 @@ export function wanted(
 	open: Set<string>,
 	filters: ReadonlySet<BoardState>
 ): string[] {
-	const selected = filters.size ? filters : new Set(DEFAULT_STATES);
-	const visible = sorted.filter((t) => selected.has(bst(t)));
+	const visible = sorted.filter((t) => filters.has(bst(t)));
 	const settled = visible.filter((t) => bst(t) === 'settled');
 	return [
 		INBOX,
