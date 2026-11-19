@@ -1059,7 +1059,8 @@ class Pusher:
             for body in self.batches(held, hashes):
                 resp = cloud._send("PUT", url, data=body, headers=headers, timeout=60)
                 if not 200 <= resp.status_code < 300:
-                    if (refused := cloud.home_refusal(resp, cloud._retry_after_s(resp))) is not None:
+                    if (refused := cloud.home_refusal(resp)) is not None:
+                        refused.retry_after = cloud._retry_after_s(resp)
                         raise refused
                     err = RuntimeError(f"PUT /v1/daemons/loom/parts -> {resp.status_code}: {resp.text[:200]}")
                     err.status_code = resp.status_code  # type: ignore[attr-defined]
