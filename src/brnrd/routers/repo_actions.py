@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Depends, Request
 
+from brnrd import home_access
 from brnrd.auth import get_db
 from sqlalchemy.orm import Session
 
@@ -60,7 +61,7 @@ async def set_repo_publish_layers_api(repo_id: str, request: Request, db: Sessio
     return _repo_action_response(notice)
 
 
-@router.post("/v1/repos/{repo_id}/telegram-pair")
+@router.post("/v1/repos/{repo_id}/telegram-pair", dependencies=[Depends(home_access.session_gate)])
 def pair_repo_telegram_api(repo_id: str, request: Request, db: Session = Depends(get_db)):
     account = _json_account(request, db)
     try:

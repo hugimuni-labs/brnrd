@@ -28,6 +28,7 @@ from brnrd.auth import get_db
 from brnrd.looms import loom_repos as _loom_repos
 from brnrd.models import Account, BoardConsent, Daemon, LoomPart, Repo
 
+from .. import home_access
 from ._session import _account_id, _json_body
 from .dashboard import enqueue_loom_letter
 
@@ -95,12 +96,12 @@ def _read(request: Request, db: Session, key: str, before: str | None = None, un
     return JSONResponse(cut, headers={**headers, "ETag": f'"{etag}"'})
 
 
-@router.get("/index")
+@router.get("/index", dependencies=[Depends(home_access.session_gate)])
 def loom_index(request: Request, db: Session = Depends(get_db)) -> Response:
     return _read(request, db, "index")
 
 
-@router.get("/beads")
+@router.get("/beads", dependencies=[Depends(home_access.session_gate)])
 def loom_beads(request: Request, since: str | None = None, db: Session = Depends(get_db)) -> Response:
     """The beads part, or the delta from ``since`` when the index still carries that patch."""
     if since:
@@ -128,17 +129,17 @@ def loom_beads(request: Request, since: str | None = None, db: Session = Depends
     return _read(request, db, "beads")
 
 
-@router.get("/topics")
+@router.get("/topics", dependencies=[Depends(home_access.session_gate)])
 def loom_topics(request: Request, db: Session = Depends(get_db)) -> Response:
     return _read(request, db, "topics")
 
 
-@router.get("/unthreaded")
+@router.get("/unthreaded", dependencies=[Depends(home_access.session_gate)])
 def loom_unthreaded(request: Request, db: Session = Depends(get_db)) -> Response:
     return _read(request, db, "unthreaded")
 
 
-@router.get("/thread/{thread_id}")
+@router.get("/thread/{thread_id}", dependencies=[Depends(home_access.session_gate)])
 def loom_thread(
     thread_id: str, request: Request, before: str | None = None, until: str | None = None,
     db: Session = Depends(get_db),
@@ -156,6 +157,7 @@ async def loom_events(request: Request) -> Response:
     factory = request.app.state.SessionLocal
     with factory() as db:
         account_id = _account_id(request, db)
+        home_access.refuse_session(db, request.app.state.settings, account_id)
     if account_id is None:
         return JSONResponse({"error": "unauthenticated"}, status_code=401)
 
@@ -186,7 +188,7 @@ async def loom_events(request: Request) -> Response:
     )
 
 
-@router.post("/letters")
+@router.post("/letters", dependencies=[Depends(home_access.session_gate)])
 async def loom_letter(request: Request, db: Session = Depends(get_db)) -> JSONResponse:
     """The board's composer, as the loopback's: ``{body, wish?, verdict?}`` into the main thread, via the relay."""
     account_id = _account_id(request, db)

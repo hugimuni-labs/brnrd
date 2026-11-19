@@ -10,7 +10,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from .. import account_deletion, github_marker, home_trial, ids, limits, publish_scope, schemas, stripe_api
+from .. import account_deletion, github_marker, home_access, ids, limits, publish_scope, schemas, stripe_api
 from ..activity_records import dedupe_activity_records, fresh_activity_records
 from ..auth import Principal, get_db, require_account, require_account_or_session
 from ..models import ActivityRecord, Account, GitHubInstallation, GitHubInstalledRepo, Repo, Token
@@ -161,8 +161,8 @@ def delete_account(
 
 
 @router.get("/home-trial", response_model=schemas.HomeTrialOut)
-def get_home_trial(principal: Principal = Depends(require_account_or_session), db: Session = Depends(get_db)):
+def get_home_trial(request: Request, principal: Principal = Depends(require_account_or_session), db: Session = Depends(get_db)):
     account = db.get(Account, principal.account_id)
     if account is None or account.deleted_at is not None:
         raise HTTPException(status_code=404, detail="account not found")
-    return home_trial.status(account)
+    return home_access.trial_status(request.app.state.settings, account)

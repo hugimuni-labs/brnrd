@@ -31,3 +31,33 @@ this observational timestamp alone is not permission to cut anyone off.
 Service gates, transition notices, cleanup and sign-in/pricing claims are later
 changes. Every existing subscriber, including historical prices, retains the
 current access rules throughout this stage. No Stripe state is written here.
+
+## The home gate (off by default)
+
+`brnrd/home_access.py` holds the one entitlement decision every refusal calls.
+It is off while `BRNRD_HOME_GATE_FROM` is unset, unparseable or in the future:
+then it reads nothing and no response changes. Set to an ISO instant, it turns
+on from that instant, and the instant also restarts every earlier clock, so an
+account's window ends 14 days after the later of its start and the switch-on.
+`GET /v1/accounts/home-trial` then reports that window and
+`enforcement_enabled: true`.
+
+Admitted while on: any live subscription (`Account.tier` subscribed, which any
+non-canceled Stripe subscription on any price sets, past due included), an
+account whose clock has not started, an account inside its window, and any
+account whose billing state cannot be read.
+
+Refused otherwise: hosted board reads and sends (`/v1/loom/*`, the board's
+`/v1/dashboard/*` reads, letters, wake requests, respawns), new messenger
+pairing codes, every device upload and relay route behind the install ceiling,
+the inbox long-poll, `/door` and the managed GitHub token. Always open: account,
+billing, deletion, terms, sign-in, connecting and registering a machine,
+`whoami`, `revoke`, paired-chat listing and revocation, repo settings, config
+approval, run stop and release.
+
+Browser routes answer 402; device routes answer 429 with `Retry-After`
+(`BRNRD_HOME_GATE_RETRY_AFTER_S`, 900), after holding the request
+`BRNRD_HOME_GATE_HOLD_S` (20) seconds, or the long-poll's own timeout for the
+inbox, so an installed client that retries without backoff is paced by the
+server. At most `BRNRD_HOME_GATE_MAX_HOLDS` (256) holds are open at once in
+the process; past that a refusal answers at once. Both carry `{reason: home_subscription_required, message, account_url}`.

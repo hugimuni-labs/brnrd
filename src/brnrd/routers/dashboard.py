@@ -25,6 +25,7 @@ from brnrd import (
     run_stop_requests,
     wake_requests,
 )
+from brnrd import home_access
 from brnrd.looms import loom_repos
 from brnrd.routers.pairing import telegram_pair_core
 from brnrd.activity_records import dedupe_activity_records, fresh_activity_records
@@ -1060,7 +1061,7 @@ def _messenger_identities(request: Request, settings):
     return env_only_identities(settings)
 
 
-@router.post("/v1/dashboard/telegram-pair")
+@router.post("/v1/dashboard/telegram-pair", dependencies=[Depends(home_access.session_gate)])
 def dashboard_telegram_pair_api(request: Request, db: Session = Depends(get_db)) -> JSONResponse:
     """#1457 — mint an *account-level* pair code from the browser session.
 
@@ -1078,7 +1079,7 @@ def dashboard_telegram_pair_api(request: Request, db: Session = Depends(get_db))
     return JSONResponse(started.model_dump(mode="json"))
 
 
-@router.post("/v1/dashboard/pair")
+@router.post("/v1/dashboard/pair", dependencies=[Depends(home_access.session_gate)])
 async def dashboard_pair_api(request: Request, db: Session = Depends(get_db)) -> JSONResponse:
     """#1465 — the registry-generalized mint: one endpoint, a `platform`
     field, covering every connector `messenger_doors` declares
@@ -1359,7 +1360,7 @@ def dashboard_repos_api(
     )
 
 
-@router.get("/v1/dashboard/quota")
+@router.get("/v1/dashboard/quota", dependencies=[Depends(home_access.session_gate)])
 def dashboard_quota_api(request: Request, db: Session = Depends(get_db)) -> JSONResponse:
     """JSON twin of ``runner_quotas`` for the SvelteKit frontend."""
     account_id = _account_id(request, db)
@@ -1380,7 +1381,7 @@ def dashboard_quota_api(request: Request, db: Session = Depends(get_db)) -> JSON
     )
 
 
-@router.get("/v1/dashboard/news")
+@router.get("/v1/dashboard/news", dependencies=[Depends(home_access.session_gate)])
 def dashboard_news_api(request: Request, db: Session = Depends(get_db)) -> JSONResponse:
     """JSON twin of the news lane (`brr.news_lane`) for the SvelteKit frontend.
 
@@ -1405,7 +1406,7 @@ def dashboard_news_api(request: Request, db: Session = Depends(get_db)) -> JSONR
     )
 
 
-@router.get("/v1/dashboard/loom")
+@router.get("/v1/dashboard/loom", dependencies=[Depends(home_access.session_gate)])
 def dashboard_loom_api(request: Request, db: Session = Depends(get_db)) -> JSONResponse:
     """The account's newest loom snapshot v1, unchanged, plus ``stale_s``."""
     account_id = _account_id(request, db)
@@ -1437,7 +1438,7 @@ def _loom_letter_repo_id(db: Session, account_id: str) -> str | None:
     ).scalar_one_or_none()
 
 
-@router.post("/v1/dashboard/loom/letters")
+@router.post("/v1/dashboard/loom/letters", dependencies=[Depends(home_access.session_gate)])
 async def dashboard_loom_letter(request: Request, db: Session = Depends(get_db)) -> JSONResponse:
     """The board's composer: queue a letter the relay delivers to a loom thread."""
     account_id = _account_id(request, db)
@@ -1502,7 +1503,7 @@ def _same_verdict(db: Session, repo_id: str, login: str, wish: str, verdict: str
     return None
 
 
-@router.get("/v1/dashboard/runners")
+@router.get("/v1/dashboard/runners", dependencies=[Depends(home_access.session_gate)])
 def dashboard_runners_api(request: Request, db: Session = Depends(get_db)) -> JSONResponse:
     """JSON twin for the spool-rack panel (#328)."""
     account_id = _account_id(request, db)
@@ -1539,7 +1540,7 @@ def _bench_home(request: Request) -> Path | None:
     return Path(raw) if raw else None
 
 
-@router.get("/v1/dashboard/bench")
+@router.get("/v1/dashboard/bench", dependencies=[Depends(home_access.session_gate)])
 def dashboard_bench_api(request: Request, db: Session = Depends(get_db)) -> JSONResponse:
     """List the resident's bench (design-the-loom.md §6/§18) — see
     `bench_store` for the store's shape and this endpoint's own scope
@@ -1550,7 +1551,7 @@ def dashboard_bench_api(request: Request, db: Session = Depends(get_db)) -> JSON
     return JSONResponse({"files": bench_store.list_bench_files(_bench_home(request))})
 
 
-@router.get("/v1/dashboard/bench/{repo}/{rest:path}")
+@router.get("/v1/dashboard/bench/{repo}/{rest:path}", dependencies=[Depends(home_access.session_gate)])
 def dashboard_bench_file_api(
     repo: str, rest: str, request: Request, db: Session = Depends(get_db)
 ) -> JSONResponse:
@@ -1570,7 +1571,7 @@ def dashboard_bench_file_api(
     return JSONResponse(record)
 
 
-@router.post("/v1/dashboard/runners/wake-request")
+@router.post("/v1/dashboard/runners/wake-request", dependencies=[Depends(home_access.session_gate)])
 async def dashboard_runners_wake_request(
     request: Request, db: Session = Depends(get_db)
 ) -> JSONResponse:
@@ -1650,7 +1651,7 @@ def dashboard_runners_wake_request_cancel(
     return JSONResponse({"wake_request": wake_requests.view(row)})
 
 
-@router.get("/v1/dashboard/live-runs")
+@router.get("/v1/dashboard/live-runs", dependencies=[Depends(home_access.session_gate)])
 def dashboard_live_runs_api(request: Request, db: Session = Depends(get_db)) -> JSONResponse:
     """Account-scoped live/coexisting-runs view (#258)."""
     account_id = _account_id(request, db)
@@ -1784,7 +1785,7 @@ def dashboard_run_release(run_id: str, request: Request, db: Session = Depends(g
     return JSONResponse({"release_request": run_release_requests.view(row)})
 
 
-@router.post("/v1/dashboard/runs/{run_id}/respawn")
+@router.post("/v1/dashboard/runs/{run_id}/respawn", dependencies=[Depends(home_access.session_gate)])
 async def dashboard_run_respawn(run_id: str, request: Request, db: Session = Depends(get_db)) -> JSONResponse:
     """Park a respawn-on-another-core for a held seat.
 
@@ -1838,7 +1839,7 @@ async def dashboard_run_respawn(run_id: str, request: Request, db: Session = Dep
     return JSONResponse({"respawn_request": run_respawn_requests.view(row)})
 
 
-@router.get("/v1/dashboard/pr-review-queue")
+@router.get("/v1/dashboard/pr-review-queue", dependencies=[Depends(home_access.session_gate)])
 def dashboard_pr_review_queue_api(request: Request, db: Session = Depends(get_db)) -> JSONResponse:
     """Account-scoped open-PR review queue (#259)."""
     account_id = _account_id(request, db)
@@ -1860,7 +1861,7 @@ def dashboard_pr_review_queue_api(request: Request, db: Session = Depends(get_db
     )
 
 
-@router.get("/v1/dashboard/run-ledger")
+@router.get("/v1/dashboard/run-ledger", dependencies=[Depends(home_access.session_gate)])
 def dashboard_run_ledger_api(
     request: Request,
     limit: int = 10,
@@ -1933,7 +1934,7 @@ def _if_none_match_hits(if_none_match: str | None, etag: str) -> bool:
     return etag in candidates or "*" in candidates
 
 
-@router.get("/v1/dashboard/surface")
+@router.get("/v1/dashboard/surface", dependencies=[Depends(home_access.session_gate)])
 def dashboard_surface_api(request: Request, db: Session = Depends(get_db)) -> Response:
     """Account-scoped discovered work surface for the SvelteKit frontend."""
     account_id = _account_id(request, db)
@@ -2056,7 +2057,7 @@ def _enrich_ask_receipts(
         row["receipts"] = resolve_receipts(row, bases, hint=repo_hint(row, bases, run_slugs))
 
 
-@router.get("/v1/dashboard/warp/asks.json")
+@router.get("/v1/dashboard/warp/asks.json", dependencies=[Depends(home_access.session_gate)])
 def dashboard_warp_asks_api(request: Request, db: Session = Depends(get_db)) -> Response:
     """The console's list of asks — the warp read as the user's LRU.
 
@@ -2136,7 +2137,7 @@ def _home_installation(db: Session, account_id: str, full_name: str) -> str | No
     return str(row[0]) if row else None
 
 
-@router.get("/v1/dashboard/warp/says/{event_id}")
+@router.get("/v1/dashboard/warp/says/{event_id}", dependencies=[Depends(home_access.session_gate)])
 def dashboard_warp_say(event_id: str, request: Request, db: Session = Depends(get_db)) -> Response:
     """A say's words, read from the home repo at request time (never stored).
 
@@ -2226,7 +2227,7 @@ def _activity_row_out(view: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-@router.get("/v1/dashboard/activity")
+@router.get("/v1/dashboard/activity", dependencies=[Depends(home_access.session_gate)])
 def dashboard_activity_api(
     request: Request,
     repo_id: str | None = None,

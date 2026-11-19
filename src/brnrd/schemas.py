@@ -1649,5 +1649,5 @@ class HomeTrialOut(BaseModel):
     status: Literal["not_started", "active", "expired"]
     started_at: datetime | None = None
     ends_at: datetime | None = None
-    # This is an observational clock, not an access decision.
+    # True only while BRNRD_HOME_GATE_FROM has switched the home gate on (home_access.py).
     enforcement_enabled: bool = False
