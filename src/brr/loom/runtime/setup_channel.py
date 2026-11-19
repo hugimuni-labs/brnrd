@@ -113,13 +113,12 @@ def _bind(home, kind, name, person, folder, env, chats, *, timeout, out, qr, lin
 
     No code reaches the loom here: the server binds the chat on the
     person's tap and ``bound`` lists it. The first letter is the proof.
-    The account's own web chat (platform ``loom``) is the approver's and
-    is saved too, but it is not a chat to write from a phone: the link is
-    still offered when it is the only one.
+    The approver's verified web chat (platform ``loom``) is enough to
+    enable the channel and start the service.
     """
     web = [chat for chat in chats if chat.get('platform') == 'loom']
     chats = [chat for chat in chats if chat.get('platform') != 'loom']
-    if not chats:
+    if not chats and not web:
         door = _door(folder, env)
         if door is None:
             raise ValueError('brnrd.dev gave no link to bind a chat; nothing was enabled. Run brnrd setup again.')

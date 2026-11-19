@@ -32,7 +32,7 @@ test('subscribeOffer labels the button with the Price checkout charges', () => {
 });
 
 test('the pitch promises no trial and no free repository', () => {
-	assert.ok(/hosted limits/.test(SUBSCRIBE_PITCH));
+	assert.ok(/hosted board/.test(SUBSCRIBE_PITCH));
 	assert.ok(!/trial|first repository|stays free/i.test(SUBSCRIBE_PITCH));
 });
 
@@ -42,14 +42,14 @@ test('pricing constants match the 2026-11-05 decision: monthly only', () => {
 });
 
 test('billingReturnNotice maps the four return params and nothing else', () => {
-	assert.equal(billingReturnNotice('?billing=subscribed')?.kind, 'success');
+	assert.equal(billingReturnNotice('?billing=subscribed')?.kind, 'subscription');
 	assert.equal(billingReturnNotice('?billing=topup-complete')?.kind, 'success');
 	assert.equal(billingReturnNotice('?billing=canceled')?.kind, 'quiet');
 	assert.equal(billingReturnNotice('?billing=topup-canceled')?.kind, 'quiet');
 	assert.equal(billingReturnNotice('?billing=nonsense'), null);
 	assert.equal(billingReturnNotice(''), null);
 	// success copy stays honest about webhook-paced entitlements…
-	assert.match(billingReturnNotice('?billing=subscribed')!.text, /incrementally/);
+	assert.match(billingReturnNotice('?billing=subscribed')!.text, /Waiting for Stripe/);
 	assert.doesNotMatch(billingReturnNotice('?billing=subscribed')!.text, /active|done/i);
 	// …and the offer surface bans credits framing
 	for (const param of ['subscribed', 'topup-complete', 'canceled', 'topup-canceled']) {

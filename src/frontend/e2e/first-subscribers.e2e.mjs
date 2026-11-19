@@ -1,4 +1,4 @@
-// The first paying subscribers see the install-session link (his 11426): in the notice right after Stripe sends them
+// The first paying subscribers see the install-session link (his 11426): after confirmation when Stripe sends them
 // back to /account, and on /account while they stay subscribed. The server decides who (billing.install_session_link,
 // tests/test_first_subscribers.py); here the page is driven with the read the server sends.
 import { test } from 'node:test';
@@ -64,15 +64,20 @@ const offers = (B) =>
 		}))
 	);
 
-test('back from checkout, a first subscriber reads the link in the notice once the webhook lands', async () => {
+test('back from checkout, a first subscriber reads the link once the webhook lands', async () => {
 	const B = await account('/account?billing=subscribed', [free, subscribed(LINK)]);
 	try {
-		await B.page.waitForSelector('[role=status] .install-offer', { timeout: 15_000 });
+		await B.page.waitForSelector('.install-offer', { timeout: 15_000 });
+		equal(
+			await B.page.getByRole('status').filter({ hasText: 'Subscription confirmed.' }).count(),
+			1
+		);
+		await B.page.getByRole('link', { name: 'Open your board' }).waitFor();
 		deepEqual(await offers(B), [
 			{
 				text: "You're one of our first 20 subscribers. Book a free install session with us.",
 				href: LINK,
-				inNotice: true
+				inNotice: false
 			}
 		]);
 		if (SHOTS) await B.page.screenshot({ path: `${SHOTS}/after-checkout-desktop.png` });
@@ -90,6 +95,7 @@ test('on /account a first subscriber reads the link beside the subscription', as
 		const B = await account('/account', [subscribed(LINK)], viewport);
 		try {
 			await B.page.waitForSelector('.install-offer');
+			await B.page.getByRole('link', { name: 'Open your board' }).waitFor();
 			deepEqual(await offers(B), [
 				{
 					text: "You're one of our first 20 subscribers. Book a free install session with us.",
@@ -109,7 +115,12 @@ test('a subscriber past the first seats, and a free account, see no link', async
 	for (const read of [subscribed(null), free]) {
 		const B = await account('/account?billing=subscribed', [read]);
 		try {
-			await B.page.waitForSelector('.acct .panel p.font-mono');
+			if (read === free) {
+				await B.page.getByRole('button', { name: 'Check payment status' }).waitFor();
+				equal(await B.page.getByRole('button', { name: /^subscribe/i }).count(), 0);
+			} else {
+				await B.page.getByText('Subscription confirmed.').waitFor();
+			}
 			equal(await B.page.locator('.install-offer').count(), 0);
 		} finally {
 			await B.close();

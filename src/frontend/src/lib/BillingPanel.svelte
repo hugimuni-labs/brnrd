@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { resolve } from '$app/paths';
 	import { onMount } from 'svelte';
 	import {
 		BillingAuthError,
@@ -18,14 +19,10 @@
 		type SubscriptionState
 	} from './billing';
 	import { fetchPricing, type PriceFigure } from './pricing';
-
-	// The account's subscription surface (maintainer steer 2026-07-21:
-	// subscription only, no wallet/credits UI). Reads ride the same session
-	// cookie as every dashboard fetch; state *changes* only ever come back
-	// through the Stripe webhook, so after a checkout the panel shows honest
-	// "landing incrementally" copy instead of pretending to know.
+	import { BASE, getJSON } from './board/parts';
 
 	let subscription = $state<SubscriptionState | null>(null);
+	let refreshing = false;
 	let loadError = $state<string | null>(null);
 	let actionError = $state<string | null>(null);
 	// One in-flight action at a time — every action here either redirects
@@ -42,9 +39,11 @@
 	let offer = $derived(subscribeOffer(figure));
 	let hasSubscription = $derived(subscription !== null && subscription.status !== null);
 	let installOffer = $derived(installSessionOffer(subscription));
-	// Right after checkout the offer rides in the notice; otherwise it sits
-	// with the subscription, for as long as the subscription is live.
-	let offerInNotice = $derived(notice?.kind === 'success' && installOffer !== null);
+	let boardReady = $state(false);
+	let checkoutPending = $derived(notice?.kind === 'subscription' && !hasSubscription);
+	let noticeText = $derived(
+		notice?.kind === 'subscription' && hasSubscription ? 'Subscription confirmed.' : notice?.text
+	);
 	let periodEndLabel = $derived(
 		subscription?.current_period_end ? dateLabel(subscription.current_period_end) : null
 	);
@@ -55,22 +54,26 @@
 	}
 
 	async function refresh() {
+		if (refreshing) return;
+		refreshing = true;
 		try {
 			subscription = await fetchSubscription();
 			loadError = null;
 		} catch (e) {
 			loadError = describeError(e, 'billing state fetch failed');
+		} finally {
+			refreshing = false;
 		}
 	}
 
 	onMount(() => {
 		notice = billingReturnNotice(window.location.search);
-		if (notice) {
+		if (notice && notice.kind !== 'subscription') {
 			// Strip the param so a reload doesn't re-announce a stale result.
 			history.replaceState(history.state, '', withoutBillingParam(window.location.href));
 		}
 		void refresh().then(() => {
-			if (notice?.kind === 'success') void awaitWebhook();
+			if (checkoutPending) void awaitWebhook();
 		});
 		void fetchPricing().then((p) => (figure = p?.public_monthly ?? null));
 	});
@@ -78,6 +81,25 @@
 	// The return from Stripe usually beats the webhook that records the
 	// subscription; reread a few times so the payer sees it (and, for a first
 	// subscriber, the install-session link) without reloading.
+	$effect(() => {
+		if (notice?.kind === 'subscription' && hasSubscription) {
+			history.replaceState(history.state, '', withoutBillingParam(window.location.href));
+		}
+	});
+
+	$effect(() => {
+		if (!hasSubscription) return;
+		let current = true;
+		void getJSON(`${BASE}/index`)
+			.then((index) => {
+				if (current) boardReady = !!index && typeof index === 'object' && 'parts' in index;
+			})
+			.catch(() => {});
+		return () => {
+			current = false;
+		};
+	});
+
 	async function awaitWebhook() {
 		for (const ms of RETURN_REFETCH_MS) {
 			if (hasSubscription) return;
@@ -118,27 +140,24 @@
 <div class="panel p-4">
 	{#if notice}
 		<p
-			class="subpanel mb-3 px-3 py-2 font-mono text-[11px] {notice.kind === 'success'
+			class="subpanel mb-3 px-3 py-2 font-mono text-[11px] {notice.kind !== 'quiet'
 				? 'text-amber-200'
 				: 'text-ink-quiet'}"
 			role="status"
 		>
-			{notice.text}
-			{#if offerInNotice && installOffer}
-				<span class="install-offer mt-1 block text-amber-100">
-					{installOffer.lead}
-					<!-- eslint-disable svelte/no-navigation-without-resolve -- an external booking link -->
-					<a href={installOffer.url} target="_blank" rel="noopener" class="underline">
-						{installOffer.link}</a
-					>.
-					<!-- eslint-enable svelte/no-navigation-without-resolve -->
-				</span>
-			{/if}
+			{noticeText}
 		</p>
 	{/if}
 
 	{#if loadError}
 		<p class="text-sm text-red-400">{loadError}</p>
+		<button type="button" class="text-sm text-amber-200 underline" onclick={refresh}
+			>Try again</button
+		>
+	{:else if checkoutPending}
+		<button type="button" class="text-sm text-amber-200 underline" onclick={refresh}>
+			Check payment status
+		</button>
 	{:else if subscription === null}
 		<p class="text-sm text-ink-quiet">reading subscription state…</p>
 	{:else}
@@ -165,7 +184,7 @@
 		{#if !hasSubscription}
 			<!-- subscribe CTA -->
 			<p class="mt-2 text-sm leading-relaxed text-stone-400">
-				{SUBSCRIBE_PITCH}
+				{SUBSCRIBE_PITCH} <a href={resolve('/')} class="text-amber-200 underline">Set up brnrd</a>.
 			</p>
 			<div class="mt-3 flex flex-wrap items-center gap-3">
 				<button
@@ -186,6 +205,19 @@
 				unchanged while your subscription is live
 			</p>
 		{:else}
+			<a href={resolve('/')} class="mt-3 inline-block text-sm text-amber-200 underline"
+				>{boardReady ? 'Open your board' : 'Set up brnrd'}</a
+			>
+			{#if installOffer}
+				<p class="install-offer mt-3 text-sm text-amber-100">
+					{installOffer.lead}
+					<!-- eslint-disable svelte/no-navigation-without-resolve -- an external booking link -->
+					<a href={installOffer.url} target="_blank" rel="noopener" class="underline">
+						{installOffer.link}</a
+					>.
+					<!-- eslint-enable svelte/no-navigation-without-resolve -->
+				</p>
+			{/if}
 			<div class="mt-3 flex flex-wrap items-center gap-3">
 				<button
 					type="button"
@@ -215,16 +247,6 @@
 					</button>
 				{/if}
 			</div>
-			{#if installOffer && !offerInNotice}
-				<p class="install-offer mt-3 text-sm text-amber-100">
-					{installOffer.lead}
-					<!-- eslint-disable svelte/no-navigation-without-resolve -- an external booking link -->
-					<a href={installOffer.url} target="_blank" rel="noopener" class="underline">
-						{installOffer.link}</a
-					>.
-					<!-- eslint-enable svelte/no-navigation-without-resolve -->
-				</p>
-			{/if}
 			<p class="mt-2 font-mono text-[10px] text-ink-quiet">
 				thank you — this funds the engine you're running, and you're early enough to shape it
 			</p>

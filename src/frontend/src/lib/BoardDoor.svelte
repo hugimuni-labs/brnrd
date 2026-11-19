@@ -3,6 +3,7 @@
 	import LoomHome from '$lib/LoomHome.svelte';
 	import { site, loadSite } from '$lib/site';
 	import { HOME_DESCRIPTION, HOME_TITLE, SOCIAL_IMAGE } from '$lib/seo';
+	import { startVisiblePoll } from './visiblePoll';
 	import { onMount } from 'svelte';
 	import Board from '$lib/board/ui/Board.svelte';
 	import BoardRecovery from '$lib/board/ui/BoardRecovery.svelte';
@@ -25,6 +26,8 @@
 	let slow = $state(false);
 	let busy = $state(false);
 	let failed = $state(false);
+	let connectionFailed = $state(false);
+	let checking = false;
 	let gone = false;
 	let timers: ReturnType<typeof setTimeout>[] = [];
 	const STEPS: Record<string, Step> = { ask: 'ask', declined: 'declined', granted: 'waiting' };
@@ -59,6 +62,32 @@
 		fetch(`${BASE}/consent`, { cache: 'no-store' })
 			.then((r) => (r.ok ? r.json() : null))
 			.catch(() => null);
+	async function checkConnection(signal?: AbortSignal) {
+		if (checking || gone || mode !== 'home') return;
+		checking = true;
+		try {
+			const [board, status] = await Promise.all([
+				fetch(`${BASE}/index`, { cache: 'no-store', signal }),
+				fetch(`${BASE}/consent`, { cache: 'no-store', signal })
+			]);
+			const j = board.ok ? await board.json() : null;
+			const c = status.ok ? await status.json() : null;
+			if (gone || mode !== 'home') return;
+			connectionFailed = !status.ok || (!board.ok && board.status !== 404);
+			if (board.status === 401) mode = 'anon';
+			else if (isBoard(j)) show(j);
+			else {
+				const step = STEPS[c?.state];
+				lastSeen = c?.last_seen_at ?? null;
+				if (step === 'waiting') wait();
+				else if (step) mode = step;
+			}
+		} catch {
+			if (!gone && !signal?.aborted) connectionFailed = true;
+		} finally {
+			checking = false;
+		}
+	}
 	const answer = async (send: boolean) => {
 		busy = true;
 		failed = false;
@@ -90,6 +119,7 @@
 	onMount(() => {
 		const flag = localStorage.getItem('board');
 		gone = false;
+		const stopPoll = flag === '0' ? undefined : startVisiblePoll(checkConnection, document, 4000);
 		const deployment = loadSite();
 		// in parallel with /v1/site: waiting for it would put a second round trip before a signed-in phone's board
 		const readIndex = () =>
@@ -147,6 +177,7 @@
 		});
 		return () => {
 			gone = true;
+			stopPoll?.();
 			timers.forEach(clearTimeout);
 			document.documentElement.classList.remove('board');
 		};
@@ -179,5 +210,7 @@
 {:else if mode === 'ask' || mode === 'declined' || mode === 'waiting'}
 	<BoardConsent step={mode} {lastSeen} {slow} {busy} {failed} {answer} />
 {:else if mode === 'home'}
-	<div data-home class="contents"><LoomHome /></div>
+	<div data-home class="contents">
+		<LoomHome retry={() => void checkConnection()} {connectionFailed} />
+	</div>
 {/if}

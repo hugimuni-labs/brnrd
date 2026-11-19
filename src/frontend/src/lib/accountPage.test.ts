@@ -61,7 +61,7 @@ test('the empty loom links to the account page', async () => {
 	try {
 		const module = await import(`${generated}?t=${process.pid}`);
 		const html = render(module.default).body;
-		assert.ok(/<a[^>]*href="\/account"[^>]*>account<\/a>/.test(html), 'no account link');
+		assert.ok(/<a[^>]*href="\/account"[^>]*>Account<\/a>/.test(html), 'no account link');
 	} finally {
 		rmSync(generated, { force: true });
 	}

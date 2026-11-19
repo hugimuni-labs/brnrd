@@ -67,10 +67,8 @@
 		<p class="failed" role="alert">brnrd.dev did not take the answer. Try again in a moment.</p>
 	{/if}
 	{#if step === 'waiting'}
-		<h1>Waiting for your loom's first push…</h1>
-		<p>
-			Your loom sends the board within a minute of the yes; this page turns into it when it lands.
-		</p>
+		<h1>Waiting for your board…</h1>
+		<p>Your computer is connected. This page opens your board when your computer sends it.</p>
 		{#if slow}
 			<p class="slow">
 				{#if lastSeen}

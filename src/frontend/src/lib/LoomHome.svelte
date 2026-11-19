@@ -23,6 +23,11 @@
 		type LoomSnapshot
 	} from './loomSnapshot.ts';
 
+	let {
+		retry = undefined,
+		connectionFailed = false
+	}: { retry?: () => void; connectionFailed?: boolean } = $props();
+
 	type View = 'unknown' | 'board' | 'empty' | 'dashboard';
 
 	let view = $state<View>('unknown');
@@ -104,7 +109,7 @@
 {:else if view === 'board' && snapshot}
 	<LoomBoard {snapshot} {seenAt} {now} bind:body />
 {:else if view === 'empty'}
-	<LoomEmpty />
+	<LoomEmpty {retry} {connectionFailed} />
 {:else}
 	<Dashboard />
 {/if}

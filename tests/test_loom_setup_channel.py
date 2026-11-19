@@ -1128,3 +1128,17 @@ def test_setup_defaults_to_installed_service_home(tmp_path, monkeypatch, capsys)
     assert setup_channel.main([]) == 0
     assert seen == [installed.resolve()]
     assert str(installed) in capsys.readouterr().out
+
+
+def test_relay_binding_accepts_the_verified_browser_chat_alone(tmp_path, monkeypatch):
+    home = home_at(tmp_path)
+    setup_channel.init_self(tmp_path, person='ada')
+    monkeypatch.setattr(setup_channel, '_door', lambda *_: None)
+    links = []
+    chat = {'platform': 'loom', 'from': 'loom:ada', 'link': 'https://brnrd.dev'}
+    assert setup_channel._bind(
+        home, 'relay', 'relay', 'ada', tmp_path, {}, [chat],
+        timeout=0, out=lambda _: None, qr=False, links=links,
+    ) == 'relay:loom:ada'
+    assert setup_channel.instances(home)['relay'] == 'relay'
+    assert links == [('brnrd.dev', 'https://brnrd.dev')]
