@@ -89,5 +89,5 @@ test('a your-call thread’s rail entry uses Your call; Waiting still names the 
 	);
 	match(text.bravo, /Your call/);
 	match(text.echo, /Waiting: the forge to come back/);
-	match(text.charlie, / · idle$/);
+	match(text.charlie, / · Stuck$/);
 });
