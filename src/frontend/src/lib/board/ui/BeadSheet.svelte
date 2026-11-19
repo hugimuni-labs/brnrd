@@ -38,7 +38,8 @@
 			? stages(
 					wish,
 					asks,
-					calls.some((c) => c.wish === wish.wish && answered(c, b.pending))
+					b.staleVerdicts.has(wish.wish) ||
+						calls.some((c) => c.wish === wish.wish && answered(c, b.pending))
 				)
 			: []
 	);

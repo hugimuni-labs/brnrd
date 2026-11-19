@@ -18,6 +18,7 @@ from __future__ import annotations
 import gzip
 import hashlib
 from collections import Counter
+from datetime import datetime
 import json
 import mimetypes
 import os
@@ -39,7 +40,7 @@ from .lifecycle import CLOSED, main_snapshot
 from .person_names import names as person_names
 from .project import fold, is_notice, projection_cache, sender_threads
 from .snapshot import _iso, assemble
-from .wishes import Say, receipt, told as told_of, waits_on, wishes
+from .wishes import EXPIRES, Say, receipt, told as told_of, waits_on, wishes
 from . import tooltrace
 from brr import emotes
 
@@ -212,7 +213,7 @@ def calls_of(threads: list[dict], told: dict, facts=()) -> dict[str, list[dict]]
     """Each thread's calls: the one action each wish waiting on him names (your-call.md, 4uwjt agreed in 4886).
 
     ask (red): an open ask whose wait reaches a person (waits_on, the loom's own rule); its line is
-    the question. verdict (yellow): a delivered wish with no verdict, on the open thread opened for it,
+    the question. verdict: a delivered or expired wish with no verdict, on the open thread opened for it,
     else the open thread it was said on, else the inbox; its last delivered result is the link.
     Either is ``closed`` once his verdict letter for the wish lands after it was raised (your-call.md, 4907):
     the card collapses, and the loom's own verdict stays the resident's to stamp.
@@ -231,7 +232,7 @@ def calls_of(threads: list[dict], told: dict, facts=()) -> dict[str, list[dict]]
             calls.setdefault(w.thread, []).append({"kind": "ask", "wish": ident, "line": w.line, "waits": head,
                                                    "at": _iso(raised.get(ident, w.at)), "raised": raised.get(ident, w.at)})
     for w in told.values():
-        if w.state != "delivered":
+        if w.verdict or w.state not in {"delivered", "expired"}:
             continue
         home = next((t for t in (opened.get(w.id), w.thread) if t in live), "inbox")
         result = [r for r in w.results if r.get("delivered")][-1]
@@ -244,14 +245,21 @@ def calls_of(threads: list[dict], told: dict, facts=()) -> dict[str, list[dict]]
     return calls
 
 
+def verdict_deadline(call: dict) -> float | None:
+    if call["kind"] == "verdict" and not call.get("closed") and not call.get("stale"):
+        return datetime.fromisoformat(call["at"].replace("Z", "+00:00")).timestamp() + EXPIRES.total_seconds()
+    return None
+
+
 def board_state(t: dict, calls: list[dict], left: int = 0, end: tuple | None = None,
                 parked: str | None = None, person: str | None = None, parked_at: str | None = None,
-                parked_wish: str | None = None) -> dict:
+                parked_wish: str | None = None, *, now: float | None = None) -> dict:
     """A column's state from one rule table (your-call.md), first match wins; the page only renders it.
 
     settled: status is closed. seated: a held strand works or holds, or the turn is mine (a body or the
-    loom is on owed letters). your call: a call names his action (red when one is an ask). mine: the
-    resident owes a move the loom will not make (a parked or failed strand, a letter owed by the
+    loom is on owed letters). your call: a call names his action (red when one is an ask). Old verdicts
+    stay on the card without making a call. mine: the resident owes a move the loom will not make
+    (a parked or failed strand, a letter owed by the
     operator, or an open thread with work left and no body that declared its end: wake or settle).
     waiting: work left, and the last body declared why it stopped (a `waiting:` read, or a paced/stopped end).
     quiet: nothing left (4987; named apart from the strand end cause `idle`, icjy2: a thread greys only when no wish on it is open).
@@ -264,8 +272,13 @@ def board_state(t: dict, calls: list[dict], left: int = 0, end: tuple | None = N
     if t.get("status") in CLOSED:
         return {"state": "settled"}
     held = next((s for s in reversed(t.get("strands") or []) if s.get("state") in {"working", "holding"}), None)
-    shown = {"calls": calls} if calls else {}  # closed calls still render, collapsed, in any column
-    calls = [c for c in calls if not c.get("closed")]
+    now = time.time() if now is None else now
+    cards = [
+        dict(c, stale=True) if (deadline := verdict_deadline(c)) is not None and deadline < now else c
+        for c in calls
+    ]
+    shown = {"calls": cards} if cards else {}
+    calls = [c for c in cards if not c.get("closed") and not c.get("stale")]
     # Whose move is apart from motion (4909): open calls badge the column, seated or not.
     calling = {"open": len(calls), "red": any(c["kind"] == "ask" for c in calls)} if calls else {}
     if held or t.get("turn") == "mine":
@@ -463,10 +476,11 @@ def board_threads(home: Home, facts, config, person: str | None = None, typed: d
             parked[w.thread] = (_iso(read["at"]), read["reading"], w.id)
     from .owners import unanswered_by_thread
     marks = thread_marks(snap.get("threads") or [], raw, unanswered_by_thread(facts, main_snapshot(home)))
+    now = time.time()
     for t in snap.get("threads") or []:
         last = ((t.get("strands") or [{}])[-1]).get("id")
         at, why, wid = parked.get(t["id"], (None, None, None))
-        t["board"] = board_state(t, calls.get(t["id"], []), left.get(t["id"], 0), ends.get(last), why, person, at, wid)
+        t["board"] = board_state(t, calls.get(t["id"], []), left.get(t["id"], 0), ends.get(last), why, person, at, wid, now=now)
         if t["board"]["state"] != "settled":
             t["board"].update(marks.get(t["id"], {}))
         if t["id"] in opened:
@@ -793,7 +807,7 @@ class Tools:
 
 
 class Parts:
-    """The parts, recomputed whole on their own thread when the ledger moved (design §D7).
+    """The parts, recomputed whole on their own thread on a ledger change or verdict deadline.
 
     A tape alone moving (a body's tool call) re-cuts only the ``tools`` and ``live`` of the thread parts
     over the last compute, at most once per ``TAPE`` s: with bodies live the tapes move several times a
@@ -810,6 +824,7 @@ class Parts:
         self.hashes: dict[str, str] = {}
         self.bead_deltas: dict[str, dict] = {}  # previous beads hash → delta, for GET ?since=
         self.revision = None
+        self.verdict_deadline: float | None = None
         self.taped, self.tape_at = False, None  # a tape move not shown yet; when the last one was
         self.usage = None  # loom/usage stamp at the last fuel read; the status line reads those files live
         # Which strand typed a letter through the board: the board's own note, outside the self repo.
@@ -835,11 +850,18 @@ class Parts:
                     main_tip(repo) if (repo / ".git").exists() else "")
         now = time.monotonic()
         usage = self._usage_stamp()
-        if revision != self.revision or typed or not self.parts:
+        verdict_aged = self.verdict_deadline is not None and self.verdict_deadline < time.time()
+        if revision != self.revision or typed or verdict_aged or not self.parts:
             self.revision, self.taped, self.tape_at = revision, False, now
             with projection_cache(self.cache):
                 parts = compute(self.home, facts, self.config_of(), self.tape.tools, self.tape.live, self.person,
                                 self.typed)
+            self.verdict_deadline = min(
+                (deadline for name, part in parts.items() if name.startswith("thread/")
+                 for call in (part.get("board") or {}).get("calls", [])
+                 if (deadline := verdict_deadline(call)) is not None),
+                default=None,
+            )
             hashes = dict(parts["index"]["parts"], index=digest(parts["index"]))  # compute hashed the others
             old_hash, old_beads = self.hashes.get("beads"), self.parts.get("beads")
             new_hash = hashes.get("beads")

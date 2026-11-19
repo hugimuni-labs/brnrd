@@ -34,19 +34,25 @@ export const openAsks = (calls: Call[]): Set<string> => {
 // took the inbox's first screen and sliced its last bar).
 export type Stack = {
 	shown: Call[];
-	fold: { asks: number; verdicts: number; answered: number } | null;
+	fold: { asks: number; verdicts: number; answered: number; stale: number } | null;
 };
 export function stack(calls: Call[], pending: Letter[], open: Set<string>, unfold: boolean): Stack {
 	const stand = (c: Call) => !answered(c, pending) && open.has(c.wish);
 	const folded = calls.filter((c) => !stand(c));
 	const live = folded.filter((c) => !answered(c, pending));
+	const stale = live.filter((c) => c.stale).length;
 	const asks = live.filter((c) => c.kind === 'ask').length;
 	return {
 		shown: unfold || folded.length < 2 ? calls : calls.filter(stand),
 		fold:
 			folded.length < 2
 				? null
-				: { asks, verdicts: live.length - asks, answered: folded.length - live.length }
+				: {
+						asks,
+						verdicts: live.length - asks - stale,
+						answered: folded.length - live.length,
+						stale
+					}
 	};
 }
 

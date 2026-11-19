@@ -1,3 +1,4 @@
+import { STATE_LABEL } from './order.ts';
 // The strand rail (board.html rail()): which strands it shows, a state move logged as `HH:MM:SS thread was→now` (the
 // last six kept), and the face a strand wears, the loom's frames for running or resting (index.faces).
 import type { Thread } from './types.ts';
@@ -48,12 +49,15 @@ const WAIT = 40;
 // The rail chip: a your-call thread waits on you, a waiting one names what, idle only when the thread is idle.
 export function waitOf(t: Thread, strandState?: string): string {
 	const st = t.board?.state;
-	if (st === 'your-call') return 'waits on you';
+	if (st === 'your-call') return STATE_LABEL[st];
 	if (st === 'waiting') {
 		const what = String(t.board?.why || '')
 			.replace(/^waiting:\s*/i, '')
 			.trim();
-		return 'waits: ' + (what.length > WAIT ? what.slice(0, WAIT - 1) + '…' : what);
+		return (
+			STATE_LABEL[st] +
+			(what ? ': ' + (what.length > WAIT ? what.slice(0, WAIT - 1) + '…' : what) : '')
+		);
 	}
-	return strandState || '';
+	return st ? STATE_LABEL[st] : strandState || '';
 }

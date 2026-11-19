@@ -41,7 +41,10 @@
 				· <button type="button" class="ref" onclick={() => b.openBead(w.thread!)}>{w.thread}</button
 				>{/if}</small
 		>
-		<div class="wline"><Chips text={w.line} /></div>
+		<div class="wline">
+			<Chips text={w.line} />
+			{#if b.staleVerdicts.has(w.wish)}<span class="not-marked">not marked</span>{/if}
+		</div>
 		<Pips {w} />
 		<div class="res">
 			{#each w.results || [] as r, i (i)}<div>

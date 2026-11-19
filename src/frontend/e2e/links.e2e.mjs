@@ -137,7 +137,9 @@ test('ordinary taps draw every line the page can draw (proof-taps)', async () =>
 		if (r.drawn.length !== r.drawable.length || r.paths !== r.drawable.length)
 			miss.push(`${id} drew ${r.drawn.length}/${r.paths} of ${r.drawable.length}`);
 	}
-	assert.ok(tapped >= 8, `tapped ${tapped} of ${ids.length} letters`);
+	// The default board hides quiet and settled columns. Tap every visible letter in this fixture.
+	assert.equal(ids.length, 7, 'letters visible with the default filters');
+	assert.equal(tapped, ids.length, 'every visible letter opens a selection');
 	assert.deepEqual(miss, [], 'drawable targets without a path');
 	// board.html asked a third of its live taps to draw; here the synthetic home says exactly which letters reach a
 	// card in another column: alpha's strand letter (strand → thread → wish → the inbox card) and the link letter.

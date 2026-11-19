@@ -26,13 +26,13 @@ test('the board has its own layout: no app fetches, no grain, no page errors', a
 	assert.deepEqual(B.errors, []);
 });
 
-test('columns stand inbox, seated, your call, mine, waiting, no body, quiet, then the settled stack', async () => {
+test('the default shows inbox and active columns in order', async () => {
 	const cols = await B.page.$$eval('#board > .column', (cs) =>
 		cs.map((c) => ({ id: c.dataset.column, b: c.dataset.b, stall: c.classList.contains('stall') }))
 	);
 	assert.deepEqual(
 		cols.map((c) => c.id),
-		['inbox', 'alpha', 'bravo', 'charlie', 'echo', 'delta', 'foxtrot', '~settled']
+		['inbox', 'alpha', 'bravo', 'charlie', 'echo', 'delta']
 	);
 	assert.deepEqual(
 		cols.filter((c) => c.stall).map((c) => c.id),
@@ -49,6 +49,64 @@ test('columns stand inbox, seated, your call, mine, waiting, no body, quiet, the
 		'waiting: the forge to come back'
 	);
 	assert.equal(await B.page.locator('[data-column="bravo"] .badge').innerText(), 'verdict');
+});
+
+test('the counted filters select a union, persist on reload and return to the default', async () => {
+	const parts = fixture();
+	const quietPart = parts['thread/foxtrot'];
+	const quietWish = quietPart.wishes[0];
+	quietWish.state = 'delivered';
+	quietWish.verdict = null;
+	quietWish.stamps = quietWish.stamps.filter((s) => s.stamp !== 'accepted');
+	quietPart.board.calls = [
+		{
+			kind: 'verdict',
+			wish: quietWish.wish,
+			line: quietWish.line,
+			at: quietWish.results[0].at,
+			stale: true
+		}
+	];
+	B.loom.set(reindex(parts));
+	const page = B.page;
+	const filters = page.getByRole('group', { name: 'Thread filters' });
+	assert.deepEqual(await filters.getByRole('button').allInnerTexts(), [
+		'Working 1',
+		'Your call 1',
+		'Waiting 1',
+		'Stuck 2',
+		'Quiet 1',
+		'Settled 2'
+	]);
+	const pressed = () => filters.getByRole('button', { pressed: true }).allInnerTexts();
+	const defaults = ['Working 1', 'Your call 1', 'Waiting 1', 'Stuck 2'];
+	assert.deepEqual(await pressed(), defaults);
+	const quiet = filters.getByRole('button', { name: 'Quiet 1' });
+	const working = filters.getByRole('button', { name: 'Working 1' });
+	const columns = () =>
+		page.locator('#board > .column').evaluateAll((cs) => cs.map((c) => c.dataset.column));
+	const active = ['inbox', 'alpha', 'bravo', 'charlie', 'echo', 'delta'];
+	const withoutWorking = active.filter((id) => id !== 'alpha');
+	await working.click();
+	assert.deepEqual(await pressed(), defaults.slice(1));
+	assert.deepEqual(await columns(), withoutWorking);
+	await quiet.click();
+	assert.deepEqual(await pressed(), [...defaults.slice(1), 'Quiet 1']);
+	assert.deepEqual(await columns(), [...withoutWorking, 'foxtrot']);
+	const quietCard = page.locator('[data-column="foxtrot"] .lg-row');
+	await quietCard.getByText('not marked', { exact: true }).waitFor();
+	assert.equal(await quietCard.locator('.pip.wait').count(), 0);
+	await page.reload();
+	await quietCard.waitFor();
+	assert.deepEqual(await pressed(), [...defaults.slice(1), 'Quiet 1']);
+	assert.deepEqual(await columns(), [...withoutWorking, 'foxtrot']);
+	for (const name of defaults.slice(1)) await filters.getByRole('button', { name }).click();
+	assert.deepEqual(await pressed(), ['Quiet 1']);
+	assert.deepEqual(await columns(), ['inbox', 'foxtrot']);
+	await quiet.click();
+	assert.deepEqual(await pressed(), defaults);
+	assert.deepEqual(await columns(), active);
+	B.loom.set(fixture());
 });
 
 test('topics has its own path; a quote opens and back returns to the board', async () => {
@@ -132,10 +190,14 @@ test('a new letter patches beads; the part is not fetched whole again', async ()
 });
 
 test('a settled thread opens beside the stack and folds back', async () => {
+	const settled = B.page.getByRole('button', { name: 'Settled 2' });
+	await settled.click();
 	await B.page.locator('[data-column="~settled"] .srow', { hasText: 'golf' }).click();
 	await B.page.waitForSelector('[data-column="golf"]');
 	await B.page.locator('[data-column="golf"] .unsettle').click();
 	await B.page.waitForSelector('[data-column="golf"]', { state: 'detached' });
+	await settled.click();
+	await B.page.waitForSelector('[data-column="~settled"]', { state: 'detached' });
 });
 
 test('the inbox stacks the calls as one counted line that opens on a tap', async () => {

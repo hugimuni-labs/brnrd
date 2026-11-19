@@ -83,11 +83,11 @@ test('a strand whose state moves flashes and logs was→now', async () => {
 	);
 });
 
-test('a your-call thread’s chip says waits on you; a waiting one says waits: what', async () => {
+test('a your-call thread’s rail entry uses Your call; Waiting still names the reason', async () => {
 	const text = await B.page.$$eval('#rail span[data-thread]', (ss) =>
 		Object.fromEntries(ss.map((s) => [s.dataset.thread, s.textContent.replace(/\s+/g, ' ').trim()]))
 	);
-	match(text.bravo, /waits on you/);
-	match(text.echo, /waits: the forge to come back/);
-	match(text.charlie, / · idle$/);
+	match(text.bravo, /Your call/);
+	match(text.echo, /Waiting: the forge to come back/);
+	match(text.charlie, / · Stuck$/);
 });

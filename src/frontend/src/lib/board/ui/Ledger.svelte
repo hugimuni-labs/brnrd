@@ -67,8 +67,10 @@
 			>
 			<span class="lg-end">
 				<Pips w={r.w} />
-				{#if r.status}<span class="lg-st">{r.status}</span>{/if}
-				{#if r.sec === 'waits' && r.call}
+				{#if r.status}<span class="lg-st" class:not-marked={r.status === 'not marked'}
+						>{r.status}</span
+					>{/if}
+				{#if r.call && (r.sec === 'waits' || r.status === 'not marked')}
 					{@const act = r.call.kind === 'ask' ? 'done' : 'agree'}
 					<button
 						type="button"

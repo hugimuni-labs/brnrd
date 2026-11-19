@@ -97,8 +97,15 @@ export function ledger(t: Thread, tw: ThreadWishes, wishes: Wish[], pending: Let
 	}
 	const many = W.length > 1;
 	const ans = new Set(calls.filter((c) => answered(c, pending)).map((c) => c.wish));
+	const stale = new Set(calls.filter((c) => c.stale).map((c) => c.wish));
 	const sec = (w: Wish): Section =>
-		waits(w, asks) && !ans.has(w.wish) ? 'waits' : isDone(w) ? 'settled' : 'hand';
+		stale.has(w.wish)
+			? 'settled'
+			: waits(w, asks) && !ans.has(w.wish)
+				? 'waits'
+				: isDone(w)
+					? 'settled'
+					: 'hand';
 	const said = W.filter((w) => w.origin !== 'derived'),
 		kids = new Map<string, Wish[]>(said.map((w) => [w.wish, []])),
 		top: Wish[] = [];
@@ -139,9 +146,11 @@ export function ledger(t: Thread, tw: ThreadWishes, wishes: Wish[], pending: Let
 					? a.pending
 						? 'sending'
 						: 'answered'
-					: k === 'settled'
-						? w.verdict?.as || own
-						: own;
+					: call?.stale
+						? 'not marked'
+						: k === 'settled'
+							? w.verdict?.as || own
+							: own;
 		return {
 			w,
 			sec: k,

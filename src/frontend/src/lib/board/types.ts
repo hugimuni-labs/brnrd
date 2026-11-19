@@ -58,6 +58,7 @@ export type Call = {
 	waits?: string;
 	ref?: string;
 	result?: string;
+	stale?: boolean;
 	closed?: { verdict: string; letter: string; at: string };
 };
 
