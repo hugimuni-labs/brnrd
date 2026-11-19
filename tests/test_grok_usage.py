@@ -215,12 +215,43 @@ def test_live_unified_billing_matches_cli_weekly_limit(live_billing_2026_11_05):
     assert levels["week_reset"] == "2026-11-09T11:59:55.857848+00:00"
 
 
-def test_monetary_only_billing_cannot_supply_weekly_quota(live_billing_2026_11_05, monkeypatch):
-    data = json.loads(live_billing_2026_11_05)
-    del data["config"]["creditUsagePercent"]
-    del data["config"]["productUsage"]
+LIVE_BILLING_2026_11_19 = (
+    # capture_usage_raw, verbatim; Grok's /usage panel read "Weekly limit
+    # (SuperGrok) 0%, Resets: November 23, 12:59" (host clock, UTC+1).
+    '{"config":{"currentPeriod":{"type":"USAGE_PERIOD_TYPE_WEEKLY",'
+    '"start":"2026-11-16T11:59:55.857848+00:00","end":"2026-11-23T11:59:55.857848+00:00"},'
+    '"onDemandCap":{"val":0},"onDemandUsed":{"val":0},"isUnifiedBillingUser":true,'
+    '"prepaidBalance":{"val":0},"topUpMethod":"TOP_UP_METHOD_SAVED_PAYMENT_METHOD",'
+    '"billingPeriodStart":"2026-11-16T11:59:55.857848+00:00",'
+    '"billingPeriodEnd":"2026-11-23T11:59:55.857848+00:00"}}'
+)
+
+
+def test_zero_week_omits_the_percentage_and_reads_as_zero_used(monkeypatch):
+    # proto3 JSON drops a zero field; the collector used to call this a failure.
+    monkeypatch.setattr(grok_usage, "capture_usage_raw", lambda **kw: LIVE_BILLING_2026_11_19)
+    levels = grok_usage.capture_levels()
+    assert "error" not in levels
+    assert levels["week_used_percentage"] == 0
+    assert levels["quota"]["buckets"]["week"]["remaining_percentage"] == 100
+    assert levels["week_reset"] == "2026-11-23T11:59:55.857848+00:00"
+
+
+@pytest.mark.parametrize("bad", ["10", True, 150, -1, None])
+def test_a_present_percentage_that_is_not_one_is_still_an_error(bad, monkeypatch):
+    data = json.loads(LIVE_BILLING_2026_11_19)
+    data["config"]["creditUsagePercent"] = bad
     monkeypatch.setattr(grok_usage, "capture_usage_raw", lambda **kw: json.dumps(data))
     levels = grok_usage.capture_levels()
     assert levels["error"] == "grok billing response has no valid usage percentage"
+    assert "quota" not in levels
+
+
+def test_monetary_fields_without_a_weekly_period_supply_no_quota(monkeypatch):
+    data = json.loads(LIVE_BILLING_2026_11_19)
+    del data["config"]["currentPeriod"]
+    monkeypatch.setattr(grok_usage, "capture_usage_raw", lambda **kw: json.dumps(data))
+    levels = grok_usage.capture_levels()
+    assert levels["error"] == "grok billing response has no weekly period"
     assert "quota" not in levels
     assert "week_used_percentage" not in levels
