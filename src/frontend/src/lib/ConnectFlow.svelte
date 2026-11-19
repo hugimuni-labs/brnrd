@@ -1,4 +1,5 @@
 <script lang="ts">
+	import HomeAccess from './HomeAccess.svelte';
 	import { resolve } from '$app/paths';
 	import {
 		ConnectAuthError,
@@ -294,6 +295,18 @@
 				link, close the page.
 			</p>
 
+			{#if context?.github_login}
+				<p class="mt-2 text-sm text-stone-400">
+					Signed in as @{context.github_login}
+					·
+					<a
+						class="text-amber-200 underline"
+						href={loginUrlForConnect(code, hash, true)}
+						rel="external">Switch GitHub account</a
+					>
+				</p>
+			{/if}
+
 			{#if contextError}
 				<p class="text-sm text-red-400">{contextError}</p>
 			{:else if unauthenticated}
@@ -420,7 +433,9 @@
 				{/if}
 
 				{#if result && !result.ok}
-					<p class="mt-3 text-sm text-red-400">{result.notice}</p>
+					{#if result.refused}<HomeAccess refused />{:else}<p class="mt-3 text-sm text-red-400">
+							{result.notice}
+						</p>{/if}
 				{/if}
 			{/if}
 		{:else}

@@ -113,29 +113,38 @@ def _bind(home, kind, name, person, folder, env, chats, *, timeout, out, qr, lin
 
     No code reaches the loom here: the server binds the chat on the
     person's tap and ``bound`` lists it. The first letter is the proof.
-    The account's own web chat (platform ``loom``) is the approver's and
-    is saved too, but it is not a chat to write from a phone: the link is
-    still offered when it is the only one.
+    The approver's verified web chat (platform ``loom``) is enough to
+    enable the channel and start the service.
     """
     web = [chat for chat in chats if chat.get('platform') == 'loom']
     chats = [chat for chat in chats if chat.get('platform') != 'loom']
-    if not chats:
-        door = _door(folder, env)
-        if door is None:
-            raise ValueError('brnrd.dev gave no link to bind a chat; nothing was enabled. Run brnrd setup again.')
+    door = _door(folder, env) if not chats else None
+    if not (chats or web or door):
+        raise ValueError('brnrd.dev gave no link to bind a chat; nothing was enabled. Run brnrd setup again.')
+    if door:
         shown = door.get('qr', True) is not False
         picture = qr_code(door['link']) if shown and (sys.stdout.isatty() if qr is None else qr) else ''
         also = ", or scan the code below with your phone's camera" if picture else ''
         # The same code binds on either app: the link fills it in, typed it is the whole message.
         whatsapp = (f"open {door['whatsapp']} and send the text it fills in" if door.get('whatsapp') else
                     f"text {door['code']} by itself to brnrd's WhatsApp number")
-        out(f"No chat is bound to your brnrd account yet. Bind one, or both:\n"
+        intro = ("You can also add Telegram or WhatsApp." if web else
+                 "No chat is bound to your brnrd account yet. Bind one, or both:")
+        wait = "" if web else f"\nWaiting up to {timeout:g}s."
+        out(f"{intro}\n"
             f"  Telegram: open {door['link']} where you use the app and press Start{also}, "
             f"or open {door['name']} yourself and send the code {door['code']}.\n"
-            f"  WhatsApp: {whatsapp}.\n"
-            f"Waiting up to {timeout:g}s.")
+            f"  WhatsApp: {whatsapp}.{wait}")
         if picture:
             out(picture)
+        if web:
+            # Pick up any phone chat already available without polling for one.
+            try:
+                current = _bound(folder, env) or []
+            except (OSError, subprocess.SubprocessError, ValueError):
+                current = []
+            chats = [chat for chat in current if chat.get('platform') != 'loom']
+    if not web and not chats:
         deadline = time.monotonic() + timeout
         while not chats:
             if time.monotonic() >= deadline:

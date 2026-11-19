@@ -65,7 +65,7 @@ test('cloud keeps consent; an unavailable declaration keeps the previous flow', 
 			ready: '[data-consent="ask"]'
 		});
 		try {
-			assert.equal(await B.page.locator('[data-home]').count(), 0);
+			assert.equal(new URL(B.page.url()).pathname, '/account');
 			assert.ok(B.requests.includes('/v1/loom/consent'));
 			assert.equal(B.requests.filter((p) => p === '/v1/site').length, 1);
 			assert.deepEqual(B.errors, []);

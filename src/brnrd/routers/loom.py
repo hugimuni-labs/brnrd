@@ -263,6 +263,8 @@ async def loom_consent_answer(request: Request, db: Session = Depends(get_db)) -
     send = data.get("send")
     if not isinstance(send, bool):
         return JSONResponse({"error": "send: true or false"}, status_code=400)
+    if send:
+        home_access.refuse_session(db, request.app.state.settings, account_id)
     looms = _loom_repos(db, account_id)
     if not looms:
         return JSONResponse({"error": "no loom on this account"}, status_code=404)

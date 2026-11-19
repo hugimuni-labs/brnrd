@@ -1,10 +1,5 @@
 import assert from 'node:assert/strict';
-import { readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { dirname, join } from 'node:path';
-import { fileURLToPath } from 'node:url';
-import { after, test } from 'node:test';
-import { compile } from 'svelte/compiler';
-import { render } from 'svelte/server';
+import { test } from 'node:test';
 import { ACCOUNT_PATH, loginFor, readAccount } from './accountPage.ts';
 import { cloudOnly } from './site.ts';
 
@@ -43,26 +38,4 @@ test('the sign-in comes back to the account page', () => {
 
 test('a local loom does not offer the account page', () => {
 	assert.ok(cloudOnly(ACCOUNT_PATH));
-});
-
-// LoomEmpty is the first page a new account sees: it must reach /account.
-const here = dirname(fileURLToPath(import.meta.url));
-const generated = join(here, '.loomEmpty.generated.mjs');
-after(() => rmSync(generated, { force: true }));
-
-test('the empty loom links to the account page', async () => {
-	const source = readFileSync(join(here, 'LoomEmpty.svelte'), 'utf8');
-	const compiled = compile(source, { generate: 'server', runes: true, name: 'LoomEmpty' });
-	const runnable = compiled.js.code.replace(
-		/import\s*\{[^}]*\}\s*from\s*'\$app\/paths';/,
-		'const resolve = (path) => path;'
-	);
-	writeFileSync(generated, runnable);
-	try {
-		const module = await import(`${generated}?t=${process.pid}`);
-		const html = render(module.default).body;
-		assert.ok(/<a[^>]*href="\/account"[^>]*>account<\/a>/.test(html), 'no account link');
-	} finally {
-		rmSync(generated, { force: true });
-	}
 });

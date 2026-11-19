@@ -352,6 +352,26 @@ def test_a_web_chat_alone_still_offers_the_phone_door(tmp_path, monkeypatch):
     assert connector._sender(Home(tmp_path), "cloud", "loom:Gurio") == "person:ada"
 
 
+def test_setup_offers_phone_links_without_waiting_when_browser_is_bound(tmp_path):
+    from brr.loom.runtime import setup_channel
+    from brr.loom.runtime.home import Home
+
+    server, seen = _stub_brnrd(tmp_path, [], login="Gurio")
+    said = []
+    try:
+        key = setup_channel.pair(Home(tmp_path), "relay", "cloud", "ada", timeout=0, out=said.append, qr=False)
+    finally:
+        server.shutdown()
+    assert key == "cloud:loom:Gurio"
+    assert [(method, path) for method, path, _ in seen] == [
+        ("GET", "/v1/daemons/chats"),
+        ("POST", "/v1/daemons/door"),
+        ("GET", "/v1/daemons/chats"),
+    ]
+    assert any("https://t.me/brnrd_bot?start=PK-AB12" in line for line in said)
+    assert all("Waiting" not in line for line in said)
+
+
 def test_a_codeless_door_offers_the_same_code_on_whatsapp_where_brnrd_has_a_number(env):
     """The code that binds on Telegram binds texted alone on WhatsApp too; the door says where."""
     from brnrd.messenger_doors import MessengerIdentities

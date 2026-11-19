@@ -1006,5 +1006,5 @@ def _cookie_secure(request: Request) -> bool:
 
 def _clear_oauth_cookies(resp, request: Request) -> None:
     s = request.app.state.settings
-    for name in (s.oauth_state_cookie, s.oauth_pkce_cookie, s.oauth_next_cookie):
+    for name in (s.oauth_state_cookie, s.oauth_pkce_cookie, s.oauth_next_cookie, s.oauth_switch_cookie):
         resp.delete_cookie(name, samesite="lax", secure=_cookie_secure(request))

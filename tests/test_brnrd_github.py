@@ -338,6 +338,58 @@ def test_named_unconnected_repo_uses_only_its_accounts_app_grant(env, monkeypatc
         assert seen == {}
 
 
+
+def test_foreign_installation_cannot_supply_a_daemon_credential_or_be_synced(env, monkeypatch):
+    app, client, _ = env
+    owner = _account(client)
+    repo_name = "octocat/private"
+    owner_repo = _repo(client, owner, repo_name)
+    other = brnrd_account_headers(app, github_id="999", login="other", email="other@example.test")
+    other_repo = _repo(client, other, "other/default")
+    daemon = _daemon_headers(client, other, other_repo)
+    with app.state.SessionLocal() as db:
+        owner_id = db.get(Repo, owner_repo).account_id
+        installation = GitHubInstallation(
+            id=ids.github_installation_id(), account_id=owner_id,
+            installation_id="99", target_login="octocat", target_type="User",
+        )
+        db.add(installation)
+        db.flush()
+        db.add(GitHubInstalledRepo(
+            id=ids.github_installed_repo_id(), github_installation_id=installation.id,
+            repo_full_name=repo_name, forge_repo_id="6262",
+        ))
+        db.commit()
+
+    seen = _capture_credential(monkeypatch)
+    url = "/v1/daemons/publishing-credential"
+    assert client.post(url, json={"repo_full_name": repo_name}, headers=daemon).status_code == 404
+    connected = client.post(
+        "/v1/accounts/repos", json={"repo_full_name": repo_name, "forge_repo_id": "6262"}, headers=other,
+    ).json()["repo_id"]
+    bound_daemon = _daemon_headers(client, other, connected)
+    assert client.post(url, json={"repo_full_name": repo_name}, headers=daemon).status_code == 409
+    assert client.post(url, headers=bound_daemon).status_code == 409
+    assert seen == {}
+
+    fetched = []
+    def get_installation(_settings, installation_id):
+        fetched.append(installation_id)
+        return {"id": 99, "account": {"login": "octocat", "type": "User"}}
+
+    monkeypatch.setattr(github_app_router.gh_app, "get_app_installation", get_installation)
+    client.cookies.set(app.state.settings.session_cookie, other["Authorization"].split()[1])
+    manual = client.post("/api/github/sync", follow_redirects=False)
+    assert manual.status_code == 303
+    assert fetched == []
+    result = client.get("/api/github/setup?installation_id=99&setup_action=install", follow_redirects=False)
+    assert result.status_code == 303
+    assert "notice=github-sync-refused" in result.headers["location"]
+    assert fetched == ["99"]
+    with app.state.SessionLocal() as db:
+        assert db.execute(select(GitHubInstallation)).scalar_one().account_id == owner_id
+    assert seen == {}
+
 def _payload(*, repo="owner/repo", body="@brr-bot do the thing",
              installation_id=42, number=17, comment_id=100, is_pr=False,
              action="created", association="COLLABORATOR", author="alice"):

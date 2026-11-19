@@ -9,6 +9,7 @@
 		slow = false,
 		busy = false,
 		failed = false,
+		embedded = false,
 		answer
 	}: {
 		step: 'ask' | 'declined' | 'waiting';
@@ -16,6 +17,7 @@
 		slow?: boolean;
 		busy?: boolean;
 		failed?: boolean;
+		embedded?: boolean;
 		answer: (send: boolean) => void;
 	} = $props();
 
@@ -29,7 +31,7 @@
 	};
 </script>
 
-<main class="consent" data-consent={step}>
+<section class="consent" class:embedded data-consent={step}>
 	{#if step === 'ask'}
 		<h1>Show your board here?</h1>
 		<p>
@@ -67,10 +69,8 @@
 		<p class="failed" role="alert">brnrd.dev did not take the answer. Try again in a moment.</p>
 	{/if}
 	{#if step === 'waiting'}
-		<h1>Waiting for your loom's first push…</h1>
-		<p>
-			Your loom sends the board within a minute of the yes; this page turns into it when it lands.
-		</p>
+		<h1>Waiting for your board…</h1>
+		<p>Your computer is connected. This page opens your board when your computer sends it.</p>
 		{#if slow}
 			<p class="slow">
 				{#if lastSeen}
@@ -81,7 +81,7 @@
 			</p>
 		{/if}
 	{/if}
-</main>
+</section>
 
 <style>
 	.consent {
@@ -90,6 +90,10 @@
 		padding: 0 1.25rem;
 		font-family: ui-monospace, monospace;
 		line-height: 1.55;
+	}
+	.consent.embedded {
+		margin: 0 0 1.5rem;
+		padding: 0;
 	}
 	h1 {
 		font-size: 1.35rem;

@@ -258,19 +258,21 @@ test('signed out, `/` keeps the landing it drew while undecided and never mounts
 	await ctx.close();
 });
 
-test('a localhost page with no loom behind it keeps the old home, as the repro drivers expect', async () => {
+test('a signed-in cloud page without a board opens Account', async () => {
 	const ctx = await B.browser.newContext(),
 		page = await ctx.newPage();
-	await page.route('**/v1/loom/**', (r) => r.fulfill({ status: 404, body: 'no loom' }));
-	await page.route('**/v1/dashboard/**', (r) => r.fulfill({ status: 401, body: '{}' }));
-	await page.goto(B.base);
-	// Wait on the decided home (+page.svelte's `data-home`), not on `main`: the only `main` this path draws is
-	// LoomHome's "reaching brnrd…" placeholder, gone once the 401s land.
-	await page.locator('[data-home]').waitFor({ state: 'attached' });
-	assert.equal(
-		await page.evaluate(() => document.documentElement.classList.contains('board')),
-		false
+	await page.route('**/v1/loom/index', (r) => r.fulfill({ status: 404, body: '{}' }));
+	await page.route('**/v1/loom/consent', (r) => r.fulfill({ json: { state: 'none' } }));
+	await page.route('**/v1/dashboard/repos', (r) =>
+		r.fulfill({
+			json: {
+				account: { github_login: 'ada' },
+				connected_repos: []
+			}
+		})
 	);
-	assert.equal(await page.locator('.brd').count(), 0);
+	await page.goto(B.base);
+	await page.getByRole('heading', { name: 'Set up brnrd' }).waitFor();
+	assert.equal(new URL(page.url()).pathname, '/account');
 	await ctx.close();
 });

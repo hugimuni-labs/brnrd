@@ -316,7 +316,7 @@ def _upsert_daemon(db: Session, principal: Principal, payload: schemas.DaemonReg
 
 
 @router.post("/register", response_model=schemas.DaemonRegistered)
-def register(payload: schemas.DaemonRegister, principal: Principal = Depends(require_daemon), db: Session = Depends(get_db)):
+def register(payload: schemas.DaemonRegister, principal: Principal = Depends(home_access.daemon_gate), db: Session = Depends(get_db)):
     daemon = _upsert_daemon(db, principal, payload)
     home_trial.start_once(db, principal.account_id)
     db.commit()
@@ -1634,7 +1634,7 @@ def _pointer_media_type(pointer: dict) -> str:
 
 
 @router.get("/events/{event_id}/attachments/{index}")
-def event_attachment(event_id: str, index: int, request: Request, principal: Principal = Depends(require_daemon), db: Session = Depends(get_db)):
+def event_attachment(event_id: str, index: int, request: Request, principal: Principal = Depends(home_access.daemon_gate), db: Session = Depends(get_db)):
     """#525 — read-through proxy for a queued event's image attachment.
 
     The server holds only *pointers* (models.Event.attachments_json); this

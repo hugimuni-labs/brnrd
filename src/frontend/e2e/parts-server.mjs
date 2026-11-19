@@ -83,6 +83,11 @@ export function partsServer(dir, port = 0, consent = null, site = null) {
 			res.end(JSON.stringify(site));
 			return;
 		}
+		if (consent && url.pathname === '/v1/dashboard/repos') {
+			res.writeHead(200, { 'content-type': 'application/json' });
+			res.end(JSON.stringify({ account: { github_login: 'ada' }, connected_repos: [] }));
+			return;
+		}
 		const path = url.pathname.replace(/^\/v1\/loom\//, '');
 		if (path === 'index') await indexGate;
 		if (req.method === 'POST' && path === 'letters') {

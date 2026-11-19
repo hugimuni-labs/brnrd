@@ -1,4 +1,5 @@
 """The home gate (brnrd.home_access): off by default, one decision, refusals through the real routers."""
+from dataclasses import replace
 import re
 import time
 from datetime import datetime, timedelta, timezone
@@ -43,6 +44,7 @@ SESSION_ROUTES = [
     ("GET", "/v1/loom/unthreaded", None),
     ("GET", "/v1/loom/thread/main", None),
     ("GET", "/v1/loom/events", None),
+    ("POST", "/v1/loom/consent", {"send": True}),
     ("POST", "/v1/loom/letters", {"body": "hello"}),
     ("POST", "/v1/dashboard/loom/letters", {"body": "hello"}),
     ("POST", "/v1/dashboard/runners/wake-request", {}),
@@ -52,6 +54,8 @@ SESSION_ROUTES = [
     ("POST", "/v1/repos/{repo}/telegram-pair", None),
 ]
 DAEMON_ROUTES = [
+    ("POST", "/v1/daemons/register", {"daemon_name": "computer"}),
+    ("GET", "/v1/daemons/events/evt_x/attachments/0", None),
     ("GET", "/v1/daemons/inbox?wait=0", None),
     ("PUT", "/v1/daemons/activity", {"records": []}),
     ("PUT", "/v1/daemons/surface", {"files": []}),
@@ -71,9 +75,10 @@ DAEMON_ROUTES = [
     ("POST", "/v1/daemons/card", {"text": "hi"}),
     ("POST", "/v1/daemons/pack", {"text": "hi"}),
     ("POST", "/v1/daemons/door", {}),
+    ("POST", "/v1/daemons/config-requests", {}),
     ("POST", "/v1/daemons/publishing-credential", {}),
 ]
-# Account controls, billing, deletion, connecting: open to everyone, gate on or off.
+# Account controls, billing, deletion: open to everyone, gate on or off.
 OPEN_SESSION = [
     ("GET", "/v1/accounts/subscription", None),
     ("GET", "/v1/accounts/home-trial", None),
@@ -87,7 +92,6 @@ OPEN_SESSION = [
     ("POST", "/v1/accounts/subscription/portal", {}),
 ]
 OPEN_DAEMON = [
-    ("POST", "/v1/daemons/register", {"daemon_name": "computer"}),
     ("GET", "/v1/daemons/whoami", None),
     ("GET", "/v1/daemons/chats", None),
 ]
@@ -184,9 +188,10 @@ def test_on_refuses_every_protected_operation_and_names_account():
             assert r.status_code == 402
     trial = client.get("/v1/accounts/home-trial").json()
     assert trial["status"] == "expired" and trial["enforcement_enabled"] is True
+    assert not trial["household"] and not trial["subscribed"]
 
 
-def test_on_keeps_account_controls_billing_deletion_and_connecting_open():
+def test_on_keeps_account_controls_billing_and_deletion_open():
     client, account, daemon, repo = _setup(gate_from=_iso(NOW - timedelta(days=15)))
     for method, path, body in OPEN_SESSION:
         r = _call(client, method, path, body, {}, repo)
@@ -194,11 +199,34 @@ def test_on_keeps_account_controls_billing_deletion_and_connecting_open():
     for method, path, body in OPEN_DAEMON:
         r = _call(client, method, path, body, daemon, repo)
         assert r.status_code == 200, (path, r.text)
-    # A new machine can still connect (pairing starts no second clock), and deletion works.
-    _, second_daemon, _ = brnrd_repo_and_daemon(client)
-    assert client.post("/v1/daemons/revoke", headers=second_daemon).status_code == 200
+    assert client.post("/v1/daemons/revoke", headers=daemon).status_code == 200
     r = client.post("/v1/accounts/delete", headers=account, json={"confirm": "delete"})
     assert not _refused(r) and r.status_code < 500, r.text
+
+
+@pytest.mark.parametrize("kind", ["legacy", "loom"])
+def test_expired_account_cannot_approve_or_pick_up_a_device_credential(kind):
+    client, _, _, repo = _setup()
+    capabilities = {"kind": "loom", "board": True} if kind == "loom" else {}
+    pair = client.post("/v1/accounts/pair", json=capabilities).json()
+    reply = client.post(f"/v1/connect/{pair['pair_code']}", json={
+        "repo_id": repo, "approve_secret": pair["approve_secret"],
+    })
+    assert reply.status_code == 200, reply.text
+
+    # Enable enforcement after one approval, before the machine claims it.
+    client.app.state.settings = replace(client.app.state.settings, home_gate_from=_iso(NOW - timedelta(days=15)))
+    poll = client.get(f"/v1/accounts/pair/{pair['pair_code']}", params={"poll_secret": pair["poll_secret"]})
+    assert poll.status_code == 402 and _refused(poll)
+    assert "daemon_token" not in poll.json()
+
+    new_pair = client.post("/v1/accounts/pair", json=capabilities).json()
+    reply = client.post(f"/v1/connect/{new_pair['pair_code']}", json={
+        "repo_id": repo, "approve_secret": new_pair["approve_secret"],
+    })
+    assert reply.status_code == 402 and _refused(reply)
+    pending = client.get(f"/v1/accounts/pair/{new_pair['pair_code']}", params={"poll_secret": new_pair["poll_secret"]})
+    assert pending.json()["status"] == "pending"
 
 
 @pytest.mark.parametrize("status,price", [
@@ -249,7 +277,7 @@ def test_clock_started_before_switch_on_gets_a_fresh_window_never_a_day_one_cuto
 def test_never_connected_account_is_not_refused():
     client, account, daemon, repo = _setup(gate_from=_iso(NOW - timedelta(days=15)), started=None)
     # The first successful connect starts the clock inside the admitted request.
-    assert client.post("/v1/daemons/register", headers=daemon, json={"daemon_name": "c"}).status_code == 200
+    assert client.post("/v1/daemons/register", headers=daemon, json={"daemon_name": "computer"}).status_code == 200
     assert client.get("/v1/accounts/home-trial").json()["status"] == "active"
     assert not any(_refused(r) for _, r in _all(client, daemon, repo))
 

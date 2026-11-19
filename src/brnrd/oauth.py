@@ -60,6 +60,7 @@ def authorize_url(
     state: str,
     redirect_uri: str,
     code_challenge: str,
+    select_account: bool = False,
 ) -> str:
     params = {
         "client_id": settings.github_oauth_client_id,
@@ -68,6 +69,8 @@ def authorize_url(
         "code_challenge": code_challenge,
         "code_challenge_method": "S256",
     }
+    if select_account:
+        params["prompt"] = "select_account"
     if settings.github_oauth_scope:
         params["scope"] = settings.github_oauth_scope
     return f"{settings.github_oauth_authorize_url}?{urlencode(params)}"

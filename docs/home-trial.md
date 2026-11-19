@@ -42,20 +42,27 @@ account's window ends 14 days after the later of its start and the switch-on.
 `GET /v1/accounts/home-trial` then reports that window and
 `enforcement_enabled: true`.
 
-Admitted while on: any live subscription (`Account.tier` subscribed, which any
-non-canceled Stripe subscription on any price sets, past due included), an
+Admitted while on: household GitHub logins configured by the operator, any
+live subscription (`Account.tier` subscribed, which any non-canceled Stripe
+subscription on any price sets, past due included), an
 account whose clock has not started, an account inside its window, and any
 account whose billing state cannot be read.
 
 Refused otherwise: hosted board reads and sends (`/v1/loom/*`, the board's
 `/v1/dashboard/*` reads, letters, wake requests, respawns), new messenger
 pairing codes, every device upload and relay route behind the install ceiling,
-the inbox long-poll, `/door` and the managed GitHub token. Always open: account,
-billing, deletion, terms, sign-in, connecting and registering a machine,
+the inbox long-poll, attachment downloads, device configuration proposals,
+`/door` and the managed GitHub token.
+Both `brnrd account connect` and relay setup use the same device handshake.
+The server checks entitlement at browser approval and again before handing
+out the approved device token. Registration checks it for existing tokens.
+The initial anonymous pairing request has no account or service credential.
+Always open: account, billing, deletion, terms, sign-in,
 `whoami`, `revoke`, paired-chat listing and revocation, repo settings, config
 approval, run stop and release.
 
-Browser routes answer 402; device routes answer 429 with `Retry-After`
+Browser routes and approved-token pickup answer 402. Authenticated device
+service routes answer 429 with `Retry-After`
 (`BRNRD_HOME_GATE_RETRY_AFTER_S`, 900), after holding the request
 `BRNRD_HOME_GATE_HOLD_S` (20) seconds, or the long-poll's own timeout for the
 inbox, so an installed client that retries without backoff is paced by the

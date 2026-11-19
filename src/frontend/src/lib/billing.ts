@@ -151,32 +151,24 @@ export function subscribeOffer(figure?: PriceFigure | null): {
 	};
 }
 
-/** What a subscription does today, and nothing it does not: no trial and
- * no gate exist yet (the offering design is undecided). The server's only
- * paid difference is lifting the free account's hosted limits. */
 export const SUBSCRIBE_PITCH =
-	"A subscription lifts the free account's hosted limits and funds the open-source engine.";
+	'Run brnrd and use its board on your own computer for free. A subscription supports the project and covers the hosted board and Telegram or WhatsApp messaging through brnrd.dev.';
 
 // --- return-param notices ---------------------------------------------------
 
 export interface BillingNotice {
-	kind: 'success' | 'quiet';
+	kind: 'subscription' | 'success' | 'quiet';
 	text: string;
 }
 
-/** Maps the Checkout return params (`?billing=…`, set by the server's
- * success/cancel URLs) to a one-line banner. Success copy stays honest:
- * entitlements ride the webhook and land incrementally, so "confirming",
- * never "done". The topup-* params have no UI leg anymore but the server
- * still mints those return URLs for API-driven top-ups, so they render
- * rather than vanishing. Unknown values render nothing. */
+/** Identifies the Checkout return. Subscription confirmation comes from the API. */
 export function billingReturnNotice(search: string): BillingNotice | null {
 	const value = new URLSearchParams(search).get('billing');
 	switch (value) {
 		case 'subscribed':
 			return {
-				kind: 'success',
-				text: 'checkout complete — thank you. Stripe is confirming; the subscription lands here incrementally.'
+				kind: 'subscription',
+				text: 'Waiting for Stripe to confirm your subscription.'
 			};
 		case 'topup-complete':
 			return {

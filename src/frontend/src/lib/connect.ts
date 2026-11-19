@@ -11,6 +11,7 @@ export interface ConnectRepo {
 export type PairCodeStatus = 'pending' | 'approved' | 'consumed' | 'expired' | 'unknown';
 
 export interface ConnectContext {
+	github_login?: string | null;
 	code: string;
 	status: PairCodeStatus;
 	repos: ConnectRepo[];
@@ -62,6 +63,7 @@ export interface TelegramPair {
 }
 
 export interface ApproveResult {
+	refused?: boolean;
 	ok: boolean;
 	notice: string;
 	telegram: TelegramPair | null;
@@ -89,8 +91,8 @@ export function connectNextUrl(code: string, hash: string): string {
 	return `/connect/${encodeURIComponent(code)}${approvalProofFromHash(hash) ? hash : ''}`;
 }
 
-export function loginUrlForConnect(code: string, hash: string): string {
-	return `/login?next=${encodeURIComponent(connectNextUrl(code, hash))}`;
+export function loginUrlForConnect(code: string, hash: string, switchAccount = false): string {
+	return `/login?next=${encodeURIComponent(connectNextUrl(code, hash))}${switchAccount ? '&switch=1' : ''}`;
 }
 
 export async function fetchConnectContext(
@@ -135,6 +137,7 @@ export async function approveConnect(
 	const body = (await res.json().catch(() => ({}))) as Partial<ApproveResult>;
 	return {
 		ok: body.ok === true && res.ok,
+		...(res.status === 402 ? { refused: true } : {}),
 		notice:
 			typeof body.notice === 'string' && body.notice
 				? body.notice

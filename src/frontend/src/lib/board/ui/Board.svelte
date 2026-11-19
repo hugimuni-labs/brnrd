@@ -1,4 +1,5 @@
 <script lang="ts">
+	import HomeAccess from '../../HomeAccess.svelte';
 	import { personLabel } from '../sides.ts';
 	import RenderScope from './RenderScope.svelte';
 	// The board (design §C): every thread as a column, the inbox pinned left, the bead sheet on the right, the composer
@@ -31,13 +32,15 @@
 	let {
 		get,
 		held = null,
-		view = 'board'
+		view = 'board',
+		onRefused
 	}: {
 		get?: (path: string) => Promise<unknown>;
 		held?: Held | null;
 		view?: 'board' | 'topics';
+		onRefused?: () => void;
 	} = $props();
-	const b = provide(untrack(() => new Board(get, held)));
+	const b = provide(untrack(() => new Board(get, held, onRefused)));
 
 	const by = $derived(byThread(b.letters));
 	const sorted = $derived(sortThreads(b.model?.threads || [], by));
@@ -202,6 +205,7 @@
 			>
 			{#if $site?.deployment === 'cloud'}
 				<a id="account" class="topics-link" href={resolve('/account')}>account</a>
+				<HomeAccess compact />
 			{/if}
 		</span>
 		<span id="live" class="dim" class:off={b.live === 'offline'}>{b.error || b.live}</span>
