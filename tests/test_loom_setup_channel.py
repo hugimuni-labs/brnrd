@@ -990,6 +990,9 @@ def test_the_first_word_lands_the_house_rules_and_the_first_reply_offers_the_int
                                        capture_output=True, text=True, check=True).stdout
     assert f"[{letter.data['id']}]" in main('people/ada/agreement.md')
     assert '## between us' in main('people/ada/page.md')
+    # 11201: the seeded page tells its writer to rewrite the line a new one replaces, and to date what is still to come.
+    head = ' '.join(main('people/ada/page.md').split('## who')[0].split())
+    assert 'find the line it replaces and rewrite that one' in head and '· due <date>' in head
     # A second sight of a first word changes nothing on main.
     tip = subprocess.run(['git', '-C', str(self_dir), 'rev-parse', 'main'], capture_output=True, text=True).stdout
     from brr.loom.runtime.firstword import first_word
