@@ -10,6 +10,8 @@ everyone without reading the database, so no response changes for anyone.
 
 On, an account is admitted while it is:
 
+- named: its GitHub login is in ``BRNRD_HOME_GATE_ADMIT_GITHUB_LOGINS`` (the household,
+  admitted by hand with no Stripe subscription; empty by default);
 - subscribed: ``Account.tier`` is subscribed, which only Stripe webhooks flip and which
   holds for any non-canceled subscription row on any price (old supporter prices, past
   due, and the founder's own included);
@@ -60,7 +62,7 @@ _holds_open = 0
 @dataclass(frozen=True)
 class HomeAccess:
     allowed: bool
-    #: gate_off | subscribed | not_started | trial | degraded | no_account | home_subscription_required
+    #: gate_off | named | subscribed | not_started | trial | degraded | no_account | home_subscription_required
     why: str
     ends_at: datetime | None = None
 
@@ -127,6 +129,8 @@ def decide(db: Session, settings: Settings, account: Account | str | None, *, no
         return HomeAccess(True, "degraded")
     if row is None:
         return HomeAccess(True, "no_account")  # authentication is not this function's job
+    if (row.github_login or "").lower() in settings.home_gate_admit_github_logins:
+        return HomeAccess(True, "named")
     ent = billing.entitlements(db, row)
     if ent.degraded:
         return HomeAccess(True, "degraded")
