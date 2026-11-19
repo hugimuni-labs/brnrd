@@ -661,6 +661,61 @@ def _receipt_miss(room: Path) -> str:
     return section(room)
 
 
+def _notes_at(room: Path, stdin_text: str) -> str:
+    """Notes this call touches, once per body (notes.py). A note that cannot be read never costs the call."""
+    from . import notes
+    try:
+        payload = json.loads(stdin_text)
+        if not isinstance(payload, dict) or not payload.get("tool_name"):
+            return ""
+        seen_path = room / "port" / "notes-shown.json"
+        try:
+            seen = json.loads(seen_path.read_text())
+        except (OSError, ValueError):
+            seen = {}
+        body = str(payload.get("session_id") or "")
+        shown = set(seen.get("shown", [])) if seen.get("body") == body else set()
+        text, paths = notes.shown_at(room, payload, shown)
+        if paths:
+            seen_path.write_text(json.dumps({"body": body, "shown": sorted(shown | set(paths))}) + "\n")
+        return text
+    except Exception:  # noqa: BLE001
+        return ""
+
+
+def _saw(room: Path, stdin_text: str) -> None:
+    """A marked call's end, for its notes' record: worked, or blocked and why (notes.saw)."""
+    from . import notes
+    try:
+        payload = json.loads(stdin_text)
+        if not isinstance(payload, dict):
+            return
+        failed = payload.get("hook_event_name") == "PostToolUseFailure"
+        why = str(payload.get("error") or "")
+        if not why and failed:
+            response = payload.get("tool_response")
+            why = str(response.get("stderr", "") if isinstance(response, dict) else response or "")
+        notes.saw(room, payload, failed, why.strip().splitlines()[-1] if why.strip() else "")
+    except Exception:  # noqa: BLE001
+        return
+
+
+def _hand_miss(room: Path, state: dict) -> str:
+    """Something blocked this body at a service: one line for its note, asked once."""
+    from . import notes
+    try:
+        blocked = [(k, why) for k, why in notes.blocked_since(room, float(state.get("booted_at") or 0))
+                   if k not in set(state.get("hands_asked") or ())]
+    except Exception:  # noqa: BLE001
+        return ""
+    if not blocked:
+        return ""
+    _set_state(room, hands_asked=sorted(set(state.get("hands_asked") or ()) | {k for k, _ in blocked}))
+    return ("something blocked you this wake; add one line on what blocked, and what got you past it, "
+            "to the note its call showed you, or to memory/limbs/<name>.md in the self with a "
+            "`trigger:` line naming it:\n" + "\n".join(f"- {k}" + (f": {why}" if why else "") for k, why in blocked))
+
+
 def _known_miss(room: Path) -> str:
     """A known folder this body touched: a nudge to tidy or note it, once per folder (library.known_nudge)."""
     from .library import known_nudge
@@ -749,7 +804,7 @@ def execute(event: str, room: Path, stdin_text: str) -> str:
         # call is guarded too, since the act is the strand's.
         said, refuse = _guard_warnings(room, "pre", stdin_text)
         first, first_refuse = _first_word(room, stdin_text, refuse=True)
-        said = "\n".join(filter(None, (first, said)))
+        said = "\n".join(filter(None, (first, said, _notes_at(room, stdin_text))))
         refuse = refuse or first_refuse
         decision, payload = _marked(room, stdin_text)
         marked = decision.record() if decision else None
@@ -795,6 +850,7 @@ def execute(event: str, room: Path, stdin_text: str) -> str:
         audit_note(room, stdin_text, "post")
         _keep_transcript(room, stdin_text)
         _touch(room, stdin_text)
+        _saw(room, stdin_text)
         guarded = "\n".join(filter(None, (guarded, _lib_changes(room))))
         _note_tool(room, stdin_text)
         if _delegate_call(stdin_text):
@@ -967,6 +1023,9 @@ def _stop_block(room: Path, text: str, plan: str) -> str:
         _asked(room, parsed, [ident for ident, _ in lefts])
         return ""
     known = _known_miss(room)
+    if sections or known:
+        # The hand line rides a stop that already holds; alone it never holds one (notes.py).
+        known = "\n\n".join(filter(None, (known, _hand_miss(room, state))))
     if not sections and not known:
         return ""
     sections = [*sections, known] if known else sections
