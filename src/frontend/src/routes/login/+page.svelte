@@ -46,9 +46,10 @@
 			<p class="eyebrow">github identity</p>
 			<h1 class="mt-1 font-mono text-lg font-semibold tracking-tight text-amber-100">sign in</h1>
 			<p class="mt-2 text-sm text-stone-400">
-				HugiMuni SAS operates the brnrd GitHub App. Signing in identifies your GitHub account so you
-				can access your brnrd account and approve your computer. To grant repository access, install
-				the GitHub App separately and choose which repositories it can access.
+				HugiMuni SAS (hugimuni-labs on GitHub) operates the brnrd GitHub App. Signing in identifies
+				your GitHub account and lets brnrd find App installations you already manage. To grant
+				repository access, install the GitHub App separately and choose the repositories it can
+				access.
 			</p>
 
 			{#if error}
