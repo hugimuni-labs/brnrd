@@ -322,6 +322,42 @@ _RETRY_SLEEPS_S = (2.0, 5.0)
 _HELD_UNTIL: dict[tuple[str, str], float] = {}
 
 
+#: The home gate's refusal reason (``brnrd.home_access.REASON``): the account's home trial ended and it
+#: has no subscription. Only the person changes that, at the account page the refusal names.
+HOME_REFUSED = "home_subscription_required"
+_HELD_HOME: dict[tuple[str, str], "HomeSubscriptionNeeded"] = {}
+
+
+class HomeSubscriptionNeeded(RuntimeError):
+    """brnrd.dev refused a hosted home path: the trial ended and the account has no subscription.
+
+    A state, not a fault: the loom keeps working on this computer, the server's ``Retry-After`` paces the
+    next ask, and the person subscribes at ``account_url``. Told by the refusal's ``reason``, never its text.
+    """
+
+    status_code = 429
+
+    def __init__(self, message: str, *, account_url: str = "", retry_after: float | None = None):
+        super().__init__(message)
+        self.account_url = account_url
+        self.retry_after = retry_after
+
+
+def home_refusal(resp, wait: float | None = None) -> HomeSubscriptionNeeded | None:
+    """The home gate's refusal in ``resp`` (a 429 to an install, a 402 to a browser), else ``None``."""
+    if resp.status_code not in (402, 429):
+        return None
+    try:
+        detail = resp.json().get("detail")
+    except (ValueError, AttributeError):
+        return None
+    if not isinstance(detail, dict) or detail.get("reason") != HOME_REFUSED:
+        return None
+    account_url = str(detail.get("account_url") or "")
+    message = str(detail.get("message") or f"home subscription needed: subscribe at {account_url}")
+    return HomeSubscriptionNeeded(message[:300], account_url=account_url, retry_after=wait)
+
+
 def _retry_after_s(resp) -> float | None:
     try:
         value = float(resp.headers.get("Retry-After", ""))
@@ -366,6 +402,8 @@ def _send(method: str, url: str, *, repeat: bool | None = None, **kwargs):
 def _request(base_url: str, method: str, path: str, *, token: str | None = None, json: dict | None = None, params: dict | None = None, timeout: float = _HTTP_TIMEOUT_S, retry: bool = True, repeat: bool | None = None) -> dict:
     headers = {"Authorization": f"Bearer {token}"} if token else {}
     held = _HELD_UNTIL.get((method, path), 0.0) - time.monotonic()
+    if held > 0 and (refused := _HELD_HOME.get((method, path))) is not None:
+        raise HomeSubscriptionNeeded(str(refused), account_url=refused.account_url, retry_after=held)
     if held > 0:
         err = RuntimeError(f"brnrd {method} {path} -> 429 (held here {held:.0f}s more by the server's Retry-After)")
         err.status_code = 429  # type: ignore[attr-defined]
@@ -398,9 +436,15 @@ def _request(base_url: str, method: str, path: str, *, token: str | None = None,
         # string-matching a shape meant for humans.
         err = RuntimeError(f"brnrd {method} {path} -> {resp.status_code}: {resp.text[:200]}")
         err.status_code = resp.status_code  # type: ignore[attr-defined]
-        if resp.status_code == 429 and (wait := _retry_after_s(resp)) is not None:
+        wait = _retry_after_s(resp) if resp.status_code == 429 else None
+        if wait is not None:
             _HELD_UNTIL[(method, path)] = time.monotonic() + wait
             err.retry_after = wait  # type: ignore[attr-defined]
+        if (refused := home_refusal(resp, wait)) is not None:
+            if wait is not None:
+                _HELD_HOME[(method, path)] = refused
+            raise refused
+        _HELD_HOME.pop((method, path), None)
         raise err
     return resp.json() if resp.content else {}
 

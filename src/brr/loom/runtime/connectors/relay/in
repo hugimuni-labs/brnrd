@@ -166,7 +166,7 @@ def poll_forever(drop, state, client, lock, stop, log=stamped, clock=time.monoto
         if stop.is_set():
             return
         cursor = None
-        failures, backoff = {}, 1
+        failures, backoff, refused = {}, 1, None
         while not stop.is_set():
             started = clock()
             try:
@@ -179,10 +179,20 @@ def poll_forever(drop, state, client, lock, stop, log=stamped, clock=time.monoto
                     log(f'relay: slow poll, {took:.0f}s for a {cloud._POLL_WAIT_S}s wait')
                 lock.record(cursor)
                 backoff = 1
+            except cloud.HomeSubscriptionNeeded as exc:
+                # A state only the person changes: said once, then asked again after the server's Retry-After.
+                if refused != str(exc):
+                    refused = str(exc)
+                    log(f'relay: paused, {exc}')
+                stop.wait(exc.retry_after or 60)
+                backoff = 1
+                continue
             except Exception as exc:
                 log(f'relay: {type(exc).__name__} after {clock() - started:.0f}s: {exc}; retry in {backoff}s')
                 stop.wait(backoff)
                 backoff = min(backoff * 2, 60)
+                continue
+            refused = None
     finally:
         lock.release()
         lock.unwant()

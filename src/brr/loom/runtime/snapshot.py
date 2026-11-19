@@ -436,4 +436,6 @@ class Publisher:
         except Exception as exc:
             # Withheld is the board's condition, said once by the parts pusher (board.BoardWithheld); this push
             # keeps its idle pace and raises nothing, so one missing yes is not a second degraded step.
-            self.failing = None if withheld(exc) else (exc, exc.__traceback__)
+            # The home gate's refusal is the parts pusher's to tell too (board.Pusher._tell_refused): quiet here.
+            self.failing = None if withheld(exc) or isinstance(exc, cloud.HomeSubscriptionNeeded) \
+                else (exc, exc.__traceback__)
