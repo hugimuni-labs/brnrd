@@ -2387,11 +2387,15 @@
 	padding: 6px 8px;
 	border-bottom: 1px solid #222;
 }
+.brd #filter-label {
+	align-self: center;
+	white-space: nowrap;
+}
 .brd #filters button {
 	flex: none;
 	padding: 5px 10px;
 	border: 1px solid #aaa;
-	border-radius: 999px;
+	border-radius: 8px;
 	background: #fff;
 	color: #222;
 	font: inherit;
@@ -2407,10 +2411,18 @@
 	margin-left: 3px;
 	font-variant-numeric: tabular-nums;
 }
-@media (max-width: 520px) {
+.brd #filters button small {
+	display: block;
+	font-size: 11px;
+	line-height: 1.3;
+}
+@media (max-width: 640px) {
 	.brd #filters {
 		display: grid;
 		grid-template-columns: repeat(3, minmax(0, 1fr));
+	}
+	.brd #filter-label {
+		grid-column: 1 / -1;
 	}
 	.brd #filters button {
 		padding-inline: 4px;

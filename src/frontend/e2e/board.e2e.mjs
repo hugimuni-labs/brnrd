@@ -69,20 +69,24 @@ test('the counted filters select a union, persist on reload and return to the de
 	];
 	B.loom.set(reindex(parts));
 	const page = B.page;
-	const filters = page.getByRole('group', { name: 'Thread filters' });
-	assert.deepEqual(await filters.getByRole('button').allInnerTexts(), [
-		'Working 1',
-		'Your call 1',
-		'Waiting 1',
-		'Stuck 2',
-		'Quiet 1',
-		'Settled 2'
-	]);
-	const pressed = () => filters.getByRole('button', { pressed: true }).allInnerTexts();
+	const filters = page.getByRole('group', { name: 'Show threads' });
+	assert.deepEqual(
+		await filters
+			.getByRole('button')
+			.evaluateAll((buttons) => buttons.map((button) => button.getAttribute('aria-label'))),
+		['Working 1', 'Your call 1', 'Waiting 1', 'Stuck 2', 'Quiet 1', 'Settled 2']
+	);
+	const pressed = () =>
+		filters
+			.getByRole('button', { pressed: true })
+			.evaluateAll((buttons) => buttons.map((button) => button.getAttribute('aria-label')));
 	const defaults = ['Working 1', 'Your call 1', 'Waiting 1', 'Stuck 2'];
 	assert.deepEqual(await pressed(), defaults);
 	const quiet = filters.getByRole('button', { name: 'Quiet 1' });
-	const working = filters.getByRole('button', { name: 'Working 1' });
+	const working = filters.getByRole('button', {
+		name: 'Working 1',
+		description: 'Work in progress'
+	});
 	const columns = () =>
 		page.locator('#board > .column').evaluateAll((cs) => cs.map((c) => c.dataset.column));
 	const active = ['inbox', 'alpha', 'bravo', 'charlie', 'echo', 'delta'];
