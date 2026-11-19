@@ -41,7 +41,9 @@ export function installSessionOffer(
 	if (!url) return null;
 	const seats = s?.first_subscribers_seats;
 	return {
-		lead: seats ? `You're one of our first ${seats} subscribers.` : "You're one of our first subscribers.",
+		lead: seats
+			? `You're one of our first ${seats} subscribers.`
+			: "You're one of our first subscribers.",
 		link: 'Book a free install session with us',
 		url
 	};

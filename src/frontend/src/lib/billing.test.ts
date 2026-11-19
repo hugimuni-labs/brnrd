@@ -82,7 +82,11 @@ test('installSessionOffer is the server-set link with the seat count, or nothing
 	assert.equal(installSessionOffer(base), null);
 	assert.equal(installSessionOffer({ ...base, install_session_url: null }), null);
 	assert.deepEqual(
-		installSessionOffer({ ...base, install_session_url: 'https://cal.example/x', first_subscribers_seats: 20 }),
+		installSessionOffer({
+			...base,
+			install_session_url: 'https://cal.example/x',
+			first_subscribers_seats: 20
+		}),
 		{
 			lead: "You're one of our first 20 subscribers.",
 			link: 'Book a free install session with us',
