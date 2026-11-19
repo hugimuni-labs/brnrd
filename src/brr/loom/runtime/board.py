@@ -232,7 +232,7 @@ def calls_of(threads: list[dict], told: dict, facts=()) -> dict[str, list[dict]]
             calls.setdefault(w.thread, []).append({"kind": "ask", "wish": ident, "line": w.line, "waits": head,
                                                    "at": _iso(raised.get(ident, w.at)), "raised": raised.get(ident, w.at)})
     for w in told.values():
-        if w.state not in {"delivered", "expired"}:
+        if w.verdict or w.state not in {"delivered", "expired"}:
             continue
         home = next((t for t in (opened.get(w.id), w.thread) if t in live), "inbox")
         result = [r for r in w.results if r.get("delivered")][-1]
@@ -258,8 +258,8 @@ def board_state(t: dict, calls: list[dict], left: int = 0, end: tuple | None = N
 
     settled: status is closed. seated: a held strand works or holds, or the turn is mine (a body or the
     loom is on owed letters). your call: a call names his action (red when one is an ask). Old verdicts
-    stay on the card without making a call. mine: the
-    resident owes a move the loom will not make (a parked or failed strand, a letter owed by the
+    stay on the card without making a call. mine: the resident owes a move the loom will not make
+    (a parked or failed strand, a letter owed by the
     operator, or an open thread with work left and no body that declared its end: wake or settle).
     waiting: work left, and the last body declared why it stopped (a `waiting:` read, or a paced/stopped end).
     quiet: nothing left (4987; named apart from the strand end cause `idle`, icjy2: a thread greys only when no wish on it is open).

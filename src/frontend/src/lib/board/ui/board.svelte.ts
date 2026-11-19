@@ -22,7 +22,7 @@ export class Board {
 	// every card, and each tick re-ran them all (the live-path bench)
 	model = $state.raw<Model | null>(null);
 	staleVerdicts = $derived(
-		new Set(
+		new SvelteSet(
 			allCalls(this.model?.threads || [])
 				.filter((c) => c.stale)
 				.map((c) => c.wish)

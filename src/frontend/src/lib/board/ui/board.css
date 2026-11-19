@@ -2407,6 +2407,15 @@
 	margin-left: 3px;
 	font-variant-numeric: tabular-nums;
 }
+@media (max-width: 520px) {
+	.brd #filters {
+		display: grid;
+		grid-template-columns: repeat(3, minmax(0, 1fr));
+	}
+	.brd #filters button {
+		padding-inline: 4px;
+	}
+}
 .brd .not-marked,
 .brd .call .k.not-marked,
 .brd .lg-st.not-marked {
