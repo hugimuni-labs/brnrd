@@ -99,16 +99,25 @@ _FORGE_TOKEN_VARS = ("GH_TOKEN", "GITHUB_TOKEN", "GH_ENTERPRISE_TOKEN", "GITHUB_
 # switch (mark.py) a forge act with no mark stops here, and on a body with no
 # wall every gh call does: exit 3 is that refusal, any other failure of the
 # sensor never costs the call. The stand-in judges nothing else.
-_FORGE_DOOR = r"""if [ "${BRNRD_MARKS-}" = 1 ] && [ "${BRNRD_WALL-}" != 1 ]; then
-  # No wall around this body (mark.py): the stand-in is the wall for gh, every call is marked.
-  {brnrd} runtime mark --check --look --room {room} >/dev/null
-  [ $? -ne 3 ] || exit 1
-fi
-case "$1 $2" in
+_FORGE_DOOR = r"""case "$1 $2" in
   "pr merge"|"pr close"|"pr comment"|"issue close"|"issue comment"|"release create")
-    if [ -f {endpoint} ] || [ "${BRNRD_MARKS-}" = 1 ]; then
-      {brnrd} runtime audit pass --room {room} --door forge --act "$1 $2" --target="${3-}" >/dev/null
+    if [ "${BRNRD_MARKS-}" = 1 ] && [ "${BRNRD_WALL-}" != 1 ]; then
+      {brnrd} runtime mark --check --look --room {room} >/dev/null
       [ $? -ne 3 ] || exit 1
+    fi
+    if [ -f {endpoint} ] || [ "${BRNRD_MARKS-}" = 1 ]; then
+      {brnrd} runtime audit pass --room {room} --door forge --act "$1 $2" --target="${3-}" -- "$@" >/dev/null
+      [ $? -ne 3 ] || exit 1
+    fi ;;
+  *)
+    if [ "${BRNRD_MARKS-}" = 1 ]; then
+      if [ "${BRNRD_WALL-}" != 1 ]; then
+        {brnrd} runtime mark --check --look --room {room} -- "$@" >/dev/null
+        [ $? -ne 3 ] || exit 1
+      elif [ -n "${BRNRD_SAY-}" ]; then
+        {brnrd} runtime mark --check --only-confirm --room {room} -- "$@" >/dev/null
+        [ $? -ne 3 ] || exit 1
+      fi
     fi ;;
 esac
 """
@@ -471,7 +480,7 @@ def notice(home: Home, facts: list[Fact], kind: str, subject: str, what: str, ca
         if stands:
             data["stands"] = str(about.data["id"])
             lines.append(f"settling this notice settles {about.data['id']} too")
-    else:
+    elif can:
         lines.append(can)
     if channel is None:
         lines.append("passive: shown once, owed by nobody" if passive
@@ -2631,6 +2640,8 @@ def tick_once(home: Home, bodies: dict[str, Body], adapter: str, core: str,
             watcher.owners = claims(claimed)
             facts = observe_comments(home, facts, True, watcher.take()) if router.armed() else facts
         facts = router.route(facts, bodies, (adapter, core))
+        if router.armed() and getattr(router, "confirmations", None) is not None:
+            router.confirmations.step(router, facts)
         facts = router.speak_out(facts)
 
 

@@ -1,6 +1,7 @@
 """Enabled folders declare channels and exchange the port's letter files."""
 
 import hashlib
+import json
 import mimetypes
 import os
 import re
@@ -208,6 +209,13 @@ def ingest(home, name, fm, attachments, authorize=None):
         require(home, name, authorize)
         append(home, Fact(kind='letter', by=f'loom:{home.install_id()}', id=letter_id,
                           after=(source.id,), data=fields))
+    if binding and binding[0].by.startswith("loom:") and binding[0].id.startswith("loom/confirm-asked-"):
+        from .grants import owners
+        from .loom import notice
+        if source.data["from"] in owners(home.root / "self"):
+            notice(home, read_facts(home), "confirm-reply", letter_id,
+                   "Press it on the page: a message can't confirm this.", "",
+                   channel=source.data["channel"], passive=True)
     if source.data.get('refs_missing'):
         from .loom import notice
         facts = read_facts(home)
@@ -291,6 +299,17 @@ def _open_ancestor(home, thread):
 def drain(home, name, drop, failures=None, authorize=None):
     from .connector_ownership import allowed, Unavailable
     failures = failures if failures is not None else {}
+    from . import confirm
+    for path in sorted(drop.glob('*.confirm')):
+        if not allowed(home, name, authorize):
+            return
+        if not path.is_symlink():
+            try:
+                event = json.loads(path.read_text(encoding="utf-8"))
+                confirm.ingest(home, event)
+            except (ValueError, KeyError, TypeError, AttributeError):
+                pass
+        path.unlink(missing_ok=True)
     for path in sorted(drop.glob('*.md'), key=lambda p: (p.lstat().st_mtime_ns, p.name)):
         if not allowed(home, name, authorize):
             return

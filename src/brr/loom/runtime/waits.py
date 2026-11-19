@@ -66,9 +66,10 @@ _CI = re.compile(r"^ci:(?:([\w.-]+/[\w.-]+))?@([0-9a-f]{7,40})$")
 _WISH = re.compile(r"^wish:(w-[a-z0-9]+)$")
 _LETTER = re.compile(r"^letter:(\S+)$")
 #: Conditions that wait on someone, so a park on them carries a turn; a prose park does too.
-TURNED = ("letter:", "wish:", "pr:")
+TURNED = ("letter:", "wish:", "pr:", "confirm:")
+_CONFIRM = re.compile(r"^confirm:(c-[a-z0-9]{12})$")
 #: ``cond:`` names its conditions, ``conditions.NAMES``; its parse error lists them.
-GRAMMAR = "pr:[owner/repo]#N, ci:[owner/repo]@sha, wish:<w-id>, letter:<id>, at:<when>, file:<path>, cond:<names>|all"
+GRAMMAR = "pr:[owner/repo]#N, ci:[owner/repo]@sha, wish:<w-id>, letter:<id>, at:<when>, file:<path>, cond:<names>|all, confirm:<id>"
 
 
 def _iso(moment: datetime) -> str:
@@ -108,7 +109,7 @@ def canonical(text: str, now: datetime, repo=None) -> str:
                 raise ValueError(f"--wait {text}: name the repo, {kind}:<owner>/<repo>"
                                  + ("#" if kind == "pr" else "@") + match.group(2))
             return f"{kind}:{owner}" + ("#" if kind == "pr" else "@") + match.group(2)
-    if _WISH.fullmatch(text) or _LETTER.fullmatch(text):
+    if _WISH.fullmatch(text) or _LETTER.fullmatch(text) or _CONFIRM.fullmatch(text):
         return text
     if text.startswith("at:"):
         return "at:" + when(text[3:], now, "--wait at:")
@@ -218,7 +219,7 @@ def _answers(facts, target: str, since: str, replied: str | None = None,
     return None
 
 
-def outcome(wish, read, facts, found: dict, forge: dict, now: datetime) -> str | None:
+def outcome(wish, read, facts, found: dict, forge: dict, now: datetime, *, home=None) -> str | None:
     """What came true for this park, in words, or None while it still waits."""
     wait = read["wait"]
     on = wait.get("on")
@@ -254,6 +255,15 @@ def outcome(wish, read, facts, found: dict, forge: dict, now: datetime) -> str |
         answer = _answers(facts, on[7:], read["at"], replied="")
         if answer is not None:
             return f"{on[7:]} was answered by {answer}"
+    elif on.startswith("confirm:") and home is not None:
+        from . import confirm
+        row = confirm.entry(facts, on[8:])
+        if row is not None:
+            req = row["request"]
+            if req["install"] == home.install_id() and req["thread"] == wish.thread:
+                status, _ = confirm.state(home, facts, req, now)
+                if status != "pending":
+                    return f"{on} {status}"
     elif on.startswith("at:"):
         due = parse_instant(on[3:])
         if due is not None and due <= now:
@@ -378,6 +388,8 @@ class _Pending:
         self.states = {}
         self.prs = set()
         self.pr_revision = None
+        self.confirms = set()
+        self.confirm_revision = None
         self.due = []
         self.first = True
         self.retry = set()
@@ -394,6 +406,12 @@ class _Pending:
             if on.startswith("pr:"):
                 self.prs.add(key)
             times = [parse_instant(str(read["wait"].get("until", "")))]
+            if on.startswith("confirm:"):
+                from . import confirm
+                self.confirms.add(key)
+                row = confirm.entry(facts, on[8:])
+                if row is not None:
+                    times.append(confirm.instant(row["request"]["ask_exp"]))
             if on.startswith("at:"):
                 times.append(parse_instant(on[3:]))
             for due in times:
@@ -417,6 +435,17 @@ class _Pending:
         if revision != self.pr_revision:
             selected.update(self.prs)
             self.pr_revision = revision
+        revision = tuple(len(facts.by_kind[k]) for k in ("confirm.asked", "confirm.given", "confirm.refused", "confirm.used"))
+        if revision != self.confirm_revision:
+            self.confirm_revision = revision
+            selected.update(self.confirms)
+            from . import confirm
+            for key in self.confirms:
+                _, read = self.rows[key]
+                row = confirm.entry(facts, read["wait"]["on"][8:])
+                due = confirm.instant(row["request"]["ask_exp"]) if row else None
+                if due is not None and due > now:
+                    heapq.heappush(self.due, (due, key))
         for condition, keys in self.forge.items():
             state = dict(forge.get(condition) or {})
             if self.states.get(condition) != state:
@@ -465,7 +494,7 @@ def observe_waits(home, facts, armed: bool, forge: dict | None = None, now: date
         from .project import fold
         return frozenset(fold(facts).holder)
     for wish, read in rows:
-        said = outcome(wish, read, facts, found, forge or {}, now)
+        said = outcome(wish, read, facts, found, forge or {}, now, home=home)
         if said is None:
             if pace is not None and read["wait"].get("turn"):
                 try:

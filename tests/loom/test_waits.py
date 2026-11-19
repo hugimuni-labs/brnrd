@@ -21,9 +21,9 @@ def test_indexed_observer_skips_unchanged_and_resolved_parks(ledger, monkeypatch
     facts = LedgerView(read_facts(home))
     calls, real = [], waits.outcome
 
-    def outcome(*args):
+    def outcome(*args, **kwargs):
         calls.append(args[0].id)
-        return real(*args)
+        return real(*args, **kwargs)
 
     monkeypatch.setattr(waits, "outcome", outcome)
     now = datetime.now(timezone.utc)

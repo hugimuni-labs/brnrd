@@ -51,6 +51,7 @@ from .models import (
     Event,
     GitHubInstallation,
     GitHubInstalledRepo,
+    LoomConfirmation,
     PairRequest,
     Repo,
     RunStopRequest,
@@ -83,6 +84,7 @@ _ACCOUNT_ID_MODELS_BEFORE_TOKEN = (
 _ACCOUNT_ID_MODELS_AFTER_TOKEN = (
     RunnerWakeRequest,
     RunStopRequest,
+    LoomConfirmation,
 )
 
 # The tombstone value fits accounts.github_id's VARCHAR(32) exactly:

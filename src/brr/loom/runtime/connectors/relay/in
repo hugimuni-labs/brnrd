@@ -49,6 +49,12 @@ def pull_once(drop, state, client, cursor, failures=None):
         try:
             if not isinstance(event_id, str) or not event_id:
                 raise ValueError('relay: event has no event_id')
+            if event.get('source') == 'confirm':
+                atomic_write(drop / f'{key}.confirm', event.get('body') or '')
+                mapping[key] = event_id
+                atomic_write(state / 'messages.json', json.dumps(mapping))
+                failures.pop(key, None)
+                continue
             origin = event.get('reply_to') or {}
             meta = cloud._origin_meta(origin)
             platform, chat = str(meta['cloud_platform']), str(meta['cloud_chat_id'])

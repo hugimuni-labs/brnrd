@@ -92,6 +92,7 @@ any host move: `GET /v1/daemons/inbox` returns `server.github.app_id_set` and
 | --- | --- | --- | --- |
 | `BRNRD_STRIPE_API_KEY` | **Yes** | Empty | `stripe_api` authenticates Stripe API calls; billing endpoints are unavailable when empty. |
 | `BRNRD_STRIPE_WEBHOOK_SECRET` | **Yes** | Empty | `routers.webhooks` verifies Stripe webhook signatures. |
+| `BRNRD_CONFIRM_K1_SECRET` | **Yes** | Empty | Hex Ed25519 private seed for the dashboard confirmation signer. Its public key must match the loom's packaged `confirm-k1.pub` or the self-hosted loom's `confirm_key`. |
 | `BRNRD_STRIPE_API_BASE_URL` | No | `https://api.stripe.com` | `stripe_api` request base URL. |
 | `BRNRD_STRIPE_PRICE_SUPPORTER_MONTHLY` | No | Empty | `billing` selects and classifies the monthly supporter Stripe price. |
 | `BRNRD_STRIPE_PRICE_SUPPORTER_ANNUAL` | No | Empty | `billing` selects and classifies the annual supporter Stripe price. |
