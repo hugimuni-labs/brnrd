@@ -18,6 +18,23 @@ import { byAt, dated, time } from './text.ts';
 import type { Held } from './cache.ts';
 
 export const BASE = '/v1/loom';
+
+export async function probeBoard(signal?: AbortSignal) {
+	try {
+		const response = await fetch(`${BASE}/index`, { cache: 'no-store', signal });
+		if (response.status === 401) return { kind: 'anon' } as const;
+		if (response.status === 402) return { kind: 'refused' } as const;
+		if (response.status === 404) return { kind: 'missing' } as const;
+		if (response.ok) {
+			const index: unknown = await response.json();
+			if (index && typeof index === 'object' && 'parts' in index)
+				return { kind: 'ready', index } as const;
+		}
+	} catch {
+		// A failed read leaves availability unknown.
+	}
+	return { kind: 'error' } as const;
+}
 export type Beads = Record<
 	string,
 	[string | null, string | null, string | null, string | null, string]

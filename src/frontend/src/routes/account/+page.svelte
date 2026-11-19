@@ -13,6 +13,7 @@
 	// ink on white. BillingPanel and AccountDeletion are shared with the old
 	// dashboard and keep its classes; the skin below restyles them here only.
 	let account = $state<AccountRead | null>(null);
+	let board = $state<'checking' | 'ready' | 'missing' | 'refused'>('checking');
 	async function signOut(event: MouseEvent) {
 		event.preventDefault();
 		await forget();
@@ -34,7 +35,11 @@
 
 <div class="brd acct" data-testid="account">
 	<header class="flex-wrap">
-		<a class="topics-link" href={resolve('/')}>← board</a>
+		{#if board === 'ready'}
+			<a class="topics-link" href={resolve('/')}>← board</a>
+		{:else if board === 'missing'}
+			<span class="dim">Your board appears here once a computer connects.</span>
+		{/if}
 		<b>account</b>
 		<a class="topics-link" href={resolve('/pricing')}>pricing</a>
 		{#if account?.kind === 'authed' && account.githubLogin}
@@ -52,7 +57,7 @@
 			{:else if account.kind === 'error'}
 				<p class="warn">{account.message}</p>
 			{:else}
-				<AccountSetup />
+				<AccountSetup bind:board />
 				<h2 id="subscription">Subscription</h2>
 				<BillingPanel />
 				<AccountDeletion githubLogin={account.githubLogin} />
