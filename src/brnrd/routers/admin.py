@@ -29,7 +29,7 @@ from sqlalchemy.orm import Session
 from .. import billing
 from ..auth import account_id_from_session_cookie, get_db
 from ..models import Account, BillingLedgerEntry
-from ..page_views import PROMO_PATH, PageViewCount
+from ..page_views import INSTALL_PATH, PROMO_PATH, PageViewCount
 
 router = APIRouter(prefix="/v1/admin", tags=["admin"], include_in_schema=False)
 
@@ -98,6 +98,22 @@ def metrics(request: Request, db: Session = Depends(get_db)) -> HTMLResponse:
     # The invoice-paid handler writes this grant with only the subscription ID
     # in metadata. Group across all history so a renewal cannot become a first
     # paid invoice simply because the original is outside the display window.
+    # home_trial.start_once stamps this once, in the transaction of the
+    # account's first successful machine connect (pairing hands the loom its
+    # token, or the loom's first register/publish), and never moves it. So it
+    # is the day the account's first computer connected. A second computer on
+    # the same account is not counted. Accounts that connected before the
+    # column existed (2026-11-17) were stamped at their next connect after.
+    connect_day = func.date(Account.home_trial_started_at)
+    connected = {
+        str(day): count
+        for day, count in db.execute(
+            select(connect_day, func.count())
+            .where(Account.home_trial_started_at >= start, Account.home_trial_started_at < end)
+            .group_by(connect_day)
+        )
+    }
+
     ledger = BillingLedgerEntry
     first_paid = (
         select(func.min(ledger.created_at).label("received"))
@@ -117,16 +133,20 @@ def metrics(request: Request, db: Session = Depends(get_db)) -> HTMLResponse:
 
     views = _view_rows(db, since, today)
     promo_visits: dict[str, int] = defaultdict(int)
+    downloads: dict[str, int] = defaultdict(int)
     for row in views:
         if row["path"] == PROMO_PATH:
             promo_visits[row["day"]] += row["views"]
+        elif row["path"] == INSTALL_PATH:
+            downloads[row["day"]] += row["views"]
 
     daily_rows = []
     for offset in range(METRIC_DAYS):
         day = (today - dt.timedelta(days=offset)).isoformat()
         daily_rows.append(
             f"<tr><th scope='row'>{day}</th><td>{promo_visits[day]}</td>"
-            f"<td>{signups.get(day, 0)}</td><td>{paid.get(day, 0)}</td></tr>"
+            f"<td>{signups.get(day, 0)}</td><td>{downloads[day]}</td>"
+            f"<td>{connected.get(day, 0)}</td><td>{paid.get(day, 0)}</td></tr>"
         )
     view_rows = [
         f"<tr><td>{r['day']}</td><td>{escape(r['path'])}</td>"
@@ -149,10 +169,14 @@ def metrics(request: Request, db: Session = Depends(get_db)) -> HTMLResponse:
 <body>
 <main class="metrics">
   <h1>Daily metrics</h1>
-  <p>{since} to {today} (UTC). Paid subscriptions are counted on the day their first paid invoice was recorded.</p>
+  <p>{since} to {today} (UTC). Paid subscriptions are counted on the day their first paid invoice was recorded.
+    Script downloads are GETs of /install (curl and browsers; recognized bots excluded), which also counts
+    people reading the script; computers connected counts accounts on the day their first computer connected,
+    and is the install number.</p>
   <div class="metrics-table">
     <table aria-label="Daily visits and conversions">
       <thead><tr><th scope="col">Day</th><th scope="col">/hi visits</th><th scope="col">New signups</th>
+        <th scope="col">Script downloads</th><th scope="col">Computers connected</th>
         <th scope="col">New paid subscriptions</th></tr></thead>
       <tbody>{''.join(daily_rows)}</tbody>
     </table>

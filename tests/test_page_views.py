@@ -41,6 +41,8 @@ def test_path_allowlist():
     assert counted_path("/pricing?utm=x") == "/pricing"
     assert counted_path("/learn/install") == "/learn/install"
     assert counted_path("/log/2026-09-20") == "/log/2026-09-20"
+    assert counted_path("/install") == "/install"
+    assert counted_path("/install.sh") == "/install"
     for nope in ("/dashboard", "/v1/accounts", "/login", "/runs", "/learn/a/b/c/d", "/learn/<x>", "/" + "a" * 80):
         assert counted_path(nope) is None
 
@@ -75,6 +77,30 @@ def test_public_get_is_counted_and_only_as_a_counter(tmp_path):
     }
     dumped = repr([vars(r) for r in _rows(app)])
     assert "a@b.c" not in dumped and "email" not in dumped and "item?id" not in dumped
+
+
+def test_installer_downloads_fold_into_one_install_row(tmp_path):
+    script = tmp_path / "install.sh"
+    script.write_text("#!/bin/sh\necho brnrd\n")
+    build = tmp_path / "build"
+    build.mkdir()
+    (build / "index.html").write_text("<!doctype html><title>brnrd</title>")
+    app = create_app(Settings(
+        database_url=f"sqlite:///{tmp_path}/pv.db", frontend_dir=str(build), installer_path=str(script),
+    ))
+    with TestClient(app) as c:
+        assert c.get("/install", headers={"user-agent": "curl/8.4.0"}).text.startswith("#!/bin/sh")
+        assert c.get("/install.sh?v=1", headers={"user-agent": "curl/8.4.0"}).status_code == 200
+        assert c.get("/install", headers={"user-agent": CHROME, "referer": "https://brnrd.dev/pricing"}).status_code == 200
+        assert c.get("/install", headers={"user-agent": "Googlebot/2.1"}).status_code == 200
+        assert c.head("/install", headers={"user-agent": "curl/8.4.0"}).status_code == 200
+        assert c.head("/install.sh", headers={"user-agent": "curl/8.4.0"}).status_code == 200
+    rows = {(r.path, r.referer_host, r.ua_family, r.status, r.views) for r in _rows(app)}
+    assert rows == {
+        ("/install", "", "curl", 200, 2),
+        ("/install", "brnrd.dev", "chrome", 200, 1),
+        ("/install", "", "bot", 200, 1),
+    }, rows
 
 
 def test_uncounted_requests_leave_no_row(tmp_path):
