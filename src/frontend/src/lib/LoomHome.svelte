@@ -1,16 +1,7 @@
 <script lang="ts">
-	// `/`: the board when the loom has published a snapshot, the dashboard
-	// otherwise. Signed out (401) is the dashboard too, which renders its own
-	// landing. No snapshot splits once more on the repos fetch: an account no
-	// daemon has ever paired with (ColdStart's own `daemonEverPaired` and
-	// `machines.paired`) gets the three-noun empty state; anyone already set
-	// up the old way keeps the dashboard they know. Any failure falls back to
-	// the dashboard, so this route is never worse than it was.
 	import { onMount } from 'svelte';
 	import Dashboard from './Dashboard.svelte';
 	import LoomBoard from './LoomBoard.svelte';
-	import LoomEmpty from './LoomEmpty.svelte';
-	import { fetchRepos } from './repos.ts';
 	import { startVisiblePoll } from './visiblePoll.ts';
 	import {
 		BODY_KEY,
@@ -23,30 +14,13 @@
 		type LoomSnapshot
 	} from './loomSnapshot.ts';
 
-	let {
-		retry = undefined,
-		connectionFailed = false
-	}: { retry?: () => void; connectionFailed?: boolean } = $props();
-
-	type View = 'unknown' | 'board' | 'empty' | 'dashboard';
+	type View = 'unknown' | 'board' | 'dashboard';
 
 	let view = $state<View>('unknown');
 	let snapshot = $state<LoomSnapshot | null>(null);
 	let seenAt = $state<string | null>(null);
 	let body = $state<string | null>(null);
 	let now = $state(Date.now());
-
-	async function neverPaired(): Promise<boolean> {
-		try {
-			const repos = await fetchRepos();
-			const daemonEverPaired = (repos.connected_repos ?? []).some((r) =>
-				['online', 'offline', 'never_started'].includes(r.daemon_status)
-			);
-			return !daemonEverPaired && repos.machines?.paired !== true;
-		} catch {
-			return false;
-		}
-	}
 
 	function show(next: LoomSnapshot) {
 		snapshot = next;
@@ -68,8 +42,7 @@
 				view = 'dashboard';
 				return;
 			}
-			if (read === 'anon') view = 'dashboard';
-			else if (read === 'none') view = (await neverPaired()) ? 'empty' : 'dashboard';
+			if (read === 'anon' || read === 'none') view = 'dashboard';
 			else {
 				show(read);
 				// The first read already happened; the poll keeps the board current.
@@ -108,8 +81,6 @@
 	</main>
 {:else if view === 'board' && snapshot}
 	<LoomBoard {snapshot} {seenAt} {now} bind:body />
-{:else if view === 'empty'}
-	<LoomEmpty {retry} {connectionFailed} />
 {:else}
 	<Dashboard />
 {/if}

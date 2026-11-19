@@ -3,18 +3,21 @@
 	import { resolve } from '$app/paths';
 	import AccountDeletion from '$lib/AccountDeletion.svelte';
 	import BillingPanel from '$lib/BillingPanel.svelte';
+	import AccountSetup from '$lib/AccountSetup.svelte';
 	import { ACCOUNT_PATH, loginFor, readAccount, type AccountRead } from '$lib/accountPage';
 	import '$lib/board/ui/board.css';
+	import { forget } from '$lib/board/cache';
 
-	// The subscription and the account, reachable from every signed-in page
-	// (the board, the empty loom, the old dashboard). Anonymous → sign in,
-	// then back here.
-	//
 	// It wears the board's look (his 11408: the old style was the dashboard's
 	// dark panels): the board's header bar, one column with its top rule, mono
 	// ink on white. BillingPanel and AccountDeletion are shared with the old
 	// dashboard and keep its classes; the skin below restyles them here only.
 	let account = $state<AccountRead | null>(null);
+	async function signOut(event: MouseEvent) {
+		event.preventDefault();
+		await forget();
+		window.location.assign('/logout');
+	}
 
 	onMount(() => {
 		// the board's page drops the layout's dark scanline overlay the same way
@@ -30,22 +33,27 @@
 <svelte:head><title>account · brnrd</title></svelte:head>
 
 <div class="brd acct" data-testid="account">
-	<header>
+	<header class="flex-wrap">
 		<a class="topics-link" href={resolve('/')}>← board</a>
 		<b>account</b>
 		<a class="topics-link" href={resolve('/pricing')}>pricing</a>
 		{#if account?.kind === 'authed' && account.githubLogin}
-			<span class="dim" id="at">as {account.githubLogin}</span>
+			<span class="dim">@{account.githubLogin}</span>
+			<a class="topics-link" href={resolve('/login?switch=1&next=%2Faccount')}
+				>Switch GitHub account</a
+			>
+			<a class="topics-link" href="/logout" rel="external" onclick={signOut}>Sign out</a>
 		{/if}
 	</header>
 	<main>
 		<section class="sheet">
-			<h2>subscription</h2>
 			{#if account === null || account.kind === 'anon'}
 				<p class="dim">reading the account…</p>
 			{:else if account.kind === 'error'}
 				<p class="warn">{account.message}</p>
 			{:else}
+				<AccountSetup />
+				<h2 id="subscription">Subscription</h2>
 				<BillingPanel />
 				<AccountDeletion githubLogin={account.githubLogin} />
 			{/if}
@@ -54,6 +62,11 @@
 </div>
 
 <style>
+	.acct header {
+		height: auto;
+		min-height: 40px;
+	}
+
 	.acct main {
 		flex: 1;
 		overflow-y: auto;

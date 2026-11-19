@@ -14,14 +14,12 @@
 		reachBadge,
 		type DoorStatus
 	} from '$lib/supportMatrix';
-	import { fetchLoginContext, resolveSigninHref, type LoginContext } from '$lib/login';
 
 	// The resident is the persistent coordinating identity above project
 	// contexts and agent CLIs. brnrd.dev is an optional control plane around
 	// the local engine, never a remote compute farm. Keep those layers distinct
 	// in the page shape rather than asking paragraphs of copy to repair them.
 	let doorStatuses = $state<Map<string, DoorStatus> | null>(null);
-	let loginContext = $state<LoginContext | null>(null);
 	const legalNoticeReady = legalNoticeIsComplete();
 
 	// `/` draws this page while it is still probing for a board (routes/+page.svelte), so its fetches wait for
@@ -31,15 +29,10 @@
 	$effect(() => {
 		if (!live || fetched) return;
 		fetched = true;
-		Promise.all([fetchDoorStatus(), fetchLoginContext(null).catch(() => null)]).then(
-			([doors, login]) => {
-				doorStatuses = doors;
-				loginContext = login;
-			}
-		);
+		void fetchDoorStatus().then((doors) => (doorStatuses = doors));
 	});
 
-	let signinHref = $derived(resolveSigninHref(loginContext, resolve('/login')));
+	const signinHref = resolve('/login');
 
 	// Arseni's call (letter 5257): the returned pull request is the hook.
 	const HERO_HEADLINE = 'Message it the work. Get back a pull request.';

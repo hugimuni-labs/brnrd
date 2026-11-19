@@ -11,7 +11,7 @@ from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request, sta
 from sqlalchemy import select, update
 from sqlalchemy.orm import Session
 
-from .. import home_trial, ids, schemas
+from .. import home_access, home_trial, ids, schemas
 from ..auth import Principal, get_db, require_account
 from ..config import telegram_effective_bot_username
 from ..models import PairRequest, Repo, TgPairCode, Token
@@ -330,6 +330,7 @@ def poll_pair(code: str, request: Request, poll_secret: str = Query(...), db: Se
     if pair.status == PairRequest.STATUS_PENDING:
         return schemas.PairStatus(status="pending")
     if pair.status == PairRequest.STATUS_APPROVED:
+        home_access.refuse_session(db, request.app.state.settings, pair.account_id)
         token = pair.minted_token
         pair.status = PairRequest.STATUS_CONSUMED
         pair.minted_token = None

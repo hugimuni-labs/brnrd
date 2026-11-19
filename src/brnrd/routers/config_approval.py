@@ -24,8 +24,8 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from .. import ids, inbox as inbox_service, schemas
-from ..auth import Principal, get_db, require_daemon
+from .. import home_access, ids, inbox as inbox_service, schemas
+from ..auth import Principal, get_db
 from ..models import ConfigChangeRequest
 
 router = APIRouter(prefix="/v1/daemons/config-requests", tags=["config-approval"])
@@ -61,7 +61,7 @@ def _aware(value: datetime) -> datetime:
 def create_config_change_request(
     payload: schemas.ConfigChangeRequestCreate,
     request: Request,
-    principal: Principal = Depends(require_daemon),
+    principal: Principal = Depends(home_access.daemon_gate),
     db: Session = Depends(get_db),
 ):
     key = payload.config_key.strip()

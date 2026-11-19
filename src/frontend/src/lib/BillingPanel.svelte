@@ -205,7 +205,9 @@
 				unchanged while your subscription is live
 			</p>
 		{:else}
-			<a href={resolve('/')} class="mt-3 inline-block text-sm text-amber-200 underline"
+			<a
+				href={resolve(boardReady ? '/' : '/account#setup')}
+				class="mt-3 inline-block text-sm text-amber-200 underline"
 				>{boardReady ? 'Open your board' : 'Set up brnrd'}</a
 			>
 			{#if installOffer}

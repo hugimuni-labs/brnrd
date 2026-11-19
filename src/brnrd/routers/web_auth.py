@@ -15,14 +15,14 @@ import time
 from collections import defaultdict, deque
 from datetime import datetime, timezone
 from pathlib import Path
-from urllib.parse import quote
+from urllib.parse import quote, urlencode
 
 from fastapi import APIRouter, Body, Depends, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from brnrd import ids, oauth, terms
+from brnrd import home_access, ids, oauth, terms
 from brnrd.auth import get_db
 from brnrd.models import Account, ConfigChangeRequest, GitHubInstallation, PairRequest, Repo, TermsAcceptance
 from brnrd.routers.accounts import SESSION_TTL, account_for_github_identity, issue_session_token
@@ -166,14 +166,18 @@ def _message_response(
 
 
 @router.get("/v1/dashboard/login-context")
-def login_context_api(request: Request, next: str = "/", db: Session = Depends(get_db)) -> JSONResponse:
+def login_context_api(request: Request, next: str = "/", switch: bool = False, db: Session = Depends(get_db)) -> JSONResponse:
     """Context for the SPA /login page (#327 Jinja-removal, /login slice)."""
     safe_next = _safe_next(next)
+    account_id = _account_id(request, db)
+    account = db.get(Account, account_id) if account_id else None
     return JSONResponse(
         {
-            "authenticated": _account_id(request, db) is not None,
+            "authenticated": account is not None,
+            "github_login": account.github_login if account else None,
+            "switch_account": switch,
             "oauth_ready": _github_oauth_ready(request),
-            "signin_url": f"/auth/github/start?next={quote(safe_next, safe='/')}",
+            "signin_url": f"/auth/github/start?next={quote(safe_next, safe='/')}" + ("&switch=1" if switch else ""),
             "next": safe_next,
         }
     )
@@ -283,7 +287,7 @@ def terms_accept_api(
 
 
 @router.get("/auth/github/start")
-def github_login_start(request: Request, next: str = "/"):
+def github_login_start(request: Request, next: str = "/", switch: bool = False):
     if not _github_oauth_ready(request):
         return _message_response(
             title="Login unavailable",
@@ -298,11 +302,15 @@ def github_login_start(request: Request, next: str = "/"):
     state = oauth.new_state()
     verifier, challenge = oauth.new_pkce_pair()
     s = request.app.state.settings
-    resp = RedirectResponse(oauth.authorize_url(s, state=state, redirect_uri=_oauth_redirect_uri(request), code_challenge=challenge), status_code=303)
+    resp = RedirectResponse(oauth.authorize_url(s, state=state, redirect_uri=_oauth_redirect_uri(request), code_challenge=challenge, select_account=switch), status_code=303)
     secure = _cookie_secure(request)
     resp.set_cookie(s.oauth_state_cookie, state, httponly=True, samesite="lax", secure=secure, max_age=s.oauth_state_ttl_s)
     resp.set_cookie(s.oauth_pkce_cookie, verifier, httponly=True, samesite="lax", secure=secure, max_age=s.oauth_state_ttl_s)
     resp.set_cookie(s.oauth_next_cookie, _safe_next(next), httponly=True, samesite="lax", secure=secure, max_age=s.oauth_state_ttl_s)
+    if switch:
+        resp.set_cookie(s.oauth_switch_cookie, "1", httponly=True, samesite="lax", secure=secure, max_age=s.oauth_state_ttl_s)
+    else:
+        resp.delete_cookie(s.oauth_switch_cookie, samesite="lax", secure=secure)
     return resp
 
 
@@ -312,19 +320,32 @@ LOGIN_FIRST_SYNC_WAIT_S = 2.0
 
 
 @router.get("/auth/github/callback")
-def github_login_callback(request: Request, code: str | None = None, state: str | None = None, db: Session = Depends(get_db)):
+def github_login_callback(request: Request, code: str | None = None, state: str | None = None, error: str | None = None, db: Session = Depends(get_db)):
     s = request.app.state.settings
     t0 = time.monotonic()
     expected_state = request.cookies.get(s.oauth_state_cookie)
     verifier = request.cookies.get(s.oauth_pkce_cookie)
     next_url = _safe_next(request.cookies.get(s.oauth_next_cookie, "/"))
-    if not code or not state or not expected_state or not verifier or not hmac.compare_digest(state, expected_state):
+    retry = {"next": next_url}
+    if request.cookies.get(s.oauth_switch_cookie) == "1":
+        retry["switch"] = "1"
+    retry_url = "/login?" + urlencode(retry)
+    verified = bool(state and expected_state and verifier and hmac.compare_digest(state, expected_state))
+    if error == "access_denied" and verified:
+        return _message_response(
+            title="Sign-in canceled",
+            heading="GitHub authorization canceled",
+            message="You can try again whenever you’re ready.",
+            action_url=retry_url,
+            action_label="Try again",
+        )
+    if not code or not verified or error:
         return _message_response(
             title="Login failed",
             eyebrow="GitHub verification",
             heading="Could not verify GitHub login",
             message="The browser session did not match the OAuth callback.",
-            action_url="/login",
+            action_url=retry_url,
             action_label="Try again",
             severity="error",
             status_code=400,
@@ -337,7 +358,7 @@ def github_login_callback(request: Request, code: str | None = None, state: str 
             eyebrow="GitHub provider",
             heading="GitHub login failed",
             message=str(exc),
-            action_url="/login",
+            action_url=retry_url,
             action_label="Try again",
             severity="error",
             status_code=502,
@@ -431,6 +452,7 @@ def connect_context_api(code: str, request: Request, db: Session = Depends(get_d
     pair = _get_pair_row(db, code)
     if pair is None:
         _record_pair_failure(attempt_key)
+    account = db.get(Account, account_id)
     repos = _repos(db, account_id)
     # The repo the connecting checkout already named (#the-enable-button-that-
     # never-enabled-anything): a daemon paired from inside a git checkout
@@ -444,6 +466,7 @@ def connect_context_api(code: str, request: Request, db: Session = Depends(get_d
     return JSONResponse(
         {
             "code": code,
+            "github_login": account.github_login if account else None,
             "status": _pair_code_status(db, code, pair),
             "repos": [{"id": repo.id, "repo_full_name": repo.repo_full_name} for repo in repos],
             "suggested_repo_full_name": suggested,
@@ -455,7 +478,7 @@ def connect_context_api(code: str, request: Request, db: Session = Depends(get_d
     )
 
 
-@router.post("/v1/connect/{code}")
+@router.post("/v1/connect/{code}", dependencies=[Depends(home_access.session_gate)])
 def connect_approve_api(
     code: str,
     request: Request,

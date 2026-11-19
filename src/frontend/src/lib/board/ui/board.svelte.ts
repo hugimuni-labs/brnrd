@@ -59,7 +59,14 @@ export class Board {
 	// Where the last page stood (place.ts), read once; the columns take their scroll from it on their first paint.
 	place: Place = EMPTY;
 
-	constructor(get: (path: string) => Promise<unknown> = getJSON, held: Held | null = null) {
+	private readonly onRefused?: () => void;
+
+	constructor(
+		get: (path: string) => Promise<unknown> = getJSON,
+		held: Held | null = null,
+		onRefused?: () => void
+	) {
+		this.onRefused = onRefused;
 		this.store = new Store(remembering(get));
 		if (typeof window !== 'undefined') {
 			this.place = readPlace(localStorage.getItem(PLACE));
@@ -296,6 +303,7 @@ export class Board {
 			body: JSON.stringify({ body, ...extra, typed_by: this.typedBy || undefined })
 		});
 		const j = await r.json().catch(() => ({ error: `HTTP ${r.status}` }));
+		if (r.status === 402) this.onRefused?.();
 		if (!r.ok) throw new Error(j.error || `HTTP ${r.status}`);
 		this.pending = [
 			...this.pending,

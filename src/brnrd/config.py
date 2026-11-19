@@ -304,6 +304,7 @@ class Settings:
 
     oauth_state_cookie: str = os.environ.get("BRNRD_OAUTH_STATE_COOKIE", "brnrd_oauth_state")
     oauth_pkce_cookie: str = os.environ.get("BRNRD_OAUTH_PKCE_COOKIE", "brnrd_oauth_pkce")
+    oauth_switch_cookie: str = "brnrd_oauth_switch"
     oauth_next_cookie: str = os.environ.get("BRNRD_OAUTH_NEXT_COOKIE", "brnrd_oauth_next")
     oauth_state_ttl_s: int = _env_int("BRNRD_OAUTH_STATE_TTL_S", 600)
 

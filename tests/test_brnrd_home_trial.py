@@ -21,7 +21,7 @@ def _status(client, headers):
 def test_sign_in_and_account_reads_do_not_start_trial():
     client = brnrd_client()
     headers = brnrd_account_headers(client.app)
-    assert _status(client, headers) == dict(status='not_started', started_at=None, ends_at=None, enforcement_enabled=False)
+    assert _status(client, headers) == dict(status='not_started', started_at=None, ends_at=None, enforcement_enabled=False, household=False, subscribed=False)
     assert client.get('/v1/accounts/subscription', headers=headers).status_code == 200
     assert _status(client, headers)['started_at'] is None
     assert client.get('/v1/accounts/home-trial').status_code == 401

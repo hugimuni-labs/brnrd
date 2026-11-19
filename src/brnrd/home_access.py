@@ -22,8 +22,7 @@ On, an account is admitted while it is:
   on day one;
 - unreadable: a billing read error admits (paying users never brick on an outage).
 
-Account controls, deletion, billing, terms, sign-in and connecting a machine never call
-this: they stay open to everyone.
+Account controls, deletion, billing, terms and sign-in stay open to everyone.
 
 A refusal names what to do. Browser routes answer 402. Device routes answer 429 with
 ``Retry-After``, the one refusal an installed client already holds a path on, after
@@ -106,16 +105,24 @@ def window_end(settings: Settings, account: Account) -> datetime | None:
     return base + TRIAL_LENGTH
 
 
+def _household(settings: Settings, account: Account) -> bool:
+    return (account.github_login or "").lower() in settings.home_gate_admit_github_logins
+
+
 def trial_status(settings: Settings, account: Account, *, now: datetime | None = None) -> HomeTrialOut:
     """``GET /v1/accounts/home-trial``: the clock as recorded while off; the window the gate uses while on."""
     now = now or datetime.now(timezone.utc)
+    labels = {
+        "household": _household(settings, account),
+        "subscribed": account.tier == Account.TIER_SUBSCRIBED,
+    }
     if not enabled(settings, now=now):
-        return home_trial.status(account, now=now)
+        return home_trial.status(account, now=now).model_copy(update=labels)
     ends = window_end(settings, account)
     if ends is None:
-        return HomeTrialOut(status="not_started", enforcement_enabled=True)
+        return HomeTrialOut(status="not_started", enforcement_enabled=True, **labels)
     return HomeTrialOut(status="active" if now < ends else "expired", started_at=_utc(account.home_trial_started_at),
-                        ends_at=ends, enforcement_enabled=True)
+                        ends_at=ends, enforcement_enabled=True, **labels)
 
 
 def decide(db: Session, settings: Settings, account: Account | str | None, *, now: datetime | None = None) -> HomeAccess:
@@ -129,7 +136,7 @@ def decide(db: Session, settings: Settings, account: Account | str | None, *, no
         return HomeAccess(True, "degraded")
     if row is None:
         return HomeAccess(True, "no_account")  # authentication is not this function's job
-    if (row.github_login or "").lower() in settings.home_gate_admit_github_logins:
+    if _household(settings, row):
         return HomeAccess(True, "named")
     ent = billing.entitlements(db, row)
     if ent.degraded:
@@ -149,8 +156,9 @@ def _detail(settings: Settings, access: HomeAccess) -> dict:
     return {
         "reason": REASON,
         "message": (f"The home trial ended{' on ' + access.ends_at.date().isoformat() if access.ends_at else ''} "
-                    f"and this account has no subscription. Subscribe at {account_url} to use it again; "
-                    "your assistant keeps working on your computer."),
+                    f"and this account has no subscription. Subscribe at {account_url} to reconnect, "
+                    "use the hosted board and relay, and publish with the managed GitHub App. "
+                    "Your assistant keeps working on your computer."),
         "account_url": account_url,
     }
 

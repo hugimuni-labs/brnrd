@@ -58,6 +58,7 @@ async function routePage(page, { loom, repos = fixtures.repos }, letters) {
 		route.fulfill({ json: { deployment: 'cloud', tree: null, features: [] } })
 	);
 	await page.route('**/v1/loom/**', (route) => route.fulfill({ status: 404, json: {} }));
+	await page.route('**/v1/loom/consent', (route) => route.fulfill({ json: { state: 'none' } }));
 	await page.route('**/v1/dashboard/**', async (route) => {
 		const request = route.request();
 		const path = new URL(request.url()).pathname;
@@ -87,7 +88,7 @@ async function routePage(page, { loom, repos = fixtures.repos }, letters) {
 const text = async (locator) => (await locator.innerText()).replace(/\s+/g, ' ').trim();
 
 /** `kept` seeds `brnrd.loom.body`, the pick an earlier visit left behind. */
-async function scene(browser, viewport, scenario, route = '/', kept = null) {
+async function scene(browser, viewport, scenario, route = '/dashboard', kept = null) {
 	const context = await browser.newContext({
 		viewport: VIEWPORTS[viewport],
 		deviceScaleFactor: 2,
@@ -366,22 +367,21 @@ async function main() {
 				await context.close();
 			}
 
-			// 5. Empty: signed in, no snapshot, never paired: the three nouns.
+			// 5. A signed-in account without a hosted board gets the install commands on Account.
 			{
-				const { context, page } = await scene(browser, viewport, {
-					loom: null,
-					repos: NEVER_PAIRED
-				});
-				await page.waitForSelector('[data-testid="loom-empty"]', { timeout: 20000 });
-				const empty = await text(page.locator('[data-testid="loom-empty"]'));
-				for (const word of [
-					'thread',
-					'strand',
-					'letter',
-					'npm install -g brnrd',
-					'brnrd account connect'
-				])
-					assert.ok(empty.includes(word), `empty state shows ${word}`);
+				const { context, page } = await scene(
+					browser,
+					viewport,
+					{
+						loom: null,
+						repos: NEVER_PAIRED
+					},
+					'/'
+				);
+				const setup = page.locator('#setup');
+				await setup.waitFor({ timeout: 20000 });
+				assert.equal(new URL(page.url()).pathname, '/account');
+				assert.match(await text(setup.locator('pre')), /brnrd setup channel --kind relay/);
 				await shot(page, `${viewport}-5-empty`);
 				await context.close();
 			}

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+from html import unescape
 from urllib.parse import parse_qs, urlparse
 
 import pytest
@@ -158,6 +159,7 @@ def test_login_context_reports_authenticated_session(client, monkeypatch):
     r = client.get("/v1/dashboard/login-context?next=/repos")
     body = r.json()
     assert body["authenticated"] is True
+    assert body["github_login"] == _LOGIN
     assert body["next"] == "/repos"
 
 
@@ -523,6 +525,22 @@ def test_github_callback_rejects_state_mismatch(client, monkeypatch):
     assert r.status_code == 400
 
 
+
+def test_github_cancel_and_failed_callback_keep_the_switch_and_pairing_destination(client):
+    destination = "/connect/BR-123#approve-proof"
+    start = client.get("/auth/github/start", params={"next": destination, "switch": 1}, follow_redirects=False)
+    query = parse_qs(urlparse(start.headers["location"]).query)
+    assert query["prompt"] == ["select_account"]
+    canceled = client.get("/auth/github/callback", params={"error": "access_denied", "state": query["state"][0]})
+    assert canceled.status_code == 200
+    assert "GitHub authorization canceled" in canceled.text
+    failed = client.get("/auth/github/callback", params={"error": "access_denied", "state": "wrong"})
+    assert failed.status_code == 400
+    assert "Could not verify GitHub login" in failed.text
+    for response in (canceled, failed):
+        href = re.search(r'href="(/login\?[^"]+)"', response.text).group(1)
+        assert parse_qs(urlparse(unescape(href)).query) == {"next": [destination], "switch": ["1"]}
+
 def test_github_callback_surfaces_provider_failure(client, monkeypatch):
     def fail(*_args, **_kwargs):
         raise OAuthError("provider down")
@@ -696,6 +714,7 @@ def test_connect_context_lists_repos_and_code_status(client, monkeypatch):
     assert r.status_code == 200
     body = r.json()
     assert body["code"] == pair["pair_code"]
+    assert body["github_login"] == _LOGIN
     assert body["status"] == "pending"
     assert body["repos"] == [{"id": repo_id, "repo_full_name": "Gurio/laptop"}]
 
