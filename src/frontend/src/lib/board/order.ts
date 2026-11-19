@@ -1,7 +1,7 @@
 // Column order (board.py board_state names each thread's state): seated by freshest letter, your call by when it
 // entered the state (a to-do, not a feed), quiet by when the thread opened (a shelf: a body leaving moves its column
 // only out of seated, never within quiet, 4921), settled into one stack at the far right.
-import type { Letter, Thread } from './types.ts';
+import type { BoardState, Letter, Thread } from './types.ts';
 import { INBOX } from './sides.ts';
 
 export const SETTLED = '~settled';
@@ -14,7 +14,28 @@ const RANK: Record<string, number> = {
 	settled: 5
 };
 
-export const bst = (t: Thread): string => t.board?.state || 'quiet';
+export const STATE_LABEL = {
+	seated: 'Working',
+	'your-call': 'Your call',
+	waiting: 'Waiting',
+	mine: 'Stuck',
+	quiet: 'Quiet',
+	settled: 'Settled'
+} satisfies Record<BoardState, string>;
+
+export const BOARD_STATES = Object.keys(STATE_LABEL) as BoardState[];
+const DEFAULT_STATES: BoardState[] = ['seated', 'your-call', 'waiting', 'mine'];
+
+export function readFilters(saved: string): BoardState[] {
+	try {
+		const values: unknown = JSON.parse(saved);
+		return Array.isArray(values) ? BOARD_STATES.filter((state) => values.includes(state)) : [];
+	} catch {
+		return [];
+	}
+}
+
+export const bst = (t: Thread): BoardState => t.board?.state || 'quiet';
 // A thread with work left and no body (4987) sits after the columns that wait on him or on a declared reason.
 export const rank = (t: Thread): number =>
 	bst(t) === 'mine' && t.board?.stall ? 3.5 : RANK[bst(t)];
@@ -48,12 +69,19 @@ export function sortThreads(threads: Thread[], by: Map<string, Letter[]>): Threa
 		);
 }
 
-// The columns wanted: the inbox pinned first, every live thread, the settled stack, then each settled thread opened from it.
-export function wanted(sorted: Thread[], open: Set<string>): string[] {
-	const settled = sorted.filter((t) => bst(t) === 'settled');
+// Apply the selection before arranging the columns. The inbox always stands, with the settled stack and its
+// opened threads at the end when selected.
+export function wanted(
+	sorted: Thread[],
+	open: Set<string>,
+	filters: ReadonlySet<BoardState>
+): string[] {
+	const selected = filters.size ? filters : new Set(DEFAULT_STATES);
+	const visible = sorted.filter((t) => selected.has(bst(t)));
+	const settled = visible.filter((t) => bst(t) === 'settled');
 	return [
 		INBOX,
-		...sorted.filter((t) => bst(t) !== 'settled').map((t) => t.id),
+		...visible.filter((t) => bst(t) !== 'settled').map((t) => t.id),
 		...(settled.length ? [SETTLED] : []),
 		...settled.filter((t) => open.has(t.id)).map((t) => t.id)
 	];

@@ -3,7 +3,7 @@ import { test } from 'node:test';
 import type { Call, Index, Letter, Thread, ThreadPart, Wish } from './types.ts';
 import { chips, dur, refTokens, splitQuote } from './text.ts';
 import { inSide, internal, letterMark, linked, sender } from './sides.ts';
-import { arrange, REORDER, SETTLED, sortThreads, wanted } from './order.ts';
+import { arrange, readFilters, REORDER, SETTLED, sortThreads, wanted } from './order.ts';
 import { pipOn, stages, stageWord } from './stages.ts';
 import { answered, stack, verdictLetter } from './calls.ts';
 import { inboxCards, ledger, threadWishes, unechoed } from './ledger.ts';
@@ -129,20 +129,24 @@ test('order: seated by freshest letter, your-call by since, quiet by opened newe
 		sorted.map((t) => t.id),
 		['seat-2', 'seat-1', 'call-a', 'call-b', 'wait', 'stall', 'q-new', 'q-old', 'done']
 	);
-	deepEqual(wanted(sorted, new Set(['done'])), [
+	deepEqual(wanted(sorted, new Set(['done']), new Set()), [
 		'inbox',
 		'seat-2',
 		'seat-1',
 		'call-a',
 		'call-b',
 		'wait',
-		'stall',
-		'q-new',
-		'q-old',
+		'stall'
+	]);
+	deepEqual(wanted(sorted, new Set(), new Set(['quiet'])), ['inbox', 'q-new', 'q-old']);
+	deepEqual(wanted(sorted, new Set(['done']), new Set(['settled', 'waiting'])), [
+		'inbox',
+		'wait',
 		SETTLED,
 		'done'
 	]);
-	deepEqual(wanted(sorted, new Set(['done'])).slice(-3), ['q-old', SETTLED, 'done']);
+	deepEqual(readFilters('["quiet","quiet","retired","waiting"]'), ['waiting', 'quiet']);
+	deepEqual(readFilters('{'), []);
 });
 
 test('order moves at most once per REORDER; a new column lands at once; a hold keeps the screen', () => {
@@ -214,8 +218,15 @@ test('calls: an open ask stands, verdicts fold into one counted line, a pending 
 		s.shown.map((c) => c.wish),
 		[]
 	);
-	deepEqual(s.fold, { asks: 1, verdicts: 1, answered: 2 });
+	deepEqual(s.fold, { asks: 1, verdicts: 1, answered: 2, stale: 0 });
 	equal(stack(calls, pend, new Set(), true).shown.length, 4);
+	calls[1].stale = true;
+	deepEqual(stack(calls, pend, new Set(), false).fold, {
+		asks: 1,
+		verdicts: 0,
+		answered: 2,
+		stale: 1
+	});
 	deepEqual(
 		stack(calls, [], new Set(['b']), false).shown.map((c) => c.wish),
 		['b']
@@ -709,13 +720,13 @@ test('the rail logs a moved strand once, the first load moves none, and a workin
 	equal(face(faces, 'working', 3), 'b');
 	equal(face(faces, 'holding', 3), 'c');
 	equal(face(undefined, 'working', 3), 'brnrd');
-	equal(waitOf(T('bravo', { board: { state: 'your-call' } }), 'idle'), 'waits on you');
+	equal(waitOf(T('bravo', { board: { state: 'your-call' } }), 'idle'), 'Your call');
 	equal(
 		waitOf(
 			T('echo', { board: { state: 'waiting', why: 'waiting: the forge to come back' } }),
 			'parked'
 		),
-		'waits: the forge to come back'
+		'Waiting: the forge to come back'
 	);
 	equal(
 		waitOf(
@@ -727,9 +738,9 @@ test('the rail logs a moved strand once, the first load moves none, and a workin
 			}),
 			'parked'
 		),
-		'waits: ' + 'x'.repeat(39) + '…'
+		'Waiting: ' + 'x'.repeat(39) + '…'
 	);
-	equal(waitOf(T('charlie', { board: { state: 'mine' } }), 'idle'), 'idle');
+	equal(waitOf(T('charlie', { board: { state: 'mine' } }), 'idle'), 'Stuck');
 });
 
 test('a letter stamps who picked it up first, then its disposition, its send and its wishes in board.html order', () => {

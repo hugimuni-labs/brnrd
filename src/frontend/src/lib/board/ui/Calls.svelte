@@ -12,10 +12,12 @@
 		new Set([...b.open].filter((k) => k.startsWith('c:')).map((k) => k.slice(2)))
 	);
 	const S = $derived(stack(calls, b.pending, opened, b.cunfold));
-	const line = (f: { asks: number; verdicts: number }) =>
+	const line = (f: NonNullable<typeof S.fold>) =>
 		[
 			f.asks ? `${f.asks} ask${f.asks == 1 ? 's' : ''} you` : '',
-			f.verdicts ? `${f.verdicts} verdict${f.verdicts == 1 ? ' waits' : 's wait'} on you` : ''
+			f.verdicts ? `${f.verdicts} verdict${f.verdicts == 1 ? ' waits' : 's wait'} on you` : '',
+			f.stale ? `${f.stale} not marked` : '',
+			f.answered ? `${f.answered} answered` : ''
 		]
 			.filter(Boolean)
 			.join(' · ');
@@ -25,9 +27,7 @@
 {#if calls.length}<div class="calls">
 		{#if S.fold}<button type="button" class="cfold" onclick={() => (b.cunfold = !b.cunfold)}
 				>{b.cunfold ? '▾' : '▸'}
-				<b>{line(S.fold)}</b>{S.fold.answered
-					? `${S.fold.asks + S.fold.verdicts ? ' · ' : ''}${S.fold.answered} answered`
-					: ''}</button
+				<b>{line(S.fold)}</b></button
 			>{/if}
 		{#each S.shown as c (c.wish)}
 			{@const a = answered(c, b.pending)}
@@ -52,7 +52,9 @@
 						>{c.line}</span
 					><span class="dim">{a.pending ? 'sending' : hm(a.at)}</span>
 				{:else}
-					<span class="k">{ask ? 'asks you' : 'verdict'}</span><span class="q">{c.line}</span>
+					<span class="k" class:not-marked={c.stale}
+						>{ask ? 'asks you' : c.stale ? 'not marked' : 'verdict'}</span
+					><span class="q">{c.line}</span>
 					<button
 						type="button"
 						data-act={ask ? 'done' : 'agree'}

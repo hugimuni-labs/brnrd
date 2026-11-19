@@ -1,10 +1,10 @@
 <script lang="ts">
+	import { bst, STATE_LABEL } from '../order.ts';
 	import RenderScope from './RenderScope.svelte';
 	// One column. The inbox: heading, the call stack, every letter. A thread (6lozd 3, 4958) has no mode: its ledger pinned
 	// on top (a press on the heading grows it over the column), the history with its tapes, the now-line while a body runs.
 	import { tick } from 'svelte';
 	import type { Letter, Thread } from '../types.ts';
-	import { bst } from '../order.ts';
 	import { dur, hue, hm, secs, short, stepText } from '../text.ts';
 	import { liveOf, what, withTools } from '../tape.ts';
 	import LetterCard from './LetterCard.svelte';
@@ -128,11 +128,11 @@
 			{#if B.state === 'seated'}<span
 					class="pulse"
 					class:hold={B.strand === 'holding'}
-					title="seated · {B.strand}"
+					title="{STATE_LABEL.seated} · {B.strand}"
 				></span>{/if}
 			{#if B.open || B.waits}<span class="badge">verdict</span>{:else if B.state === 'mine'}<span
 					class="badge mine"
-					class:stall={B.stall}>{B.stall ? 'no body' : 'mine'}</span
+					class:stall={B.stall}>{B.stall ? 'no body' : STATE_LABEL.mine}</span
 				>{/if}
 			{#if B.ready}<span
 					class="badge ready"
@@ -152,7 +152,7 @@
 				{/each}
 			</div>{/if}
 		<div class="state">
-			{inbox ? 'the strand that weaves all of it' : t.status || ''}{#if strand}
+			{inbox ? 'the strand that weaves all of it' : STATE_LABEL[bst(t)]}{#if strand}
 				· {strand.id.slice(-6)} {strand.body || ''} {strand.state || ''}{/if}{#if t.plan?.total}
 				· <span class="plan">plan {t.plan.done}/{t.plan.total}</span
 				>{/if}{#if inbox && t.plan?.bytes != null && t.plan?.cap}

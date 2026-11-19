@@ -744,3 +744,55 @@ def test_person_names_follow_self_main_without_changing_addresses(parts):
     assert parts.parts["index"]["person_names"]["login-slug"] == "Countess Ada"
     assert parts.hashes["thread/web"] == before["thread/web"]
     assert parts.hashes["beads"] == before["beads"]
+
+
+def test_verdicts_age_on_an_idle_board_but_asks_stay_open(parts, monkeypatch):
+    from datetime import datetime, timezone
+    from brr.loom.runtime import board
+
+    root = parts.home.root
+    day = 24 * 60 * 60
+    clock = [time.time()]
+    monkeypatch.setattr(board.time, "time", lambda: clock[0])
+
+    def at(days_ago):
+        return datetime.fromtimestamp(clock[0] - days_ago * day, timezone.utc).isoformat()
+
+    for thread, age in (("web", 1), ("docs", 4)):
+        letter = inject_letter(root, to="thread:inbox", body=f"Work on {thread}")
+        wish = f"w-{thread}"
+        append(parts.home, Fact(kind="wish", by="person:test", id=wish, at=at(5), data={
+            "wish": wish, "says": [[letter, 0, None]], "from": "person",
+            "line": f"Work on {thread}", "thread": thread,
+        }))
+        append(parts.home, Fact(kind="wish.result", by="strand:s-test-work", at=at(age), data={
+            "wish": wish, "kind": "pr", "ref": "#7", "line": "Ready", "delivered": True,
+        }))
+
+    assert parts.step()
+    web = parts.parts["thread/web"]["board"]
+    assert web["state"] == "your-call"
+    assert web["open"] == 1
+    docs = parts.parts["thread/docs"]["board"]
+    assert docs["state"] != "your-call"
+    assert docs["calls"][0]["stale"] is True
+
+    clock[0] += 3 * day
+    assert parts.step()
+    web = parts.parts["thread/web"]["board"]
+    assert web["state"] != "your-call"
+    assert web["calls"][0]["stale"] is True
+    assert "open" not in web
+    assert not parts.step()
+
+    asked_at = at(4)
+    append(parts.home, Fact(kind="wish", by="strand:s-test-work", id="w-ask", at=asked_at, data={
+        "wish": "w-ask", "says": [], "from": "resident",
+        "line": "Which ref?", "thread": "web", "parent": "w-web",
+    }))
+    assert parts.step()
+    web = parts.parts["thread/web"]["board"]
+    assert web["state"] == "your-call"
+    assert web["open"] == 1
+    assert web["red"] is True
+    assert web["since"] == board._iso(asked_at)

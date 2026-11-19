@@ -2,7 +2,7 @@
 	// Settled threads fold into one stack at the far right; a press opens one as its own column beside it.
 	import type { Letter, Thread } from '../types.ts';
 	import { hm, hue } from '../text.ts';
-	import { lastAt } from '../order.ts';
+	import { lastAt, STATE_LABEL } from '../order.ts';
 	import { board } from './board.svelte.ts';
 	let { settled, by }: { settled: Thread[]; by: Map<string, Letter[]> } = $props();
 	const b = board();
@@ -16,7 +16,7 @@
 
 <section class="column stack" data-column="~settled">
 	<div class="heading">
-		<h2>settled</h2>
+		<h2>{STATE_LABEL.settled}</h2>
 		<div class="state">{settled.length} threads · tap one to open it here</div>
 	</div>
 	<div class="messages">

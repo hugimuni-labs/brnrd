@@ -2378,3 +2378,40 @@
 	color: inherit;
 	text-decoration: none;
 }
+
+.brd #filters {
+	display: flex;
+	flex-shrink: 0;
+	gap: 6px;
+	overflow-x: auto;
+	padding: 6px 8px;
+	border-bottom: 1px solid #222;
+}
+.brd #filters button {
+	flex: none;
+	padding: 5px 10px;
+	border: 1px solid #aaa;
+	border-radius: 999px;
+	background: #fff;
+	color: #222;
+	font: inherit;
+	white-space: nowrap;
+	cursor: pointer;
+}
+.brd #filters button[aria-pressed='true'] {
+	border-color: #222;
+	background: #222;
+	color: #fff;
+}
+.brd #filters button span {
+	margin-left: 3px;
+	font-variant-numeric: tabular-nums;
+}
+.brd .not-marked,
+.brd .call .k.not-marked,
+.brd .lg-st.not-marked {
+	color: #555;
+	background: #eee;
+	border-radius: 3px;
+	padding: 0 4px;
+}

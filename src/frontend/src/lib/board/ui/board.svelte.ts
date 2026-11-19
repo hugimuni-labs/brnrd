@@ -3,12 +3,13 @@
 import { getContext, setContext } from 'svelte';
 import { SvelteSet } from 'svelte/reactivity';
 import { BASE, getJSON, Store, type Beads } from '../parts.ts';
-import type { Letter, Model } from '../types.ts';
+import type { BoardState, Letter, Model } from '../types.ts';
 import { normalize, panelIds, resolveRef, timeline, type Timeline } from '../bead.ts';
-import { armedVerdict, correctDraft, verdictLetter } from '../calls.ts';
+import { allCalls, armedVerdict, correctDraft, verdictLetter } from '../calls.ts';
 import { byAt, dated, refTokens } from '../text.ts';
 import { unechoed } from '../ledger.ts';
 import { forget, remembering, type Held } from '../cache.ts';
+import { readFilters } from '../order.ts';
 import { EMPTY, PLACE, paneScroll, readPlace, type Place } from '../place.ts';
 
 const KEY = Symbol('board');
@@ -20,6 +21,13 @@ export class Board {
 	// raw: a sync replaces the model whole and nothing writes into it; a deep proxy put a trap under every read of
 	// every card, and each tick re-ran them all (the live-path bench)
 	model = $state.raw<Model | null>(null);
+	staleVerdicts = $derived(
+		new Set(
+			allCalls(this.model?.threads || [])
+				.filter((c) => c.stale)
+				.map((c) => c.wish)
+		)
+	);
 	live = $state<'connecting' | 'live' | 'polled' | 'offline'>('connecting');
 	error = $state('');
 	// letters sent from here that the ledger has not shown yet
@@ -31,6 +39,15 @@ export class Board {
 	open = new SvelteSet<string>();
 	letterView = new SvelteSet<string>(JSON.parse(local('board.letterview', '[]')));
 	settledOpen = new SvelteSet<string>(JSON.parse(local('board.settledOpen', '[]')));
+	filters = new SvelteSet<BoardState>(readFilters(local('board.filters', '[]')));
+	filter(state: BoardState) {
+		if (!this.filters.delete(state)) this.filters.add(state);
+		try {
+			localStorage.setItem('board.filters', JSON.stringify([...this.filters]));
+		} catch {
+			/* Filters still apply for this page when storage is full. */
+		}
+	}
 	grown = new SvelteSet<string>();
 	cunfold = $state(false);
 	hovered = $state<string | null>(null);

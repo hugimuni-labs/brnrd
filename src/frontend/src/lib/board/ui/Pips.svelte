@@ -12,7 +12,7 @@
 		stages(
 			w,
 			openAsks(calls),
-			calls.some((c) => c.wish === w.wish && answered(c, b.pending))
+			b.staleVerdicts.has(w.wish) || calls.some((c) => c.wish === w.wish && answered(c, b.pending))
 		)
 	);
 	const n = $derived(st.filter((s) => s.on).length);

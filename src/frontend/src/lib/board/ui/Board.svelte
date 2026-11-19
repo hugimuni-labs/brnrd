@@ -12,7 +12,16 @@
 	import { version } from '$app/environment';
 	import { site } from '$lib/site';
 	import './board.css';
-	import { arrange, bst, byThread, SETTLED, sortThreads, wanted } from '../order.ts';
+	import {
+		arrange,
+		BOARD_STATES,
+		bst,
+		byThread,
+		SETTLED,
+		sortThreads,
+		STATE_LABEL,
+		wanted
+	} from '../order.ts';
 	import { headerFuel, leadName, machinesTitle } from '../parts.ts';
 	import { barGauge } from '../../loomSnapshot.ts';
 	import FuelMarks from '../../FuelMarks.svelte';
@@ -46,13 +55,21 @@
 	const sorted = $derived(sortThreads(b.model?.threads || [], by));
 	const byId = $derived(new Map(sorted.map((t) => [t.id, t])));
 	const inbox = $derived(b.model?.threads.find((t) => t.id === INBOX) || { id: INBOX });
+	const counts = $derived.by(() => {
+		const counts = Object.fromEntries(BOARD_STATES.map((state) => [state, 0]));
+		for (const thread of sorted) {
+			const state = bst(thread);
+			counts[state]++;
+		}
+		return counts;
+	});
 	const settled = $derived(sorted.filter((t) => bst(t) === 'settled'));
 
 	let order = $state<string[]>([]);
 	let last = 0,
 		timer: ReturnType<typeof setTimeout> | null = null,
 		first = true;
-	const want = $derived(wanted(sorted, b.settledOpen));
+	const want = $derived(wanted(sorted, b.settledOpen, b.filters));
 	function place() {
 		const r = arrange(want, order, {
 			first,
@@ -220,6 +237,13 @@
 		>
 	</header>
 	{#if view === 'board'}
+		<div id="filters" role="group" aria-label="Thread filters">
+			{#each BOARD_STATES as state (state)}
+				<button type="button" aria-pressed={b.filters.has(state)} onclick={() => b.filter(state)}>
+					{STATE_LABEL[state]} <span>{counts[state]}</span>
+				</button>
+			{/each}
+		</div>
 		<nav id="rail" aria-label="strands">
 			{#each rail as r (r.s.id)}<!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
 				<span
@@ -246,7 +270,7 @@
 						document
 							.querySelector(`[data-column="${CSS.escape(id)}"]`)
 							?.scrollIntoView({ inline: 'start', behavior: 'smooth' })
-					)}>{id === SETTLED ? 'settled' : id}</a
+					)}>{id === SETTLED ? STATE_LABEL.settled : id}</a
 				>{/each}
 		</nav>
 		<main id="board" bind:this={main} onscrollcapture={save}>
