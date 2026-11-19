@@ -312,3 +312,24 @@ def test_held_refusals_have_a_ceiling_past_which_they_answer_at_once():
     assert sum(t >= 3.0 for t in took) == 2  # the ceiling's worth held
     assert all(t < 2.0 for t in took[:3]), took  # the rest answered at once
     assert home_access._holds_open == 0
+
+
+def test_named_login_is_admitted_without_a_subscription():
+    # The household (w-e080rjxmdya4): past its window, no subscription, named by login.
+    gate = _iso(NOW - timedelta(days=15))
+    client, account, daemon, repo = _setup(gate_from=gate, home_gate_admit_github_logins=("someone", "octocat"))
+    assert not any(_refused(r) for _, r in _all(client, daemon, repo))
+    with client.app.state.SessionLocal() as db:
+        row = db.execute(select(Account)).scalar_one()
+        assert home_access.decide(db, client.app.state.settings, row).why == "named"
+        # Login case does not matter: GitHub logins are case-insensitive.
+        row.github_login = "OctoCat"
+        db.commit()
+        assert home_access.decide(db, client.app.state.settings, row.id).why == "named"
+
+
+def test_named_list_is_empty_by_default_and_names_only_its_logins():
+    assert brnrd_client().app.state.settings.home_gate_admit_github_logins == ()
+    gate = _iso(NOW - timedelta(days=15))
+    client, account, daemon, repo = _setup(gate_from=gate, home_gate_admit_github_logins=("octocat-other",))
+    assert all(_refused(r) for _, r in _all(client, daemon, repo, refused=True))

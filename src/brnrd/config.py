@@ -241,6 +241,10 @@ class Settings:
     # The home gate (home_access.py): off while empty. An ISO instant turns it on from then,
     # and that instant also opens a fresh 14-day window for every clock started before it.
     home_gate_from: str = os.environ.get("BRNRD_HOME_GATE_FROM", "")
+    # GitHub logins the home gate always admits, with no subscription: the household, named
+    # by hand. Comma-split, lowercased; empty (the default) names nobody. Matched against the
+    # login the account last signed in with, so editing the variable needs no deploy of code.
+    home_gate_admit_github_logins: tuple[str, ...] = _env_csv_lower("BRNRD_HOME_GATE_ADMIT_GITHUB_LOGINS")
     # A refused device request is held this long before its answer, and told to come back
     # after Retry-After: an old client's retry loop cannot become a flood.
     home_gate_hold_s: float = _env_float("BRNRD_HOME_GATE_HOLD_S", 20.0)
