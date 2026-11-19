@@ -117,6 +117,9 @@ def walled(tmp_path, monkeypatch):
     monkeypatch.setenv(mark.WALL, "1")
     monkeypatch.setenv("TMPDIR", str(place / "tmp"))
     (home.root / "loom").mkdir(exist_ok=True)
+    # Mark tests require a durable receipt, even when a loaded runner takes
+    # more than the production deadline to schedule the writer and fsync.
+    monkeypatch.setattr(audit, "DEADLINE", 1.0)
     writer = audit.Writer(home)
     yield home, place
     writer.close()
@@ -166,7 +169,7 @@ def test_the_loom_verbs_cross_unmarked_and_judge_themselves(walled):
     assert jack.execute("pre", place, _bash('brnrd runtime send --to thread:x "$(cat f)"')) == ""
 
 
-def test_file_web_and_mcp_tools(walled, monkeypatch):
+def test_file_web_and_mcp_tools(walled):
     home, place = walled
     assert jack.execute("pre", place, _tool("Write", file_path=str(place / "self/a.md"), content="x")) == ""
     assert jack.execute("pre", place, _tool("Edit", file_path="notes/a.md", old_string="a", new_string="b")) == ""
