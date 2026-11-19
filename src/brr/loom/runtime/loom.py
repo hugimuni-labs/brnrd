@@ -1171,18 +1171,26 @@ def _pull(home: Home, facts, thread: str, strand: str, room: Path) -> dict[str, 
 def _reply_context(facts, thread: str, letters, room: Path | None = None) -> dict[str, str]:
     """Reply context. What a person letter steers is said at the reply that touched
     no wish (``untouched_line``), never as a standing list under it. Beside a
-    letter whose author is not the owner, its provenance (``provenance``)."""
+    letter whose author is not the owner, its provenance (``provenance``). Under
+    a person's letter, how they read (``reads``): the wake and every boundary
+    render this, so the line is said once, here."""
+    from .home import home_of_room
+    from .people import person_of
+    from .reads import reads_line
     context = dict(letter_replies(facts))
+    self_dir = home_of_room(Path(room)).root / "self" if room is not None else None
     owner = None
     for letter in letters:
         ident = str(letter.data.get("id", letter.id))
         if owner is None:
             from .grants import owners
-            from .home import home_of_room
-            owner = owners(home_of_room(Path(room)).root / "self") if room is not None else set()
-        line = provenance(letter, owner)
-        if line:
-            context[ident] = "\n".join(part for part in (context.get(ident, ""), line) if part)
+            owner = owners(self_dir) if self_dir is not None else set()
+        person = person_of(str(letter.data.get("from") or "")) if letter.kind == "letter" else ""
+        reads = reads_line(self_dir, person) if person and self_dir is not None else ""
+        # How they read sits right under their words, before the conversation tail.
+        joined = "\n".join(part for part in (reads, context.get(ident, ""), provenance(letter, owner)) if part)
+        if joined:
+            context[ident] = joined
     return context
 
 
