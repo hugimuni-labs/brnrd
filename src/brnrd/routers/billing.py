@@ -64,23 +64,32 @@ def _ensure_customer(db: Session, settings, account: Account) -> str:
     return account.stripe_customer_id
 
 
-def _subscription_out(subscription: Subscription | None, tier: str) -> schemas.SubscriptionOut:
+def _subscription_out(
+    db: Session, settings, subscription: Subscription | None, account: Account
+) -> schemas.SubscriptionOut:
     if subscription is None:
-        return schemas.SubscriptionOut(tier=tier)
+        return schemas.SubscriptionOut(tier=account.tier)
+    link = billing.install_session_link(db, settings, account.id)
     return schemas.SubscriptionOut(
-        tier=tier,
+        tier=account.tier,
         status=subscription.status,
         cohort=subscription.cohort,
         cadence=subscription.cadence,
         cancel_at_period_end=subscription.cancel_at_period_end,
         current_period_end=subscription.current_period_end,
+        install_session_url=link,
+        first_subscribers_seats=settings.first_subscribers_seats if link else None,
     )
 
 
 @router.get("/subscription", response_model=schemas.SubscriptionOut)
-def get_subscription(principal: Principal = Depends(require_account_or_session), db: Session = Depends(get_db)):
+def get_subscription(
+    request: Request,
+    principal: Principal = Depends(require_account_or_session),
+    db: Session = Depends(get_db),
+):
     account = _account(db, principal)
-    return _subscription_out(_live_subscription(db, account.id), account.tier)
+    return _subscription_out(db, _settings(request), _live_subscription(db, account.id), account)
 
 
 @router.post("/subscription/checkout", response_model=schemas.CheckoutOut)
@@ -155,7 +164,7 @@ def _set_cancel(request: Request, principal: Principal, db: Session, *, cancel: 
     # Optimistic local mirror; the subscription.updated webhook confirms.
     subscription.cancel_at_period_end = cancel
     db.commit()
-    return _subscription_out(subscription, account.tier)
+    return _subscription_out(db, settings, subscription, account)
 
 
 @router.post("/subscription/portal", response_model=schemas.PortalOut)

@@ -235,6 +235,16 @@ class Settings:
     # "12 months from public launch, whichever comes first" clause. Empty =
     # cohort closes on count alone.
     supporter_cohort_deadline: str = os.environ.get("BRNRD_SUPPORTER_COHORT_DEADLINE", "")
+    # The first paying subscribers get a link to book a free install session
+    # (his 11426, 2026-11-18). How many seats, the link, and GitHub logins
+    # that never take a seat (test buyers; the admin logins above never do
+    # either). Railway variables, so changing one is a restart, not a code
+    # change. Seats 0 or an empty link turns the offer off.
+    first_subscribers_seats: int = _env_int("BRNRD_FIRST_SUBSCRIBERS_SEATS", 20)
+    first_subscribers_link: str = os.environ.get(
+        "BRNRD_FIRST_SUBSCRIBERS_LINK", "https://calendly.com/alexandra-hugimuni/hugimuni-sas"
+    )
+    first_subscribers_exclude: tuple[str, ...] = _env_csv_lower("BRNRD_FIRST_SUBSCRIBERS_EXCLUDE")
     topup_min_usd: int = _env_int("BRNRD_TOPUP_MIN_USD", 5)
     topup_max_usd: int = _env_int("BRNRD_TOPUP_MAX_USD", 500)
 
