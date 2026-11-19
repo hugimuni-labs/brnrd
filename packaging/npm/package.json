@@ -1,6 +1,6 @@
 {
   "name": "brnrd",
-  "version": "0.7.1",
+  "version": "0.7.2",
   "description": "brnrd: structured guardrails for AI agent work, managed from a chat. `npm install -g brnrd` runs brnrd's installer once, pinned to this release, and then the command it installs.",
   "keywords": [
     "ai",
