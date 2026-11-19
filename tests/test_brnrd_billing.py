@@ -781,13 +781,13 @@ def test_metrics_counts_first_paid_invoice_and_excludes_renewals():
 
     today = dt.datetime.now(dt.timezone.utc).date()
     assert _post_event(client, _subscription_event(account_id)).json()["disposition"] == "subscription-created"
-    unpaid_row = f"<th scope='row'>{today}</th><td>0</td><td>1</td><td>0</td>"
+    unpaid_row = f"<th scope='row'>{today}</th><td>0</td><td>1</td><td>0</td><td>0</td><td>0</td>"
     assert unpaid_row in client.get("/metrics").text
 
     first_invoice = _invoice_paid_event(account_id)
     assert _post_event(client, first_invoice).json()["disposition"] == "grant-issued"
     assert _post_event(client, first_invoice).json()["disposition"] == "duplicate"
-    paid_row = f"<th scope='row'>{today}</th><td>0</td><td>1</td><td>1</td>"
+    paid_row = f"<th scope='row'>{today}</th><td>0</td><td>1</td><td>0</td><td>0</td><td>1</td>"
     assert paid_row in client.get("/metrics").text
 
     # A first payment outside the window still disqualifies an in-window renewal.
