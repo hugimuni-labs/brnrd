@@ -9,7 +9,7 @@
 	import Board from '$lib/board/ui/Board.svelte';
 	import BoardRecovery from '$lib/board/ui/BoardRecovery.svelte';
 	import Landing from '$lib/Landing.svelte';
-	import { BASE } from '$lib/board/parts';
+	import { BASE, probeBoard } from '$lib/board/parts';
 	import { cached, forget, restore, type Held } from '$lib/board/cache';
 
 	// One bundle, two doors. /v1/site declares the loopback: it always draws the board, whose own loading state
@@ -20,7 +20,7 @@
 	let mode = $state<'?' | 'anon' | 'board' | 'refused' | 'error' | 'account'>('?');
 	let holding = $state(cached());
 	let held = $state<Held | null>(null);
-	let pending: Promise<unknown> | null = null;
+	let pending: ReturnType<typeof probeBoard> | null = null;
 	let gone = false;
 	function refuse() {
 		if (gone) return;
@@ -34,7 +34,6 @@
 		mode = 'board';
 		document.documentElement.classList.add('board');
 	};
-	const isBoard = (j: unknown) => !!j && typeof j === 'object' && 'parts' in j;
 	async function readPart(path: string) {
 		const response = await fetch(path, { cache: 'no-store' });
 		if (response.status === 402) refuse();
@@ -52,17 +51,15 @@
 		pending = null;
 		if (!p) return readPart(path);
 		return p.then((j) => {
-			if (isBoard(j)) return j;
-			throw new Error(`${path}: ${j === 401 ? 'HTTP 401' : 'no board'}`);
+			if (j.kind === 'ready') return j.index;
+			throw new Error(`${path}: ${j.kind === 'anon' ? 'HTTP 401' : 'no board'}`);
 		});
 	};
 	onMount(() => {
 		gone = false;
 		const deployment = loadSite();
 		// in parallel with /v1/site: waiting for it would put a second round trip before a signed-in phone's board
-		const probe = fetch(`${BASE}/index`, { cache: 'no-store' })
-			.then((r) => (r.ok ? r.json() : r.status))
-			.catch(() => null);
+		const probe = probeBoard();
 		// The last page's parts, when the browser holds them (a few ms to read). Whichever answers first paints the
 		// board: the cache alone (the probe becomes the board's first index read), or the probe with the cache primed
 		// behind it, so the thread parts are fetched only where their hash moved. The parts, not the index, are the
@@ -90,20 +87,20 @@
 		probe.then(async (j) => {
 			const s = await deployment;
 			if (gone || s?.deployment === 'loopback') return;
-			if (isBoard(j)) {
+			if (j.kind === 'ready') {
 				const h = await fromCache;
 				if (gone || mode === 'board') return;
 				held = h;
-				return show(j);
+				return show(j.index);
 			}
 			// not his board: whatever the cache held is not to be shown again on this browser
 			held = null;
 			holding = false;
 			if (mode === 'board') mode = '?';
 			void forget();
-			if (j === 401) return void (mode = 'anon');
-			if (j === 402) return refuse();
-			if (j === 404) {
+			if (j.kind === 'anon') return void (mode = 'anon');
+			if (j.kind === 'refused') return refuse();
+			if (j.kind === 'missing') {
 				mode = 'account';
 				void goto(resolve('/account'), { replaceState: true });
 				return;

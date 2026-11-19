@@ -5,6 +5,7 @@ import { fixture } from './fixture.mjs';
 
 const site = { deployment: 'cloud', tree: null, features: ['account', 'consent', 'dashboard'] };
 const shots = process.env.BRNRD_E2E_SHOTS;
+const boardHint = 'Your board appears here once a computer connects.';
 
 test('a new account sees setup and moves to its hosted board when the computer publishes', async () => {
 	for (const [name, viewport] of [
@@ -49,6 +50,9 @@ test('a new account sees setup and moves to its hosted board when the computer p
 			await B.page.locator('.boot-glitch').waitFor({ state: 'hidden' });
 			assert.match(await setup.locator('pre').innerText(), /brnrd setup channel --kind relay/);
 			await B.page.getByText('@ada', { exact: true }).waitFor();
+			const header = B.page.getByTestId('account').locator('header');
+			await header.getByText(boardHint, { exact: true }).waitFor();
+			assert.equal(await header.getByRole('link', { name: '← board' }).count(), 0);
 			await B.page.getByRole('link', { name: 'Switch GitHub account' }).waitFor();
 			assert.equal(await B.page.getByRole('link', { name: 'Sign out' }).count(), 1);
 			if (shots) await B.page.screenshot({ path: `${shots}/account-setup-${name}.png` });
@@ -62,6 +66,13 @@ test('a new account sees setup and moves to its hosted board when the computer p
 			await B.page.locator('[data-consent="waiting"]').waitFor({ timeout: 8000 });
 			B.loom.set(fixture());
 			await B.page.waitForSelector('.brd .column.threadcol', { timeout: 8000 });
+
+			await B.page.goto(new URL('/account', B.base).href);
+			const boardLink = header.getByRole('link', { name: '← board' });
+			await boardLink.waitFor();
+			assert.equal(await header.getByText(boardHint, { exact: true }).count(), 0);
+			await boardLink.click();
+			await B.page.waitForSelector('.brd .column.threadcol');
 			assert.deepEqual(B.errors, []);
 		} finally {
 			await B.close();

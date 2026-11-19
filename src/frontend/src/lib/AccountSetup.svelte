@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import { resolve } from '$app/paths';
-	import { BASE } from './board/parts';
+	import { BASE, probeBoard } from './board/parts';
 	import BoardConsent from './BoardConsent.svelte';
 	import HomeAccess from './HomeAccess.svelte';
 	import { startVisiblePoll } from './visiblePoll';
@@ -12,8 +12,8 @@
 		'brnrd setup channel --kind relay'
 	].join('\n');
 
-	let board = $state<'checking' | 'ready' | 'missing' | 'refused'>('checking');
-	let step = $state<'none' | 'ask' | 'declined' | 'granted'>('none');
+	let { board = $bindable() }: { board: 'checking' | 'ready' | 'missing' | 'refused' } = $props();
+	let step = $state<'none' | 'ask' | 'declined' | 'granted' | null>(null);
 	let lastSeen = $state<string | null>(null);
 	let connectionFailed = $state(false);
 	let busy = $state(false);
@@ -36,21 +36,22 @@
 		if (checking || busy || board === 'ready') return;
 		checking = true;
 		try {
-			const index = await fetch(`${BASE}/index`, { cache: 'no-store', signal });
+			const index = await probeBoard(signal);
 			if (signal?.aborted) return;
-			if (index.ok && 'parts' in (await index.json())) {
+			if (index.kind === 'ready') {
 				const justConnected = board === 'missing';
 				board = 'ready';
 				if (justConnected && !window.location.search && !window.location.hash)
 					window.location.assign(resolve('/'));
 				return;
 			}
-			if (index.status === 402) {
+			if (index.kind === 'refused') {
 				board = 'refused';
 				connectionFailed = false;
 				return;
 			}
-			if (index.status !== 404) throw new Error('Board check failed');
+			if (index.kind !== 'missing') throw new Error('Board check failed');
+			board = 'missing';
 			const consent = await fetch(`${BASE}/consent`, { cache: 'no-store', signal });
 			if (!consent.ok) throw new Error('Consent check failed');
 			const status = await consent.json();
@@ -64,7 +65,6 @@
 				waitingSince = 0;
 				slow = false;
 			}
-			board = 'missing';
 			connectionFailed = false;
 		} catch {
 			if (!signal?.aborted) connectionFailed = true;
@@ -114,7 +114,7 @@
 			here.
 		</p>
 	</section>
-{:else if board === 'missing' && step !== 'none'}
+{:else if board === 'missing' && step !== null && step !== 'none'}
 	<BoardConsent
 		step={step === 'granted' ? 'waiting' : step}
 		{lastSeen}
