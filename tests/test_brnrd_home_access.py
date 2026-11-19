@@ -285,12 +285,17 @@ def test_device_refusal_is_held_before_it_answers():
     assert time.monotonic() - began >= 0.6  # the long-poll's own timeout
 
 
-def test_held_refusals_have_a_ceiling_past_which_they_answer_at_once():
+def test_held_refusals_have_a_ceiling_past_which_they_answer_at_once(tmp_path):
     import asyncio
     import httpx
 
-    client = brnrd_client(home_gate_from=_iso(NOW - timedelta(days=15)), home_gate_hold_s=3.0,
-                          home_gate_max_holds=2)
+    # Concurrent worker threads need independent connections and transactions.
+    client = brnrd_client(
+        database_url=f"sqlite:///{tmp_path / 'home-access.db'}",
+        home_gate_from=_iso(NOW - timedelta(days=15)),
+        home_gate_hold_s=3.0,
+        home_gate_max_holds=2,
+    )
     account, daemon, repo = brnrd_repo_and_daemon(client)
     with client.app.state.SessionLocal() as db:
         db.execute(select(Account)).scalar_one().home_trial_started_at = (NOW - timedelta(days=30)).replace(tzinfo=None)
@@ -299,7 +304,7 @@ def test_held_refusals_have_a_ceiling_past_which_they_answer_at_once():
     async def one(http):
         began = time.monotonic()
         r = await http.put("/v1/daemons/activity", headers=daemon, json={"records": []})
-        return _refused(r), time.monotonic() - began
+        return r.status_code, _refused(r), time.monotonic() - began
 
     async def burst():
         transport = httpx.ASGITransport(app=client.app)
@@ -307,8 +312,8 @@ def test_held_refusals_have_a_ceiling_past_which_they_answer_at_once():
             return await asyncio.gather(*(one(http) for _ in range(5)))
 
     results = asyncio.run(burst())
-    assert all(refused for refused, _ in results), results
-    took = sorted(t for _, t in results)
+    assert all(refused for _, refused, _ in results), results
+    took = sorted(t for _, _, t in results)
     assert sum(t >= 3.0 for t in took) == 2  # the ceiling's worth held
     assert all(t < 2.0 for t in took[:3]), took  # the rest answered at once
     assert home_access._holds_open == 0
