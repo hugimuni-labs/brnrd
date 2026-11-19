@@ -3,6 +3,7 @@ signature verification, pricing selection, and the API surface."""
 
 from __future__ import annotations
 
+import datetime as dt
 import hashlib
 import hmac
 import json
@@ -23,7 +24,7 @@ from _helpers import brnrd_account_headers, brnrd_client  # noqa: E402
 WEBHOOK_SECRET = "whsec_test"
 
 
-def _client() -> TestClient:
+def _client(**settings) -> TestClient:
     return brnrd_client(
         github_oauth_client_id=Settings.github_oauth_client_id,
         github_oauth_client_secret=Settings.github_oauth_client_secret,
@@ -34,6 +35,7 @@ def _client() -> TestClient:
         stripe_price_public_monthly="price_pub_m",
         stripe_price_public_annual="price_pub_y",
         supporter_cohort_size=2,
+        **settings,
     )
 
 
@@ -763,3 +765,40 @@ def test_checkout_and_portal_return_to_the_account_page(monkeypatch):
     assert seen["topup"]["success_url"] == f"{base}/account?billing=topup-complete"
     assert seen["topup"]["cancel_url"] == f"{base}/account?billing=topup-canceled"
     assert seen["portal"]["return_url"] == f"{base}/account"
+
+
+def test_metrics_counts_first_paid_invoice_and_excludes_renewals():
+    from sqlalchemy import select
+
+    from brnrd.models import Account, BillingLedgerEntry
+    from brnrd.routers.accounts import issue_session_token
+
+    client = _client(admin_github_logins=("octocat",))
+    account_id = _account_id(client, _account(client))
+    with client.app.state.SessionLocal() as db:
+        token = issue_session_token(db, db.get(Account, account_id))
+    client.cookies.set("brnrd_session", token)
+
+    today = dt.datetime.now(dt.timezone.utc).date()
+    assert _post_event(client, _subscription_event(account_id)).json()["disposition"] == "subscription-created"
+    unpaid_row = f"<th scope='row'>{today}</th><td>0</td><td>1</td><td>0</td>"
+    assert unpaid_row in client.get("/metrics").text
+
+    first_invoice = _invoice_paid_event(account_id)
+    assert _post_event(client, first_invoice).json()["disposition"] == "grant-issued"
+    assert _post_event(client, first_invoice).json()["disposition"] == "duplicate"
+    paid_row = f"<th scope='row'>{today}</th><td>0</td><td>1</td><td>1</td>"
+    assert paid_row in client.get("/metrics").text
+
+    # A first payment outside the window still disqualifies an in-window renewal.
+    with client.app.state.SessionLocal() as db:
+        grant = db.execute(
+            select(BillingLedgerEntry).where(BillingLedgerEntry.op == "grant_subscriber_monthly")
+        ).scalar_one()
+        grant.created_at = dt.datetime.combine(today - dt.timedelta(days=14), dt.time.min)
+        db.commit()
+    renewal = _invoice_paid_event(
+        account_id, event_id="evt_inv_2", invoice_id="in_2", billing_reason="subscription_cycle",
+    )
+    assert _post_event(client, renewal).json()["disposition"] == "grant-issued"
+    assert unpaid_row in client.get("/metrics").text

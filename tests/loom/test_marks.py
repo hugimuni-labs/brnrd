@@ -235,6 +235,18 @@ def test_a_send_to_a_person_refuses_without_a_mark(person, monkeypatch):
                                "inferred": [], "crossed": True}
 
 
+def test_a_delivery_receipt_passes_the_door_unmarked(person, monkeypatch):
+    """A --deliver's letter is the loom's, to the chat the wish was said in: no mark to give."""
+    from brr.loom.runtime.port import PortError, write_send
+    home, seat = person
+    monkeypatch.setenv(mark.MARKS, "1")
+    monkeypatch.delenv(audit.SAY, raising=False)
+    with pytest.raises(PortError, match="refused at the door"):
+        write_send(seat, to="channel:mine/42", sender=seat.name, body="unmarked")
+    write_send(seat, to="channel:mine/42", sender=seat.name, body="delivered &w-x: X\n", receipt=True)
+    assert any("delivered &w-x" in p.read_text() for p in (seat / "port" / "out").rglob("*") if p.is_file())
+
+
 def test_publish_refuses_before_the_push_without_a_mark(tmp_path, monkeypatch):
     from test_publish import _kill, _note, _open, _tip, _verb
     from brr.loom.runtime.ledger import read_facts

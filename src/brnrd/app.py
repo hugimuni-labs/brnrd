@@ -7,7 +7,7 @@ from pathlib import Path
 
 from brr import __version__
 from fastapi import FastAPI
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, RedirectResponse
 from starlette.staticfiles import StaticFiles
 
 from .config import Settings, get_settings, record_telegram_derived_bot_username, telegram_username_is_valid
@@ -15,7 +15,7 @@ from .db import Base, make_engine, make_session_factory
 from .inbox import Forwarder, make_default_forwarder
 from .migrations import run_startup_migrations
 from .pack_relay import PackRelayStore
-from .page_views import PageViewMiddleware
+from .page_views import PROMO_PATH, PROMO_STATUS, PageViewMiddleware
 from .routers import accounts, admin, billing, config_approval, daemons, dev, github_app, pairing, render, stats, webhooks
 from .routers import dashboard as dashboard_router
 from .routers import loom as loom_router
@@ -168,6 +168,7 @@ def create_app(
         github_app.router,
         stats.router,
         admin.router,
+        admin.pages,
     ]
     if settings.enable_dev_endpoints:
         routers.append(dev.router)
@@ -185,6 +186,10 @@ def create_app(
         StaticFiles(directory=_STATIC_DIR),
         name="brnrd_static",
     )
+
+    @app.api_route(PROMO_PATH, methods=["GET", "HEAD"], include_in_schema=False)
+    def promo_redirect() -> RedirectResponse:
+        return RedirectResponse("/", status_code=PROMO_STATUS, headers={"Cache-Control": "no-store"})
 
     @app.get("/healthz")
     def healthz() -> dict:
