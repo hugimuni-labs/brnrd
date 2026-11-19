@@ -9,7 +9,9 @@ is empty) gets the same 404 an unknown route gets, so the surface is not
 discoverable by probing it. The page that reads this (``/account/views``)
 is linked from nowhere.
 
-The 30-day page-view read-out and the 14-day funnel at /metrics are read-only.
+The 30-day page-view read-out, the 14-day funnel at /metrics, and the first
+paying subscribers (who holds an install-session seat and why the rest do
+not) are read-only.
 """
 
 from __future__ import annotations
@@ -24,6 +26,7 @@ from fastapi.responses import HTMLResponse
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from .. import billing
 from ..auth import account_id_from_session_cookie, get_db
 from ..models import Account, BillingLedgerEntry
 from ..page_views import PROMO_PATH, PageViewCount
@@ -168,3 +171,26 @@ def metrics(request: Request, db: Session = Depends(get_db)) -> HTMLResponse:
 </html>""",
         headers=_PRIVATE,
     )
+
+
+@router.get("/first-subscribers")
+def first_subscribers(request: Request, db: Session = Depends(get_db)) -> dict[str, Any]:
+    """Every paying account in the order its first subscription started, with
+    ``seat`` true for the ones shown the install-session link (while they stay
+    subscribed) and ``skipped`` saying why the others are not."""
+    _admin_or_404(request, db)
+    settings = request.app.state.settings
+    rows = billing.first_subscribers(db, settings)
+    return {
+        "seats": settings.first_subscribers_seats,
+        "link": settings.first_subscribers_link,
+        "rows": [
+            {
+                "github_login": r.github_login,
+                "started_at": r.started_at.isoformat() if r.started_at else None,
+                "seat": not r.skipped,
+                "skipped": r.skipped,
+            }
+            for r in rows
+        ],
+    }

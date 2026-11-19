@@ -27,7 +27,31 @@ export interface SubscriptionState {
 	cadence: string | null;
 	cancel_at_period_end: boolean;
 	current_period_end: string | null;
+	/** Set only for one of the first paying subscribers while subscribed:
+	 * where to book a free install session. The server decides who. */
+	install_session_url?: string | null;
+	first_subscribers_seats?: number | null;
 }
+
+/** The first-subscriber offer, or null when this account has none. */
+export function installSessionOffer(
+	s: SubscriptionState | null
+): { lead: string; link: string; url: string } | null {
+	const url = s?.install_session_url;
+	if (!url) return null;
+	const seats = s?.first_subscribers_seats;
+	return {
+		lead: seats
+			? `You're one of our first ${seats} subscribers.`
+			: "You're one of our first subscribers.",
+		link: 'Book a free install session with us',
+		url
+	};
+}
+
+/** After a checkout return the subscription lands by webhook, a few seconds
+ * behind the redirect; the panel rereads until it shows or this runs out. */
+export const RETURN_REFETCH_MS = [1500, 3000, 5000, 8000, 12000] as const;
 
 export type Cadence = 'monthly' | 'annual';
 

@@ -1578,6 +1578,12 @@ class SubscriptionOut(BaseModel):
     cadence: str | None = None
     cancel_at_period_end: bool = False
     current_period_end: datetime | None = None
+    # Set only for one of the first paying subscribers while subscribed
+    # (billing.install_session_link): where to book a free install session.
+    install_session_url: str | None = None
+    # How many first seats there are, for the copy ("one of our first 20");
+    # set exactly when install_session_url is.
+    first_subscribers_seats: int | None = None
 
 
 class SubscriptionCheckoutIn(BaseModel):
