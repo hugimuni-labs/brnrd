@@ -81,7 +81,7 @@ def test_refusals_grants_and_misses_make_the_acts_number(tmp_path, monkeypatch):
     counted = trust.ungranted(read_facts(home), home.root / "self")
     assert counted == {"misses": 0, "granted": 0, "refused": 1}
     assert trust.line(read_facts(home), home.root / "self").startswith(
-        "14d: 0 irreversible acts without a grant (0 granted, 1 refused: final acts and his letter)")
+        "14d: 0 irreversible acts without a grant (0 granted, 1 refused: ledger, unchained; journal after #2787)")
 
 
 def test_a_miss_on_main_counts_and_reads_only_its_section(tmp_path):

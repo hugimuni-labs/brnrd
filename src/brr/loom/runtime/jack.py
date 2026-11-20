@@ -827,7 +827,9 @@ def execute(event: str, room: Path, stdin_text: str) -> str:
         if refuse:
             # A refused call gets no post hook; its end is written here.
             tooltrace.note(room, stdin_text, "refused")
-            audit_note(room, stdin_text, "refused", mark=marked)
+            judged = decision.judged if decision is not None else None
+            grant = {"letter": None, "granted": False} if judged is not None and not judged.granted else None
+            audit_note(room, stdin_text, "refused", mark=marked, grant=grant)
             return _json({"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "deny",
                                                  "permissionDecisionReason": _clocked(by + said)}})
         if decision is not None and decision.verdict == "lift":
