@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 import os
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 logger = logging.getLogger(__name__)
 
@@ -91,6 +91,19 @@ def _env_int_tuple(name: str) -> tuple[int, ...]:
 
 def _env_csv_lower(name: str) -> tuple[str, ...]:
     return tuple(p.strip().lower() for p in os.environ.get(name, "").split(",") if p.strip())
+
+
+def _member_github_logins() -> tuple[str, ...]:
+    """Who the home gate admits with no subscription, read when ``Settings`` is built.
+
+    ``BRNRD_MEMBER_GITHUB_LOGINS`` when that name is present, including when it is
+    empty (an empty value names nobody). Otherwise the previous name,
+    ``BRNRD_HOME_GATE_ADMIT_GITHUB_LOGINS``, which production still sets.
+    """
+    name = "BRNRD_MEMBER_GITHUB_LOGINS"
+    if name not in os.environ:
+        name = "BRNRD_HOME_GATE_ADMIT_GITHUB_LOGINS"
+    return _env_csv_lower(name)
 
 
 @dataclass(frozen=True)
@@ -248,10 +261,11 @@ class Settings:
     topup_min_usd: int = _env_int("BRNRD_TOPUP_MIN_USD", 5)
     topup_max_usd: int = _env_int("BRNRD_TOPUP_MAX_USD", 500)
 
-    # GitHub logins the home gate always admits, with no subscription: the household, named
+    # GitHub logins the home gate always admits, with no subscription: members, named
     # by hand. Comma-split, lowercased; empty (the default) names nobody. Matched against the
     # login the account last signed in with, so editing the variable needs no deploy of code.
-    home_gate_admit_github_logins: tuple[str, ...] = _env_csv_lower("BRNRD_HOME_GATE_ADMIT_GITHUB_LOGINS")
+    # Read at construction. The new name wins when it is set; the old name is the fallback.
+    home_gate_member_github_logins: tuple[str, ...] = field(default_factory=_member_github_logins)
     # A refused device request is held this long before its answer, and told to come back
     # after Retry-After: an old client's retry loop cannot become a flood.
     home_gate_hold_s: float = _env_float("BRNRD_HOME_GATE_HOLD_S", 20.0)

@@ -8,7 +8,7 @@
 		status: 'not_started' | 'active' | 'expired';
 		ends_at: string | null;
 		enforcement_enabled: boolean;
-		household: boolean;
+		member: boolean;
 		subscribed: boolean;
 	}
 	let trial = $state<Trial | null>(null);
@@ -19,12 +19,12 @@
 		refused ||
 			(trial?.enforcement_enabled &&
 				trial.status === 'expired' &&
-				!trial.household &&
+				!trial.member &&
 				!trial.subscribed)
 	);
 	function accessLabel() {
 		if (expired) return 'Home trial ended';
-		if (trial?.household) return 'Household access';
+		if (trial?.member) return 'Member access';
 		if (trial?.subscribed) return 'Subscribed';
 		if (trial?.status === 'active')
 			return `Home trial · ${days} ${days === 1 ? 'day' : 'days'} left`;
@@ -64,13 +64,13 @@
 
 {#if label}
 	{#if compact}
-		<span class="dim" title={trial?.household || trial?.subscribed ? undefined : explanation}
+		<span class="dim" title={trial?.member || trial?.subscribed ? undefined : explanation}
 			>{label}</span
 		>
 	{:else}
 		<section aria-label="Home access" data-home-access class="mb-4 space-y-2">
 			<h2>{label}</h2>
-			{#if refused || (trial && !trial.household && !trial.subscribed)}
+			{#if refused || (trial && !trial.member && !trial.subscribed)}
 				<p>{explanation}</p>
 			{/if}
 			{#if expired}

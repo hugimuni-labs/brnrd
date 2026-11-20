@@ -6,8 +6,9 @@ Nothing else in the server reads subscription state to refuse home access.
 
 Always on. An account is admitted while it is:
 
-- named: its GitHub login is in ``BRNRD_HOME_GATE_ADMIT_GITHUB_LOGINS`` (the household,
-  admitted by hand with no Stripe subscription; empty by default);
+- member: its GitHub login is in ``BRNRD_MEMBER_GITHUB_LOGINS`` (members,
+  admitted by hand with no Stripe subscription; empty by default). The previous
+  name ``BRNRD_HOME_GATE_ADMIT_GITHUB_LOGINS`` is read when the new one is unset;
 - subscribed: ``Account.tier`` is subscribed, which only Stripe webhooks flip and which
   holds for any non-canceled subscription row on any price (old supporter prices, past
   due, and the founder's own included);
@@ -53,7 +54,7 @@ _holds_open = 0
 @dataclass(frozen=True)
 class HomeAccess:
     allowed: bool
-    #: named | subscribed | not_started | trial | degraded | no_account | home_subscription_required
+    #: member | subscribed | not_started | trial | degraded | no_account | home_subscription_required
     why: str
     ends_at: datetime | None = None
 
@@ -68,15 +69,15 @@ def window_end(account: Account) -> datetime | None:
     return None if started is None else _utc(started) + TRIAL_LENGTH
 
 
-def _household(settings: Settings, account: Account) -> bool:
-    return (account.github_login or "").lower() in settings.home_gate_admit_github_logins
+def _member(settings: Settings, account: Account) -> bool:
+    return (account.github_login or "").lower() in settings.home_gate_member_github_logins
 
 
 def trial_status(settings: Settings, account: Account, *, now: datetime | None = None) -> HomeTrialOut:
     """``GET /v1/accounts/home-trial``: the window the gate uses."""
     now = now or datetime.now(timezone.utc)
     labels = {
-        "household": _household(settings, account),
+        "member": _member(settings, account),
         "subscribed": account.tier == Account.TIER_SUBSCRIBED,
     }
     ends = window_end(account)
@@ -95,8 +96,8 @@ def decide(db: Session, settings: Settings, account: Account | str | None, *, no
         return HomeAccess(True, "degraded")
     if row is None:
         return HomeAccess(True, "no_account")  # authentication is not this function's job
-    if _household(settings, row):
-        return HomeAccess(True, "named")
+    if _member(settings, row):
+        return HomeAccess(True, "member")
     ent = billing.entitlements(db, row)
     if ent.degraded:
         return HomeAccess(True, "degraded")
