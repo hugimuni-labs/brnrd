@@ -1652,7 +1652,7 @@ class LetterPresence(BaseModel):
 
 
 class HomeTrialOut(BaseModel):
-    household: bool = False
+    member: bool = False
     subscribed: bool = False
     status: Literal["not_started", "active", "expired"]
     started_at: datetime | None = None

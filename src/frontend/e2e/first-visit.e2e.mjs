@@ -80,12 +80,12 @@ test('a new account sees setup and moves to its hosted board when the computer p
 	}
 });
 
-test('trial, household, and subscribed accounts see their access on the board', async () => {
+test('trial, member, and subscribed accounts see their access on the board', async () => {
 	const B = await open({ site });
 	try {
 		for (const [state, text] of [
 			[{}, 'Home trial · 9 days left'],
-			[{ household: true }, 'Household access'],
+			[{ member: true }, 'Member access'],
 			[{ subscribed: true }, 'Subscribed']
 		]) {
 			await B.page.route('**/v1/accounts/home-trial', (r) =>
