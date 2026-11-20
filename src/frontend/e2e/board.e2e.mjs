@@ -74,13 +74,13 @@ test('the counted filters select a union, persist on reload and return to the de
 		await filters
 			.getByRole('button')
 			.evaluateAll((buttons) => buttons.map((button) => button.getAttribute('aria-label'))),
-		['Working 1', 'Your call 1', 'Waiting 1', 'Stuck 2', 'Quiet 1', 'Settled 2']
+		['Working 1', 'Needs you 1', 'Waiting 1', 'Stuck 2', 'Quiet 1', 'Settled 2']
 	);
 	const pressed = () =>
 		filters
 			.getByRole('button', { pressed: true })
 			.evaluateAll((buttons) => buttons.map((button) => button.getAttribute('aria-label')));
-	const defaults = ['Working 1', 'Your call 1', 'Waiting 1', 'Stuck 2'];
+	const defaults = ['Working 1', 'Needs you 1', 'Waiting 1', 'Stuck 2'];
 	assert.deepEqual(await pressed(), defaults);
 	const quiet = filters.getByRole('button', { name: 'Quiet 1' });
 	const working = filters.getByRole('button', {

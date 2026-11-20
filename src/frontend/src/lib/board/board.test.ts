@@ -720,7 +720,7 @@ test('the rail logs a moved strand once, the first load moves none, and a workin
 	equal(face(faces, 'working', 3), 'b');
 	equal(face(faces, 'holding', 3), 'c');
 	equal(face(undefined, 'working', 3), 'brnrd');
-	equal(waitOf(T('bravo', { board: { state: 'your-call' } }), 'idle'), 'Your call');
+	equal(waitOf(T('bravo', { board: { state: 'your-call' } }), 'idle'), 'Needs you');
 	equal(
 		waitOf(
 			T('echo', { board: { state: 'waiting', why: 'waiting: the forge to come back' } }),
