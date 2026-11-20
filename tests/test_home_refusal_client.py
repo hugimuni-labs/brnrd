@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import threading
 import time
-from datetime import timedelta
 from types import SimpleNamespace
 
 import pytest
@@ -12,7 +11,7 @@ import pytest
 pytest.importorskip("fastapi")
 
 from brr.gates import cloud, relay_lock  # noqa: E402
-from test_brnrd_home_access import NOW, _iso, _setup  # noqa: E402
+from test_brnrd_home_access import _setup  # noqa: E402
 from test_brnrd_loom_parts import PARTS, _gated  # noqa: E402
 from test_loom_relay import home  # noqa: E402,F401
 
@@ -20,7 +19,7 @@ from test_loom_relay import home  # noqa: E402,F401
 @pytest.fixture
 def refused(monkeypatch):
     """A real app with the gate on and this account past its window; the cloud client's session wired to it."""
-    client, account, daemon, repo = _setup(gate_from=_iso(NOW - timedelta(days=15)))
+    client, account, daemon, repo = _setup()
     token = daemon["Authorization"].split(" ", 1)[1]
     calls = []
 
