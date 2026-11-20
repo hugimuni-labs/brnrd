@@ -12,6 +12,7 @@ from sqlalchemy import select
 
 from brnrd import billing, home_access
 from brnrd.auth import require_daemon
+from brnrd.config import Settings
 from brnrd.models import Account
 from _helpers import brnrd_client, brnrd_repo_and_daemon
 
@@ -177,7 +178,7 @@ def test_on_refuses_every_protected_operation_and_names_account():
             assert r.status_code == 402
     trial = client.get("/v1/accounts/home-trial").json()
     assert trial["status"] == "expired" and trial["enforcement_enabled"] is True
-    assert not trial["household"] and not trial["subscribed"]
+    assert not trial["member"] and not trial["subscribed"]
 
 
 def test_on_keeps_account_controls_billing_and_deletion_open():
@@ -317,20 +318,33 @@ def test_held_refusals_have_a_ceiling_past_which_they_answer_at_once(tmp_path):
     assert home_access._holds_open == 0
 
 
-def test_named_login_is_admitted_without_a_subscription():
-    # The household (w-e080rjxmdya4): past its window, no subscription, named by login.
-    client, account, daemon, repo = _setup(home_gate_admit_github_logins=("someone", "octocat"))
+def test_member_login_is_admitted_without_a_subscription():
+    # A member (w-e080rjxmdya4): past its window, no subscription, admitted by login.
+    client, account, daemon, repo = _setup(home_gate_member_github_logins=("someone", "octocat"))
     assert not any(_refused(r) for _, r in _all(client, daemon, repo))
     with client.app.state.SessionLocal() as db:
         row = db.execute(select(Account)).scalar_one()
-        assert home_access.decide(db, client.app.state.settings, row).why == "named"
+        assert home_access.decide(db, client.app.state.settings, row).why == "member"
         # Login case does not matter: GitHub logins are case-insensitive.
         row.github_login = "OctoCat"
         db.commit()
-        assert home_access.decide(db, client.app.state.settings, row.id).why == "named"
+        assert home_access.decide(db, client.app.state.settings, row.id).why == "member"
 
 
-def test_named_list_is_empty_by_default_and_names_only_its_logins():
-    assert brnrd_client().app.state.settings.home_gate_admit_github_logins == ()
-    client, account, daemon, repo = _setup(home_gate_admit_github_logins=("octocat-other",))
+def test_member_list_is_empty_by_default_and_names_only_its_logins():
+    assert brnrd_client().app.state.settings.home_gate_member_github_logins == ()
+    client, account, daemon, repo = _setup(home_gate_member_github_logins=("octocat-other",))
     assert all(_refused(r) for _, r in _all(client, daemon, repo, refused=True))
+
+
+def test_member_logins_read_the_new_env_and_fall_back_to_the_old(monkeypatch):
+    monkeypatch.delenv("BRNRD_MEMBER_GITHUB_LOGINS", raising=False)
+    monkeypatch.delenv("BRNRD_HOME_GATE_ADMIT_GITHUB_LOGINS", raising=False)
+    assert Settings().home_gate_member_github_logins == ()
+    monkeypatch.setenv("BRNRD_HOME_GATE_ADMIT_GITHUB_LOGINS", " Someone, OctoCat ,,")
+    assert Settings().home_gate_member_github_logins == ("someone", "octocat")
+    monkeypatch.setenv("BRNRD_MEMBER_GITHUB_LOGINS", "Ada")
+    assert Settings().home_gate_member_github_logins == ("ada",)
+    # Set, even empty, wins: the old name does not leak back in.
+    monkeypatch.setenv("BRNRD_MEMBER_GITHUB_LOGINS", "")
+    assert Settings().home_gate_member_github_logins == ()

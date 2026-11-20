@@ -126,6 +126,36 @@ def test_trust_reports_a_broken_committed_chain(person, capsys):
     assert "journal unavailable" not in line
 
 
+def test_trust_reads_a_garbled_writer_reply_as_unavailable_not_broken(person, capsys):
+    import socket
+    import threading
+
+    from brr.loom.runtime import trust
+    from brr.loom.runtime.config import set_value
+
+    home, _ = person
+    (home.root / "loom/install-id").write_text(home.install_id() + "\n")
+    set_value(home.root, "audit", "on")
+    server = socket.create_server(("127.0.0.1", 0))
+
+    def garble():
+        conn, _ = server.accept()
+        with conn:
+            conn.recv(4096)
+            conn.sendall(b"not json\n")
+
+    thread = threading.Thread(target=garble, daemon=True)
+    thread.start()
+    try:
+        audit._endpoint(home).write_text(json.dumps({"port": server.getsockname()[1], "token": "t"}))
+        assert trust.main(["--home", str(home.root)]) == 0
+    finally:
+        thread.join(5)
+        server.close()
+    line = capsys.readouterr().out
+    assert "journal unavailable" in line
+    assert "fails verification" not in line
+
 
 def test_audit_without_doors_records_no_passage(person):
     home, seat = person

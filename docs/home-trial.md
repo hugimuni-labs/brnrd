@@ -37,9 +37,10 @@ It is always on, with no switch: an account's window ends 14 days after its
 first successful connect, and `GET /v1/accounts/home-trial` reports that window.
 To turn it off, revert the change that removed `BRNRD_HOME_GATE_FROM`.
 
-Admitted while on: household GitHub logins configured by the operator, any
-live subscription (`Account.tier` subscribed, which any non-canceled Stripe
-subscription on any price sets, past due included), an
+Admitted while on: member GitHub logins configured by the operator
+(`BRNRD_MEMBER_GITHUB_LOGINS`, or `BRNRD_HOME_GATE_ADMIT_GITHUB_LOGINS` while
+that name is unset), any live subscription (`Account.tier` subscribed, which
+any non-canceled Stripe subscription on any price sets, past due included), an
 account whose clock has not started, an account inside its window, and any
 account whose billing state cannot be read.
 

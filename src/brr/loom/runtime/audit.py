@@ -650,11 +650,16 @@ def _verify_home(home: Home, *, visit: Callable[[dict], None] | None = None) -> 
     base = home.root / "audit" / home.install_id()
     endpoint_path = _endpoint(home)
     if endpoint_path.exists():
-        endpoint = json.loads(endpoint_path.read_bytes())
-        with socket.create_connection(("127.0.0.1", endpoint["port"]), timeout=30) as conn:
-            conn.sendall(canonical({"token": endpoint["token"], "action": "verify"}) + b"\n")
-            with conn.makefile("rb") as stream:
-                snapshot = json.loads(stream.readline())
+        # An unreadable endpoint or reply is the writer unreachable, never a
+        # broken journal: only verify's own faults may surface as ValueError.
+        try:
+            endpoint = json.loads(endpoint_path.read_bytes())
+            with socket.create_connection(("127.0.0.1", endpoint["port"]), timeout=30) as conn:
+                conn.sendall(canonical({"token": endpoint["token"], "action": "verify"}) + b"\n")
+                with conn.makefile("rb") as stream:
+                    snapshot = json.loads(stream.readline())
+        except (ValueError, KeyError, TypeError) as exc:
+            raise OSError(f"audit writer reply unreadable: {exc}") from exc
         return verify(base, snapshot, visit=visit)
     else:
         with open(base / "writer.lock", "rb") as lock:

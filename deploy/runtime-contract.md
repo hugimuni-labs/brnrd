@@ -103,6 +103,13 @@ any host move: `GET /v1/daemons/inbox` returns `server.github.app_id_set` and
 | `BRNRD_TOPUP_MIN_USD` | No | `5` | `routers.billing` minimum accepted top-up. |
 | `BRNRD_TOPUP_MAX_USD` | No | `500` | `routers.billing` maximum accepted top-up. |
 
+## Home gate
+
+| Variable | Secret | Default | Consumer |
+| --- | --- | --- | --- |
+| `BRNRD_MEMBER_GITHUB_LOGINS` | No | Empty | `home_access` admits these GitHub logins with no subscription. Comma-separated, matched case-insensitively. An empty value names nobody. |
+| `BRNRD_HOME_GATE_ADMIT_GITHUB_LOGINS` | No | Empty | Previous name of `BRNRD_MEMBER_GITHUB_LOGINS`. Read only when the new name is unset, so a deploy that still sets this one keeps admitting the same logins. |
+
 ## Service limits
 
 All values are non-secret integers consumed by `limits.py`.
