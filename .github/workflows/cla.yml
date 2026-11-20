@@ -36,7 +36,7 @@ jobs:
           path-to-signatures: signatures/version1/cla.json
           # Pinned to the commit that added version 1.0. A later edit of CLA.md
           # needs a new pin and a new path-to-signatures in the same change.
-          path-to-document: https://github.com/hugimuni-labs/brnrd/blob/c1437e75a030374cecfa6809170de6a4947ce4f4/CLA.md
+          path-to-document: https://github.com/hugimuni-labs/brnrd/blob/48f37bb1bfb2be116c67d363b0c9688ce1707020/CLA.md
           branch: cla-signatures
           allowlist: brnrd-dev[bot],brnrd-bot,StrayUnicorn,dependabot[bot]
           # The signature file is the record. Locking every merged pull
