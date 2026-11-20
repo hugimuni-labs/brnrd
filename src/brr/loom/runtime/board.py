@@ -38,7 +38,7 @@ from .home import Home, atomic_write, channel_parts, mint, thread_of
 from .port import _front
 from .lifecycle import CLOSED, main_snapshot
 from .person_names import names as person_names
-from .project import fold, is_notice, projection_cache, sender_threads
+from .project import cached_projection, fold, is_notice, projection_cache, sender_threads
 from .snapshot import _iso, assemble
 from .wishes import EXPIRES, Say, receipt, told as told_of, waits_on, wishes
 from . import tooltrace
@@ -253,11 +253,13 @@ def verdict_deadline(call: dict) -> float | None:
 
 def board_state(t: dict, calls: list[dict], left: int = 0, end: tuple | None = None,
                 parked: str | None = None, person: str | None = None, parked_at: str | None = None,
-                parked_wish: str | None = None, *, now: float | None = None) -> dict:
+                parked_wish: str | None = None, *, from_person: bool = False, now: float | None = None) -> dict:
     """A column's state from one rule table (your-call.md), first match wins; the page only renders it.
 
     settled: status is closed. seated: a held strand works or holds, or the resident has the turn
-    and an open wish still needs work. your call: a call names his action (red when one is an ask). Old verdicts
+    and an open wish still needs work, or an owed letter is from a person (``from_person``; a loom
+    notice alone is not, and the column stays quiet until a body is held). your call: a call names
+    his action (red when one is an ask). Old verdicts
     stay on the card without making a call. mine: the resident owes a move the loom will not make
     (a parked or failed strand, a letter owed by the
     operator, or an open thread with work left and no body that declared its end: wake or settle).
@@ -281,7 +283,7 @@ def board_state(t: dict, calls: list[dict], left: int = 0, end: tuple | None = N
     calls = [c for c in cards if not c.get("closed") and not c.get("stale")]
     # Whose move is apart from motion (4909): open calls badge the column, seated or not.
     calling = {"open": len(calls), "red": any(c["kind"] == "ask" for c in calls)} if calls else {}
-    if held or (left and t.get("turn") == "mine"):
+    if held or (t.get("turn") == "mine" and (left or from_person)):
         word = held["state"] if held else (t.get("strands") or [{}])[-1].get("state") or "starting"
         return {"state": "seated", "strand": word, **shown, **calling}
     if calls:
@@ -441,6 +443,19 @@ def letters_of(facts, typed: dict | None = None, told: dict | None = None) -> tu
     return rows, every
 
 
+def _person_owed(facts, home: Home) -> dict[str, bool]:
+    """Threads whose owed letters include one from a person.
+
+    The letters are the owed list ``thread_table`` already built. ``from`` on those letters is the
+    sender; this does not decide owed again.
+    """
+    from .threads import _table_inputs
+    main = main_snapshot(home)
+    owed = cached_projection(facts, "thread-table", repr(main), lambda rows: _table_inputs(rows, main))[3]
+    return {thread: True for thread, letters in owed.items()
+            if any(_person_side(str(letter.data.get("from") or "")) for letter in letters)}
+
+
 def board_threads(home: Home, facts, config, person: str | None = None, typed: dict | None = None) -> tuple[dict, dict, list, dict]:
     """``(snapshot, told, letters, wish rows)``: snapshot v1 with each thread's board state, steps and opening."""
     raw = told_of(facts)  # the projection the beads read too: one union of the wish facts per change
@@ -477,10 +492,12 @@ def board_threads(home: Home, facts, config, person: str | None = None, typed: d
     from .owners import unanswered_by_thread
     marks = thread_marks(snap.get("threads") or [], raw, unanswered_by_thread(facts, main_snapshot(home)))
     now = time.time()
+    person_owed = _person_owed(facts, home)
     for t in snap.get("threads") or []:
         last = ((t.get("strands") or [{}])[-1]).get("id")
         at, why, wid = parked.get(t["id"], (None, None, None))
-        t["board"] = board_state(t, calls.get(t["id"], []), left.get(t["id"], 0), ends.get(last), why, person, at, wid, now=now)
+        t["board"] = board_state(t, calls.get(t["id"], []), left.get(t["id"], 0), ends.get(last), why, person, at, wid,
+                                 from_person=bool(person_owed.get(t["id"])), now=now)
         if t["board"]["state"] != "settled":
             t["board"].update(marks.get(t["id"], {}))
         if t["id"] in opened:

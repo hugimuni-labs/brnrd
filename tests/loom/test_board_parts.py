@@ -69,6 +69,21 @@ def test_owed_loom_letters_alone_do_not_make_an_unseated_thread_working(parts):
     assert web["board"]["state"] == "quiet"
 
 
+def test_an_owed_letter_from_a_person_seats_an_unseated_thread(parts):
+    ident = "p-ada/test"
+    append(parts.home, Fact(kind="letter", by="person:ada", id=ident, data={
+        "id": ident, "from": "p-ada", "to": "thread:web", "body": "A person wrote",
+    }))
+
+    assert parts.step()
+    web = parts.parts["thread/web"]
+    assert web["turn"] == "mine"
+    assert web["owed"] == 1
+    assert not web.get("strands")
+    assert web["board"]["state"] == "seated"
+    assert web["board"]["strand"] == "starting"
+
+
 def test_the_looms_own_heartbeat_recomputes_nothing(parts, monkeypatch):
     from brr.loom.runtime import board
     root = parts.home.root
