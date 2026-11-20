@@ -4,11 +4,7 @@ Every protected operation (hosted board reads and sends, a device's uploads, rel
 delivery, new pairing credentials, the managed GitHub token) asks :func:`decide`.
 Nothing else in the server reads subscription state to refuse home access.
 
-Off by default. ``BRNRD_HOME_GATE_FROM`` (an ISO instant, UTC when no offset) turns it
-on from that instant; unset, unparseable or still in the future, :func:`decide` admits
-everyone without reading the database, so no response changes for anyone.
-
-On, an account is admitted while it is:
+Always on. An account is admitted while it is:
 
 - named: its GitHub login is in ``BRNRD_HOME_GATE_ADMIT_GITHUB_LOGINS`` (the household,
   admitted by hand with no Stripe subscription; empty by default);
@@ -17,9 +13,7 @@ On, an account is admitted while it is:
   due, and the founder's own included);
 - not yet started: the clock starts on the first successful connect (``home_trial``),
   so an account that never connected has nothing to refuse;
-- inside its window: 14 days from ``max(trial started, gate from)``. A clock that
-  started before the switch-on gets a fresh window from the switch-on, never a cut-off
-  on day one;
+- inside its window: 14 days from its first successful connect;
 - unreadable: a billing read error admits (paying users never brick on an outage).
 
 Account controls, deletion, billing, terms and sign-in stay open to everyone.
@@ -32,10 +26,9 @@ holding the request open (``BRNRD_HOME_GATE_HOLD_S``) so a client too old to hon
 from __future__ import annotations
 
 import asyncio
-import functools
 import logging
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 
 from fastapi import Depends, HTTPException, Request
 from sqlalchemy.orm import Session
@@ -44,7 +37,6 @@ from starlette.concurrency import run_in_threadpool
 from . import billing
 from .auth import Principal, account_id_from_session_cookie, get_db, require_daemon
 from .config import Settings
-from . import home_trial
 from .home_trial import TRIAL_LENGTH
 from .models import Account
 from .schemas import HomeTrialOut
@@ -61,48 +53,19 @@ _holds_open = 0
 @dataclass(frozen=True)
 class HomeAccess:
     allowed: bool
-    #: gate_off | named | subscribed | not_started | trial | degraded | no_account | home_subscription_required
+    #: named | subscribed | not_started | trial | degraded | no_account | home_subscription_required
     why: str
     ends_at: datetime | None = None
-
-
-@functools.lru_cache(maxsize=8)
-def _parse(raw: str) -> datetime | None:
-    raw = (raw or "").strip()
-    if not raw:
-        return None
-    try:
-        at = datetime.fromisoformat(raw.replace("Z", "+00:00"))
-    except ValueError:
-        logger.warning("BRNRD_HOME_GATE_FROM=%r is not an ISO instant; the home gate stays off", raw)
-        return None
-    return at.replace(tzinfo=timezone.utc) if at.tzinfo is None else at.astimezone(timezone.utc)
-
-
-def gate_from(settings: Settings) -> datetime | None:
-    """The switch-on instant, or ``None`` while the gate is off."""
-    return _parse(settings.home_gate_from)
-
-
-def enabled(settings: Settings, *, now: datetime | None = None) -> bool:
-    at = gate_from(settings)
-    return at is not None and (now or datetime.now(timezone.utc)) >= at
 
 
 def _utc(value: datetime) -> datetime:
     return value.replace(tzinfo=timezone.utc) if value.tzinfo is None else value
 
 
-def window_end(settings: Settings, account: Account) -> datetime | None:
-    """When this account's home window ends; a pre-switch-on clock restarts at the switch-on."""
+def window_end(account: Account) -> datetime | None:
+    """When this account's home window ends: 14 days after its first successful connect."""
     started = account.home_trial_started_at
-    if started is None:
-        return None
-    base = _utc(started)
-    at = gate_from(settings)
-    if at is not None and at > base:
-        base = at
-    return base + TRIAL_LENGTH
+    return None if started is None else _utc(started) + TRIAL_LENGTH
 
 
 def _household(settings: Settings, account: Account) -> bool:
@@ -110,15 +73,13 @@ def _household(settings: Settings, account: Account) -> bool:
 
 
 def trial_status(settings: Settings, account: Account, *, now: datetime | None = None) -> HomeTrialOut:
-    """``GET /v1/accounts/home-trial``: the clock as recorded while off; the window the gate uses while on."""
+    """``GET /v1/accounts/home-trial``: the window the gate uses."""
     now = now or datetime.now(timezone.utc)
     labels = {
         "household": _household(settings, account),
         "subscribed": account.tier == Account.TIER_SUBSCRIBED,
     }
-    if not enabled(settings, now=now):
-        return home_trial.status(account, now=now).model_copy(update=labels)
-    ends = window_end(settings, account)
+    ends = window_end(account)
     if ends is None:
         return HomeTrialOut(status="not_started", enforcement_enabled=True, **labels)
     return HomeTrialOut(status="active" if now < ends else "expired", started_at=_utc(account.home_trial_started_at),
@@ -128,8 +89,6 @@ def trial_status(settings: Settings, account: Account, *, now: datetime | None =
 def decide(db: Session, settings: Settings, account: Account | str | None, *, now: datetime | None = None) -> HomeAccess:
     """May this account use the home's hosted services right now?"""
     now = now or datetime.now(timezone.utc)
-    if not enabled(settings, now=now):
-        return HomeAccess(True, "gate_off")
     try:
         row = db.get(Account, account) if isinstance(account, str) else account
     except Exception:
@@ -143,7 +102,7 @@ def decide(db: Session, settings: Settings, account: Account | str | None, *, no
         return HomeAccess(True, "degraded")
     if ent.headroom_lifted:
         return HomeAccess(True, "subscribed")
-    ends = window_end(settings, row)
+    ends = window_end(row)
     if ends is None:
         return HomeAccess(True, "not_started")
     if now < ends:
@@ -174,8 +133,6 @@ def refuse_session(db: Session, settings: Settings, account_id: str | None) -> N
 
 def session_gate(request: Request, db: Session = Depends(get_db)) -> None:
     """Route dependency for the hosted board's session routes."""
-    if not enabled(request.app.state.settings):
-        return
     refuse_session(db, request.app.state.settings, account_id_from_session_cookie(request, db))
 
 
@@ -189,8 +146,6 @@ def _decide_alone(request: Request, account_id: str) -> HomeAccess:
 async def daemon_gate(request: Request, principal: Principal = Depends(require_daemon)) -> Principal:
     """``require_daemon`` behind the home decision, for a device's uploads and relay routes."""
     settings = request.app.state.settings
-    if not enabled(settings):
-        return principal
     access = await run_in_threadpool(_decide_alone, request, principal.account_id)
     if access.allowed:
         return principal

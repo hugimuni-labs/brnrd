@@ -21,7 +21,7 @@ def _status(client, headers):
 def test_sign_in_and_account_reads_do_not_start_trial():
     client = brnrd_client()
     headers = brnrd_account_headers(client.app)
-    assert _status(client, headers) == dict(status='not_started', started_at=None, ends_at=None, enforcement_enabled=False, household=False, subscribed=False)
+    assert _status(client, headers) == dict(status='not_started', started_at=None, ends_at=None, enforcement_enabled=True, household=False, subscribed=False)
     assert client.get('/v1/accounts/subscription', headers=headers).status_code == 200
     assert _status(client, headers)['started_at'] is None
     assert client.get('/v1/accounts/home-trial').status_code == 401
@@ -77,8 +77,8 @@ def test_existing_device_starts_on_successful_connect_only(path, body):
 
 
 @pytest.mark.parametrize('tier', [Account.TIER_FREE, Account.TIER_SUBSCRIBED])
-def test_expired_clock_does_not_change_access_or_subscription(tier):
-    client = brnrd_client()
+def test_expired_clock_changes_no_subscription_and_a_reconnect_keeps_it(tier):
+    client = brnrd_client(home_gate_hold_s=0)
     account, daemon, _ = brnrd_repo_and_daemon(client)
     with client.app.state.SessionLocal() as db:
         row = db.execute(select(Account)).scalar_one()
@@ -87,8 +87,10 @@ def test_expired_clock_does_not_change_access_or_subscription(tier):
         db.commit()
     before = client.get('/v1/accounts/subscription', headers=account).json()
     assert _status(client, account)['status'] == 'expired'
-    assert _status(client, account)['enforcement_enabled'] is False
-    assert client.post('/v1/daemons/register', headers=daemon, json={'daemon_name': 'reinstall'}).status_code == 200
+    assert _status(client, account)['enforcement_enabled'] is True
+    # The gate admits a subscriber and refuses a free account; neither restarts the clock.
+    r = client.post('/v1/daemons/register', headers=daemon, json={'daemon_name': 'reinstall'})
+    assert r.status_code == (200 if tier == Account.TIER_SUBSCRIBED else 429), r.text
     assert _status(client, account)['status'] == 'expired'
     assert client.get('/v1/accounts/subscription', headers=account).json() == before
 

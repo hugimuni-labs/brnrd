@@ -1,5 +1,4 @@
-"""The home gate (brnrd.home_access): off by default, one decision, refusals through the real routers."""
-from dataclasses import replace
+"""The home gate (brnrd.home_access): always on, one decision, refusals through the real routers."""
 import re
 import time
 from datetime import datetime, timedelta, timezone
@@ -14,13 +13,9 @@ from sqlalchemy import select
 from brnrd import billing, home_access
 from brnrd.auth import require_daemon
 from brnrd.models import Account
-from _helpers import brnrd_account_headers, brnrd_client, brnrd_repo_and_daemon
+from _helpers import brnrd_client, brnrd_repo_and_daemon
 
 NOW = datetime.now(timezone.utc)
-
-
-def _iso(dt: datetime) -> str:
-    return dt.isoformat()
 
 
 # Every protected operation: (method, path, json body); {repo} is the paired repo's id.
@@ -97,8 +92,8 @@ OPEN_DAEMON = [
 ]
 
 
-def _setup(gate_from: str = "", started: datetime | None = NOW - timedelta(days=30), tier: str = Account.TIER_FREE, **kw):
-    client = brnrd_client(home_gate_from=gate_from, home_gate_hold_s=0, inbox_long_poll_max_s=0, **kw)
+def _setup(started: datetime | None = NOW - timedelta(days=30), tier: str = Account.TIER_FREE, **kw):
+    client = brnrd_client(home_gate_hold_s=0, inbox_long_poll_max_s=0, **kw)
     account, daemon, repo = brnrd_repo_and_daemon(client)
     with client.app.state.SessionLocal() as db:
         row = db.execute(select(Account)).scalar_one()
@@ -137,9 +132,9 @@ def _all(client, daemon, repo, *, refused: bool = False):
     return out
 
 
-def test_flag_off_changes_no_response_through_the_real_routers():
-    """Off, an account long past its trial gets exactly what it got with no gate in the code at all."""
-    client, account, daemon, repo = _setup()
+def test_inside_its_window_changes_no_response_through_the_real_routers():
+    """An account inside its 14 days gets exactly what it got with no gate in the code at all."""
+    client, account, daemon, repo = _setup(started=NOW - timedelta(days=1))
     routes = [(m, p, b, {}) for m, p, b in SESSION_ROUTES] + [(m, p, b, daemon) for m, p, b in DAEMON_ROUTES]
     reads = [(m, p, b, h) for m, p, b, h in routes if m == "GET" and not p.endswith("/events")]
     gated = {(m, p): _bytes(r) for m, p, b, h in reads
@@ -150,7 +145,7 @@ def test_flag_off_changes_no_response_through_the_real_routers():
             for r in [_call(client, m, p, b, h, repo)]}
     assert gated == bare  # byte for byte, but for generated_at
     # Writes change state, so each runs once on twin setups: same status, same JSON shape.
-    twin = _setup()
+    twin = _setup(started=NOW - timedelta(days=1))
     twin[0].app.dependency_overrides[home_access.session_gate] = lambda: None
     twin[0].app.dependency_overrides[home_access.daemon_gate] = require_daemon
     for m, p, b, h in routes:
@@ -165,18 +160,12 @@ def test_flag_off_changes_no_response_through_the_real_routers():
             assert type(ja) is type(jz)
             if isinstance(ja, dict):
                 assert set(ja) == set(jz), (m, p)
-    assert client.get("/v1/accounts/home-trial").json()["enforcement_enabled"] is False
-
-
-def test_unparseable_or_future_switch_on_stays_off():
-    for value in ["soon", _iso(NOW + timedelta(days=1))]:
-        client, account, daemon, repo = _setup(gate_from=value)
-        assert not any(_refused(r) for _, r in _all(client, daemon, repo)), value
-        assert client.get("/v1/accounts/home-trial").json()["enforcement_enabled"] is False
+    trial = client.get("/v1/accounts/home-trial").json()
+    assert trial["status"] == "active" and trial["enforcement_enabled"] is True
 
 
 def test_on_refuses_every_protected_operation_and_names_account():
-    client, account, daemon, repo = _setup(gate_from=_iso(NOW - timedelta(days=15)))
+    client, account, daemon, repo = _setup()
     for (method, path), r in _all(client, daemon, repo, refused=True):
         assert _refused(r), (method, path, r.status_code, r.text)
         detail = r.json()["detail"]
@@ -192,7 +181,7 @@ def test_on_refuses_every_protected_operation_and_names_account():
 
 
 def test_on_keeps_account_controls_billing_and_deletion_open():
-    client, account, daemon, repo = _setup(gate_from=_iso(NOW - timedelta(days=15)))
+    client, account, daemon, repo = _setup()
     for method, path, body in OPEN_SESSION:
         r = _call(client, method, path, body, {}, repo)
         assert not _refused(r), (path, r.status_code, r.text)
@@ -206,7 +195,7 @@ def test_on_keeps_account_controls_billing_and_deletion_open():
 
 @pytest.mark.parametrize("kind", ["legacy", "loom"])
 def test_expired_account_cannot_approve_or_pick_up_a_device_credential(kind):
-    client, _, _, repo = _setup()
+    client, _, _, repo = _setup(started=None)
     capabilities = {"kind": "loom", "board": True} if kind == "loom" else {}
     pair = client.post("/v1/accounts/pair", json=capabilities).json()
     reply = client.post(f"/v1/connect/{pair['pair_code']}", json={
@@ -214,8 +203,10 @@ def test_expired_account_cannot_approve_or_pick_up_a_device_credential(kind):
     })
     assert reply.status_code == 200, reply.text
 
-    # Enable enforcement after one approval, before the machine claims it.
-    client.app.state.settings = replace(client.app.state.settings, home_gate_from=_iso(NOW - timedelta(days=15)))
+    # The window ends after one approval, before the machine claims it.
+    with client.app.state.SessionLocal() as db:
+        db.execute(select(Account)).scalar_one().home_trial_started_at = (NOW - timedelta(days=15)).replace(tzinfo=None)
+        db.commit()
     poll = client.get(f"/v1/accounts/pair/{pair['pair_code']}", params={"poll_secret": pair["poll_secret"]})
     assert poll.status_code == 402 and _refused(poll)
     assert "daemon_token" not in poll.json()
@@ -235,7 +226,7 @@ def test_expired_account_cannot_approve_or_pick_up_a_device_credential(kind):
     ("active", "price_founder_own"),
 ])
 def test_on_any_live_subscription_keeps_everything(status, price):
-    client, account, daemon, repo = _setup(gate_from=_iso(NOW - timedelta(days=15)))
+    client, account, daemon, repo = _setup()
     with client.app.state.SessionLocal() as db:
         account_id = db.execute(select(Account.id)).scalar_one()
         billing.handle_stripe_event(db, client.app.state.settings, {
@@ -252,7 +243,7 @@ def test_on_any_live_subscription_keeps_everything(status, price):
 
 
 def test_canceled_subscription_past_its_window_is_refused():
-    client, account, daemon, repo = _setup(gate_from=_iso(NOW - timedelta(days=15)), tier=Account.TIER_SUBSCRIBED)
+    client, account, daemon, repo = _setup(tier=Account.TIER_SUBSCRIBED)
     with client.app.state.SessionLocal() as db:
         row = db.execute(select(Account)).scalar_one()
         row.tier = Account.TIER_FREE  # what _refresh_tier writes once no live row remains
@@ -260,36 +251,16 @@ def test_canceled_subscription_past_its_window_is_refused():
     assert _refused(client.get("/v1/dashboard/loom"))
 
 
-def test_clock_started_before_switch_on_gets_a_fresh_window_never_a_day_one_cutoff():
-    # Started 30 days ago; switched on yesterday: 13 days left, counted from the switch-on.
-    gate = NOW - timedelta(days=1)
-    client, account, daemon, repo = _setup(gate_from=_iso(gate), started=NOW - timedelta(days=30))
-    assert not any(_refused(r) for _, r in _all(client, daemon, repo))
-    trial = client.get("/v1/accounts/home-trial").json()
-    assert trial["status"] == "active" and trial["enforcement_enabled"] is True
-    assert datetime.fromisoformat(trial["ends_at"].replace("Z", "+00:00")) == gate + timedelta(days=14)
-    # A clock started after the switch-on keeps its own 14 days.
-    client, *_ = _setup(gate_from=_iso(NOW - timedelta(days=20)), started=NOW - timedelta(days=3))
-    ends = datetime.fromisoformat(client.get("/v1/accounts/home-trial").json()["ends_at"].replace("Z", "+00:00"))
-    assert abs(ends - (NOW + timedelta(days=11))) < timedelta(seconds=5)
-
-
 def test_never_connected_account_is_not_refused():
-    client, account, daemon, repo = _setup(gate_from=_iso(NOW - timedelta(days=15)), started=None)
+    client, account, daemon, repo = _setup(started=None)
     # The first successful connect starts the clock inside the admitted request.
     assert client.post("/v1/daemons/register", headers=daemon, json={"daemon_name": "computer"}).status_code == 200
     assert client.get("/v1/accounts/home-trial").json()["status"] == "active"
     assert not any(_refused(r) for _, r in _all(client, daemon, repo))
 
 
-def test_decide_is_the_one_decision():
-    settings = brnrd_client().app.state.settings
-    off = home_access.decide(None, settings, "acc_any")  # no database touched while off
-    assert off.allowed and off.why == "gate_off"
-
-
 def test_billing_read_error_admits():
-    client, account, daemon, repo = _setup(gate_from=_iso(NOW - timedelta(days=15)))
+    client, account, daemon, repo = _setup()
 
     class Broken:
         def get(self, *a, **k):
@@ -300,7 +271,7 @@ def test_billing_read_error_admits():
 
 def test_device_refusal_is_held_before_it_answers():
     """An old client retries a refusal with no backoff on its 3 s publish tick; the hold paces it."""
-    client = brnrd_client(home_gate_from=_iso(NOW - timedelta(days=15)), home_gate_hold_s=0.3, inbox_long_poll_max_s=0.6)
+    client = brnrd_client(home_gate_hold_s=0.3, inbox_long_poll_max_s=0.6)
     account, daemon, repo = brnrd_repo_and_daemon(client)
     with client.app.state.SessionLocal() as db:
         db.execute(select(Account)).scalar_one().home_trial_started_at = (NOW - timedelta(days=30)).replace(tzinfo=None)
@@ -320,7 +291,6 @@ def test_held_refusals_have_a_ceiling_past_which_they_answer_at_once(tmp_path):
     # Concurrent worker threads need independent connections and transactions.
     client = brnrd_client(
         database_url=f"sqlite:///{tmp_path / 'home-access.db'}",
-        home_gate_from=_iso(NOW - timedelta(days=15)),
         home_gate_hold_s=3.0,
         home_gate_max_holds=2,
     )
@@ -349,8 +319,7 @@ def test_held_refusals_have_a_ceiling_past_which_they_answer_at_once(tmp_path):
 
 def test_named_login_is_admitted_without_a_subscription():
     # The household (w-e080rjxmdya4): past its window, no subscription, named by login.
-    gate = _iso(NOW - timedelta(days=15))
-    client, account, daemon, repo = _setup(gate_from=gate, home_gate_admit_github_logins=("someone", "octocat"))
+    client, account, daemon, repo = _setup(home_gate_admit_github_logins=("someone", "octocat"))
     assert not any(_refused(r) for _, r in _all(client, daemon, repo))
     with client.app.state.SessionLocal() as db:
         row = db.execute(select(Account)).scalar_one()
@@ -363,6 +332,5 @@ def test_named_login_is_admitted_without_a_subscription():
 
 def test_named_list_is_empty_by_default_and_names_only_its_logins():
     assert brnrd_client().app.state.settings.home_gate_admit_github_logins == ()
-    gate = _iso(NOW - timedelta(days=15))
-    client, account, daemon, repo = _setup(gate_from=gate, home_gate_admit_github_logins=("octocat-other",))
+    client, account, daemon, repo = _setup(home_gate_admit_github_logins=("octocat-other",))
     assert all(_refused(r) for _, r in _all(client, daemon, repo, refused=True))
