@@ -1657,5 +1657,5 @@ class HomeTrialOut(BaseModel):
     status: Literal["not_started", "active", "expired"]
     started_at: datetime | None = None
     ends_at: datetime | None = None
-    # True only while BRNRD_HOME_GATE_FROM has switched the home gate on (home_access.py).
-    enforcement_enabled: bool = False
+    # The home gate is always on (home_access.py); the field stays for clients that read it.
+    enforcement_enabled: bool = True

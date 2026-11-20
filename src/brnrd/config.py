@@ -248,9 +248,6 @@ class Settings:
     topup_min_usd: int = _env_int("BRNRD_TOPUP_MIN_USD", 5)
     topup_max_usd: int = _env_int("BRNRD_TOPUP_MAX_USD", 500)
 
-    # The home gate (home_access.py): off while empty. An ISO instant turns it on from then,
-    # and that instant also opens a fresh 14-day window for every clock started before it.
-    home_gate_from: str = os.environ.get("BRNRD_HOME_GATE_FROM", "")
     # GitHub logins the home gate always admits, with no subscription: the household, named
     # by hand. Comma-split, lowercased; empty (the default) names nobody. Matched against the
     # login the account last signed in with, so editing the variable needs no deploy of code.

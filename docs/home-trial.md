@@ -1,8 +1,8 @@
 # Home trial clock
 
 The server records a 14-day clock once per account and exposes its UTC dates at
-`GET /v1/accounts/home-trial`. This stage observes connection state; expiry does
-not change access, subscription status, prices or the existing product limits.
+`GET /v1/accounts/home-trial`. The home gate below refuses hosted services once
+the clock has run out and the account has no subscription.
 
 Sign-in, creating a repository, starting a pairing and browser approval do not
 start the clock. The computer collecting the approved token does. An existing
@@ -16,7 +16,7 @@ concurrent connections cannot replace an existing start date.
 
 The account endpoint accepts the account's API token or browser session; daemon
 credentials cannot read it. It returns `status` (`not_started`, `active`, or
-`expired`), nullable `started_at` and `ends_at`, and `enforcement_enabled: false`.
+`expired`), nullable `started_at` and `ends_at`, and `enforcement_enabled: true`.
 At the exact end instant the status is `expired`. This endpoint is intended for
 the account page; it does not replace the subscription endpoint or decide
 whether a subscriber can use a service.
@@ -24,23 +24,18 @@ whether a subscriber can use a service.
 Deployment adds one nullable account column through the existing PostgreSQL
 startup migration. New databases get it through model creation. Existing users
 are not backdated from sign-in or historical activity. Their first successful
-connection after deployment records the timestamp. A later enforcement rollout
-must supply notice and a fresh transition window for existing free hosted users;
-this observational timestamp alone is not permission to cut anyone off.
+connection after deployment records the timestamp.
 
 Service gates, transition notices, cleanup and sign-in/pricing claims are later
 changes. Every existing subscriber, including historical prices, retains the
 current access rules throughout this stage. No Stripe state is written here.
 
-## The home gate (off by default)
+## The home gate
 
 `brnrd/home_access.py` holds the one entitlement decision every refusal calls.
-It is off while `BRNRD_HOME_GATE_FROM` is unset, unparseable or in the future:
-then it reads nothing and no response changes. Set to an ISO instant, it turns
-on from that instant, and the instant also restarts every earlier clock, so an
-account's window ends 14 days after the later of its start and the switch-on.
-`GET /v1/accounts/home-trial` then reports that window and
-`enforcement_enabled: true`.
+It is always on, with no switch: an account's window ends 14 days after its
+first successful connect, and `GET /v1/accounts/home-trial` reports that window.
+To turn it off, revert the change that removed `BRNRD_HOME_GATE_FROM`.
 
 Admitted while on: household GitHub logins configured by the operator, any
 live subscription (`Account.tier` subscribed, which any non-canceled Stripe
