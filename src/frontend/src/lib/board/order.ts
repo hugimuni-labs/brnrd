@@ -16,7 +16,7 @@ const RANK: Record<string, number> = {
 
 export const STATE_LABEL = {
 	seated: 'Working',
-	'your-call': 'Your call',
+	'your-call': 'Needs you',
 	waiting: 'Waiting',
 	mine: 'Stuck',
 	quiet: 'Quiet',
