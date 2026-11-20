@@ -588,7 +588,7 @@ def passage(room: Path, door: str, act: str, target: str = "") -> None:
             gen = None
         if gen is not None:
             event["wake"] = gen
-        session = os.environ.get("CLAUDE_SESSION_ID") or os.environ.get("CODEX_THREAD_ID")
+        session = os.environ.get("CLAUDE_CODE_SESSION_ID") or os.environ.get("CODEX_THREAD_ID")
         if session:
             event["session"] = session
         from .mark import parse

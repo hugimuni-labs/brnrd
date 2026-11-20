@@ -215,7 +215,10 @@ def main(argv):
         try:
             counts = audit.trust_counts(home, int(cut.timestamp() * 1_000_000_000))
             status = f"journal: {counts['unsaid']} unsaid passages, {counts['hook_refusals']} hook grant refusals"
-        except (OSError, ValueError, KeyError, TypeError):
+        except ValueError as exc:
+            fault = str(exc).split("; ", 1)[0].split("\n", 1)[0][:160]
+            status = f"journal fails verification: {fault}"
+        except (OSError, KeyError, TypeError):
             status = "journal unavailable"
     else:
         status = "capture off"
