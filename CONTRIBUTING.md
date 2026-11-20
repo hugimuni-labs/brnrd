@@ -33,11 +33,16 @@ so the next task picks up new code without a restart ritual.
 - Explain the *why* in the PR description, not just the *what*.
 - If you're touching something with an open design doc or issue, link it.
 
-## No CLA
+## Contributor agreement
 
-Inbound contributions carry the license of the package they touch (MIT for
-`src/brr/`, AGPLv3 for `src/brnrd/` and `src/frontend/`). No CLA. See
-[LICENSE-OVERVIEW.md](LICENSE-OVERVIEW.md) for the full picture.
+A pull request needs the contributor agreement in [CLA.md](CLA.md). You keep
+the copyright. You license the contribution to HugiMuni SAS, and the
+contribution also stays under the license of the package you touched: MIT for
+`src/brr/`, AGPLv3 for `src/brnrd/` and `src/frontend/`. That license to
+HugiMuni SAS is what keeps a commercial license of the backend possible
+without changing the terms anyone already has. Sign it the way `CLA.md`
+describes. The reason for the two licenses is in
+[LICENSE-OVERVIEW.md](LICENSE-OVERVIEW.md).
 
 ## Security
 

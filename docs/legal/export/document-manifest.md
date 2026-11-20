@@ -11,9 +11,9 @@ population was empty of third parties, so no re-acceptance was owed).
 
 Hash snapshot:
 
-- Date: 2026-11-19
-- Source revision (parent of this export-only change):
-  `17430997480b3d540a342317e7631de522d6c535`
+- Date: 2026-11-20
+- Source revision (parent of this pin update):
+  `80ec66267d576212223b0e4a561fc60abc6d54e7`
 - Algorithm: SHA-256 over raw repository file bytes
 - Machine-readable list: [`SHA256SUMS`](SHA256SUMS)
 - Verification from the repository root:
@@ -50,7 +50,7 @@ hashes below remain authoritative for the snapshot if a deployed page changes.
 | Driven data-flow and trust inventory | [`SECURITY.md`](../../../SECURITY.md) | `d7140dd0a2d76561f622cdf7dc8ae4fa689006704952900d0e28d104b363a17f` |
 | Pricing and offer page | [`src/frontend/src/routes/pricing/+page.svelte`](../../../src/frontend/src/routes/pricing/+page.svelte) | `10a539ce8369818ab026f69c4f72fdfac477a401675bee9e17e064a72f09e278` |
 | MIT license | [`LICENSE`](../../../LICENSE) | `3101d42b24f94e634de450ea11eca86b144900590896948376f67936acf02d92` |
-| License boundary overview | [`LICENSE-OVERVIEW.md`](../../../LICENSE-OVERVIEW.md) | `37ed3bb589c5b2a46bcb4a674548d49d433efdda573c003332f7c13405ada0d8` |
+| License boundary overview | [`LICENSE-OVERVIEW.md`](../../../LICENSE-OVERVIEW.md) | `001772b9056df7f6db354e70dc2b214abe0fef3ccbcad87393467a8a47c85f4e` |
 
 ## Load-bearing implementation evidence
 
