@@ -6,6 +6,7 @@ refused or judged; a passage with no sentence tells the person once per window.
 import json
 import subprocess
 import sys
+import time
 
 import pytest
 
@@ -62,6 +63,68 @@ def test_send_to_a_person_is_a_passage_with_its_sentence_or_one_note(person, mon
     assert counts["send"] == {"seen": 3, "declared": 1}
     assert counts["publish"] == counts["forge"] == {"seen": 0, "declared": 0}
     assert audit.verify(home.root / "audit" / home.install_id())["entries"] == 3
+
+
+def test_trust_reads_mixed_door_rows_from_the_journal(person, monkeypatch, capsys):
+    from brr.loom.runtime import trust
+    from brr.loom.runtime.port import render_boundary
+
+    home, seat = person
+    (home.root / "loom/install-id").write_text(home.install_id() + "\n")
+    (seat / "port/in").mkdir(parents=True, exist_ok=True)
+    (seat / "port/in/boundary.md").write_text(render_boundary(seat.name, 7, "work", [], set(), {}))
+    monkeypatch.setenv("CODEX_THREAD_ID", "codex-session")
+    monkeypatch.delenv("CLAUDE_CODE_SESSION_ID", raising=False)
+    writer = audit.Writer(home, doors=True)
+    try:
+        writer.journal.append({"kind": "door", "event": {
+            "id": "old-door", "at_ns": time.time_ns(), "door": "forge",
+            "act": "pr merge", "sentence": None,
+        }})
+        command(home, seat, "send", "--to", "channel:mine/42", "unsaid")
+        monkeypatch.delenv("CODEX_THREAD_ID")
+        monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "claude-session")
+        command(home, seat, "send", "--to", "channel:mine/42", "also unsaid")
+        old, codex, claude = _passages(home)
+        assert "wake" not in old and "session" not in old
+        assert (codex["wake"], codex["session"]) == (7, "codex-session")
+        assert (claude["wake"], claude["session"]) == (7, "claude-session")
+        assert trust.main(["--home", str(home.root)]) == 0
+        line = capsys.readouterr().out
+        assert "0 granted, 0 refused: ledger, unchained" in line
+        assert "3 unsaid passages" in line
+        assert "coverage unknown; audit-warning absent" in line
+    finally:
+        writer.close()
+    assert audit.verify(writer.journal.base)["entries"] == 3
+    assert trust.main(["--home", str(home.root)]) == 0
+    assert "capture off" in capsys.readouterr().out
+
+
+def test_trust_reports_a_broken_committed_chain(person, capsys):
+    from brr.loom.runtime import trust
+    from brr.loom.runtime.config import set_value
+
+    home, seat = person
+    (home.root / "loom/install-id").write_text(home.install_id() + "\n")
+    set_value(home.root, "audit", "on")
+    writer = audit.Writer(home, doors=True)
+    try:
+        command(home, seat, "send", "--to", "channel:mine/42", "unsaid")
+    finally:
+        writer.close()
+
+    entries = writer.journal.epoch / "entries.jsonl"
+    original = entries.read_bytes()
+    tampered = original.replace(b"channel:mine/42", b"channel:mine/43", 1)
+    assert tampered != original and len(tampered) == len(original)
+    entries.write_bytes(tampered)
+    assert trust.main(["--home", str(home.root)]) == 0
+    line = capsys.readouterr().out
+    assert "journal fails verification:" in line
+    assert "broken chain at entry 1" in line
+    assert "journal unavailable" not in line
+
 
 
 def test_audit_without_doors_records_no_passage(person):

@@ -174,7 +174,7 @@ def ungranted(facts, self_repo: Path, days: float = 30, now: datetime | None = N
             "refused": sum(f.at >= cut for f in kind_facts(facts, "guard.refused"))}
 
 
-def line(facts, self_repo: Path, days: float = 14, now: datetime | None = None) -> str:
+def line(facts, self_repo: Path, days: float = 14, now: datetime | None = None, *, audit_status: str = "") -> str:
     """The weave-up's line: both numbers, one row."""
     u = ungranted(facts, self_repo, days, now)
     rows = calibrate(facts, days, now)
@@ -184,7 +184,9 @@ def line(facts, self_repo: Path, days: float = 14, now: datetime | None = None) 
         for how, n in row.counts.items():
             total.counts[how] = total.counts.get(how, 0) + n
     acts = (f"{days:g}d: {u['misses']} irreversible acts without a grant "
-            f"({u['granted']} granted, {u['refused']} refused: final acts and his letter)")
+            f"({u['granted']} granted, {u['refused']} refused: ledger, unchained; journal after #2787)")
+    if audit_status:
+        acts += " · " + audit_status
     if not total.asks:
         return acts + " · no asks"
     kinds = ", ".join(f"{k} {_rate(r.n('took'), r.classified)} of {r.classified}"
@@ -195,6 +197,8 @@ def line(facts, self_repo: Path, days: float = 14, now: datetime | None = None) 
 
 
 def main(argv):
+    from . import audit
+    from .config import load_config
     from .home import home_for
     from .ledger import read_facts
     from .refusals import Parser
@@ -204,7 +208,22 @@ def main(argv):
     parser.add_argument("--days", type=float, default=14)
     args = parser.parse_args(argv)
     home = home_for(args.home, args.room)
-    print(line(read_facts(home), home.root / "self", args.days))
+    now = datetime.now(timezone.utc)
+    warning = "present" if (home.root / "loom" / "audit-warning").exists() else "absent"
+    if audit._endpoint(home).exists() or load_config(home.root).audit == "on":
+        cut = now - timedelta(days=args.days)
+        try:
+            counts = audit.trust_counts(home, int(cut.timestamp() * 1_000_000_000))
+            status = f"journal: {counts['unsaid']} unsaid passages, {counts['hook_refusals']} hook grant refusals"
+        except ValueError as exc:
+            fault = str(exc).split("; ", 1)[0].split("\n", 1)[0][:160]
+            status = f"journal fails verification: {fault}"
+        except (OSError, KeyError, TypeError):
+            status = "journal unavailable"
+    else:
+        status = "capture off"
+    status += f" (coverage unknown; audit-warning {warning})"
+    print(line(read_facts(home), home.root / "self", args.days, now, audit_status=status))
     return 0
 
 

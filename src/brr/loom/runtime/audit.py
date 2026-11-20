@@ -15,6 +15,7 @@ import sys
 import threading
 import time
 from pathlib import Path
+from typing import Callable
 
 from .home import Home, home_for, home_of_room
 from .refusals import Parser, refuse
@@ -148,6 +149,10 @@ def _door_problem(event: object) -> str | None:
         return "invalid door time"
     if event.get("sentence") is not None and not isinstance(event["sentence"], str):
         return "invalid door sentence"
+    if "wake" in event and type(event["wake"]) is not int:
+        return "invalid door wake"
+    if "session" in event and not isinstance(event["session"], str):
+        return "invalid door session"
     return _mark_problem(event.get("mark"))
 
 
@@ -161,6 +166,12 @@ def _event_problem(event: object) -> str | None:
         value = event.get(name)
         if not isinstance(value, str) or len(value) != 64 or any(c not in "0123456789abcdef" for c in value):
             return "invalid payload digest"
+    if "grant" in event:
+        grant = event["grant"]
+        if (event.get("phase") != "refused" or not isinstance(grant, dict)
+                or set(grant) != {"letter", "granted"} or grant["granted"] is not False
+                or (grant["letter"] is not None and not isinstance(grant["letter"], str))):
+            return "invalid hook grant refusal"
     return _mark_problem(event.get("mark"))
 
 
@@ -187,7 +198,7 @@ def _first_row(path: Path) -> dict | None:
         return None
 
 
-def _walk(path: Path, epoch: str, install: str, previous: str, limit: int, seen: set) -> tuple[int, str, int]:
+def _walk(path: Path, epoch: str, install: str, previous: str, limit: int, seen: set, visit: Callable[[dict], None] | None) -> tuple[int, str, int]:
     """Check the committed bytes of one epoch; (entries, final hash, tool events)."""
     seq, head, tools = 0, ZERO, 0
     for row in _rows(path, limit):
@@ -212,11 +223,13 @@ def _walk(path: Path, epoch: str, install: str, previous: str, limit: int, seen:
                 raise ValueError("duplicate event id")
             seen.add(given["event"]["id"])
             tools += 1
+            if visit is not None:
+                visit(given)
         seq, head = seq + 1, claimed
     return seq, head, tools
 
 
-def verify(base: Path, snapshot: dict | None = None) -> dict:
+def verify(base: Path, snapshot: dict | None = None, *, visit: Callable[[dict], None] | None = None) -> dict:
     """Read-only full walk; the verb's job, never the loom's start.
 
     An epoch its successor declared unclean (a stop between the journal fsync
@@ -253,7 +266,7 @@ def verify(base: Path, snapshot: dict | None = None) -> dict:
         if committed is not None:
             try:
                 seq, head, tools = _walk(epoch / "entries.jsonl", name, base.name, previous,
-                                         committed["bytes"], seen)
+                                         committed["bytes"], seen, visit)
                 count += tools
                 if committed != {"seq": seq - 1, "hash": head, "bytes": committed["bytes"]}:
                     broken.append(f"{name}: committed head disagrees with its entries")
@@ -499,7 +512,7 @@ def _warn(home: Home) -> None:
         pass  # Even reporting a failed append must not fail the caller.
 
 
-def note(room: Path, stdin_text: str, phase: str, mark: dict | None = None) -> None:
+def note(room: Path, stdin_text: str, phase: str, mark: dict | None = None, *, grant: dict | None = None) -> None:
     home = None
     try:
         home = home_of_room(room)
@@ -532,6 +545,8 @@ def note(room: Path, stdin_text: str, phase: str, mark: dict | None = None) -> N
                      "reported" if phase == "post" else "pending"}
         if mark is not None:
             event["mark"] = mark
+        if grant is not None:
+            event["grant"] = grant
         endpoint = json.loads(endpoint_raw)
         raw = canonical({"token": endpoint["token"], "event": event}) + b"\n"
         deadline = time.monotonic() + DEADLINE
@@ -566,6 +581,16 @@ def passage(room: Path, door: str, act: str, target: str = "") -> None:
                  "target": target, "sentence": sentence, "strand": room.name,
                  "thread": os.environ.get("BRNRD_THREAD", ""),
                  "engine": os.environ.get("BRNRD_BODY_SHELL", "unknown")}
+        from .port import PortError, parse_boundary
+        try:
+            gen = parse_boundary((room / "port" / "in" / "boundary.md").read_text()).gen
+        except (OSError, PortError, UnicodeError):
+            gen = None
+        if gen is not None:
+            event["wake"] = gen
+        session = os.environ.get("CLAUDE_CODE_SESSION_ID") or os.environ.get("CODEX_THREAD_ID")
+        if session:
+            event["session"] = session
         from .mark import parse
         marked = parse(sentence, what=f"{act} {target}".strip())[0]
         if marked is not None:
@@ -618,6 +643,39 @@ def doors(base: Path, since_ns: int = 0, until_ns: int | None = None) -> dict:
                 continue
             counts[event["door"]]["seen"] += 1
             counts[event["door"]]["declared"] += event.get("sentence") is not None
+    return counts
+
+
+def _verify_home(home: Home, *, visit: Callable[[dict], None] | None = None) -> dict:
+    base = home.root / "audit" / home.install_id()
+    endpoint_path = _endpoint(home)
+    if endpoint_path.exists():
+        endpoint = json.loads(endpoint_path.read_bytes())
+        with socket.create_connection(("127.0.0.1", endpoint["port"]), timeout=30) as conn:
+            conn.sendall(canonical({"token": endpoint["token"], "action": "verify"}) + b"\n")
+            with conn.makefile("rb") as stream:
+                snapshot = json.loads(stream.readline())
+        return verify(base, snapshot, visit=visit)
+    else:
+        with open(base / "writer.lock", "rb") as lock:
+            fcntl.flock(lock, fcntl.LOCK_SH | fcntl.LOCK_NB)
+            return verify(base, visit=visit)
+
+
+def trust_counts(home: Home, since_ns: int) -> dict:
+    """Trust observations in a verified committed prefix of this install's journal."""
+    counts = {"unsaid": 0, "hook_refusals": 0}
+
+    def count(row):
+        event = row["event"]
+        if event.get("at_ns", 0) < since_ns:
+            return
+        if row["kind"] == "door" and event.get("sentence") is None:
+            counts["unsaid"] += 1
+        elif row["kind"] == "tool" and event.get("grant", {}).get("granted") is False:
+            counts["hook_refusals"] += 1
+
+    _verify_home(home, visit=count)
     return counts
 
 
@@ -686,20 +744,7 @@ def main(argv=None) -> int:
         print(json.dumps(counts, sort_keys=True))
         return 0
     try:
-        endpoint_path = _endpoint(home)
-        if endpoint_path.exists():
-            endpoint = json.loads(endpoint_path.read_bytes())
-            with socket.create_connection(("127.0.0.1", endpoint["port"]), timeout=30) as conn:
-                conn.sendall(canonical({"token": endpoint["token"], "action": "verify"}) + b"\n")
-                with conn.makefile("rb") as stream:
-                    # Unbounded: one head per loom start, so this outgrows any fixed cap.
-                    snapshot = json.loads(stream.readline())
-            result = verify(home.root / "audit" / home.install_id(), snapshot)
-        else:
-            base = home.root / "audit" / home.install_id()
-            with open(base / "writer.lock", "rb") as lock:
-                fcntl.flock(lock, fcntl.LOCK_SH | fcntl.LOCK_NB)
-                result = verify(base)
+        result = _verify_home(home)
         print(json.dumps(result, sort_keys=True))
         return 0
     except (OSError, ValueError, KeyError, TypeError) as exc:

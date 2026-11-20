@@ -87,6 +87,38 @@ def test_the_hook_refuses_a_final_mark_with_no_letter_and_says_ask(tmp_path, mon
         ("final", "v0.9.1 release")]
 
 
+def test_hook_journals_the_refusal_that_stopped_dispatch(tmp_path, monkeypatch, capsys):
+    from brr.loom.runtime import audit, trust
+    from brr.loom.runtime.port import render_boundary
+
+    room, _ = _room(tmp_path)
+    home = Home(tmp_path)
+    (room / "port/in/boundary.md").write_text(render_boundary(room.name, 3, "ta", [], set(), {}))
+    monkeypatch.setenv("BRNRD_THREAD", "ta")
+    writer = audit.Writer(home)
+    try:
+        payload = _call("Bash", command='BRNRD_SAY="final · release · 2610" gh release create example')
+        assert json.loads(execute("pre", room, payload))["hookSpecificOutput"]["permissionDecision"] == "deny"
+        rows = []
+
+        def capture(row):
+            if row["event"]["phase"] == "refused":
+                rows.append(row["event"])
+
+        audit._verify_home(home, visit=capture)
+        refusal, = [f for f in read_facts(home) if f.kind == "guard.refused"]
+        observed, = rows
+        assert observed["grant"] == {"granted": False, "letter": refusal.data.get("letter")}
+        assert observed["wake"] == 3
+        append(home, Fact(kind="guard.refused", by=f"strand:{room.name}", data={"target": "ledger only"}))
+        assert trust.main(["--home", str(home.root)]) == 0
+        line = capsys.readouterr().out
+        assert "2 refused: ledger, unchained" in line
+        assert "1 hook grant refusals" in line
+    finally:
+        writer.close()
+
+
 def test_his_letter_lets_the_final_act_through_and_leaves_its_receipt(tmp_path, monkeypatch):
     monkeypatch.setenv("BRNRD_THREAD", "ta")
     monkeypatch.setenv("BRNRD_WALL", "1")
