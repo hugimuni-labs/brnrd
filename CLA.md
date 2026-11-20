@@ -1,260 +1,129 @@
-# Contributor License Agreement
+# brnrd Contributor License Agreement
 
-1. You keep your copyright. You give HugiMuni SAS a license to your contribution, including patents. This is not an assignment.
-2. HugiMuni SAS may license that contribution under any license, including a commercial one.
-3. HugiMuni SAS must also keep the contribution available under the license of the package you changed: MIT for the daemon, AGPLv3 for the backend and the dashboard.
-4. You sign by posting one comment on the pull request. A person signs the individual agreement. A company, or an employee whose company owns the work, signs the entity agreement.
-5. This is a binding agreement. It is not legal advice. A lawyer should read it before the first outside contribution.
+Version 1.0 · effective 20 November 2026
 
-This file is the brnrd contributor agreement, version 1.0, dated 2026-11-20.
+This Contributor License Agreement (the "Agreement") is made between:
 
-It is adapted from Project Harmony's Individual Contributor License Agreement (HA-CLA-I) and Entity Contributor License Agreement (HA-CLA-E), each Version 1.0, 4 July 2011:
+**HugiMuni SAS**, a French société par actions simplifiée with a share capital of €500.00, registered with the Tarascon Trade and Companies Register (RCS) under number 104 156 260, whose registered office is at 6 rue de la Verdière, 13200 Arles, France ("**HugiMuni**", "**We**" or "**Us**"); and
 
-- <https://www.harmonyagreements.org/docs/ha-cla-i-v1.pdf>
-- <https://www.harmonyagreements.org/docs/ha-cla-e-v1.pdf>
+the person or Legal Entity that accepts it as set out in Section 12 ("**You**").
 
-Those templates are by Project Harmony and are licensed under [Creative Commons Attribution 3.0 Unported](https://creativecommons.org/licenses/by/3.0/). Project Harmony does not endorse this adaptation. The Harmony trademark is not used: this text is modified, so it is not an unmodified template.
+It sets out the terms on which You license Your Contributions to Us. Read it before You accept it.
 
-Selected from the template, and not rewritten:
+## 1. Definitions
 
-- The copyright-license form (HA-CLA), not the copyright-assignment form (HA-CAA).
-- The patent license.
-- Outbound License Option Five only. Options One through Four are not part of this agreement.
-- The template's optional extra list of Media licenses is not selected.
-- The individual patent grant does not insert the template's bracketed "or Your Affiliates". That agreement does not define Affiliates.
-- The entity patent grant does include Your Affiliates.
+1.1 "**Contribution**" means any work of authorship, including any modification of or addition to existing work, that You Submit to Us and in which You own or control the Copyright, except communication that You conspicuously mark or otherwise designate in writing as "Not a Contribution".
 
-Changed from the template, and marked where they appear:
+1.2 "**Copyright**" means all rights protecting works of authorship, including copyright, moral rights and neighbouring rights, for the full term of their existence, including any extension.
 
-- Section 2.3 adds the Package License, so Option Five's promise-back names MIT or AGPLv3-only by path.
-- "Us" includes the legal successors of HugiMuni SAS.
-- The signature is the GitHub comment in "How you sign", not a paper form.
-- The governing-law blank is filled in as France. The template has no court clause, and none is added here.
+1.3 "**Legal Entity**" means an entity that is not a natural person. Where You are a Legal Entity, "You" includes Your Affiliates.
 
-The company details below are the ones published in the project's legal notice on the date of version 1.0 (`src/frontend/src/lib/legalNotice.ts`). They are not a fresh extract.
+1.4 "**Affiliate**" means any Legal Entity that controls, is controlled by, or is under common control with You. "Control" means (a) the power, direct or indirect, to cause the direction or management of that Legal Entity, by contract or otherwise, (b) ownership of fifty percent (50%) or more of the outstanding shares or securities that vote to elect its management, or (c) beneficial ownership of that Legal Entity.
 
-## How you sign
+1.5 "**Material**" means brnrd, the software and documentation published by Us at https://github.com/hugimuni-labs/brnrd, and any other work of authorship that We make available to third parties and to which a Contribution is Submitted.
 
-This is the electronic submission the agreements refer to. It is how either agreement becomes effective. There is no paper counterpart, and HugiMuni SAS does not countersign each contribution.
+1.6 "**Package License**" means, for each part of a Contribution, the license under which We make available the part of the Material to which that part is Submitted, as stated on the Submission Date in the `LICENSE` file that governs it. On the effective date of this Agreement, those licenses are:
 
-Comment on the pull request with this line and nothing else:
+(a) the MIT License, for the local runtime: `src/brr/` and every other file covered by the repository-root `LICENSE`;
 
-```
-I have read the CLA Document and I hereby sign the CLA
-```
+(b) the GNU Affero General Public License, version 3 only, for the managed backend, `src/brnrd/`; and
 
-The GitHub account that posts the comment is the signer. The check stores that account on the branch `cla-signatures`, in `signatures/version1/cla.json`. A comment `recheck` asks the check to look again.
+(c) the GNU Affero General Public License, version 3 only, for the web dashboard, `src/frontend/`.
 
-Which agreement that comment signs:
+1.7 "**Submit**" means to send any form of electronic, verbal or written communication to Us or Our representatives, including through source code control systems, pull requests, issue trackers and mailing lists managed by or on behalf of Us for the purpose of discussing and improving the Material.
 
-- If the pull request does not name a Legal Entity, you sign the Individual agreement below, for yourself.
-- If the pull request states a Legal Entity's name and that the contribution is made on its behalf, you sign the Entity agreement below for that entity, and you confirm that you can bind it. Put the entity's name in the pull request. The signature file records your GitHub account, not a separate entity field.
-- If your employer owns the copyright, do not use the Individual agreement for that work. The employer signs the Entity agreement. Section 3(c) of the Individual agreement says the same thing.
+1.8 "**Submission Date**" means the date on which You Submit a Contribution.
 
-These accounts do not sign: `brnrd-dev[bot]`, `brnrd-bot`, `StrayUnicorn`, `dependabot[bot]`.
+## 2. Copyright license
 
-You are agreeing to version 1.0 of this file, dated 2026-11-20. A later change to the operative text is a new version. It does not rewrite what this version says.
+2.1 You retain ownership of the Copyright in Your Contributions. You keep every right to use and license Your Contributions that You would have had without this Agreement.
 
-## Third-party material
+2.2 You grant Us a perpetual, worldwide, non-exclusive, transferable, royalty-free, irrevocable license under the Copyright in Your Contributions, with the right to sublicense through multiple tiers of sublicensees, to reproduce, modify, display, perform and distribute Your Contributions as part of the Material.
 
-If you do not own the copyright in the entire work you submit, do not present the part you do not own as your Contribution. Keep that part's license notice and attribution, say in the pull request what you do not own, and mark it "Not a Contribution" if you are only passing it through. HugiMuni SAS may refuse a submission that includes third-party material it cannot ship under the Package License of the Material it was submitted to.
+2.3 The license in Section 2.2 is conditioned on Our compliance with Section 4.
 
-## Individual agreement
+## 3. Patent license
 
-Adapted from the Harmony Individual Contributor License Agreement (HA-CLA-I), Version 1.0, 4 July 2011. The selections and the changes are listed at the top of this file.
+3.1 For patent claims, including method, process and apparatus claims, that You own, control or have the right to grant, now or in the future, You grant Us a perpetual, worldwide, non-exclusive, transferable, royalty-free, irrevocable patent license, with the right to sublicense through multiple tiers of sublicensees, to make, have made, use, sell, offer for sale, import and otherwise transfer Your Contributions, alone and in combination with the Material or any portion of it.
 
-Thank you for your interest in contributing to brnrd ("We" or "Us").
+3.2 This license applies only to the extent that exercising the licensed rights would infringe those patent claims. It is conditioned on Our compliance with Section 4.
 
-We are HugiMuni SAS, a French société par actions simplifiée, share capital of 500,00 €, registered at RCS Tarascon under SIREN 104 156 260, registered office at 6 rue de la Verdière, 13200 Arles, France, and its legal successors. The words "and its legal successors" are a project addition.
+## 4. Outbound license
 
-This contributor agreement ("Agreement") documents the rights granted by contributors to Us. To make this document effective, sign it by the electronic submission in "How you sign", above. This is a legally binding document, so please read it carefully before agreeing to it. The Agreement may cover more than one software project managed by Us.
+4.1 If We include a Contribution in the Material, We may license it under any license, including copyleft, permissive, commercial and proprietary licenses.
 
-### 1. Definitions
+4.2 As a condition of that right, We will also make each part of the Contribution available under its Package License as it stood on the Submission Date.
 
-"You" means the individual who Submits a Contribution to Us.
+4.3 Where it is not clear from its location which Package License applies to a part of a Contribution, You will state it when You Submit, and We may decline the Contribution until it is settled.
 
-"Contribution" means any work of authorship that is Submitted by You to Us in which You own or assert ownership of the Copyright. If You do not own the Copyright in the entire work of authorship, follow the instructions in "Third-party material", above.
+## 5. Moral rights
 
-"Copyright" means all rights protecting works of authorship owned or controlled by You, including copyright, moral and neighboring rights, as appropriate, for the full term of their existence including any extensions by You.
+To the extent permitted by applicable law, You agree not to exercise or assert any moral rights in Your Contributions against Us, Our successors in interest or any of Our direct or indirect licensees, in connection with any use of Your Contributions permitted by this Agreement.
 
-"Material" means the work of authorship which is made available by Us to third parties. When this Agreement covers more than one software project, the Material means the work of authorship to which the Contribution was Submitted. After You Submit the Contribution, it may be included in the Material.
+## 6. Our rights
 
-"Submit" means any form of electronic, verbal, or written communication sent to Us or our representatives, including but not limited to electronic mailing lists, source code control systems, and issue tracking systems that are managed by, or on behalf of, Us for the purpose of discussing and improving the Material, but excluding communication that is conspicuously marked or otherwise designated in writing by You as "Not a Contribution."
+We are not obliged to include any Contribution in the Material. We may include, modify or remove any Contribution at Our discretion.
 
-"Submission Date" means the date on which You Submit a Contribution to Us.
+## 7. Reservation of rights
 
-"Effective Date" means the date You execute this Agreement or the date You first Submit a Contribution to Us, whichever is earlier.
+All rights not expressly granted to Us in this Agreement are reserved by You.
 
-"Media" means any portion of a Contribution which is not software.
+## 8. Your representations
 
-### 2. Grant of Rights
+You represent that:
 
-#### 2.1 Copyright License
+(a) You have the legal capacity and authority to enter into this Agreement and, if You accept it on behalf of a Legal Entity, to bind that Legal Entity;
 
-(a) You retain ownership of the Copyright in Your Contribution and have the same rights to use or license the Contribution which You would have had without entering into the Agreement.
+(b) You own or control the Copyright and patent claims needed to grant the rights in Sections 2 and 3;
 
-(b) To the maximum extent permitted by the relevant law, You grant to Us a perpetual, worldwide, non-exclusive, transferable, royalty-free, irrevocable license under the Copyright covering the Contribution, with the right to sublicense such rights through multiple tiers of sublicensees, to reproduce, modify, display, perform and distribute the Contribution as part of the Material; provided that this license is conditioned upon compliance with Section 2.3.
+(c) granting those rights does not breach any obligation You owe to a third party. If You are an individual and Your employer or another party has rights in Your Contributions, You have obtained its permission to Submit them, or that party has accepted this Agreement as a Legal Entity; and
 
-#### 2.2 Patent License
+(d) any part of a Submission that is not Your own work is identified as such when You Submit it, together with its source and the license under which You received it, and is marked "Not a Contribution".
 
-For patent claims including, without limitation, method, process, and apparatus claims which You own, control or have the right to grant, now or in the future, You grant to Us a perpetual, worldwide, non-exclusive, transferable, royalty-free, irrevocable patent license, with the right to sublicense these rights to multiple tiers of sublicensees, to make, have made, use, sell, offer for sale, import and otherwise transfer the Contribution and the Contribution in combination with the Material (and portions of such combination). This license is granted only to the extent that the exercise of the licensed rights infringes such patent claims; and provided that this license is conditioned upon compliance with Section 2.3.
+You will notify Us promptly if You become aware of any fact that makes any of these representations inaccurate.
 
-#### 2.3 Outbound License
+## 9. Disclaimer
 
-Based on the grant of rights in Sections 2.1 and 2.2, if We include Your Contribution in a Material, We may license the Contribution under any license, including copyleft, permissive, commercial, or proprietary licenses. As a condition on the exercise of this right, We agree to also license the Contribution under the terms of the license or licenses which We are using for the Material on the Submission Date.
+EXCEPT FOR THE REPRESENTATIONS IN SECTION 8, YOUR CONTRIBUTIONS ARE PROVIDED "AS IS", AND ALL EXPRESS OR IMPLIED WARRANTIES, INCLUDING ANY IMPLIED WARRANTY OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NON-INFRINGEMENT, ARE DISCLAIMED. WHERE A WARRANTY CANNOT BE DISCLAIMED, IT IS LIMITED IN DURATION TO THE MINIMUM PERIOD PERMITTED BY LAW.
 
-Project addition (brnrd), not in the template. For this project, the license or licenses We are using for the Material on the Submission Date are the Package License:
+## 10. Limitation of liability
 
-- MIT, for a Contribution to the daemon core. That is `src/brr/`, and any other file the repository-root `LICENSE` covers as the installed tool, including a test or document that exercises only that core.
-- The GNU Affero General Public License, version 3 only, for a Contribution to the managed backend. That is `src/brnrd/`, and a test, document, or configuration that exists for that backend.
-- The GNU Affero General Public License, version 3 only, for a Contribution to the dashboard, `src/frontend/`.
+TO THE MAXIMUM EXTENT PERMITTED BY APPLICABLE LAW, YOU WILL NOT BE LIABLE TO US FOR ANY LOSS OF PROFITS, LOSS OF ANTICIPATED SAVINGS, LOSS OF DATA, OR ANY INDIRECT, SPECIAL, INCIDENTAL, CONSEQUENTIAL OR EXEMPLARY DAMAGES ARISING OUT OF THIS AGREEMENT, WHATEVER THE LEGAL THEORY (CONTRACT, TORT OR OTHERWISE) ON WHICH THE CLAIM IS BASED.
 
-If You Submit one Contribution to more than one of those, We will license each part under the Package License of that part. If which Package License applies is not plain from the path, say which one in the pull request. We may refuse the Submission until that is settled. The template's optional list of extra Media licenses is not selected. Media in a Contribution is licensed under this Section 2.3 on the same terms as the rest of that Contribution.
+## 11. Term and successors
 
-#### 2.4 Moral Rights
+11.1 This Agreement takes effect on the earlier of the date You accept it and the date You first Submit a Contribution, and applies to every Contribution You Submit on or after that date.
 
-If moral rights apply to the Contribution, to the maximum extent permitted by law, You waive and agree not to assert such moral rights against Us or our successors in interest, or any of our licensees, either direct or indirect.
+11.2 The licenses granted in Sections 2 and 3 are irrevocable and survive any termination of the relationship between You and Us.
 
-#### 2.5 Our Rights
+11.3 This Agreement binds and benefits the parties and their respective successors. If either party assigns the rights or obligations under this Agreement to a third party, that third party must, as a condition of the assignment, agree in writing to be bound by all the rights and obligations of this Agreement.
 
-You acknowledge that We are not obligated to use Your Contribution as part of the Material and may decide to include any Contribution We consider appropriate.
+## 12. Acceptance
 
-#### 2.6 Reservation of Rights
+12.1 You accept this Agreement by posting the following comment, on its own, on a pull request to the Material on GitHub:
 
-Any rights not expressly licensed under this section are expressly reserved by You.
+> I have read the CLA Document and I hereby sign the CLA
 
-### 3. Agreement
+12.2 The GitHub account that posts the comment is recorded as the signatory, with the date, in `signatures/version1/cla.json` on the `cla-signatures` branch of the repository. The parties agree that this record is an electronic signature of this Agreement within the meaning of Articles 1366 and 1367 of the French Civil Code. No countersignature by Us is required.
 
-You confirm that:
+12.3 If You accept on behalf of a Legal Entity, You will state the full legal name of that Legal Entity in the same pull request. Acceptance then binds that Legal Entity, and You represent that You are authorised to bind it.
 
-(a) You have the legal authority to enter into this Agreement.
+12.4 Acceptance covers this version of the Agreement. A later version applies only to Contributions Submitted after You accept that later version.
 
-(b) You own the Copyright and patent claims covering the Contribution which are required to grant the rights under Section 2.
+## 13. General
 
-(c) The grant of rights under Section 2 does not violate any grant of rights which You have made to third parties, including Your employer. If You are an employee, You have had Your employer approve this Agreement or sign the Entity version of this document. If You are less than eighteen years old, please have Your parents or guardian sign the Agreement.
+13.1 **Governing law.** This Agreement is governed by French law, excluding its conflict-of-laws rules. The United Nations Convention on Contracts for the International Sale of Goods does not apply.
 
-(d) You have followed the instructions in "Third-party material", above, if You do not own the Copyright in the entire work of authorship Submitted.
+13.2 **Jurisdiction.** Any dispute arising out of or in connection with this Agreement is subject to the exclusive jurisdiction of the competent courts within the jurisdiction of the Aix-en-Provence Court of Appeal, France, unless a mandatory rule of law provides otherwise.
 
-### 4. Disclaimer
+13.3 **Entire agreement.** This Agreement is the entire agreement between You and Us regarding Your Contributions and supersedes all prior agreements and understandings on that subject.
 
-EXCEPT FOR THE EXPRESS WARRANTIES IN SECTION 3, THE CONTRIBUTION IS PROVIDED "AS IS". MORE PARTICULARLY, ALL EXPRESS OR IMPLIED WARRANTIES INCLUDING, WITHOUT LIMITATION, ANY IMPLIED WARRANTY OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NON-INFRINGEMENT ARE EXPRESSLY DISCLAIMED BY YOU TO US. TO THE EXTENT THAT ANY SUCH WARRANTIES CANNOT BE DISCLAIMED, SUCH WARRANTY IS LIMITED IN DURATION TO THE MINIMUM PERIOD PERMITTED BY LAW.
+13.4 **Severability.** If any provision of this Agreement is held invalid or unenforceable, it will be replaced by a valid provision that comes closest to its intent, and the remaining provisions remain in full force.
 
-### 5. Consequential Damage Waiver
+13.5 **No waiver.** A party's failure to enforce any provision on one occasion does not waive its right to enforce that provision, or any other, later.
 
-TO THE MAXIMUM EXTENT PERMITTED BY APPLICABLE LAW, IN NO EVENT WILL YOU BE LIABLE FOR ANY LOSS OF PROFITS, LOSS OF ANTICIPATED SAVINGS, LOSS OF DATA, INDIRECT, SPECIAL, INCIDENTAL, CONSEQUENTIAL AND EXEMPLARY DAMAGES ARISING OUT OF THIS AGREEMENT REGARDLESS OF THE LEGAL OR EQUITABLE THEORY (CONTRACT, TORT OR OTHERWISE) UPON WHICH THE CLAIM IS BASED.
+13.6 **Language.** This Agreement is written in English. If it is translated, the English version prevails.
 
-### 6. Miscellaneous
+---
 
-6.1 This Agreement will be governed by and construed in accordance with the laws of France excluding its conflicts of law provisions. Under certain circumstances, the governing law in this section might be superseded by the United Nations Convention on Contracts for the International Sale of Goods ("UN Convention") and the parties intend to avoid the application of the UN Convention to this Agreement and, thus, exclude the application of the UN Convention in its entirety to this Agreement.
-
-6.2 This Agreement sets out the entire agreement between You and Us for Your Contributions to Us and overrides all other agreements or understandings.
-
-6.3 If You or We assign the rights or obligations received through this Agreement to a third party, as a condition of the assignment, that third party must agree in writing to abide by all the rights and obligations in the Agreement.
-
-6.4 The failure of either party to require performance by the other party of any provision of this Agreement in one situation shall not affect the right of a party to require such performance at any time in the future. A waiver of performance under a provision in one situation shall not be considered a waiver of the performance of the provision in the future or a waiver of the provision in its entirety.
-
-6.5 If any provision of this Agreement is found void and unenforceable, such provision will be replaced to the extent possible with a provision that comes closest to the meaning of the original provision and which is enforceable. The terms and conditions set forth in this Agreement shall apply notwithstanding any failure of essential purpose of this Agreement or any limited remedy to the maximum extent possible under law.
-
-Your signature is the electronic submission in "How you sign". It records your GitHub account. It does not record a postal address.
-
-Us: HugiMuni SAS, identified above. We do not countersign.
-
-## Entity agreement
-
-Adapted from the Harmony Entity Contributor License Agreement (HA-CLA-E), Version 1.0, 4 July 2011. The selections and the changes are listed at the top of this file.
-
-Thank you for your interest in contributing to brnrd ("We" or "Us").
-
-We are HugiMuni SAS, a French société par actions simplifiée, share capital of 500,00 €, registered at RCS Tarascon under SIREN 104 156 260, registered office at 6 rue de la Verdière, 13200 Arles, France, and its legal successors. The words "and its legal successors" are a project addition.
-
-This contributor agreement ("Agreement") documents the rights granted by contributors to Us. To make this document effective, sign it by the electronic submission in "How you sign", above. This is a legally binding document, so please read it carefully before agreeing to it. The Agreement may cover more than one software project managed by Us.
-
-### 1. Definitions
-
-"You" means any Legal Entity on behalf of whom a Contribution has been received by Us. "Legal Entity" means an entity which is not a natural person. "Affiliates" means other Legal Entities that control, are controlled by, or under common control with that Legal Entity. For the purposes of this definition, "control" means (i) the power, direct or indirect, to cause the direction or management of such Legal Entity, whether by contract or otherwise, (ii) ownership of fifty percent (50%) or more of the outstanding shares or securities which vote to elect the management or other persons who direct such Legal Entity or (iii) beneficial ownership of such entity.
-
-"Contribution" means any work of authorship that is Submitted by You to Us in which You own or assert ownership of the Copyright. If You do not own the Copyright in the entire work of authorship, follow the instructions in "Third-party material", above.
-
-"Copyright" means all rights protecting works of authorship owned or controlled by You or Your Affiliates, including copyright, moral and neighboring rights, as appropriate, for the full term of their existence including any extensions by You.
-
-"Material" means the work of authorship which is made available by Us to third parties. When this Agreement covers more than one software project, the Material means the work of authorship to which the Contribution was Submitted. After You Submit the Contribution, it may be included in the Material.
-
-"Submit" means any form of electronic, verbal, or written communication sent to Us or our representatives, including but not limited to electronic mailing lists, source code control systems, and issue tracking systems that are managed by, or on behalf of, Us for the purpose of discussing and improving the Material, but excluding communication that is conspicuously marked or otherwise designated in writing by You as "Not a Contribution."
-
-"Submission Date" means the date on which You Submit a Contribution to Us.
-
-"Effective Date" means the date You execute this Agreement or the date You first Submit a Contribution to Us, whichever is earlier.
-
-"Media" means any portion of a Contribution which is not software.
-
-### 2. Grant of Rights
-
-#### 2.1 Copyright License
-
-(a) You retain ownership of the Copyright in Your Contribution and have the same rights to use or license the Contribution which You would have had without entering into the Agreement.
-
-(b) To the maximum extent permitted by the relevant law, You grant to Us a perpetual, worldwide, non-exclusive, transferable, royalty-free, irrevocable license under the Copyright covering the Contribution, with the right to sublicense such rights through multiple tiers of sublicensees, to reproduce, modify, display, perform and distribute the Contribution as part of the Material; provided that this license is conditioned upon compliance with Section 2.3.
-
-#### 2.2 Patent License
-
-For patent claims including, without limitation, method, process, and apparatus claims which You or Your Affiliates own, control or have the right to grant, now or in the future, You grant to Us a perpetual, worldwide, non-exclusive, transferable, royalty-free, irrevocable patent license, with the right to sublicense these rights to multiple tiers of sublicensees, to make, have made, use, sell, offer for sale, import and otherwise transfer the Contribution and the Contribution in combination with the Material (and portions of such combination). This license is granted only to the extent that the exercise of the licensed rights infringes such patent claims; and provided that this license is conditioned upon compliance with Section 2.3.
-
-#### 2.3 Outbound License
-
-Based on the grant of rights in Sections 2.1 and 2.2, if We include Your Contribution in a Material, We may license the Contribution under any license, including copyleft, permissive, commercial, or proprietary licenses. As a condition on the exercise of this right, We agree to also license the Contribution under the terms of the license or licenses which We are using for the Material on the Submission Date.
-
-Project addition (brnrd), not in the template. For this project, the license or licenses We are using for the Material on the Submission Date are the Package License:
-
-- MIT, for a Contribution to the daemon core. That is `src/brr/`, and any other file the repository-root `LICENSE` covers as the installed tool, including a test or document that exercises only that core.
-- The GNU Affero General Public License, version 3 only, for a Contribution to the managed backend. That is `src/brnrd/`, and a test, document, or configuration that exists for that backend.
-- The GNU Affero General Public License, version 3 only, for a Contribution to the dashboard, `src/frontend/`.
-
-If You Submit one Contribution to more than one of those, We will license each part under the Package License of that part. If which Package License applies is not plain from the path, say which one in the pull request. We may refuse the Submission until that is settled. The template's optional list of extra Media licenses is not selected. Media in a Contribution is licensed under this Section 2.3 on the same terms as the rest of that Contribution.
-
-#### 2.4 Moral Rights
-
-If moral rights apply to the Contribution, to the maximum extent permitted by law, You waive and agree not to assert such moral rights against Us or our successors in interest, or any of our licensees, either direct or indirect.
-
-#### 2.5 Our Rights
-
-You acknowledge that We are not obligated to use Your Contribution as part of the Material and may decide to include any Contribution We consider appropriate.
-
-#### 2.6 Reservation of Rights
-
-Any rights not expressly licensed under this section are expressly reserved by You.
-
-### 3. Agreement
-
-You confirm that:
-
-(a) You have the legal authority to enter into this Agreement.
-
-(b) You or Your Affiliates own the Copyright and patent claims covering the Contribution which are required to grant the rights under Section 2.
-
-(c) The grant of rights under Section 2 does not violate any grant of rights which You or Your Affiliates have made to third parties.
-
-(d) You have followed the instructions in "Third-party material", above, if You do not own the Copyright in the entire work of authorship Submitted.
-
-### 4. Disclaimer
-
-EXCEPT FOR THE EXPRESS WARRANTIES IN SECTION 3, THE CONTRIBUTION IS PROVIDED "AS IS". MORE PARTICULARLY, ALL EXPRESS OR IMPLIED WARRANTIES INCLUDING, WITHOUT LIMITATION, ANY IMPLIED WARRANTY OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NON-INFRINGEMENT ARE EXPRESSLY DISCLAIMED BY YOU TO US. TO THE EXTENT THAT ANY SUCH WARRANTIES CANNOT BE DISCLAIMED, SUCH WARRANTY IS LIMITED IN DURATION TO THE MINIMUM PERIOD PERMITTED BY LAW.
-
-### 5. Consequential Damage Waiver
-
-TO THE MAXIMUM EXTENT PERMITTED BY APPLICABLE LAW, IN NO EVENT WILL YOU BE LIABLE FOR ANY LOSS OF PROFITS, LOSS OF ANTICIPATED SAVINGS, LOSS OF DATA, INDIRECT, SPECIAL, INCIDENTAL, CONSEQUENTIAL AND EXEMPLARY DAMAGES ARISING OUT OF THIS AGREEMENT REGARDLESS OF THE LEGAL OR EQUITABLE THEORY (CONTRACT, TORT OR OTHERWISE) UPON WHICH THE CLAIM IS BASED.
-
-### 6. Miscellaneous
-
-6.1 This Agreement will be governed by and construed in accordance with the laws of France excluding its conflicts of law provisions. Under certain circumstances, the governing law in this section might be superseded by the United Nations Convention on Contracts for the International Sale of Goods ("UN Convention") and the parties intend to avoid the application of the UN Convention to this Agreement and, thus, exclude the application of the UN Convention in its entirety to this Agreement.
-
-6.2 This Agreement sets out the entire agreement between You and Us for Your Contributions to Us and overrides all other agreements or understandings.
-
-6.3 If You or We assign the rights or obligations received through this Agreement to a third party, as a condition of the assignment, that third party must agree in writing to abide by all the rights and obligations in the Agreement.
-
-6.4 The failure of either party to require performance by the other party of any provision of this Agreement in one situation shall not affect the right of a party to require such performance at any time in the future. A waiver of performance under a provision in one situation shall not be considered a waiver of the performance of the provision in the future or a waiver of the provision in its entirety.
-
-6.5 If any provision of this Agreement is found void and unenforceable, such provision will be replaced to the extent possible with a provision that comes closest to the meaning of the original provision and which is enforceable. The terms and conditions set forth in this Agreement shall apply notwithstanding any failure of essential purpose of this Agreement or any limited remedy to the maximum extent possible under law.
-
-The person who signs for You does so by the electronic submission in "How you sign", and confirms that they can bind the Legal Entity named in the pull request. That submission records a GitHub account. It does not record a postal address.
-
-Us: HugiMuni SAS, identified above. We do not countersign.
+This Agreement is based on the Harmony Contributor Agreements (HA-CLA-I and HA-CLA-E, version 1.0) by Project Harmony, licensed under [Creative Commons Attribution 3.0 Unported](https://creativecommons.org/licenses/by/3.0/), and has been modified. Project Harmony does not endorse it.
