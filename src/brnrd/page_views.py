@@ -20,9 +20,10 @@ a daily file would be lost at the next rollout; a counter row survives it.
 Only a closed allowlist of public routes is counted (``/``, ``/pricing``,
 ``/learn*``, ``/log*``, ``/install``, and the configured campaign paths),
 only ``GET``, and only a 200/304 — a scanner walking ``/learn/<junk>`` cannot
-mint rows. A campaign path (``/hi`` unless ``BRNRD_CAMPAIGN_PATHS`` says
-otherwise) counts only its 302. ``/install`` and ``/install.sh`` serve the
-same installer script and fold into one ``/install`` row: a download of the
+mint rows. A campaign path counts only its 302. ``/hi`` is always one;
+``BRNRD_CAMPAIGN_PATHS`` adds others and cannot remove it. ``/install`` and
+``/install.sh`` serve the same installer script and fold into one ``/install``
+row: a download of the
 script, which counts bots and people reading it as well as installs.
 Signed-in surfaces are never touched.
 

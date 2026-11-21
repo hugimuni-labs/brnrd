@@ -107,23 +107,32 @@ _CAMPAIGN_PATH = re.compile(r"^/[a-z0-9][a-z0-9-]{0,15}$")
 
 
 def campaign_paths_from(raw: str | None) -> tuple[str, ...]:
-    """Campaign paths from a comma-separated env value. Empty or all-invalid keeps ``/hi``."""
+    """Campaign paths from a comma-separated env value.
 
+    ``/hi`` (``page_views.PROMO_PATH``) is always first. A paid post already
+    uses that link, so naming other paths must not drop it. Invalid entries
+    are skipped.
+    """
+
+    from .page_views import PROMO_PATH
+
+    found: list[str] = [PROMO_PATH]
     if raw is None or not raw.strip():
-        return ("/hi",)
-    found: list[str] = []
+        return (PROMO_PATH,)
     for part in raw.split(","):
         path = part.strip().lower()
         if len(path) > 1:
             path = path.rstrip("/")
         if path and not path.startswith("/"):
             path = "/" + path
+        if path == PROMO_PATH or path in found:
+            continue
         if not _CAMPAIGN_PATH.match(path) or path.endswith("-"):
             continue
-        if path[1:] in CAMPAIGN_RESERVED_SEGMENTS or path in found:
+        if path[1:] in CAMPAIGN_RESERVED_SEGMENTS:
             continue
         found.append(path)
-    return tuple(found) or ("/hi",)
+    return tuple(found)
 
 
 def _campaign_paths() -> tuple[str, ...]:
@@ -269,9 +278,9 @@ class Settings:
     # GitHub logins of the accounts that may open them. Comma-split,
     # lowercased. Unset or empty means nobody; nobody else learns they exist.
     admin_github_logins: tuple[str, ...] = _env_csv_lower("BRNRD_ADMIN_GITHUB_LOGINS")
-    # Campaign links (/hi by default). Each is counted, then redirected home.
-    # Comma-separated. Read when Settings is built. An empty or all-invalid
-    # value keeps /hi, so a bad edit does not drop the link a post already uses.
+    # Campaign links. /hi is always first (a paid post already uses it);
+    # BRNRD_CAMPAIGN_PATHS adds more beside it and cannot remove it.
+    # Comma-separated. Read when Settings is built. Invalid entries are skipped.
     campaign_paths: tuple[str, ...] = field(default_factory=_campaign_paths)
     # Growth counts leave these GitHub logins out (team and test accounts).
     # Comma-separated, lowercased, read when Settings is built. Empty names

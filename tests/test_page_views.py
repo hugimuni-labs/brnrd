@@ -150,9 +150,27 @@ def test_campaign_paths_drop_real_pages_and_keep_hi():
     from brnrd.config import Settings, campaign_paths_from
 
     assert campaign_paths_from(None) == ("/hi",)
-    assert campaign_paths_from(" /XPost, /pricing, /new, /a-, /nope/two, /hi ") == ("/xpost", "/hi")
+    assert campaign_paths_from(" /XPost, /pricing, /new, /a-, /nope/two, /hi ") == ("/hi", "/xpost")
     assert campaign_paths_from("/pricing") == ("/hi",)
-    assert Settings(campaign_paths=("/pricing", "/xpost")).campaign_paths == ("/xpost",)
+    assert campaign_paths_from("/x") == ("/hi", "/x")
+    assert Settings(campaign_paths=("/pricing", "/xpost")).campaign_paths == ("/hi", "/xpost")
+
+
+def test_hi_stays_when_campaign_paths_names_another(tmp_path, monkeypatch):
+    monkeypatch.setenv("BRNRD_CAMPAIGN_PATHS", "/x")
+    build = tmp_path / "build"
+    build.mkdir()
+    (build / "index.html").write_text("<!doctype html><title>brnrd</title>")
+    app = create_app(Settings(
+        database_url=f"sqlite:///{tmp_path}/pv.db",
+        frontend_dir=str(build),
+    ))
+    assert app.state.settings.campaign_paths == ("/hi", "/x")
+    with TestClient(app) as c:
+        response = c.get("/hi", follow_redirects=False)
+        assert response.status_code == 302
+        assert response.headers["location"] == "/"
+        assert c.get("/x", follow_redirects=False).status_code == 302
 
 
 def test_a_configured_campaign_path_counts_and_sets_no_cookie(tmp_path):
