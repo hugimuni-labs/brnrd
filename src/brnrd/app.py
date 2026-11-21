@@ -15,7 +15,7 @@ from .db import Base, make_engine, make_session_factory
 from .inbox import Forwarder, make_default_forwarder
 from .migrations import run_startup_migrations
 from .pack_relay import PackRelayStore
-from .page_views import PROMO_PATH, PROMO_STATUS, PageViewMiddleware
+from .page_views import PROMO_STATUS, PageViewMiddleware
 from .routers import accounts, admin, billing, config_approval, daemons, dev, github_app, pairing, render, stats, webhooks
 from .routers import dashboard as dashboard_router
 from .routers import loom as loom_router
@@ -143,7 +143,11 @@ def create_app(
     app.state.SessionLocal = make_session_factory(engine)
     # Server-side funnel counters — see page_views.py. A counter table, no
     # tracker, no PII; public marketing routes only.
-    app.add_middleware(PageViewMiddleware, factory=app.state.SessionLocal)
+    app.add_middleware(
+        PageViewMiddleware,
+        factory=app.state.SessionLocal,
+        campaigns=frozenset(settings.campaign_paths),
+    )
     # The forwarder is the seam where a response body leaves brnrd
     # without being persisted. Default dispatches through a per-platform
     # routing table (``inbox.make_default_forwarder``, keyed on
@@ -187,9 +191,17 @@ def create_app(
         name="brnrd_static",
     )
 
-    @app.api_route(PROMO_PATH, methods=["GET", "HEAD"], include_in_schema=False)
-    def promo_redirect() -> RedirectResponse:
+    def _campaign_redirect() -> RedirectResponse:
         return RedirectResponse("/", status_code=PROMO_STATUS, headers={"Cache-Control": "no-store"})
+
+    for path in settings.campaign_paths:
+        app.add_api_route(
+            path,
+            _campaign_redirect,
+            methods=["GET", "HEAD"],
+            include_in_schema=False,
+            name=f"campaign_{path.strip('/')}",
+        )
 
     @app.get("/healthz")
     def healthz() -> dict:

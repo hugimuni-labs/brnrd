@@ -361,7 +361,7 @@ code {
 }
 
 .metrics {
-  max-width: 72rem;
+  max-width: 90rem;
   margin: auto;
   padding: clamp(1rem, 4vw, 3rem);
   font-size: 0.875rem;
