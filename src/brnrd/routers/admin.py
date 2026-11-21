@@ -9,9 +9,9 @@ is empty) gets the same 404 an unknown route gets, so the surface is not
 discoverable by probing it. The page that reads this (``/account/views``)
 is linked from nowhere.
 
-The 30-day page-view read-out, the 14-day funnel at /metrics, and the first
-paying subscribers (who holds an install-session seat and why the rest do
-not) are read-only.
+The 30-day page-view read-out, the funnel at /metrics (14 days and 8 ISO
+weeks, plus the same numbers as JSON), and the first paying subscribers
+(who holds an install-session seat and why the rest do not) are read-only.
 """
 
 from __future__ import annotations
@@ -22,21 +22,20 @@ from html import escape
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Request
-from fastapi.responses import HTMLResponse
-from sqlalchemy import func, select
+from fastapi.responses import HTMLResponse, JSONResponse
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from .. import billing
+from .. import billing, funnel
 from ..auth import account_id_from_session_cookie, get_db
-from ..models import Account, BillingLedgerEntry
-from ..page_views import INSTALL_PATH, PROMO_PATH, PageViewCount
+from ..models import Account
+from ..page_views import PageViewCount
 
 router = APIRouter(prefix="/v1/admin", tags=["admin"], include_in_schema=False)
 
 pages = APIRouter(include_in_schema=False)
 
 PAGE_VIEW_DAYS = 30
-METRIC_DAYS = 14
 _PRIVATE = {"Cache-Control": "private, no-store"}
 
 
@@ -77,77 +76,41 @@ def _view_rows(db: Session, since: dt.date, today: dt.date) -> list[dict[str, An
     ]
 
 
+def _funnel_row(row: dict[str, Any], campaigns: list[str]) -> str:
+    camps = "".join(f"<td>{row['campaigns'][path]}</td>" for path in campaigns)
+    return (
+        f"<tr><th scope='row'>{escape(row['period'])}</th><td>{row['landing']}</td>{camps}"
+        f"<td>{row['signups']}</td><td>{row['installs_started']}</td><td>{row['installs_finished']}</td>"
+        f"<td>{row['active_day3']}</td><td>{row['paid']}</td></tr>"
+    )
+
+
+def _metrics_payload(request: Request, db: Session) -> dict[str, Any]:
+    _admin_or_404(request, db)
+    return funnel.build(db, request.app.state.settings)
+
+
+@router.get("/metrics")
+def metrics_json(request: Request, db: Session = Depends(get_db)) -> JSONResponse:
+    """The /metrics tables as JSON, behind the same gate. Not a public stat."""
+    return JSONResponse(_metrics_payload(request, db), headers=_PRIVATE)
+
+
 @pages.get("/metrics")
 def metrics(request: Request, db: Session = Depends(get_db)) -> HTMLResponse:
-    """Fourteen UTC days of origin views and local account/billing activity."""
-    _admin_or_404(request, db)
-    today = dt.datetime.now(dt.timezone.utc).date()
-    since = today - dt.timedelta(days=METRIC_DAYS - 1)
-    start = dt.datetime.combine(since, dt.time.min)
-    end = dt.datetime.combine(today + dt.timedelta(days=1), dt.time.min)
-
-    signup_day = func.date(Account.created_at)
-    signups = {
-        str(day): count
-        for day, count in db.execute(
-            select(signup_day, func.count())
-            .where(Account.created_at >= start, Account.created_at < end)
-            .group_by(signup_day)
-        )
-    }
-    # The invoice-paid handler writes this grant with only the subscription ID
-    # in metadata. Group across all history so a renewal cannot become a first
-    # paid invoice simply because the original is outside the display window.
-    # home_trial.start_once stamps this once, in the transaction of the
-    # account's first successful machine connect (pairing hands the loom its
-    # token, or the loom's first register/publish), and never moves it. So it
-    # is the day the account's first computer connected. A second computer on
-    # the same account is not counted. Accounts that connected before the
-    # column existed (2026-11-17) were stamped at their next connect after.
-    connect_day = func.date(Account.home_trial_started_at)
-    connected = {
-        str(day): count
-        for day, count in db.execute(
-            select(connect_day, func.count())
-            .where(Account.home_trial_started_at >= start, Account.home_trial_started_at < end)
-            .group_by(connect_day)
-        )
-    }
-
-    ledger = BillingLedgerEntry
-    first_paid = (
-        select(func.min(ledger.created_at).label("received"))
-        .where(ledger.op == "grant_subscriber_monthly")
-        .group_by(ledger.metadata_json)
-        .subquery()
+    """Fourteen UTC days and eight ISO weeks of the growth steps."""
+    payload = _metrics_payload(request, db)
+    today = dt.date.fromisoformat(payload["until"])
+    since = dt.date.fromisoformat(payload["daily_since"])
+    campaigns = payload["campaigns"]
+    camp_heads = "".join(f"<th scope=\"col\">{escape(path)} visits</th>" for path in campaigns)
+    head = (
+        "<tr><th scope=\"col\">Period</th><th scope=\"col\">Landing</th>"
+        f"{camp_heads}<th scope=\"col\">New signups</th><th scope=\"col\">Script downloads</th>"
+        "<th scope=\"col\">Computers connected</th><th scope=\"col\">Active on day 3</th>"
+        "<th scope=\"col\">New paid subscriptions</th></tr>"
     )
-    paid_day = func.date(first_paid.c.received)
-    paid = {
-        str(day): count
-        for day, count in db.execute(
-            select(paid_day, func.count())
-            .where(first_paid.c.received >= start, first_paid.c.received < end)
-            .group_by(paid_day)
-        )
-    }
-
     views = _view_rows(db, since, today)
-    promo_visits: dict[str, int] = defaultdict(int)
-    downloads: dict[str, int] = defaultdict(int)
-    for row in views:
-        if row["path"] == PROMO_PATH:
-            promo_visits[row["day"]] += row["views"]
-        elif row["path"] == INSTALL_PATH:
-            downloads[row["day"]] += row["views"]
-
-    daily_rows = []
-    for offset in range(METRIC_DAYS):
-        day = (today - dt.timedelta(days=offset)).isoformat()
-        daily_rows.append(
-            f"<tr><th scope='row'>{day}</th><td>{promo_visits[day]}</td>"
-            f"<td>{signups.get(day, 0)}</td><td>{downloads[day]}</td>"
-            f"<td>{connected.get(day, 0)}</td><td>{paid.get(day, 0)}</td></tr>"
-        )
     view_rows = [
         f"<tr><td>{r['day']}</td><td>{escape(r['path'])}</td>"
         f"<td>{escape(r['referer_host'] or '(direct)')}</td>"
@@ -156,6 +119,7 @@ def metrics(request: Request, db: Session = Depends(get_db)) -> HTMLResponse:
     ]
     if not view_rows:
         view_rows.append("<tr><td colspan='5'>No views in this window.</td></tr>")
+    names = payload["excluded_logins"]
 
     return HTMLResponse(
         f"""<!doctype html>
@@ -163,26 +127,41 @@ def metrics(request: Request, db: Session = Depends(get_db)) -> HTMLResponse:
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Daily metrics · brnrd</title>
+  <title>Metrics · brnrd</title>
   <link rel="stylesheet" href="/static/app.css">
 </head>
 <body>
 <main class="metrics">
-  <h1>Daily metrics</h1>
-  <p>{since} to {today} (UTC). Paid subscriptions are counted on the day their first paid invoice was recorded.
-    Script downloads are GETs of /install (curl and browsers; recognized bots excluded), which also counts
-    people reading the script; computers connected counts accounts on the day their first computer connected,
-    and is the install number.</p>
+  <h1>Metrics</h1>
+  <p>{payload['weekly_since']} to {payload['until']} (UTC). Landing, campaign visits and script downloads
+    count origin requests and leave out recognized bots. A campaign path is counted and then sends the
+    visitor home, so that visit is also in the landing count. The same numbers are at /v1/admin/metrics.</p>
+  <p>Signups, computers connected, active on day 3 and paid subscriptions count distinct accounts.
+    They leave out GitHub logins named in BRNRD_FUNNEL_EXCLUDE_GITHUB_LOGINS, the admin list, the member
+    list and the first-subscriber exclude list ({names} names). Visit counts have no login to leave out.</p>
+  <p>Computers connected is the day an account's first computer connected. Active on day 3 counts how many
+    of those later showed a daemon sighting or a letter, 72 hours or more after that connection. The number
+    is dated on the connection and rises when they return; a recent day stays 0 until then. A wake that
+    never reaches this server is not in it. Paid subscriptions are the day the account's first paid invoice
+    was recorded. Script downloads also count people reading the script.</p>
+  <h2>By ISO week</h2>
+  <p>The current week runs through today.</p>
+  <div class="metrics-table">
+    <table aria-label="Weekly visits and conversions">
+      <thead>{head}</thead>
+      <tbody>{''.join(_funnel_row(row, campaigns) for row in payload['weeks'])}</tbody>
+    </table>
+  </div>
+  <h2>By day</h2>
+  <p>{since} to {today}.</p>
   <div class="metrics-table">
     <table aria-label="Daily visits and conversions">
-      <thead><tr><th scope="col">Day</th><th scope="col">/hi visits</th><th scope="col">New signups</th>
-        <th scope="col">Script downloads</th><th scope="col">Computers connected</th>
-        <th scope="col">New paid subscriptions</th></tr></thead>
-      <tbody>{''.join(daily_rows)}</tbody>
+      <thead>{head}</thead>
+      <tbody>{''.join(_funnel_row(row, campaigns) for row in payload['days'])}</tbody>
     </table>
   </div>
   <h2>Views by path and referrer</h2>
-  <p>Views and /hi visits count origin requests and exclude recognized bots. Bot views appear separately.</p>
+  <p>The last {funnel.DAILY_DAYS} days. Recognized bots are in their own column.</p>
   <div class="metrics-table">
     <table aria-label="Views by path and referrer">
       <thead><tr><th scope="col">Day</th><th scope="col">Path</th><th scope="col">Referrer host</th>
