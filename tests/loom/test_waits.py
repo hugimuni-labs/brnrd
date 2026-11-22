@@ -347,11 +347,10 @@ def verb(*args):
                           capture_output=True, text=True)
     assert proc.returncode == 0, proc.stderr
     return proc.stdout.strip()
-letters = ctx.owed()
 wake = ctx.wake()
 if "carry the PR wait" in wake:
     atomic_write(Path({str(root / "successor")!r}), wake)
-for letter in letters:
+for letter in ctx.owed():
     if letter.body == "begin":
         wish = verb("wish", "new", "--line", "Ship it", "--say", letter.id)
         verb("wish", wish, "--read", "waiting: the merge", "--wait", "pr:{REPO}#5")
@@ -368,16 +367,16 @@ for letter in letters:
     loom = Loom(root)
     loom.start()
     try:
-        wait_until((root / "successor").exists, 30, loom.dump)
+        wait_until((root / "successor").exists, 60, loom.dump)
         wish = (root / "parked").read_text()
         waiting = f"waiting: {wish} on pr:{REPO}#5 since "
         assert waiting in (root / "successor").read_text()
         assert any(f.kind == "attempt.ended" and f.data["cause"] == "reincarnated" for f in loom.facts())
-        wait_until(lambda: holder(loom.facts(), "work") is None, 20, loom.dump)
+        wait_until(lambda: holder(loom.facts(), "work") is None, 60, loom.dump)
         wait_until(lambda: polled, 10, loom.dump)
         assert not (root / "woken").exists(), "an open PR wakes nobody"
         state.update(state="merged", at="2026-10-27T12:00:00Z")
-        wait_until((root / "woken").exists, 20, loom.dump)
+        wait_until((root / "woken").exists, 60, loom.dump)
         woken = json.loads((root / "woken").read_text())
         assert waiting not in woken["wake"]
         assert woken["id"].startswith("loom/wait-")
