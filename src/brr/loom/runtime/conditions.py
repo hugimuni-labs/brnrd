@@ -12,12 +12,20 @@ install, and writing it is the record: nothing else is stored.
 - ``room-kept``: a room the reaper keeps for leftovers in a checkout whose
   thread has since merged a pull request on that repo. Commits already on
   main need no condition: the reaper's own leftovers check reaps the room.
+- ``pass-due``: once per local day, at or after ``pass_hour`` (default 8;
+  ``off`` sends none). The key is that local date, so a missed hour fires
+  on the first tick after it the same day, and a day the machine slept
+  through is not made up. Always told to the home thread: a seat and a
+  ``cond:`` park do not move it, and neither is required. The notice
+  carries the week's pace for that thread's shell and up to three
+  candidate moves. ``BRNRD_LOOM_PASS=off`` is test-only and sends none.
 
 A firing goes to its thread when a seat holds it; otherwise to the thread of
 a live ``cond:`` park that names the condition (the inbox's); with neither it
 is not told yet, and is told on the first tick a park exists, since the
-condition still holds. A ``cond:`` park stands: ``waits.outcome`` never
-resolves it, so one park keeps receiving firings until it is re-read.
+condition still holds. ``pass-due`` skips that routing. A ``cond:`` park
+stands: ``waits.outcome`` never resolves it, so one park keeps receiving the
+firings routed to it until it is re-read.
 """
 
 from __future__ import annotations
@@ -28,7 +36,7 @@ import time
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 
-NAMES = ("signal-unread", "ask-moot", "wish-stale", "room-kept")
+NAMES = ("signal-unread", "ask-moot", "wish-stale", "room-kept", "pass-due")
 #: A loom notice owed this long without a disposition is unread.
 UNREAD = timedelta(hours=24)
 #: An open wish with no fact and no left this long, and no park, is stale.
@@ -171,9 +179,75 @@ def room_kept(home, facts) -> list[Firing]:
     return rows
 
 
-def firings(home, facts, found: dict, state, now: datetime) -> list[Firing]:
+def _pass_hour(home) -> int | None:
+    """The local hour the pass is due, or None when ``pass_hour`` is off.
+
+    ``BRNRD_LOOM_PASS=off`` is test-only, the way ``BRNRD_LOOM_CLOCK_SKEW_S`` is:
+    the suite sets it so a live loop does not wake the home thread after the
+    hour. Production leaves it unset, and the config key is the switch.
+    """
+    import os
+    if os.environ.get("BRNRD_LOOM_PASS") == "off":
+        return None
+    from .config import load_config
+    value = load_config(home.root).pass_hour
+    if value == "off":
+        return None
+    return int(value)
+
+
+def _local_now(now: datetime) -> datetime:
+    """``now`` on the machine's local clock, as ``body_limits`` reads a reset."""
+    return datetime.fromtimestamp(now.timestamp()).astimezone()
+
+
+def _pass_lines(home, facts) -> str:
+    """The week's pace for the home thread's shell, then up to three candidate moves.
+
+    Either helper failing still leaves the pass: the schedule only opens the door.
+    A notice already written for today never reaches here, so this does not
+    refresh a gauge every tick of the afternoon.
+    """
+    from . import idle
+    from .config import load_config
+    from .home import HOME_THREAD
+    from .loom import _log, _turn_pace
+    lines: list[str] = []
+    try:
+        said = _turn_pace(home, facts, load_config(home.root))(HOME_THREAD)
+    except Exception as exc:  # noqa: BLE001 - the pass is the notice; the pace is an extra line
+        _log(home, f"pass: pace skipped ({type(exc).__name__}: {exc})")
+        said = ""
+    if said:
+        lines.append(said)
+    try:
+        lines.extend(idle.candidates(home, facts, HOME_THREAD)[:3])
+    except Exception as exc:  # noqa: BLE001 - same: a candidate failure must not swallow the pass
+        _log(home, f"pass: candidates skipped ({type(exc).__name__}: {exc})")
+    return "\n".join(lines)
+
+
+def pass_due(home, facts, now: datetime, known: set[str]) -> list[Firing]:
+    """One firing for today's local date, once the local hour has been reached."""
+    from .home import HOME_THREAD, notice_id
+    hour = _pass_hour(home)
+    if hour is None:
+        return []
+    local = _local_now(now)
+    if local < local.replace(hour=hour, minute=0, second=0, microsecond=0):
+        return []
+    day = local.date().isoformat()
+    if notice_id("cond", f"pass-due|{day}") in known:
+        return []
+    what = (f"pass: {day}. Read the last pass's line and check it; read the board; "
+            "pick one move (two if both cheap) across every thread; act; "
+            "write one line saying what you picked and why.")
+    return [Firing("pass-due", day, HOME_THREAD, what, _pass_lines(home, facts))]
+
+
+def firings(home, facts, found: dict, state, now: datetime, known: set[str] | None = None) -> list[Firing]:
     return [*signal_unread(facts, state, now), *ask_moot(found), *wish_stale(found, now),
-            *room_kept(home, facts)]
+            *room_kept(home, facts), *pass_due(home, facts, now, known or set())]
 
 
 def parks(home, facts, found: dict) -> dict[str, str]:
@@ -212,10 +286,13 @@ def observe_conditions(home, facts, armed: bool, now: datetime | None = None, fo
     parked = parks(home, facts, found)
     held = set(state.holder)
     ids = facts.by_id if isinstance(facts, LedgerView) else {f.id for f in facts}
-    for firing in firings(home, facts, found, state, now):
+    for firing in firings(home, facts, found, state, now, ids):
         if notice_id("cond", firing.subject) in ids:
             continue
-        thread = firing.thread if firing.thread in held else parked.get(firing.name)
+        # pass-due always wakes the home thread. The notice is the wake: route
+        # starts a body for an owed letter on an unheld thread, the same path
+        # every other notice uses.
+        thread = firing.thread if firing.name == "pass-due" or firing.thread in held else parked.get(firing.name)
         if thread is None:
             continue
         notice(home, facts, "cond", firing.subject, firing.what, firing.can, thread=thread)

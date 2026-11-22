@@ -27,7 +27,7 @@ def _home(tmp_path: Path, text: str | None = None) -> Path:
 
 def test_declaration_is_the_dataclass():
     assert [f.name for f in dataclasses.fields(load_config(Path("/nonexistent")))] == [k.name for k in KEYS]
-    assert len(KEYS) == 25
+    assert len(KEYS) == 26
 
 
 def test_a_retired_key_still_loads_and_is_ignored(tmp_path):
@@ -48,7 +48,10 @@ def test_unknown_key_is_refused_with_the_nearest(tmp_path):
     assert "config.toml" in msg and "forge_token" in msg and "did you mean forge_token?" in msg
 
 
-@pytest.mark.parametrize("line", ['stop_grace = "soon"', "stop_grace = -1", "router_ttl = 0", "author = 5", "gh = true"])
+@pytest.mark.parametrize("line", [
+    'stop_grace = "soon"', "stop_grace = -1", "router_ttl = 0", "author = 5", "gh = true",
+    'pass_hour = "morning"', "pass_hour = 24", "pass_hour = -1", "pass_hour = true",
+])
 def test_wrong_type_is_refused(tmp_path, line):
     with pytest.raises(ConfigError, match=line.split(" ")[0]):
         load_config(_home(tmp_path, line + "\n"))

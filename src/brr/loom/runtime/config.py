@@ -45,7 +45,8 @@ class ConfigError(ValueError):
 class Key:
     """One knob. ``kind`` is ``text``, ``path`` (``~`` expanded), ``secret``
     (how to get a value: ``command:``, ``file:`` or ``env:``), ``seconds``
-    (a number >= 0), ``positive`` (a number > 0), ``percent`` or ``choice``."""
+    (a number >= 0), ``positive`` (a number > 0), ``percent``, ``hour``
+    (an integer 0 to 23, or ``off``) or ``choice``."""
 
     name: str
     kind: str
@@ -122,6 +123,9 @@ KEYS: tuple[Key, ...] = (
         "Seconds between a park's turns. A park that waits on someone (letter:, wish:, pr:, prose) "
         "wakes its thread once a turn while the week's fuel is ahead of pace and the thread has acts "
         "it could move; the park stays. 0: parks carry no turn."),
+    Key("pass_hour", "hour", 8,
+        "Local hour, 0 to 23, when the morning pass wakes the home thread; off sends none. "
+        "The machine's local clock. A missed hour fires later that day; a missed day is not made up."),
     Key("stop_grace", "seconds", DEFAULT_STOP_GRACE,
         "Seconds a settled thread's body may take to land and exit before it is signalled."),
     Key("router_ttl", "positive", DEFAULT_TTL,
@@ -220,6 +224,16 @@ def _coerce(key: Key, value: object, path: Path) -> object:
         if value not in key.choices:
             raise refuse(" or ".join(f'"{c}"' for c in key.choices))
         return value
+    if key.kind == "hour":
+        if value == "off":
+            return "off"
+        if isinstance(value, bool) or not isinstance(value, (int, float)) or (
+                isinstance(value, float) and not value.is_integer()):
+            raise refuse('an hour from 0 to 23, or "off"')
+        number = int(value)
+        if number not in range(24):
+            raise refuse('an hour from 0 to 23, or "off"')
+        return number
     if value == "" and key.default is None:
         # A number with no default renders as "" in the seeded file: unset.
         return None
