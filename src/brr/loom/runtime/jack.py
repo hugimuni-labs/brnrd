@@ -369,7 +369,10 @@ def _poll(room: Path, stdin_text: str = '') -> str:
 
 
 def _unease(room: Path) -> str:
-    """The one unease line, counted as shown. A missing file says nothing."""
+    """The one unease line, counted as shown. No mark: each keepalive counts.
+
+    A missing file says nothing. A quiet-face render counts by its fact instead.
+    """
     try:
         from . import idle
         return idle.present_unease(room)

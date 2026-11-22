@@ -17,6 +17,8 @@ drawn from every open thread, most owed first, and its block also names
 every engine whose week is ahead of pace. One unease line rides the same
 places, on every thread, whatever the pace. The loom writes ``port/in/idle.md``
 and ``port/in/unease.md``; the jack reads those and the gauge, never the ledger.
+A show is one quiet face, named by its fact, or one keepalive. Rendering the
+same face again does not count.
 """
 
 from __future__ import annotations
@@ -543,11 +545,14 @@ def publish_unease(room, key: str, line: str) -> None:
     atomic_write(path, key.rstrip("\n") + "\n" + line.rstrip("\n") + "\n")
 
 
-def present_unease(room, now: float | None = None) -> str:
-    """The line as shown, counting this show. Five or more adds the acted-on suffix.
+def present_unease(room, now: float | None = None, mark: str | None = None) -> str:
+    """The line as shown. The same ``mark`` counts once; no mark counts every call.
 
-    A key that is not the one published is dropped. An empty file is a computed
-    miss: it stays, so its mtime still throttles, and the count record is cleared.
+    Five or more adds the acted-on suffix. A quiet-face render passes its fact
+    as the mark. A keepalive passes none, and leaves the last mark in place so
+    that face is not counted again on the next render. A key that is not the
+    one published is dropped. An empty file is a computed miss: it stays, so
+    its mtime still throttles, and the count record is cleared.
     """
     from .home import atomic_write
     room = Path(room)
@@ -569,13 +574,22 @@ def present_unease(room, now: float | None = None) -> str:
     except (OSError, ValueError):
         kept = {}
     entry = kept.get(key) if isinstance(kept, dict) else None
-    if isinstance(entry, dict) and entry.get("since"):
-        count = int(entry.get("n") or 0) + 1
-        since = str(entry["since"])
+    held = entry if isinstance(entry, dict) and entry.get("since") else None
+    if held and mark and held.get("mark") == mark:
+        count = int(held.get("n") or 0)
+        since = str(held["since"])
     else:
-        count = 1
-        since = time.strftime("%Y-%m-%d %H:%MZ", time.gmtime(now))
-    atomic_write(record_path, json.dumps({key: {"n": count, "since": since}}, sort_keys=True) + "\n")
+        if held:
+            count = int(held.get("n") or 0) + 1
+            since = str(held["since"])
+        else:
+            count = 1
+            since = time.strftime("%Y-%m-%d %H:%MZ", time.gmtime(now))
+        stored = {"n": count, "since": since}
+        kept_mark = mark or (held.get("mark") if held else None)
+        if kept_mark:
+            stored["mark"] = kept_mark
+        atomic_write(record_path, json.dumps({key: stored}, sort_keys=True) + "\n")
     if count < SHOWN_ACT:
         return base
     return (f"{base} (shown {count} times since {since}, nothing changed: "
