@@ -105,6 +105,7 @@ def _fuel(home: Home, cores: dict[str, list[str]], floor: float) -> list[dict]:
     with no window is ``fails``, the same word the line uses, and the error
     text stays in the file.
     """
+    from .config import initiative_share
     from .usage import FAILS, _SHELL_NAME, _past_reset, collector_failed, gauge_windows
     found = []
     for path in sorted((home.root / "loom/usage").glob("*.json")):
@@ -126,7 +127,9 @@ def _fuel(home: Home, cores: dict[str, list[str]], floor: float) -> list[dict]:
             continue
         state = ("dry" if any(g["left_pct"] <= floor for g in gauges)
                  else "stale" if _past_reset(payload, time.time()) else "ok")
+        share = initiative_share(home.root, shell)
         found.append({"shell": shell, "state": state, "gauges": gauges,
+                      **({"initiative_share": share} if share != 100 else {}),
                       **({"cores": cores[shell]} if cores.get(shell) else {})})
     return found
 

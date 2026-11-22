@@ -61,7 +61,7 @@
 						>
 					{/if}
 				</span>
-				<FuelMarks gauges={shell.gauges} {now} />
+				<FuelMarks gauges={shell.gauges} {now} share={shell.initiative_share} />
 			</button>
 		{/each}
 	</div>

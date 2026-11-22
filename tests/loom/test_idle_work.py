@@ -65,6 +65,38 @@ def test_pace_is_fuel_left_against_time_left():
     assert not idle.ahead(_gauge(40.0, 3.0))
 
 
+def _window(left: float, to_go: float, now: float) -> dict:
+    reset = datetime.fromtimestamp(now + to_go * idle.WEEK, timezone.utc).isoformat()
+    return {"at": now, "windows": [{"name": "week", "left_pct": left, "resets_at": reset}]}
+
+
+def _today(gauge: dict, now: float) -> bool:
+    """The comparison the gates used before a share existed."""
+    week = next(w for w in gauge["windows"] if w.get("name") == "week")
+    to_go = min(max(idle._reset(week) - now, 0.0) / idle.WEEK, 1.0)
+    return float(week["left_pct"]) / 100 > to_go
+
+
+def test_share_100_is_todays_test_on_a_few_gauges():
+    now = time.time()
+    gauges = [_window(left, to_go, now) for left, to_go in (
+        (92, 5.5 / 7), (50, 3 / 7), (40, 3 / 7), (33, 0.24), (100, 1), (0, 0),
+        (10, 6 / 7), (80, 1 / 7), (50, 0.5), (1, 0.99), (99, 0.01),
+    )]
+    for gauge in gauges:
+        assert idle.ahead(gauge, now, share=100) is _today(gauge, now)
+        assert idle.ahead(gauge, now) is _today(gauge, now)
+    assert "initiative share" not in idle.pace(_window(33, 0.24, now), now, share=100)
+
+
+def test_share_50_flips_a_gauge_that_is_ahead_at_100_and_pace_names_it():
+    now = time.time()
+    gauge = _window(33, 0.24, now)
+    assert idle.ahead(gauge, now, share=100)
+    assert not idle.ahead(gauge, now, share=50)
+    assert idle.pace(gauge, now, share=50) == "week 33% left, 24% of it to go, initiative share 50%"
+
+
 def _seat(home, seat, monkeypatch, gauge):
     monkeypatch.setattr(usage, "reading", lambda *args, **kwargs: gauge)
     letter = inject_letter(home.root, to="thread:work", body="Please decide the colour")
@@ -251,6 +283,56 @@ def test_the_inbox_reads_each_shared_source_once(ledger, monkeypatch):
     idle.candidates(home, read_facts(home), "inbox")
     assert counts == {"told": 1, "queues": 1, "pr_cards": 1, "receipts": 1,
                       "main_snapshot": 1, "_people": 1}
+
+
+def test_fuel_line_drops_an_engine_below_its_share_and_a_per_shell_override_wins(ledger, monkeypatch):
+    from brr.loom.runtime.conditions import _pass_lines
+    from brr.loom.runtime.config import load_config, set_value
+    home, _ = ledger
+    now = time.time()
+
+    def gauge(pct, days):
+        reset = datetime.fromtimestamp(now + days * 86400, timezone.utc).isoformat()
+        return {"at": now, "windows": [{"name": "week", "left_pct": pct, "resets_at": reset}]}
+
+    # codex is ahead at 100 and behind at 50. grok stays ahead at 50. claude is behind at 100.
+    gauges = {"codex": gauge(65, 3.8), "grok": gauge(71, 1.5), "claude": gauge(20, 5.5),
+              "fake": _window(33, 0.24, now)}
+    monkeypatch.setattr(usage, "shells", lambda home: ["codex", "grok", "claude", "none"])
+    monkeypatch.setattr(usage, "reading", lambda home, shell, *args, **kwargs: gauges.get(shell))
+    set_value(home.root, "initiative_share", 50)
+    assert idle.fuel_line(home, now) == "fuel to burn: grok week 71% left, 1.5d to reset"
+    assert not idle.wants_block(home, "claude", "work")
+    # The room's lease shell is fake. Its override, not the default, decides the turn.
+    set_value(home.root, "initiative_share", 100)
+    set_value(home.root, "initiative_share_fake", 50)
+    assert idle.share_for(home, "fake") == 50
+    assert idle.share_for(home, "grok") == 100
+    assert idle.ahead(gauges["fake"], now, share=100)
+    assert idle.fuel_line(home, now) == (
+        "fuel to burn: codex week 65% left, 3.8d to reset; grok 71% left, 1.5d")
+    said = loom._turn_pace(home, read_facts(home), load_config(home.root))("work")
+    assert said == ""
+    set_value(home.root, "body", "claude")
+    set_value(home.root, "initiative_share_claude", 50)
+    monkeypatch.setattr(usage, "reading", lambda *args, **kwargs: _window(92, 5.5 / 7, time.time()))
+    text = _pass_lines(home, read_facts(home))
+    assert "initiative share 50%" in text.splitlines()[0]
+
+
+def test_the_keepalive_rests_past_the_share_and_names_it_when_still_inside(worker, monkeypatch):
+    from brr.loom.runtime.config import set_value
+    from brr.loom.runtime.home import home_of_room
+    room, _ = worker
+    home = home_of_room(room)
+    set_value(home.root, "initiative_share", 50)
+    rested = _stop(room, monkeypatch, _window(33, 0.24, time.time()))
+    assert rested["reason"].partition(chr(10))[2].startswith(
+        "cache keepalive, nothing new arrived: stop")
+    kept = _stop(room, monkeypatch, _window(92, 5.5 / 7, time.time()))
+    assert kept["decision"] == "block"
+    assert "initiative share 50%" in kept["reason"]
+    assert ": stop" not in kept["reason"]
 
 
 def test_the_fuel_line_names_every_engine_ahead_of_pace(ledger, monkeypatch):

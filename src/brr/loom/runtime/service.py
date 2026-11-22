@@ -842,17 +842,36 @@ def cmd_config(argv: list[str]) -> int:
 
 
 def _config(argv: list[str]) -> int:
-    """``brnrd loom config [--home H]``: every key, its effective value, source, help."""
-    from .config import ConfigError, _render_value, describe_config
+    """``brnrd runtime config [--home H]``: every key, or ``set KEY VALUE``, or ``edit``."""
+    from .config import ConfigError, _literal, _render_value, describe_config, set_value
 
-    parser = argparse.ArgumentParser(prog="brnrd loom config")
+    parser = argparse.ArgumentParser(prog="brnrd runtime config")
     parser.add_argument("--home", default=None)
-    parser.add_argument("action", nargs="?", choices=("edit",), help="edit and validate the config")
-    args = parser.parse_args(argv)
+    parser.add_argument("action", nargs="?", choices=("edit", "set"),
+                        help="edit the file, or set one key")
+    parser.add_argument("key", nargs="?")
+    parser.add_argument("value", nargs="?")
+    # A negative share is a value, not a flag: ``set initiative_share -1``.
+    args, extra = parser.parse_known_args(argv)
+    if extra and args.action == "set" and args.value is None and len(extra) == 1:
+        args.value = extra[0]
+        extra = []
+    if extra:
+        parser.error("unrecognized arguments: " + " ".join(extra))
     home, _ = _service_home(args.home)
     if args.action == "edit":
         from .config_edit import edit_config
         return edit_config(home)
+    if args.action == "set":
+        if args.key is None or args.value is None:
+            parser.error("set needs a key and a value")
+        try:
+            set_value(home, args.key, _literal(args.value))
+        except ConfigError as exc:
+            print(str(exc), file=sys.stderr)
+            return 1
+        print(f"{args.key} = {_render_value(_literal(args.value))}")
+        return 0
     try:
         rows = describe_config(home)
     except ConfigError as exc:
@@ -910,7 +929,7 @@ def _uninstall(*, run, agents_home, system) -> int:
 
 
 LOOM_USAGE = (
-    "usage: brnrd loom install [--home PATH] [--no-start] [--dry-run] [--dev] | uninstall | start | stop | restart | status | logs | where | config [edit] | check\n"
+    "usage: brnrd loom install [--home PATH] [--no-start] [--dry-run] [--dev] | uninstall | start | stop | restart | status | logs | where | config [edit | set KEY VALUE] | check\n"
     "\n"
     "Local board: brnrd setup channel --kind web --wait 0\n"
     "Enables the loopback page, prints its URL and starts the loom.\n\n"

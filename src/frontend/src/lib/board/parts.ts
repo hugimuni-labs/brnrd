@@ -75,7 +75,11 @@ export function headerFuel(fuel: Fuel[] | undefined): string {
 		.map((f) => {
 			const gauges = (f.gauges ?? []).map((g) => `${g.window} ${g.left_pct}%`).join(' ');
 			const word = gauges || f.error || '';
-			return word ? `${f.shell} ${word}` : '';
+			const share =
+				typeof f.initiative_share === 'number' && f.initiative_share !== 100
+					? ` share ${f.initiative_share}%`
+					: '';
+			return word ? `${f.shell} ${word}${share}` : '';
 		})
 		.filter((line) => line)
 		.join('   ');

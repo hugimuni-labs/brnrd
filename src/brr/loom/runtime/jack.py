@@ -383,11 +383,12 @@ def _unease(room: Path) -> str:
 
 
 def _idle(room: Path, home, shell: str | None):
-    """The keepalive's candidates, when the loom wrote some and fuel is ahead of pace; else None.
+    """The keepalive's candidates, when the loom wrote some and this shell is inside its share; else None.
 
-    The room's own gauge is the first word. A ``fuel to burn:`` line is the loom's
-    word that some other engine is ahead, so the inbox still moves when this shell
-    is behind. A failed read says nothing: the keepalive then says what it said before.
+    The room's own gauge is the first word, read against this shell's initiative
+    share. A ``fuel to burn:`` line is the loom's word that some other engine is
+    inside its own share, so the inbox still moves when this shell is behind.
+    A failed read says nothing: the keepalive then says what it said before.
     """
     path = room / "port" / "in" / "idle.md"
     if not shell or _hand() or not path.is_file():
@@ -396,12 +397,13 @@ def _idle(room: Path, home, shell: str | None):
     from .usage import reading
     try:
         lines, value = path.read_text(), reading(home, shell)
+        share = idle.share_for(home, shell)
         fuel = next((line.removeprefix("fuel to burn: ").strip()
                      for line in lines.splitlines() if line.startswith("fuel to burn:")), "")
-        if not lines.strip() or not (idle.ahead(value) or fuel):
+        if not lines.strip() or not (idle.ahead(value, share=share) or fuel):
             return None
-        if idle.ahead(value):
-            return lambda news: idle.keepalive(lines, value, news)
+        if idle.ahead(value, share=share):
+            return lambda news: idle.keepalive(lines, value, news, share=share)
         return lambda news: idle.keepalive(lines, value, news, pace_text=fuel)
     except Exception:
         try:

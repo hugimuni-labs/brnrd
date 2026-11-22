@@ -191,6 +191,24 @@ def test_a_late_first_tick_fires_for_today_and_a_missed_day_is_not_made_up(ledge
     assert told(home, _utc(12, days=2)) == []
 
 
+def test_a_zero_share_sends_no_pass_and_any_share_above_still_fires(ledger, monkeypatch):
+    """Share 0 on the home shell is no morning pass. Share 50 still fires, with no pace line when behind."""
+    _arm_pass(monkeypatch)
+    home, _seat = ledger
+    from brr.loom.runtime.config import set_value
+    now = datetime.now(timezone.utc).timestamp()
+    reset = datetime.fromtimestamp(now + 0.24 * 7 * 86400, timezone.utc).isoformat()
+    behind = {"at": now, "windows": [{"name": "week", "left_pct": 33, "resets_at": reset}]}
+    monkeypatch.setattr("brr.loom.runtime.usage.reading", lambda *args, **kwargs: behind)
+    set_value(home.root, "body", "claude")
+    set_value(home.root, "initiative_share_claude", 0)
+    assert conditions.pass_due(home, read_facts(home), _utc(8), set()) == []
+    set_value(home.root, "initiative_share_claude", 50)
+    [firing] = conditions.pass_due(home, read_facts(home), _utc(8), set())
+    assert firing.name == "pass-due" and firing.thread == "inbox"
+    assert not any(line.startswith("week ") for line in firing.can.splitlines())
+
+
 def test_pass_hour_off_sends_nothing(ledger, monkeypatch):
     _arm_pass(monkeypatch)
     home, _seat = ledger

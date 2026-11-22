@@ -33,6 +33,8 @@ export interface LoomShell {
 	state?: string;
 	gauges?: LoomGauge[];
 	cores?: string[];
+	// Present only when this engine's initiative share is not 100.
+	initiative_share?: number;
 }
 
 export interface LoomBodies {

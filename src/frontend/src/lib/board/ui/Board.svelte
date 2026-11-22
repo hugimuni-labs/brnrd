@@ -206,7 +206,7 @@
 				<span class="shell" data-shell={shell.shell} data-bar={bar?.window ?? ''}>
 					<span class="name">{shell.shell}</span>
 					{#if shell.gauges?.length}
-						<FuelMarks gauges={shell.gauges} now={fuelNow} />
+						<FuelMarks gauges={shell.gauges} now={fuelNow} share={shell.initiative_share} />
 					{:else if shell.error}
 						<span class="fail">{shell.error}</span>
 					{/if}

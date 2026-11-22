@@ -10,7 +10,7 @@ from pathlib import Path
 import pytest
 
 from brr.loom.runtime.config import (
-    KEYS, ConfigError, describe_config, load_config, load_config_report,
+    KEYS, ConfigError, describe_config, initiative_share, load_config, load_config_report,
     render_config, resolve_secret, secret_shell,
 )
 from brr.loom.runtime.selfrepo import init_self
@@ -27,7 +27,7 @@ def _home(tmp_path: Path, text: str | None = None) -> Path:
 
 def test_declaration_is_the_dataclass():
     assert [f.name for f in dataclasses.fields(load_config(Path("/nonexistent")))] == [k.name for k in KEYS]
-    assert len(KEYS) == 26
+    assert len(KEYS) == 27
 
 
 def test_a_retired_key_still_loads_and_is_ignored(tmp_path):
@@ -195,6 +195,42 @@ def test_non_utf8_secret_file_is_refused_without_its_bytes(tmp_path):
     with pytest.raises(ConfigError) as err:
         resolve_secret(f"file: {token}")
     assert str(err.value) == f"secret file {token}: not UTF-8 text"
+
+
+@pytest.mark.parametrize("line", [
+    "initiative_share = 150", "initiative_share = -1", "initiative_share_codex = 101",
+])
+def test_a_share_outside_0_to_100_is_refused_at_load(tmp_path, line):
+    with pytest.raises(ConfigError, match="from 0 to 100"):
+        load_config(_home(tmp_path, line + "\n"))
+
+
+def test_share_bounds_include_0_and_100_and_a_shell_override(tmp_path):
+    home = _home(tmp_path, "initiative_share = 0\ninitiative_share_codex = 100\n")
+    assert load_config(home).initiative_share == 0
+    assert initiative_share(home, "codex") == 100
+    assert initiative_share(home, "grok") == 0
+
+
+def test_runtime_config_set_initiative_share(tmp_path, capsys):
+    from brr.loom.runtime.__main__ import main as runtime
+    home = _home(tmp_path)
+    assert runtime(["config", "--home", str(home), "set", "initiative_share", "50"]) == 0
+    assert "initiative_share = 50" in capsys.readouterr().out
+    assert load_config(home).initiative_share == 50
+    assert runtime(["config", "--home", str(home), "set", "initiative_share", "101"]) == 1
+    assert "from 0 to 100" in capsys.readouterr().err
+    assert load_config(home).initiative_share == 50
+    assert runtime(["config", "--home", str(home), "set", "initiative_share", "-1"]) == 1
+    assert load_config(home).initiative_share == 50
+    assert runtime(["config", "--home", str(home), "set", "initiative_share_codex", "40"]) == 0
+    capsys.readouterr()
+    assert initiative_share(home, "codex") == 40
+    assert initiative_share(home, "grok") == 50
+    assert runtime(["config", "--home", str(home), "set", "initiative_share_codex", "140"]) == 1
+    assert initiative_share(home, "codex") == 40
+    names = {row[0] for row in describe_config(home)}
+    assert "initiative_share_codex" in names
 
 
 def test_loom_start_folds_a_key_set_twice_and_runs_the_body_in_effect(tmp_path, monkeypatch):

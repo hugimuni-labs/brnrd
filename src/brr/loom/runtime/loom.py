@@ -2168,20 +2168,34 @@ def park_reminders(facts, thread):
                      if wish.thread == thread and read.get("wait", {}).get("reminder"))
 
 
+def pace_shell(facts, config, thread: str) -> str:
+    """The shell a thread's initiative is priced on.
+
+    Its latest lease's shell, else the configured body before the first slash.
+    The morning pass and a park's pace both use this, so a share of 0 lands
+    on the same engine.
+    """
+    shell = next((str(f.data["shell"]) for f in reversed(kind_facts(facts, "lease"))
+                  if f.data.get("thread") == thread and f.data.get("shell")), None)
+    return shell or str(getattr(config, "body", None) or "").partition("/")[0]
+
+
 def _turn_pace(home, facts, config):
-    """``pace(thread)`` for a park's turn: the week's pace when the shell that thread runs on is
-    ahead of it, else ``""``. The shell is the thread's latest lease's, else the configured body's."""
+    """``pace(thread)`` for a park's turn and the morning pass.
+
+    The week's pace when the shell that thread runs on is inside its initiative
+    share, else ``""``. The shell is :func:`pace_shell`. The share is that shell's.
+    """
     from . import idle
     from .usage import reading
 
     def pace(thread: str) -> str:
-        shell = next((str(f.data["shell"]) for f in reversed(kind_facts(facts, "lease"))
-                      if f.data.get("thread") == thread and f.data.get("shell")), None)
-        shell = shell or str(getattr(config, "body", None) or "").partition("/")[0]
+        shell = pace_shell(facts, config, thread)
         if not shell:
             return ""
         value = reading(home, shell)
-        return idle.pace(value) if idle.ahead(value) else ""
+        share = idle.share_for(home, shell)
+        return idle.pace(value, share=share) if idle.ahead(value, share=share) else ""
     return pace
 
 

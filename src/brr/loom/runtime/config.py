@@ -45,14 +45,16 @@ class ConfigError(ValueError):
 class Key:
     """One knob. ``kind`` is ``text``, ``path`` (``~`` expanded), ``secret``
     (how to get a value: ``command:``, ``file:`` or ``env:``), ``seconds``
-    (a number >= 0), ``positive`` (a number > 0), ``percent``, ``hour``
-    (an integer 0 to 23, or ``off``) or ``choice``."""
+    (a number >= 0), ``positive`` (a number > 0), ``percent`` (0 or more, and
+    at most ``ceiling`` when the key sets one), ``hour`` (an integer 0 to 23,
+    or ``off``) or ``choice``."""
 
     name: str
     kind: str
     default: object
     help: str
     choices: tuple[str, ...] = ()
+    ceiling: float | None = None
 
 
 KEYS: tuple[Key, ...] = (
@@ -126,6 +128,11 @@ KEYS: tuple[Key, ...] = (
     Key("pass_hour", "hour", 8,
         "Local hour, 0 to 23, when the morning pass wakes the home thread; off sends none. "
         "The machine's local clock. A missed hour fires later that day; a missed day is not made up."),
+    Key("initiative_share", "percent", 100.0,
+        "Percent of each engine's week the resident may spend on its own initiative. "
+        "Default 100. initiative_share_<shell> (for example initiative_share_codex) overrides one engine. "
+        "Answering a letter is never capped. From 0 to 100.",
+        ceiling=100.0),
     Key("stop_grace", "seconds", DEFAULT_STOP_GRACE,
         "Seconds a settled thread's body may take to land and exit before it is signalled."),
     Key("router_ttl", "positive", DEFAULT_TTL,
@@ -146,6 +153,25 @@ KEYS: tuple[Key, ...] = (
         "Loopback port the board's parts are served on (127.0.0.1); unset, the board is off. Read at start."),
 )
 BY_NAME = {k.name: k for k in KEYS}
+
+# No table of per-shell values exists (``connectors`` is name=folder). A flat
+# default plus one key per engine is the form: ``initiative_share_codex = 50``.
+_SHARE_SHELL = re.compile(r"initiative_share_([A-Za-z0-9][A-Za-z0-9._-]*)\Z")
+
+
+def share_shell(name: str) -> str | None:
+    """The engine ``initiative_share_<shell>`` names, else None."""
+    found = _SHARE_SHELL.fullmatch(name)
+    return found.group(1) if found else None
+
+
+def _share_key(name: str) -> Key | None:
+    shell = share_shell(name)
+    if shell is None:
+        return None
+    return Key(name, "percent", 100.0,
+               "Percent of this engine's week initiative may spend. Overrides initiative_share.",
+               ceiling=100.0)
 
 #: Derived, not written out a second time: one field per ``KEYS`` row.
 LoomConfig = make_dataclass(
@@ -242,7 +268,9 @@ def _coerce(key: Key, value: object, path: Path) -> object:
     number = float(value)
     if key.kind == "positive" and number <= 0:
         raise refuse("greater than 0")
-    if number < 0:
+    if number < 0 or (key.ceiling is not None and number > key.ceiling):
+        if key.ceiling is not None:
+            raise refuse(f"from 0 to {key.ceiling:g}")
         raise refuse("0 or more")
     return number
 
@@ -329,9 +357,14 @@ def set_value(root: Path | str, name: str, value: object) -> None:
     The line that sets ``name`` is replaced; with none, the seeded template's
     commented ``# name = ...`` line is; with neither, the line is appended.
     Any other line setting ``name`` is folded, so the file says it once.
+    A value of the wrong kind, or an initiative share outside 0 to 100, is
+    refused before the file changes.
     """
-    if name not in BY_NAME:
-        raise ConfigError(f"{config_path(root)}: unknown key {name!r}")
+    path = config_path(root)
+    key = BY_NAME.get(name) or _share_key(name)
+    if key is None:
+        raise ConfigError(f"{path}: unknown key {name!r}")
+    _coerce(key, value, path)
     seed_config(root)
     path = config_path(root)
     lines = path.read_text(encoding="utf-8").splitlines()
@@ -371,7 +404,12 @@ def load_config_report(root: Path | str, *, unknown=None) -> tuple[LoomConfig, f
     path = config_path(root)
     found = read_values(path)
     values: dict[str, object] = {}
+    shares: dict[str, float] = {}
     for name, value in found.items():
+        shell = share_shell(name)
+        if shell is not None:
+            shares[shell] = float(_coerce(_share_key(name), value, path))
+            continue
         key = BY_NAME.get(name)
         if key is None and name in RETIRED:
             continue  # read and ignored for a release, so a file that names it still loads
@@ -384,7 +422,20 @@ def load_config_report(root: Path | str, *, unknown=None) -> tuple[LoomConfig, f
                 continue
             raise ConfigError(message)
         values[name] = _coerce(key, value, path)
-    return LoomConfig(**values), frozenset(found)
+    # Not a field: the dataclass stays one field per KEYS row. The tick caches
+    # this object, so the overrides ride with it.
+    cfg = LoomConfig(**values)
+    object.__setattr__(cfg, "_initiative_shares", shares)
+    return cfg, frozenset(found)
+
+
+def initiative_share(root: Path | str, shell: str | None = None) -> float:
+    """Percent of ``shell``'s week initiative may spend. Default 100; a per-shell key wins."""
+    cfg = load_config(root)
+    overrides = getattr(cfg, "_initiative_shares", {})
+    if shell and shell in overrides:
+        return float(overrides[shell])
+    return float(cfg.initiative_share)
 
 
 _TICK_CONFIG = ContextVar("loom_tick_config", default=None)
@@ -449,10 +500,14 @@ def seed_config(root: Path | str) -> bool:
 def describe_config(root: Path | str) -> list[tuple[str, object, str, str]]:
     """``(key, effective value, source, help)`` for every key, in ``KEYS`` order."""
     cfg, from_file = load_config_report(root)
-    return [
+    rows = [
         (k.name, getattr(cfg, k.name), "file" if k.name in from_file else "default", k.help)
         for k in KEYS
     ]
+    for shell, number in sorted(getattr(cfg, "_initiative_shares", {}).items()):
+        rows.append((f"initiative_share_{shell}", number, "file",
+                     "Percent of this engine's week initiative may spend. Overrides initiative_share."))
+    return rows
 
 
 SECRET_SOURCES = ("command", "file", "env")
