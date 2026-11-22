@@ -37,7 +37,10 @@ def test_ahead_of_pace_the_keepalive_carries_the_acts_and_never_says_stop(worker
     result = _stop(room, monkeypatch, AHEAD)
     assert result["decision"] == "block"
     reason = result["reason"]
-    assert reason.partition(chr(10))[2].startswith("cache keepalive, fuel ahead of pace (week 92% left, 79% of it to go)")
+    # pace() rounds the week fraction at call time. AHEAD is built at import, so a
+    # long suite crosses the 79% into 78% edge. Compare against pace() now.
+    assert reason.partition(chr(10))[2].startswith(
+        f"cache keepalive, fuel ahead of pace ({idle.pace(AHEAD)})")
     assert ": stop" not in reason
     assert "  - w-aaaa is heard, never read" in reason
     assert "or end with one line saying why not" in reason
