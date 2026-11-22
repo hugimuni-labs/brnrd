@@ -611,7 +611,7 @@ def test_inbox_goal_is_unmoved_at_three_days_since_its_last_landed_change(ledger
     assert lines[:2] == [_GOAL_LINE + " · unmoved 3d", _GOAL_LINE.replace("growth:", "recent:", 1)]
 
 
-def test_inbox_idle_with_no_goals_prompts_for_one(worker, ledger, monkeypatch):
+def test_inbox_idle_with_no_goals_prompts_for_one(ledger, monkeypatch):
     home, seat = ledger
     _seat(home, seat, monkeypatch, AHEAD)
     block = _inbox_idle(home)
@@ -619,11 +619,14 @@ def test_inbox_idle_with_no_goals_prompts_for_one(worker, ledger, monkeypatch):
     assert block.splitlines()[0] == prompt
     assert block.count(prompt) == 1
 
+
+def test_inbox_keepalive_shows_goals_before_unease_and_the_closing_line(worker, monkeypatch):
     room, _ = worker
     monkeypatch.setattr(usage, "dry_until", lambda *args: None)
-    (room / "port/in/idle.md").write_text((seat / "port/in/idle.md").read_text())
+    monkeypatch.setattr(usage, "reading", lambda *args, **kwargs: BEHIND)
+    fuel = "fuel to burn: codex week 65% left, 3.8d to reset"
+    (room / "port/in/idle.md").write_text(f"{_GOAL_LINE}\n{fuel}\n", encoding="utf-8")
     idle.publish_unease(room, "goal:test", "unease: check growth")
     reason = json.loads(jack.execute("stop", room, "{}"))["reason"]
-    assert reason.count(prompt) == 1
-    assert reason.endswith(f"unease: check growth\n{_GOAL_CLOSE}\n")
+    assert reason.endswith(f"{_GOAL_LINE}\n{fuel}\nunease: check growth\n{_GOAL_CLOSE}\n")
     assert "--pick" not in reason
