@@ -2186,32 +2186,62 @@ def _turn_pace(home, facts, config):
 
 
 def _idle_acts(home, facts, strand, context, proposal, children) -> str:
-    """Writes ``port/in/idle.md`` for the jack's keepalive; returns the block when the face is quiet and the
-    week is ahead of pace (w-i1xohccy9ht0). Information only: a failure costs no boundary.
+    """Writes ``port/in/idle.md`` for the jack's keepalive and ``port/in/unease.md``.
 
-    Behind pace nothing is derived and the file goes; ahead, the acts are derived at most once per
-    ``idle.EVERY``, stamped by the file's mtime (an empty file stamps "none").
+    Both files are stamped by their own mtime and derived at most once per
+    ``idle.EVERY``. Returns the idle block when the face is quiet and the week
+    is ahead of pace (w-i1xohccy9ht0), plus the one unease line whenever the
+    face is quiet. The line is not gated on pace and is not stored in
+    ``idle.md``. Its shown count is applied when the line is shown, so a cached
+    ``unease.md`` still counts every quiet face. Information only: a failure
+    costs no boundary.
     """
     from . import idle
     from .faces import PROPOSED
-    from .usage import reading
+    from .home import HOME_THREAD
     try:
-        path = home.room(strand) / "port/in/idle.md"
+        room = home.room(strand)
+        path = room / "port/in/idle.md"
         shell = getattr(context, "shell", None)
-        if not shell or not idle.ahead(reading(home, shell)):
+        thread = context.thread
+        if not idle.wants_block(home, shell, thread):
             path.unlink(missing_ok=True)
+            block = ""
+        else:
+            try:
+                fresh = time.time() - path.stat().st_mtime < idle.EVERY
+            except OSError:
+                fresh = False
+            if fresh:
+                block = path.read_text()
+            else:
+                fuel = idle.fuel_line(home) if thread == HOME_THREAD else ""
+                block = idle.render(idle.candidates(home, facts, thread, children), fuel)
+                atomic_write(path, block)
+        unease_path = room / "port" / "in" / "unease.md"
+        try:
+            fresh_unease = time.time() - unease_path.stat().st_mtime < idle.EVERY
+        except OSError:
+            fresh_unease = False
+        if not fresh_unease:
+            try:
+                key, line = idle.unease(home, facts, thread, room)
+                idle.publish_unease(room, key, line)
+            except Exception as exc:  # noqa: BLE001 - the acts still show if the one line cannot be built
+                _log(home, f"unease: skipped ({type(exc).__name__}: {exc})")
+        quiet = bool(proposal) and proposal["face"] == PROPOSED["quiet"]
+        if not quiet:
             return ""
         try:
-            fresh = time.time() - path.stat().st_mtime < idle.EVERY
-        except OSError:
-            fresh = False
-        if fresh:
-            block = path.read_text()
-        else:
-            block = idle.render(idle.candidates(home, facts, context.thread, children))
-            atomic_write(path, block)
-        quiet = bool(proposal) and proposal["face"] == PROPOSED["quiet"]
-        return block if quiet else ""
+            shown = idle.present_unease(room)
+        except Exception as exc:  # noqa: BLE001 - a count that fails leaves the acts as they were
+            _log(home, f"unease: skipped ({type(exc).__name__}: {exc})")
+            shown = ""
+        if shown:
+            if block and not block.endswith("\n"):
+                block += "\n"
+            block += shown + "\n"
+        return block
     except Exception as exc:  # noqa: BLE001 - information only; never costs a boundary
         _log(home, f"idle: skipped ({type(exc).__name__}: {exc})")
         return ""

@@ -358,17 +358,36 @@ def _poll(room: Path, stdin_text: str = '') -> str:
             # happens only at the hook ceiling.
             news = _stop_news(room, text, parsed)
             idle = _idle(room, home, shell)
-            if idle:
-                return _json({"decision": "block", "reason": idle(news)})
-            return _json({"decision": "block", "reason": "cache keepalive, nothing new arrived: stop, unless the boundary"
-                          " below shows work you already owed\n" + news})
+            reason = idle(news) if idle else (
+                "cache keepalive, nothing new arrived: stop, unless the boundary"
+                " below shows work you already owed\n" + news)
+            extra = _unease(room)
+            if extra:
+                reason += extra + "\n"
+            return _json({"decision": "block", "reason": reason})
         time.sleep(min(0.2, remaining))
 
 
-def _idle(room: Path, home, shell: str | None):
-    """The keepalive's candidates, when the loom wrote some and the week is ahead of pace; else None.
+def _unease(room: Path) -> str:
+    """The one unease line, counted as shown. A missing file says nothing."""
+    try:
+        from . import idle
+        return idle.present_unease(room)
+    except Exception:
+        try:
+            with (room / "port" / "idle-errors.log").open("a") as handle:
+                handle.write(traceback.format_exc())
+        except OSError:
+            pass
+        return ""
 
-    A failed read says nothing: the keepalive then says what it said before.
+
+def _idle(room: Path, home, shell: str | None):
+    """The keepalive's candidates, when the loom wrote some and fuel is ahead of pace; else None.
+
+    The room's own gauge is the first word. A ``fuel to burn:`` line is the loom's
+    word that some other engine is ahead, so the inbox still moves when this shell
+    is behind. A failed read says nothing: the keepalive then says what it said before.
     """
     path = room / "port" / "in" / "idle.md"
     if not shell or _hand() or not path.is_file():
@@ -377,9 +396,13 @@ def _idle(room: Path, home, shell: str | None):
     from .usage import reading
     try:
         lines, value = path.read_text(), reading(home, shell)
-        if not lines.strip() or not idle.ahead(value):
+        fuel = next((line.removeprefix("fuel to burn: ").strip()
+                     for line in lines.splitlines() if line.startswith("fuel to burn:")), "")
+        if not lines.strip() or not (idle.ahead(value) or fuel):
             return None
-        return lambda news: idle.keepalive(lines, value, news)
+        if idle.ahead(value):
+            return lambda news: idle.keepalive(lines, value, news)
+        return lambda news: idle.keepalive(lines, value, news, pace_text=fuel)
     except Exception:
         try:
             with (room / "port" / "idle-errors.log").open("a") as handle:
