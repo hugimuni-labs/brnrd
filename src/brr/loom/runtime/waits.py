@@ -166,6 +166,20 @@ def live(found: dict) -> list[tuple]:
     return rows
 
 
+def wish_waiters(home, facts, found: dict, target: str, now: datetime) -> list[tuple]:
+    """Open, unresolved parks on a wish, with the thread each would wake."""
+    from .home import notice_id
+    from .ledger import kind_facts
+    rows = [(wish, read) for wish, read in live(found)
+            if read["wait"].get("on") == f"wish:{target}"]
+    if not rows:
+        return []
+    notices = {fact.id for fact in kind_facts(facts, "letter")}
+    return [(wish, read, parker(home, facts, wish, read)) for wish, read in rows
+            if notice_id("wait", subject(wish, read)) not in notices
+            and outcome(wish, read, facts, found, {}, now) is None]
+
+
 def pr_repo(data: dict) -> str | None:
     """``owner/repo`` of a ``pr.opened`` fact, read off its url; its ``repo`` is the library name."""
     match = re.match(r"https://github\.com/([\w.-]+/[\w.-]+)/pull/\d+", str(data.get("url") or ""))

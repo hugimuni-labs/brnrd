@@ -12,7 +12,7 @@ from brr.loom.runtime.ledger import Fact, append, inject_letter, read_facts
 from brr.loom.runtime.port import render_boundary
 from test_never_quit import STRAND, worker  # noqa: F401  (worker is a fixture)
 from test_wake import commit
-from test_wishes import command, ledger  # noqa: F401  (ledger is a fixture)
+from test_wishes import command, heard, ledger  # noqa: F401  (ledger is a fixture)
 
 
 def _gauge(left_pct: float, days_to_go: float) -> dict:
@@ -432,6 +432,26 @@ def test_the_oldest_unanswered_ask_is_the_inbox_unease(ledger, monkeypatch):
     assert (key, line) == (f"ask:{ask}",
                            f"unease: ask {ask} to test unanswered 8d: follow it up once, or close it")
     assert not idle.unease(home, read_facts(home), "work", room, born + 8 * 86400 + 60)[0].startswith("ask:")
+
+
+def test_unanswered_ask_unease_names_the_waiting_thread_and_counts_its_wishes(ledger, monkeypatch):
+    from brr.loom.runtime.wishes import wishes
+
+    home, seat = ledger
+    monkeypatch.setenv("LOOM_BUDGET_BYTES", "10000000")
+    first, _ = _seat(home, seat, monkeypatch, AHEAD)
+    ask = command(home, seat, "ask", "Pick a colour", "--for", first)
+    second = heard(home, seat, "Paint the door")
+    for waiter in (first, second):
+        command(home, seat, "wish", waiter, "--read", "waiting: for a colour", "--wait", f"wish:{ask}",
+                "--until", "+10d")
+
+    facts = read_facts(home)
+    born = idle._epoch(wishes(facts)[ask].born)
+    room = home.room("s-aaaa-test")
+    assert idle.unease(home, facts, "inbox", room, born + 8 * 86400) == (
+        f"ask:{ask}", f"unease: ask {ask} to test unanswered 8d: write to thread:work first · 2 wait on it",
+    )
 
 
 def test_unease_is_recomputed_at_most_once_per_window(ledger, monkeypatch):

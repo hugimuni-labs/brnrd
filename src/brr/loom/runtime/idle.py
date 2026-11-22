@@ -26,7 +26,7 @@ from __future__ import annotations
 import json
 import re
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 from .usage import _reset
@@ -483,6 +483,7 @@ def _who(home, head: str) -> str:
 def _ask_unease(home, facts, now: float) -> tuple[str, str] | None:
     """The oldest ask to a person, older than seven days, with no answer. Inbox only."""
     from .lifecycle import main_snapshot
+    from .waits import wish_waiters
     from .wishes import told, waits_on
     found = told(facts)
     heads = waits_on(found, main_snapshot(home))
@@ -503,9 +504,13 @@ def _ask_unease(home, facts, now: float) -> tuple[str, str] | None:
     if oldest is None:
         return None
     wish, age, head = oldest
+    waiters = wish_waiters(home, facts, found, wish.id, datetime.fromtimestamp(now, timezone.utc))
+    advice = "follow it up once, or close it"
+    if waiters:
+        threads = ", ".join(f"thread:{thread}" for thread in sorted({thread for _, _, thread in waiters}))
+        advice = f"write to {threads} first · {len(waiters)} wait on it"
     return (f"ask:{wish.id}",
-            f"unease: ask {wish.id} to {_who(home, head)} unanswered {_age(age)}: "
-            "follow it up once, or close it")
+            f"unease: ask {wish.id} to {_who(home, head)} unanswered {_age(age)}: {advice}")
 
 
 def unease(home, facts, thread: str, room, now: float | None = None) -> tuple[str, str]:
