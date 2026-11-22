@@ -112,7 +112,7 @@ STREAMS = {"letters": _letters, "board": _board}
 def main(argv: list[str]) -> int:
     parser = Parser(verb="attend", prog="brnrd runtime attend")
     parser.add_argument("--room", default=os.environ.get("BRNRD_ROOM"), help=argparse.SUPPRESS)
-    parser.add_argument("--for", dest="duration", default="9m", metavar="DURATION")
+    parser.add_argument("--for", dest="duration", default="110s", metavar="DURATION")
     parser.add_argument("--streams", default="letters,board")
     args = parser.parse_args(argv)
     try:
