@@ -451,6 +451,66 @@ def test_unease_is_recomputed_at_most_once_per_window(ledger, monkeypatch):
     assert len(calls) == 2
 
 
+def _count(room, key="readme:work"):
+    return json.loads((room / "port" / "unease.json").read_text())[key]
+
+
+def test_twenty_renders_of_one_quiet_face_count_once(ledger, monkeypatch):
+    home, seat = ledger
+    _, context = _seat(home, seat, monkeypatch, AHEAD)
+    room = home.room("s-aaaa-test")
+    line = "unease: this README is cut at wake (10 of its 20 bytes cut): trim it"
+    idle.publish_unease(room, "readme:work", line)
+    fact = "quiet:s-aaaa-test:1:2026-11-22T05:33:00+00:00"
+    quiet = {"face": PROPOSED["quiet"], "token": "quiet since 05:33", "fact": fact}
+    last = ""
+    for _ in range(20):
+        last = loom._idle_acts(home, read_facts(home), "s-aaaa-test", context, quiet, ())
+    record = _count(room)
+    assert record["n"] == 1
+    assert record["mark"] == fact
+    assert line in last and "nothing changed" not in last
+    nxt = "quiet:s-aaaa-test:1:2026-11-22T06:26:00+00:00"
+    last = loom._idle_acts(home, read_facts(home), "s-aaaa-test", context, {**quiet, "fact": nxt}, ())
+    record = _count(room)
+    assert record["n"] == 2 and record["mark"] == nxt
+    assert line in last and "nothing changed" not in last
+
+
+def test_the_jack_counts_each_unmarked_show(tmp_path):
+    room = tmp_path / "room"
+    line = "unease: this README is cut at wake (10 of its 20 bytes cut): trim it"
+    idle.publish_unease(room, "readme:work", line)
+    for n in range(1, 4):
+        assert jack._unease(room) == line
+        assert _count(room)["n"] == n
+    assert "mark" not in _count(room)
+    # A keepalive counts, and leaves the quiet face's mark, so the next render of it does not.
+    fact = "quiet:s-aaaa-test:1:2026-11-22T05:33:00+00:00"
+    assert idle.present_unease(room, mark=fact) == line
+    assert _count(room)["n"] == 4 and _count(room)["mark"] == fact
+    shown = jack._unease(room)
+    assert shown.startswith(line) and "shown 5 times" in shown
+    assert _count(room)["n"] == 5 and _count(room)["mark"] == fact
+    assert idle.present_unease(room, mark=fact) == shown
+    assert _count(room)["n"] == 5
+
+
+def test_a_new_unease_key_resets_the_shown_count(tmp_path):
+    room = tmp_path / "room"
+    now = datetime(2026, 11, 22, 5, 33, tzinfo=timezone.utc).timestamp()
+    first = "unease: this README is cut at wake (10 of its 20 bytes cut): trim it"
+    idle.publish_unease(room, "readme:work", first)
+    for _ in range(6):
+        idle.present_unease(room, now)
+    assert _count(room)["n"] == 6
+    nxt = "unease: ask w-1 to test unanswered 8d: follow it up once, or close it"
+    idle.publish_unease(room, "ask:w-1", nxt)
+    assert idle.present_unease(room, now) == nxt
+    kept = json.loads((room / "port" / "unease.json").read_text())
+    assert list(kept) == ["ask:w-1"] and kept["ask:w-1"]["n"] == 1
+
+
 def test_a_shown_key_that_stops_is_dropped(tmp_path):
     room = tmp_path / "room"
     line = "unease: memory/scars/x.md blocked 4 times in 7d: make it a check, or rewrite it"

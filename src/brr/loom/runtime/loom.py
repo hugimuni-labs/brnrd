@@ -2206,9 +2206,9 @@ def _idle_acts(home, facts, strand, context, proposal, children) -> str:
     ``idle.EVERY``. Returns the idle block when the face is quiet and the week
     is ahead of pace (w-i1xohccy9ht0), plus the one unease line whenever the
     face is quiet. The line is not gated on pace and is not stored in
-    ``idle.md``. Its shown count is applied when the line is shown, so a cached
-    ``unease.md`` still counts every quiet face. Information only: a failure
-    costs no boundary.
+    ``idle.md``. A show is one quiet face: the proposal's fact is the mark, and
+    the same mark does not count again. The jack's keepalive passes no mark,
+    so each stop counts. Information only: a failure costs no boundary.
     """
     from . import idle
     from .faces import PROPOSED
@@ -2247,7 +2247,7 @@ def _idle_acts(home, facts, strand, context, proposal, children) -> str:
         if not quiet:
             return ""
         try:
-            shown = idle.present_unease(room)
+            shown = idle.present_unease(room, mark=proposal.get("fact"))
         except Exception as exc:  # noqa: BLE001 - a count that fails leaves the acts as they were
             _log(home, f"unease: skipped ({type(exc).__name__}: {exc})")
             shown = ""
