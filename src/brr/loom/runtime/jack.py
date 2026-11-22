@@ -121,7 +121,8 @@ def _slot(key: str) -> str:
     return head if head.endswith((":", "?")) else key
 
 
-def _news(text: str, state: dict, plan_changed: bool) -> tuple[str, list[str], list[str]]:
+def _news(text: str, state: dict, plan_changed: bool, *,
+          letters_only: bool = False) -> tuple[str, list[str], list[str]]:
     """The boundary minus what an earlier boundary already said: (news, said, told).
 
     The wake shows everything; a post shows a line only when it is new, the
@@ -160,6 +161,8 @@ def _news(text: str, state: dict, plan_changed: bool) -> tuple[str, list[str], l
             else:
                 letters.extend(unit)
             continue
+        if letters_only:
+            continue
         status = unit[0].startswith("status:")
         key = ("status: · plan " + unit[0].partition(" · plan ")[2] if status
                else _ageless(unit[0]) if unit[0].startswith(("opened: ", "asks: ")) else "\n".join(unit))
@@ -170,14 +173,32 @@ def _news(text: str, state: dict, plan_changed: bool) -> tuple[str, list[str], l
     # A thread line that changed is said anew, not gone: its slot (``opened: <thread>``, ``idle:``) is still here.
     slots = {_slot(key) for key in said}
     body.extend("gone: " + key.split("\n")[0] for key in state.get("said", [])
-                if key not in said and not key.startswith("status:") and _slot(key) not in slots)
+                if not letters_only and key not in said and not key.startswith("status:") and _slot(key) not in slots)
     if not body and not letters:
         return "", said, told
     shown = [item.group(1) for line in letters if (item := _ITEM_LINE.match(line))]
-    owed = (["owed: " + " ".join(skipped) + " (shown before)"] if skipped else []) \
+    owed = (["owed: " + " ".join(skipped) + " (shown before)"] if skipped and not letters_only else []) \
         + (["owed:"] if letters else [])
     head = f"<!-- port {header.group(1)} gen {header.group(2)} · {clock()} · owed {' '.join(shown)} -->"
     return "\n".join([head, *body, *owed, *letters, ""]), said, told
+
+
+def attend_letters(room: Path) -> str:
+    """The letter portion of a post, with the same shown receipt and state."""
+    text = _boundary_text(room)
+    parsed = parse_boundary(text)
+    state = _state(room)
+    known = set(state.get("told", []))
+    unshown = {letter.id for letter in parsed.letters if not letter.compact} - known
+    if not unshown:
+        return ""
+    known.update(set(parsed.ids) - unshown | answered(room))
+    news, _, _ = _news(text, {"told": known}, False, letters_only=True)
+    if news:
+        shown = parse_boundary(news)
+        _shown(room, shown)
+        _set_state(room, told=sorted(set(state.get("told", [])) | set(shown.ids)))
+    return news
 
 
 def _stop_news(room: Path, text: str, parsed: Boundary) -> str:

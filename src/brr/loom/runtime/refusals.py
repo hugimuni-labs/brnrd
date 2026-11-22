@@ -57,6 +57,7 @@ FLAGS: dict[str, list[tuple[str, str]]] = {
         ("--default-at", 'ask "merge #12?" --for <w-id> --rec "yes" --default-at +1d'),
         ("--rec", 'ask "merge #12?" --for <w-id> --rec "yes"'),
     ],
+    "attend": [("--streams", "attend --streams letters,board")],
     "attention": [("--note", 'attention --note <letter id> --why "what was done"')],
     "machines": [("prefer", "machines prefer <install>")],
     "face": [("nothing is proposed", "face b·w·d")],
@@ -65,6 +66,7 @@ FLAGS: dict[str, list[tuple[str, str]]] = {
 
 VERB: dict[str, str] = {
     "update": "update take",
+    "attend": "attend --for 30s",
     "send": 'send --re <letter id> --to thread:inbox "reply"',
     "settle": 'settle <thread> --why "what it became"',
     "reincarnate": 'reincarnate --why "mostly residue; the README has the rest"',

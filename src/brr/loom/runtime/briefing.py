@@ -15,6 +15,7 @@ BRIEFING = f"""How a body holds the seat. The installed loom writes this section
 
 - Stopping is resting, not ending: the jack holds the body at no cost and the next letter wakes it here. An addressed reply is a turn, not the end of the seat.
 - A sleep or poll loop is never the wait: it has no tool boundary, so no letter lands inside it. Waiting on CI, a PR, a command, a person or a time, park and stop: `brnrd runtime wish <w-id> --read "waiting: <what>" --wait <{GRAMMAR}>`. The loom's letter wakes the body when the condition turns true; a wait that returns on its own is a quit.
+- To stay warm while waiting on letters or the board, call `brnrd runtime attend`; it returns the moment one lands.
 - A command the body starts itself runs as `(cmd; echo $? > <path>) &` and parks on `file:<path>`.
 - Scratch goes under `$TMPDIR`, the room's `tmp/`, never `/private/tmp` or `/tmp`: the reaper clears the room, nothing clears those. A checkout with work to land sits at the room's root, where the reaper reads it before anything goes; `tmp/` is reaped unread.
 - A letter names its reply address: answer with `brnrd runtime send --re <id> --to <address> "…"`; where the address is `-`, settle it with `send --re <id> --to thread:<this thread> --note "<what you did>"`. A letter from `loom` is a notice yours to settle; its last lines say how. Stamp what someone wants with `send --wish`; open a thread only for one: `send --to thread:<new> --wish <w-id>` or `--wish new:"<line>"`.

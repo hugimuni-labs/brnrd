@@ -100,7 +100,7 @@ def renamed(row: dict) -> dict:
     return row
 
 
-def read_file(path: Path) -> list[Fact]:
+def read_file(path: Path, select=None) -> list[Fact]:
     """Parse one jsonl file, skipping a trailing line the process didn't finish."""
     raw = path.read_bytes()
     if not raw:
@@ -108,11 +108,15 @@ def read_file(path: Path) -> list[Fact]:
     if not raw.endswith(b"\n"):
         cut = raw.rfind(b"\n")
         raw = raw[:cut + 1] if cut >= 0 else b""
-    facts = []
-    for line in raw.decode().splitlines():
-        if line.strip():
-            facts.append(Fact.from_row(renamed(json.loads(line))))
-    return facts
+    return _parse_lines(raw, select)
+
+
+def _parse_lines(raw: bytes, select=None) -> list[Fact]:
+    if select is None:
+        lines = raw.decode().splitlines()
+    else:
+        lines = (line for line in raw.split(b"\n") if select(line))
+    return [Fact.from_row(renamed(json.loads(line))) for line in lines if line.strip()]
 
 
 def read_facts(home: Home) -> list[Fact]:
@@ -400,7 +404,9 @@ class LedgerReader:
     new view, so a walker on another thread never sees one half-rebuilt.
     """
 
-    def __init__(self):
+    def __init__(self, *, select=None):
+        # A read-only projection can discard unrelated JSONL rows before decoding.
+        self.select = select
         self.streams = {}
         self.listing = (None, [])
         self.ordered = LedgerView()
@@ -483,15 +489,14 @@ class LedgerReader:
                     handle.seek(0)
                     raw = handle.read()
                 complete = raw[:raw.rfind(b"\n") + 1]
-                added = [Fact.from_row(renamed(json.loads(line)))
-                         for line in complete.decode().splitlines() if line.strip()]
+                added = _parse_lines(complete, self.select)
                 tail = ((prior[3] if prior is not None and offset else b"") + complete)[-TAIL:]
                 streams[path] = (stamp, offset + len(complete), str(path), tail)
                 additions.extend(added)
         if changed:
             if repair:
                 duplicates = []
-                self.ordered = LedgerView(union(*(read_file(path) for path in paths),
+                self.ordered = LedgerView(union(*(read_file(path, self.select) for path in paths),
                                                 duplicates=duplicates))
                 self.ordered.duplicates = duplicates
             else:
