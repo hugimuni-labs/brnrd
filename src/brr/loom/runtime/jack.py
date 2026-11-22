@@ -137,7 +137,7 @@ def _news(text: str, state: dict, plan_changed: bool) -> tuple[str, list[str], l
     for line in text[header.end():].splitlines():
         if line.startswith("  ") and units:
             units[-1].append(line)
-        elif line.startswith("first-word: "):
+        elif line.startswith(("first-word: ", "next wake: ")):
             continue
         elif line.strip() and line != "owed:":
             units.append([line])
@@ -294,6 +294,11 @@ def _order(room: Path) -> str:
     return path.read_text().strip() if path.is_file() else ""
 
 
+def _rest(text: str) -> str:
+    return next((line.removeprefix("next wake: ") for line in text.splitlines()
+                 if line.startswith("next wake: ")), "resting until the next letter")
+
+
 def _poll(room: Path, stdin_text: str = '') -> str:
     from .usage import dry_until
     home = home_of_room(room)
@@ -358,9 +363,10 @@ def _poll(room: Path, stdin_text: str = '') -> str:
             # happens only at the hook ceiling.
             news = _stop_news(room, text, parsed)
             idle = _idle(room, home, shell)
-            reason = idle(news) if idle else (
-                "cache keepalive, nothing new arrived: stop, unless the boundary"
-                " below shows work you already owed\n" + news)
+            rest = _rest(text)
+            reason = (idle(news) if idle else "cache keepalive: " + rest + "\n" + news)
+            if idle:
+                reason += rest + "\n"
             extra = _unease(room)
             if extra:
                 reason += extra + "\n"
@@ -977,6 +983,13 @@ def execute(event: str, room: Path, stdin_text: str) -> str:
     out = _stop_block(room, text, plan) or _poll(room, stdin_text)
     if out:
         _opened(room)
+    elif _hand():
+        latest = _boundary_text(room)
+        boundary = parse_boundary(latest)
+        if (boundary.settled is None and not (set(boundary.ids) - answered(room))
+                and not _state(room).get("reincarnated") and _order(room) != "end"
+                and any(line.startswith("next wake: ") for line in latest.splitlines())):
+            return _clocked(_rest(latest) + "\n")
     return out
 
 
@@ -1085,7 +1098,7 @@ Restate each one's whole list:
 - or a park: wish <w-id> --read "waiting: <on what>"; a delivery: --result <kind>:<ref> --line "<what>" --deliver"""
 
 README = """before resting: since threads/{thread}/README.md last changed this body did {did}. Any end can
-come while it rests, and the README is what its successor boots into. Rewrite it to the current state
+come while it rests, and the next context starts from the README. Rewrite it to the current state
 (a decision with its why, `## Now`, a done row cut to its receipt; never a log line) and land it with
 `brnrd runtime send-self --room .`; or stop again: it still is.{facts}"""
 
@@ -1104,7 +1117,7 @@ def _readme_miss(room: Path, state: dict) -> str:
 MARK = """context {k}k, past the {mark}k mark, before resting: what in it would die if you reincarnated now?
 {census}
 The burden is on holding: name what would die, or go. A conversation with a person that is mid-way counts as live.
-- go: brnrd runtime reincarnate --why "<what the successor picks up>"
+- go: brnrd runtime reincarnate --why "<what the next context needs>"
 - hold: brnrd runtime hold --why "<what would die, by name>"
 Asked once; it comes back when the context grows {rearm}k past this."""
 

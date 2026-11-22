@@ -227,30 +227,44 @@ def _pass_lines(home, facts) -> str:
     return "\n".join(lines)
 
 
-def pass_due(home, facts, now: datetime, known: set[str]) -> list[Firing]:
-    """One firing for today's local date, once the local hour has been reached.
-
-    The pass is the resident's own initiative. A share of 0 on the home
-    thread's shell, the same shell :func:`pace_shell` prices, sends none.
-    Any share above 0 fires, and the pace line stays off when that shell
-    is behind.
-    """
+def _pass_schedule(home, facts, now: datetime, known):
+    """Return the next unsent pass's local date and scheduled UTC instant."""
     from . import idle
     from .config import load_config
     from .home import HOME_THREAD, notice_id
     from .loom import pace_shell
+
     hour = _pass_hour(home)
     if hour is None:
-        return []
+        return None
     shell = pace_shell(facts, load_config(home.root), HOME_THREAD)
     if shell and idle.share_for(home, shell) <= 0:
+        return None
+    day = _local_now(now).date()
+    while notice_id("cond", f"pass-due|{day.isoformat()}") in known:
+        day += timedelta(days=1)
+    # Resolve the zone at the scheduled wall time, including a DST change
+    # between now and the next pass.
+    at = datetime(day.year, day.month, day.day, hour).astimezone(timezone.utc)
+    return day.isoformat(), at
+
+
+def next_pass(home, facts, now: datetime) -> datetime | None:
+    """The drive's next calendar wake, with a missed hour due immediately."""
+    from .ledger import LedgerView
+    known = facts.by_id if isinstance(facts, LedgerView) else {f.id for f in facts}
+    schedule = _pass_schedule(home, facts, now, known)
+    return max(now, schedule[1]) if schedule else None
+
+
+def pass_due(home, facts, now: datetime, known: set[str]) -> list[Firing]:
+    """One firing for today's local date, once the local hour has been reached."""
+    from .home import HOME_THREAD
+
+    schedule = _pass_schedule(home, facts, now, known)
+    if schedule is None or now < schedule[1]:
         return []
-    local = _local_now(now)
-    if local < local.replace(hour=hour, minute=0, second=0, microsecond=0):
-        return []
-    day = local.date().isoformat()
-    if notice_id("cond", f"pass-due|{day}") in known:
-        return []
+    day, _ = schedule
     what = (f"pass: {day}. Read the last pass's line and check it; read the board; "
             "pick one move (two if both cheap) across every thread; act; "
             "write one line saying what you picked and why.")

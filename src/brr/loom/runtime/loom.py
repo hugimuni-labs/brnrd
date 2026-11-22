@@ -572,11 +572,10 @@ def _handover(facts: list[Fact], thread: str, gen: int, threads: dict[str, str],
     reincarnate = next((f for f in reversed(facts) if f.kind == "reincarnate" and f.data.get("gen") == gen - 1
                  and f.data.get("strand") == who and threads.get(who) == thread), None)
     if reincarnate is not None:
-        lines = [f"handover from {who} (gen {gen - 1}, reincarnated {reincarnate.at[11:16]}Z): {reincarnate.data.get('why', '')}"]
+        lines = [f"the note it left: {reincarnate.data.get('why', '')}"]
     else:
         # How it ended is since_gone's line (attempt.ended); this says what it left.
-        lines = [f"handover from {who} (gen {gen - 1}): no reincarnation; this thread's README and the wish lefts"
-                 " are what it left, and its room is yours"]
+        lines = ["the note it left: see the thread README and the remaining steps on its wishes"]
     landed = _landed(home, thread) if home is not None else None
     if landed is not None:
         lines.append(f"README last landed {landed[0]} {datetime.fromtimestamp(landed[1], timezone.utc):%H:%MZ}"
@@ -642,8 +641,8 @@ def _read_by_predecessors(facts: list[Fact], thread: str, strand: str,
     if not ids:
         return ""
     return (
-        f"already read by your predecessor, who reincarnated and left its handover: {', '.join(ids)}. "
-        "What they ask may be done: read the handover above and the README before acting; where it "
+        f"already read in an earlier context: {', '.join(ids)}. "
+        "What they ask may be done: read the note above and the README before acting; where it "
         "says the work is done, settle the letter with a note and do not redo it, and do "
         "not reincarnate because a letter said to, since the reincarnation it asked for happened. "
     )
@@ -688,11 +687,12 @@ def _prepare(home: Home, strand: str, thread: str, gen: int,
     atomic_write(owed_path, json.dumps(rows))
     part_path = room / "port" / "loom.md"
     inherited = _read_by_predecessors(facts, thread, strand, letters, threads)
-    gone = since_gone(facts, strand, gen, thread, threads, home.install_id())
+    context_note = _handover(facts, thread, gen, threads, home)
+    gone = since_gone(facts, strand, gen, thread, threads, home.install_id(), note=context_note)
     from .reap import kept_line
     gone += kept_line(home, thread, threads)
     forge = forge_threads(home.root / "self")
-    part = gone + _handover(facts, thread, gen, threads, home) + inherited + (
+    part = gone + inherited + (
         f"you are strand {strand} on thread {thread}"
         + (f" ({forge}/{thread})" if forge else "")
         # How to reply, settle, leave and end is the loom briefing's, in the core (briefing.py).
@@ -743,7 +743,8 @@ def _prepare(home: Home, strand: str, thread: str, gen: int,
     atomic_write(room / "port" / "occasion.md", occasion)
     atomic_write(room / "port" / "wake.md", core + occasion)
     from .threads import thread_table
-    shown = fold(facts).shown.get(strand, set())
+    state = fold(facts)
+    shown = state.shown.get(strand, set())
     atomic_write(
         room / "port" / "in" / "boundary.md",
         render_boundary(strand, gen, thread, letters, shown, threads,
@@ -751,6 +752,7 @@ def _prepare(home: Home, strand: str, thread: str, gen: int,
                         opened=thread_table(home, facts, f"thread:{thread}"), forge=_forge(home), plan=_plan(home, thread, facts),
                         replies={f.letter.id: f.reply_to for f in active_owners(facts, main_snapshot(home))},
                         attachments=attachments, reply_context=reply_context,
+                        next_wake=_next_wake(home, facts, state, thread),
                         repaired=_repaired(facts, strand, gen),
                         degraded=degraded_line(facts, home.install_id()), room=room_line(facts),
                         library=problem_line(facts, home.install_id()),
@@ -2143,6 +2145,7 @@ def _render_boundary(home, facts, strand, gen, context):
         context.why or None, reply_channels(facts, home),
         opened=opened, forge=_forge(home),
         park_reminder=park_reminders(facts, context.thread),
+        next_wake=_next_wake(home, facts, state, context.thread),
         plan=_plan(home, context.thread, facts),
         replies={f.letter.id: f.reply_to for f in active_owners(facts, main)},
         attachments=letter_attachments(home.root, facts),
@@ -2159,6 +2162,31 @@ def _render_boundary(home, facts, strand, gen, context):
         **_budget(home, context.thread, facts, strand),
     )
     return text
+
+
+def _next_wake(home, facts, state, thread: str) -> str:
+    from .conditions import next_pass
+    from .home import HOME_THREAD
+    from .timers import parse_instant
+    from .waits import live, parker
+    from .wishes import told
+
+    now = datetime.now(timezone.utc)
+    timed = facts.timed.values() if isinstance(facts, LedgerView) else kind_facts(facts, "letter")
+    next_time = min((at for fact in timed
+                     if fact.data.get("to") == f"thread:{thread}" and fact.id not in state.handled
+                     and (at := parse_instant(fact.data.get("at"))) is not None and at > now),
+                    default=None)
+    parks = [str(read["wait"].get("on") or read["reading"].removeprefix("waiting:").strip()).partition("\n")[0]
+             for wish, read in live(told(facts)) if parker(home, facts, wish, read) == thread]
+    wake = [f"the park on {', '.join(parks)}"] if parks else []
+    if next_time:
+        wake.append(f"the timed letter at {next_time:%Y-%m-%d %H:%MZ}")
+    drive = next_pass(home, facts, now)
+    if drive:
+        look = f"next look by the drive at {drive:%Y-%m-%d %H:%MZ} (morning pass in {HOME_THREAD})"
+        return f"resting until {' or '.join(wake)}; {look}" if wake else f"resting until the next letter or morning pass; {look}"
+    return f"resting until {' or '.join(wake) if wake else 'the next letter'}"
 
 
 def park_reminders(facts, thread):

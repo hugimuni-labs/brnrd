@@ -206,7 +206,7 @@ from brr.loom.runtime.fakebody import Ctx
 from brr.loom.runtime.home import atomic_write
 ctx = Ctx(Path(sys.argv[1]))
 letters = ctx.owed()
-if "predecessor" in ctx.wake():
+if "already read in an earlier context" in ctx.wake():
     atomic_write(Path({str(received)!r}), json.dumps({{"wake": ctx.wake()}}))
     for letter in letters:
         ctx.send("thread:work", note="settled", re=letter.id)
@@ -219,8 +219,8 @@ else:
     try:
         wait_until(received.exists, 30, loom.dump)
         wake = json.loads(received.read_text())["wake"]
-        assert f"already read by your predecessor, who reincarnated and left its handover: {ask}" in wake
-        assert wake.count("already read by your predecessor") == 1
+        assert f"already read in an earlier context: {ask}" in wake
+        assert wake.count("already read in an earlier context") == 1
     finally:
         loom.halt()
     assert not loom.errors
@@ -240,7 +240,7 @@ from brr.loom.runtime.fakebody import Ctx
 from brr.loom.runtime.home import atomic_write
 ctx = Ctx(Path(sys.argv[1]))
 letters = ctx.owed()
-if "handover from" in ctx.wake():
+if "It left this note:" in ctx.wake():
     atomic_write(Path({str(received)!r}), json.dumps({{"wake": ctx.wake()}}))
     for letter in letters:
         ctx.send("thread:work", note="settled", re=letter.id)
@@ -254,7 +254,8 @@ else:
     try:
         wait_until(received.exists, 30, loom.dump)
         wake = json.loads(received.read_text())["wake"]
-        assert "(gen 1, reincarnated " in wake
+        assert "the last context ended at " in wake
+        assert "(full)." in wake
         assert "NEXT: merge #7 when its re-run is green" in wake
         assert "done after the reincarnation: #7 merged as abc123" in wake
         assert wake.index("NEXT: merge #7") < wake.index("done after the reincarnation")
@@ -294,7 +295,7 @@ else:
         wait_until(received.exists, 30, loom.dump)
         result = json.loads(received.read_text())
         assert "Decision: keep the room" in result["readme"]
-        assert "(gen 1): no reincarnation" in result["wake"]
+        assert "It left this note:\nsee the thread README" in result["wake"]
         assert "README last landed" in result["wake"]
         assert "→ channel:fake: on it" in result["wake"]
         leases = [f for f in loom.facts() if f.kind == "lease" and f.data.get("thread") == "work"]
@@ -321,7 +322,7 @@ from brr.loom.runtime.fakebody import Ctx
 from brr.loom.runtime.home import atomic_write
 ctx = Ctx(Path(sys.argv[1]))
 letters = ctx.owed()
-if "handover from" in ctx.wake():
+if "It left this note:" in ctx.wake():
     atomic_write(Path({str(received)!r}), json.dumps([letter.id for letter in letters]))
 else:
     ctx.reincarnate("README Now says merge #7")

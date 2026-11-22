@@ -215,7 +215,7 @@ def _reincarnate(argv: list[str]) -> int:
 
 
 def _stakes(room) -> str:
-    """What the successor boots into, said once more before the seat goes."""
+    """What the next context starts from, said once more before the seat goes."""
     from .jack import _state
     from .ledger import read_facts
     from .project import sender_threads
@@ -257,7 +257,7 @@ def _hold(argv: list[str]) -> int:
     if bare(why):
         return refuse("hold", "hold: name what would die, by name (a decision mid-way, a person's "
                               "conversation, a reasoning not yet written); a generic why is no hold. "
-                              "If nothing would, reincarnate --why \"<what the successor picks up>\".")
+                              "If nothing would, reincarnate --why \"<what the next context needs>\".")
     try:
         room = _room(args.room)
         state = _state(room)

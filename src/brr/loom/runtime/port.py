@@ -316,7 +316,7 @@ def render_boundary(strand: str, gen: int, thread: str, letters: list[Fact],
                     degraded: str = "", face: str = "", left: str = "", moved: str = "",
                     library: str = "", forge: str = "", band: str = "",
                     done: str = "", room: str = "", cited: str = "", idle: str = "",
-                    park_reminder: str = "") -> str:
+                    park_reminder: str = "", next_wake: str = "") -> str:
     """Shown letters keep their first line, reply context and attachments when compacted.
 
     ``budget`` sits before the plan: the jack compares what follows `` · plan ``,
@@ -325,11 +325,13 @@ def render_boundary(strand: str, gen: int, thread: str, letters: list[Fact],
     lines = [
         f"<!-- port {strand} gen {gen} · {clock()} · owed "
         + " ".join(str(letter.data['id']) for letter in letters) + " -->",
-        f"status: strand {strand} · gen {gen} · thread {thread}"
+        f"status: thread {thread}"
         + (f" · {fuel}" if fuel else "") + (f" · {budget}" if budget else "")
         + (f" · {plan}" if plan else ""),
         "owed:",
     ]
+    if next_wake:
+        lines.insert(2, f"next wake: {next_wake}")
     if park_reminder:
         lines.insert(2, park_reminder)
     from .dispositions import is_person
