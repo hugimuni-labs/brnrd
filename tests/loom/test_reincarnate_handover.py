@@ -255,7 +255,7 @@ else:
         wait_until(received.exists, 30, loom.dump)
         wake = json.loads(received.read_text())["wake"]
         assert "the last context ended at " in wake
-        assert "(full)." in wake
+        assert "(reincarnated)." in wake
         assert "NEXT: merge #7 when its re-run is green" in wake
         assert "done after the reincarnation: #7 merged as abc123" in wake
         assert wake.index("NEXT: merge #7") < wake.index("done after the reincarnation")

@@ -73,7 +73,6 @@ def _ended(rows, pred, install: str) -> tuple[int, str] | None:
             restart = began is not None and any(r.kind == "loom.started" and r.data.get("install") == home
                                                 for r in rows[began:i])
             why = ("restart" if restart and cause == "failed" else
-                   "full" if cause == "reincarnated" else
                    f"failed, code {code}" if cause == "failed" else cause)
             return i, f"the last context ended at {f.at[11:16]}Z ({why})."
     return None
