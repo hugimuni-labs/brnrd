@@ -1317,9 +1317,13 @@ def handler(parts: Parts, port: int, spa=spa_root):
                 self.end_headers()
                 self.wfile.write(raw)
                 return
-            parts.note_post(origin, urlsplit(self.path).path, sent["id"],
-                            wish if isinstance(wish, str) else None,
-                            verdict if isinstance(verdict, str) else None)
+            try:
+                parts.note_post(origin, urlsplit(self.path).path, sent["id"],
+                                wish if isinstance(wish, str) else None,
+                                verdict if isinstance(verdict, str) else None)
+            except Exception as exc:  # the letter landed; its record must not turn the answer into an error
+                if parts.log:
+                    parts.log(parts.home, f"board: {type(exc).__name__}: {exc}")
             self._json(sent)
 
         def _events(self):
