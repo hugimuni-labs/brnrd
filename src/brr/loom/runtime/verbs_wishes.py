@@ -93,6 +93,7 @@ def _wish_arguments(parser):
     parser.add_argument("--from", dest="sender", choices=("person", "resident"))
     action = parser.add_mutually_exclusive_group()
     action.add_argument("--read")
+    action.add_argument("--clear-wait", action="store_true", help="clear the wish's current wait")
     action.add_argument("--result")
     action.add_argument("--accept", choices=("word", "act", "implied"))
     action.add_argument("--drop")
@@ -122,6 +123,10 @@ def cmd_wish(args):
             append(home, _answer_fact(args, facts, by))
             print(args.id)
             return 0
+        if args.clear_wait:
+            if args.wait is not None or args.until is not None:
+                raise ValueError("--clear-wait takes neither --wait nor --until")
+            args.read = "wait cleared"
         actions = any(x is not None for x in (args.read, args.result, args.accept, args.drop))
         left = _left_fact(args, facts, by) if args.left else None
         if left is not None and not actions:
@@ -158,7 +163,7 @@ def cmd_wish(args):
                 if args.wait is not None and not args.read.startswith("waiting:"):
                     data["reading"] = "waiting: " + args.read
                 if data["reading"].startswith("waiting:"):
-                    data["wait"] = _wait(home, facts, args.id, args.wait, args.until)
+                    data["wait"] = _wait(home, facts, args.id, args.wait, args.until, thread=thread)
                     _guard_long_park(home, facts, args.id, data["wait"], args.read, thread, by)
             elif args.result is not None:
                 result_kind, sep, ref = args.result.partition(":")
@@ -405,7 +410,7 @@ def _wakes(home, facts, by: str, data: dict) -> str:
     from .waits import parker
     wait = data.get("wait") or {}
     on, until = wait.get("on"), wait.get("until")
-    thread = parker(home, facts, wishes(facts)[data["wish"]], {"writer": by})
+    thread = parker(home, facts, wishes(facts)[data["wish"]], dict(data, writer=by))
     if on and on.startswith("cond:"):
         when = f"on each firing of {on}, until it is re-read" + (f" or {until}" if until else "")
     else:
@@ -438,7 +443,7 @@ def _recall(argv: list[str]) -> int:
     return 0
 
 
-def _wait(home, facts, ident, condition, until, default=None):
+def _wait(home, facts, ident, condition, until, default=None, *, thread=None):
     """A park's ``wait``: its condition with the repo filled in, its deadline and its turn."""
     from datetime import datetime, timezone
     from . import waits
@@ -449,8 +454,10 @@ def _wait(home, facts, ident, condition, until, default=None):
         condition = waits.canonical(condition, now, repo=lambda number: _repo(facts, number))
         if condition.startswith("wish:") and condition[5:] not in found:
             raise ValueError(f"--wait {condition}: no wish {condition[5:]}")
-    return waits.park(found[ident], condition, until, now, found=found, default=default,
+    wait = waits.park(found[ident], condition, until, now, found=found, default=default,
                       turn=float(load_config(home.root).turn or 0))
+    wait["thread"] = thread or found[ident].thread
+    return wait
 
 
 def _guard_long_park(home, facts, ident, park, reading, thread, by):
@@ -637,7 +644,8 @@ def cmd_ask(args):
             # The asking wish parks on the ask; at its deadline the body is woken with its own rec.
             append(home, Fact(kind="wish.read", by=by, id="wish.read:" + mint(12), data={
                 "wish": args.wish, "reading": f"waiting: ask {ident}: {args.what}", "by": "resident",
-                "wait": _wait(home, facts, args.wish, "wish:" + ident, args.default_at, default=args.rec)}))
+                "wait": _wait(home, facts, args.wish, "wish:" + ident, args.default_at,
+                              default=args.rec, thread=thread)}))
         _declare(args, "ask")
         if args.kind is None and (same is None or not same.kind):
             print("ask: no --kind; its answer counts under (no kind) in asks --calibrate", file=sys.stderr)

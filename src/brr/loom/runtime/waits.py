@@ -3,7 +3,8 @@
 A park is a ``wish.read`` whose reading starts ``waiting:``. Its ``wait``
 field is ``{"on": <condition>, "until": <instant>}``, ``on`` absent for a
 prose park. The live wait is the latest read of an open wish with no result
-after it: a result or another read ends it, and a closed wish has none. Every tick
+after it: a result or another read ends it, and a closed wish has none.
+New parks store the destination thread alongside the condition. Every tick
 ``observe_waits`` checks the live waits against facts already held and the
 forge states the ``Watcher`` polled off the loop; when one comes true, or its
 ``until`` passes, the loom writes one notice to the wish's thread, and that
@@ -191,8 +192,30 @@ def want(read) -> str:
     return f"{on} since {read['at']}" if on.startswith("ci:") else on
 
 
-def forge_wants(found: dict) -> set[str]:
-    return {want(read) for _wish, read in live(found)
+def unresolved(found, facts):
+    """Live waits that have yet to produce their terminal notice."""
+    from .home import notice_id
+    from .ledger import LedgerView, kind_facts
+    ids = facts.by_id if isinstance(facts, LedgerView) else {f.id for f in kind_facts(facts, "letter")}
+    return [(wish, read) for wish, read in live(found)
+            if notice_id("wait", subject(wish, read)) not in ids]
+
+
+def thread_lines(home, facts, thread):
+    """The waits the current context inherits on this thread."""
+    from .wishes import told
+    lines = []
+    for wish, read in unresolved(told(facts), facts):
+        if parker(home, facts, wish, read) != thread:
+            continue
+        on = read["wait"].get("on") or read["reading"].removeprefix("waiting:").strip()
+        lines.append(f"waiting: {wish.id} on {on} since {read['at']}")
+    return lines
+
+
+def forge_wants(found: dict, facts=None) -> set[str]:
+    rows = live(found) if facts is None else unresolved(found, facts)
+    return {want(read) for _wish, read in rows
             if str(read["wait"].get("on", "")).startswith(("pr:", "ci:"))}
 
 
@@ -370,7 +393,6 @@ class _Pending:
     """
 
     def __init__(self, found, facts, now):
-        from .home import notice_id
         self.found = found
         self.rows = {}
         self.files = set()
@@ -381,10 +403,8 @@ class _Pending:
         self.due = []
         self.first = True
         self.retry = set()
-        for wish, read in live(found):
+        for wish, read in unresolved(found, facts):
             key = subject(wish, read)
-            if notice_id("wait", key) in facts.by_id:
-                continue
             self.rows[key] = (wish, read)
             on = str(read["wait"].get("on") or "")
             if on.startswith("file:"):
@@ -454,8 +474,7 @@ def observe_waits(home, facts, armed: bool, forge: dict | None = None, now: date
         rows = pending.candidates(facts, forge or {}, now)
     else:
         pending = None
-        rows = [(wish, read) for wish, read in live(found)
-                if not any(f.id == notice_id("wait", subject(wish, read)) for f in facts)]
+        rows = unresolved(found, facts)
     if not rows:
         return facts
     from functools import cache
@@ -491,12 +510,13 @@ def observe_waits(home, facts, armed: bool, forge: dict | None = None, now: date
 
 
 def parker(home, facts, wish, read) -> str:
-    """The thread a wait's notice wakes: the one whose strand parked, not the
-    wish's, which may be settled or another's (w-fu0i49mzlfa3). A person's park,
-    or a parker whose thread is gone, falls back to the wish's thread."""
-    from .project import sender_threads
-    writer = str(read.get("writer") or "")
-    thread = sender_threads(facts).get(writer.removeprefix("strand:")) if writer.startswith("strand:") else None
+    """The recorded destination, with lease lookup for parks written by older installs."""
+    thread = (read.get("wait") or {}).get("thread")
+    if thread is None:
+        from .project import sender_threads
+        writer = str(read.get("writer") or "")
+        if writer.startswith("strand:"):
+            thread = sender_threads(facts).get(writer.removeprefix("strand:"))
     return thread if thread and home.routable(thread) else wish.thread
 
 

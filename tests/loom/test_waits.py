@@ -284,6 +284,10 @@ def test_a_result_or_a_new_reading_ends_the_wait(ledger):
     command(home, seat, "wish", ident, "--result", "pr:https://example.com/1", "--line", "Done")
     assert told(home, now=later(hours=2)) == []
 
+    park(home, seat, ident, "--wait", "at:+1h")
+    command(home, seat, "wish", ident, "--clear-wait")
+    assert told(home, now=later(hours=2)) == []
+
 
 def test_wait_flags_need_a_park_and_a_known_grammar(ledger):
     home, seat = ledger
@@ -309,8 +313,8 @@ def test_ask_default_at_parks_the_parent_and_wakes_it_with_the_rec(ledger):
     assert "nobody answered" in letter.data["body"] and "Your rec was: Call it loom" in letter.data["body"]
 
 
-def test_the_loop_polls_the_forge_and_its_notice_wakes_the_parked_thread(tmp_path, monkeypatch):
-    """A body parks on a PR; the Watcher reads it merged; the loom's letter starts a body again."""
+def test_a_pr_wait_outlives_reincarnation_and_wakes_the_thread(tmp_path, monkeypatch):
+    """Drive the CLI, jack, and loom across reincarnation and a forge resolution."""
     import json
     from brr.loom.runtime.project import holder
     from brr.loom.runtime.selfrepo import init_self
@@ -343,27 +347,39 @@ def verb(*args):
                           capture_output=True, text=True)
     assert proc.returncode == 0, proc.stderr
     return proc.stdout.strip()
-for letter in ctx.owed():
+letters = ctx.owed()
+wake = ctx.wake()
+if "carry the PR wait" in wake:
+    atomic_write(Path({str(root / "successor")!r}), wake)
+for letter in letters:
     if letter.body == "begin":
         wish = verb("wish", "new", "--line", "Ship it", "--say", letter.id)
         verb("wish", wish, "--read", "waiting: the merge", "--wait", "pr:{REPO}#5")
         atomic_write(Path({str(root / "parked")!r}), wish)
-    else:
-        atomic_write(Path({str(root / "woken")!r}), json.dumps({{"id": letter.id, "body": letter.body}}))
+        ctx.send("thread:work", note="waiting for the merge", re=letter.id)
+        ctx.reincarnate("carry the PR wait")
+        assert ctx.jack("stop").raw == ""
+        break
+    if letter.id.startswith("loom/wait-"):
+        atomic_write(Path({str(root / "woken")!r}), json.dumps({{"id": letter.id, "body": letter.body, "wake": wake}}))
     ctx.send("thread:work", note="read", re=letter.id)
 ''')
     inject_letter(root, to="thread:work", body="begin")
     loom = Loom(root)
     loom.start()
     try:
-        wait_until((root / "parked").exists, 20, loom.dump)
+        wait_until((root / "successor").exists, 30, loom.dump)
+        wish = (root / "parked").read_text()
+        waiting = f"waiting: {wish} on pr:{REPO}#5 since "
+        assert waiting in (root / "successor").read_text()
+        assert any(f.kind == "attempt.ended" and f.data["cause"] == "reincarnated" for f in loom.facts())
         wait_until(lambda: holder(loom.facts(), "work") is None, 20, loom.dump)
         wait_until(lambda: polled, 10, loom.dump)
         assert not (root / "woken").exists(), "an open PR wakes nobody"
         state.update(state="merged", at="2026-10-27T12:00:00Z")
         wait_until((root / "woken").exists, 20, loom.dump)
         woken = json.loads((root / "woken").read_text())
-        wish = (root / "parked").read_text()
+        assert waiting not in woken["wake"]
         assert woken["id"].startswith("loom/wait-")
         assert f"wait on {wish} resolved: pr:{REPO}#5 merged" in woken["body"]
     finally:
@@ -573,6 +589,7 @@ def test_a_wait_wakes_the_thread_that_parked_not_the_wishs(ledger):
     ident = command(home, seat, "wish", "new", "--line", "Ship other", "--say", letter, "--thread", "other")
     parked = cli(["wish", ident, "--room", str(seat), "--read", "waiting: the merge", "--wait", f"pr:{REPO}#12"])
     assert parked.returncode == 0, parked.stderr
+    assert view(home, ident).reads[-1]["wait"]["thread"] == "work"
     assert f"parked: wakes thread:work when pr:{REPO}#12 resolves" in parked.stderr
     append(home, Fact(kind="pr.opened", by="strand:s-aaaa-test", data={
         "thread": "work", "repo": "brnrd", "number": 12, "head": "loom/x",
