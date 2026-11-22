@@ -145,6 +145,33 @@ def test_a_marked_call_crosses_the_wall_and_the_mark_is_on_the_record(walled):
     assert counts == {"calls": 2, "marked": {"look": 1, "change": 1, "final": 0}, "crossed": 2, "inferred": 1}
 
 
+def test_a_call_at_the_board_is_held_until_it_is_marked(walled):
+    """An unmarked call to the board port, or a write that names /v1/loom/, is held with the wall's
+    own text. A marked one is lifted and the mark is on the record. A read of another port stays in."""
+    home, place = walled
+    (home.root / "loom/config.toml").write_text('board_port = "4767"\n')
+    curl = ("curl -sS -X POST -H 'Host: 127.0.0.1:4767' -H 'Content-Type: application/json' "
+            "-d '{}' http://127.0.0.1:4767/v1/loom/letters")
+    out = _out(jack.execute("pre", place, _bash(curl)))
+    assert out["permissionDecision"] == "deny" and mark.HIT in out["permissionDecisionReason"]
+    # The audit socket is another loopback port: naming it is not naming the board.
+    assert jack.execute("pre", place, _bash("curl -sS http://127.0.0.1:9/health")) == ""
+    # A GET of the route is a read. A write to it is the board, on whatever host.
+    assert jack.execute("pre", place, _bash("curl -sS https://example.test/v1/loom/index")) == ""
+    out = _out(jack.execute("pre", place, _bash("curl -sS -d '{}' https://example.test/v1/loom/letters")))
+    assert out["permissionDecision"] == "deny" and mark.HIT in out["permissionDecisionReason"]
+    # Words in a heredoc are the letter, not a call at the board.
+    assert jack.execute("pre", place, _bash(
+        "brnrd runtime send --to thread:x <<'EOF'\ncurl http://127.0.0.1:4767/v1/loom/letters POST\nEOF")) == ""
+    marked = 'BRNRD_SAY="change · letter on the board · l-3 · delete the letter" ' + curl
+    out = _out(jack.execute("pre", place, _bash(marked)))
+    assert out["permissionDecision"] == "allow"
+    assert out["updatedInput"]["dangerouslyDisableSandbox"] is True
+    phase, recorded = _marks(home)[-1]
+    assert phase == "pre" and recorded["reach"] == "change" and recorded["crossed"] is True
+    assert recorded["what"] == "letter on the board"
+
+
 def test_no_mark_no_crossing(walled):
     home, place = walled
     # A walled call runs as asked: the wall holds it, nothing to say.

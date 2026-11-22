@@ -46,6 +46,7 @@ _LOOM_KINDS = {
     "loom.started", "home.migrated", "loom.degraded", "loom.recovered", "loom.moved", "loom.pruned", "lease.fenced", "lease.handed", "machines.prefer", "machines.pin", "machines.name", "self.healed",
     "update.offered", "update.decided", "update.checked",
     "library.problem", "library.cleared", "place.offered", "interview.offer", "interview.offered",
+    "board.post",
 }
 
 

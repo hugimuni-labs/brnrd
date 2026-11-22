@@ -17,7 +17,7 @@ A resource in ``CLOSED`` is declared in full: ``admit`` refuses, at the
 ledger's one write path, a kind under its name that has no row here, a writer
 the row does not name, and fields the row does not list. The body's table
 folds ``body`` rows by strand and generation; the other closed resources
-(wishes, pull request receipts, loom starts) are declared for that check
+(wishes, pull request receipts, loom starts, a board post) are declared for that check
 alone. Rows of any other resource document observations, including inputs the body's
 table reads; their writers are not checked and kinds beside them stay undeclared.
 """
@@ -53,7 +53,7 @@ def _kind(kind: str, resource: str, fields: str, writer: str, scope: str, once: 
     return Kind(kind, resource, tuple(fields.split()), tuple(writer.split()), scope, once)
 
 
-CLOSED = ("body", "wish", "pr", "loom")
+CLOSED = ("body", "wish", "pr", "loom", "board")
 ROLES = ("loom", "strand", "person")
 SCOPES = ("global", "machine")
 
@@ -112,6 +112,8 @@ REGISTRY = (
     _kind("place.touched",     "place",   "place kind act shown thread strand letters wishes root?", "strand",      "global"),
     _kind("place.offered",     "place",   "place",                                            "loom",        "global"),
     _kind("place.dismissed",   "place",   "place",                                            "strand",      "global"),
+    # What the loopback saw on an accepted POST. Never the body; an overview joins on letter.
+    _kind("board.post",        "board",   "origin route letter wish? verdict?",           "loom",        "machine"),
 )
 
 KINDS = {row.kind: row for row in REGISTRY}

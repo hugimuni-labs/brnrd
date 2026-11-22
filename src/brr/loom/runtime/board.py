@@ -9,7 +9,7 @@ returns the delta from that hash when the loopback still holds it, else the whol
 recomputes them on its own thread whenever the ledger or a room's trace moves; ``serve`` is the
 loopback shell over it on 127.0.0.1 (config ``board_port``), which also serves the SvelteKit build,
 so the board needs no cloud hop and no dev server.
-The cloud PUT of parts stays off until brnrd.dev stores them. The index carries the last beads
+The same parts are PUT to the cloud when a gate is configured. The index carries the last beads
 delta so a cloud reader patches without a second 1 MB GET.
 """
 
@@ -995,6 +995,18 @@ class Parts:
                 return sent
         return self._send(body, typed_by, wish, verdict)
 
+    def note_post(self, origin: str, route: str, letter: str, wish: str | None, verdict: str | None) -> None:
+        """What this server saw on an accepted POST. Never the body: an overview joins on the letter id."""
+        from brr.daemon2.facts import Fact
+        from .ledger import append
+        data = {"origin": origin, "route": route, "letter": letter}
+        if wish:
+            data["wish"] = wish
+        if verdict:
+            data["verdict"] = verdict
+        append(self.home, Fact(kind="board.post", by=f"loom:{self.home.install_id()}",
+                               id="board.post:" + mint(12), data=data))
+
     def _send(self, body: str, typed_by: str | None, wish: str | None, verdict: str | None) -> dict:
         instance, user = person_channel(self.home, self.person)
         lands = self.home.main_thread()
@@ -1277,9 +1289,14 @@ def handler(parts: Parts, port: int, spa=spa_root):
             self.wfile.write(raw)
 
         def do_POST(self):
-            # A write needs our own Host (DNS rebinding), our own Origin when a browser sends one, and a
-            # JSON body: a foreign page cannot send application/json without a preflight we never answer.
-            if self.headers.get("Host") not in hosts or self.headers.get("Origin", next(iter(origins))) not in origins:
+            # A write needs our own Host (DNS rebinding), an Origin from our set (a missing one is not
+            # ours) and Sec-Fetch-Site: same-origin. The page's fetch sets only Content-Type; a browser
+            # attaches the other two on a same-origin POST, and both are forbidden headers, so the page
+            # cannot set them. A client that omits either is not the page. A foreign page cannot send
+            # application/json without a preflight we never answer. Same gate for every POST on this server.
+            origin = self.headers.get("Origin")
+            if (self.headers.get("Host") not in hosts or origin not in origins
+                    or (self.headers.get("Sec-Fetch-Site") or "").strip() != "same-origin"):
                 self.send_error(HTTPStatus.FORBIDDEN, "origin")
                 return
             if (self.headers.get("Content-Type") or "").split(";")[0].strip() != "application/json":
@@ -1290,9 +1307,9 @@ def handler(parts: Parts, port: int, spa=spa_root):
                 return
             try:
                 data = json.loads(self.rfile.read(min(int(self.headers.get("Content-Length") or 0), 1 << 20)))
-                sent = parts.send(str(data["body"]), data.get("typed_by") or None,
-                                  data.get("wish") or None, data.get("verdict") or None)
-            except (ValueError, KeyError, TypeError, LookupError) as exc:
+                wish, verdict = data.get("wish") or None, data.get("verdict") or None
+                sent = parts.send(str(data["body"]), data.get("typed_by") or None, wish, verdict)
+            except (ValueError, KeyError, TypeError, AttributeError, LookupError) as exc:
                 raw = json.dumps({"error": str(exc)}).encode()
                 self.send_response(HTTPStatus.BAD_REQUEST)
                 self.send_header("Content-Type", "application/json")
@@ -1300,6 +1317,9 @@ def handler(parts: Parts, port: int, spa=spa_root):
                 self.end_headers()
                 self.wfile.write(raw)
                 return
+            parts.note_post(origin, urlsplit(self.path).path, sent["id"],
+                            wish if isinstance(wish, str) else None,
+                            verdict if isinstance(verdict, str) else None)
             self._json(sent)
 
         def _events(self):
