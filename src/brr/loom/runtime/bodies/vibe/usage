@@ -1,6 +1,11 @@
 #!/usr/bin/env python3
 from brr.loom.runtime.usage import print_windows
 
-# vibe_usage reads per-session token journals, not an account quota or limit.
-# No percentage can be derived from cumulative tokens without a denominator.
-print_windows([], error="vibe account quota unavailable; session journals contain token totals only")
+# The plan key has no quota route. billing.budget answers only a browser
+# session, and the session journals are token totals with no denominator.
+# That is a known state: the fuel line says unmetered, and no ask is filed.
+print_windows(
+    [],
+    state="unmetered",
+    reason="plan key has no quota API; the budget route needs the browser session",
+)

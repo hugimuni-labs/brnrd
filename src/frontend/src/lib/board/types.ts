@@ -115,7 +115,13 @@ export type Live = {
 };
 
 export type Gauge = { window: string; left_pct: number; resets_at?: string };
-export type Fuel = { shell: string; gauges: Gauge[]; error?: string; initiative_share?: number };
+export type Fuel = {
+	shell: string;
+	gauges: Gauge[];
+	state?: string;
+	error?: string;
+	initiative_share?: number;
+};
 
 export type Machine = {
 	id: string;
