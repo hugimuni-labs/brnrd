@@ -258,6 +258,12 @@ def post(port, payload, host=None, **headers):
     return resp.status, body
 
 
+def page(port, host=None):
+    """The headers the served page's own fetch carries: Origin and Sec-Fetch-Site, which a browser attaches."""
+    host = host or f"127.0.0.1:{port}"
+    return {"Origin": f"http://{host}", "Sec-Fetch-Site": "same-origin"}
+
+
 def test_a_board_letter_lands_as_the_persons_own_and_foreign_pages_cannot_send(parts):
     """POST /v1/loom/letters drops where the channel's letters land; the intake reads it as the person's."""
     from brr.loom.runtime.connector import drain
@@ -274,13 +280,13 @@ def test_a_board_letter_lands_as_the_persons_own_and_foreign_pages_cannot_send(p
     try:
         assert post(port, {"body": "x"}, Origin="https://evil.test")[0] == 403
         assert post(port, {"body": "x"}, host="evil.test")[0] == 403
-        assert post(port, {"body": "x"}, **{"Content-Type": "text/plain"})[0] == 415
-        assert post(port, {"body": "  "})[0] == 400
-        assert post(port, {"body": "x", "wish": "nope"})[0] == 400
+        own = page(port)
+        assert post(port, {"body": "x"}, **{"Content-Type": "text/plain", **own})[0] == 415
+        assert post(port, {"body": "  "}, **own)[0] == 400
+        assert post(port, {"body": "x", "wish": "nope"}, **own)[0] == 400
         assert not list(root.glob("loom/connectors/mine/state/in/*"))
 
-        status, body = post(port, {"body": "from the board", "typed_by": "s-ae66-abcdef"},
-                            Origin=f"http://127.0.0.1:{port}")
+        status, body = post(port, {"body": "from the board", "typed_by": "s-ae66-abcdef"}, **own)
         assert status == 200, body
         sent = json.loads(body)
         drop = root / "loom/connectors/mine/state/in"
@@ -291,6 +297,48 @@ def test_a_board_letter_lands_as_the_persons_own_and_foreign_pages_cannot_send(p
         typed = [r for p, part in parts.parts.items() if p.startswith("thread/") for r in part["letters"]
                  if r["id"] == sent["id"]]
         assert [r["typed_by"] for r in typed] == ["s-ae66-abcdef"]
+    finally:
+        parts.stop.set()
+        server.shutdown()
+        server.server_close()
+
+
+def test_a_board_post_needs_the_pages_origin_and_records_what_it_saw(parts):
+    """No Origin, a wrong Origin, and a cross-site fetch are refused. The page's own POST is accepted,
+    and the fact is origin, route, wish and verdict: never the body."""
+    root = parts.home.root
+    (root / "loom/config.toml").write_text('connectors = ["mine=fake"]\n')
+    (root / "self/people/ada").mkdir(parents=True)
+    (root / "self/people/ada/channels.toml").write_text('channels = ["mine:42"]\n')
+    parts.step()
+    server = serve(parts, 0)
+    port = server.server_address[1]
+    try:
+        assert post(port, {"body": "no origin"})[0] == 403
+        assert post(port, {"body": "evil", "wish": "w-abcdef"},
+                    Origin="https://evil.test", **{"Sec-Fetch-Site": "same-origin"})[0] == 403
+        assert post(port, {"body": "cross"}, Origin=f"http://127.0.0.1:{port}",
+                    **{"Sec-Fetch-Site": "cross-site"})[0] == 403
+        assert post(port, {"body": "none"}, **page(port) | {"Sec-Fetch-Site": "none"})[0] == 403
+        assert not list(root.glob("loom/connectors/mine/state/in/*"))
+        assert [f for f in read_facts(parts.home) if f.kind == "board.post"] == []
+
+        status, body = post(port, {"body": "from the page", "wish": "w-abcdef12", "verdict": "agree"},
+                            **page(port))
+        assert status == 200, body
+        sent = json.loads(body)
+        wrote = [f for f in read_facts(parts.home) if f.kind == "board.post"]
+        assert len(wrote) == 1
+        assert wrote[0].data == {"origin": f"http://127.0.0.1:{port}", "route": "/v1/loom/letters",
+                                 "letter": sent["id"], "wish": "w-abcdef12", "verdict": "agree"}
+        assert wrote[0].by.startswith("loom:")
+        assert "from the page" not in json.dumps(wrote[0].data)
+
+        status, body = post(port, {"body": "on localhost"}, host=f"localhost:{port}", **page(port, f"localhost:{port}"))
+        assert status == 200, body
+        plain = [f for f in read_facts(parts.home) if f.kind == "board.post" and "wish" not in f.data]
+        assert [f.data["origin"] for f in plain] == [f"http://localhost:{port}"]
+        assert "verdict" not in plain[0].data and plain[0].data["route"] == "/v1/loom/letters"
     finally:
         parts.stop.set()
         server.shutdown()
