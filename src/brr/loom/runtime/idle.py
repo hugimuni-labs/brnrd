@@ -8,6 +8,9 @@ the person's order, a red or stale own pull request, the stalest wait, a
 wish never read, a child thread quiet for days with nothing in hand. The
 body takes one and logs the pick in one line, or says in one line why not.
 Behind pace a thread's own block carries nothing: resting is then the right call.
+The person can lower the share of a week an engine may spend on that
+(``initiative_share``, default 100, or ``initiative_share_<shell>``). A letter
+is never gated by it.
 
 The inbox is the resident's boredom, not one thread's. Its candidates are
 drawn from every open thread, most owed first, and its block also names
@@ -50,10 +53,12 @@ _AROUND: dict[str, tuple[tuple, float, int]] = {}
 _WAKE = None
 
 
-def ahead(value, now: float | None = None) -> bool:
-    """The week's fuel left exceeds the week's time left: spending now stays on budget.
+def ahead(value, now: float | None = None, *, share: float = 100.0) -> bool:
+    """Used fuel is under ``share`` percent of the week that has elapsed.
 
-    An unknown or refreshing gauge, or one with no week window, is not ahead.
+    Share 100 is today's test, the same comparison: fuel left exceeds time
+    left. Below that, used < share × elapsed. An unknown or refreshing gauge,
+    or one with no week window, is not ahead. A letter's answer does not call this.
     """
     week = next((w for w in (value or {}).get("windows") or ()
                  if isinstance(w, dict) and w.get("name") == "week"), None)
@@ -62,17 +67,34 @@ def ahead(value, now: float | None = None) -> bool:
     now = time.time() if now is None else now
     to_go = min(max(_reset(week) - now, 0.0) / WEEK, 1.0)
     try:
-        return float(week["left_pct"]) / 100 > to_go
+        left = float(week["left_pct"]) / 100
+        share = float(share)
     except (KeyError, TypeError, ValueError):
         return False
+    # At 100 the algebra (1 - left) < (1 - to_go) is not the same float
+    # comparison. Keep the one the gates have always used.
+    if share == 100:
+        return left > to_go
+    if share <= 0:
+        return False
+    return (1.0 - left) < (share / 100.0) * (1.0 - to_go)
 
 
-def pace(value, now: float | None = None) -> str:
-    """``week 92% left, 78% of it to go`` for the line that says why the body is asked."""
+def pace(value, now: float | None = None, *, share: float = 100.0) -> str:
+    """``week 92% left, 78% of it to go``, and the share when it is not 100."""
     week = next(w for w in value["windows"] if w.get("name") == "week")
     now = time.time() if now is None else now
     to_go = min(max(_reset(week) - now, 0.0) / WEEK, 1.0)
-    return f"week {float(week['left_pct']):g}% left, {to_go:.0%} of it to go"
+    text = f"week {float(week['left_pct']):g}% left, {to_go:.0%} of it to go"
+    if float(share) != 100:
+        text += f", initiative share {float(share):g}%"
+    return text
+
+
+def share_for(home, shell: str | None) -> float:
+    """The percent of this shell's week initiative may spend."""
+    from .config import initiative_share
+    return initiative_share(home.root, shell)
 
 
 def _age(seconds: float) -> str:
@@ -273,16 +295,16 @@ def candidates(home, facts, thread: str, children=(), now: float | None = None) 
 def fuel_line(home, now: float | None = None) -> str:
     """``fuel to burn: codex week 65% left, 3.8d to reset; grok 71%, 1.5d``.
 
-    Every configured engine whose week is ahead of pace, in ``shells`` order.
-    An engine with no reading is left out. Cached readings only: this never
-    starts a collector.
+    Every configured engine whose week is ahead of its own initiative share,
+    in ``shells`` order. An engine below its share, or with no reading, is
+    left out. Cached readings only: this never starts a collector.
     """
     from .usage import reading, shells
     now = time.time() if now is None else now
     parts = []
     for name in shells(home):
         value = reading(home, name, cached_only=True)
-        if not ahead(value, now):
+        if not ahead(value, now, share=share_for(home, name)):
             continue
         week = next(w for w in value["windows"] if isinstance(w, dict) and w.get("name") == "week")
         days = max(_reset(week) - now, 0.0) / 86400
@@ -297,12 +319,13 @@ def fuel_line(home, now: float | None = None) -> str:
 def wants_block(home, shell, thread: str) -> bool:
     """Whether this boundary keeps an idle block.
 
-    A thread's own block follows its room's shell, as before. The inbox's
-    boredom is the resident's: any configured engine ahead of pace is enough.
+    A thread's own block follows its room's shell and that shell's share.
+    The inbox's boredom is the resident's: any configured engine ahead of
+    its own share is enough.
     """
     from .home import HOME_THREAD
     from .usage import reading
-    if shell and ahead(reading(home, shell)):
+    if shell and ahead(reading(home, shell), share=share_for(home, shell)):
         return True
     return thread == HOME_THREAD and bool(fuel_line(home))
 
@@ -317,9 +340,10 @@ def render(lines: list[str], fuel: str = "") -> str:
     return text + "".join(f"  - {line}\n" for line in lines)
 
 
-def keepalive(lines: str, value, stop_news: str, *, pace_text: str | None = None) -> str:
-    """The keepalive's reason when fuel is ahead of pace and the thread has acts to move."""
-    said = pace(value) if pace_text is None else pace_text
+def keepalive(lines: str, value, stop_news: str, *, pace_text: str | None = None,
+               share: float = 100.0) -> str:
+    """The keepalive's reason when fuel is ahead of the shell's share and the thread has acts to move."""
+    said = pace(value, share=share) if pace_text is None else pace_text
     kept = [line for line in lines.splitlines() if line.startswith("  - ") or line.startswith("fuel to burn:")]
     return _KEEP.replace("{pace}", said) + "".join(line + "\n" for line in kept) + stop_news
 

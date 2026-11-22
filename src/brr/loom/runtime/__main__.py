@@ -63,7 +63,7 @@ SUMMARY = {
     "face": "wear, change or drop a face",
     "machines": "the machines this home runs on",
     "where": "where the home, rooms and self are",
-    "config": "show or edit the home config",
+    "config": "show, set or edit the home config",
     "resume": "resume a paused tool child",
     "drop": "give up on a paused tool child",
     "init": "create a home and its self",

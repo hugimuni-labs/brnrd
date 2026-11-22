@@ -2169,8 +2169,12 @@ def park_reminders(facts, thread):
 
 
 def _turn_pace(home, facts, config):
-    """``pace(thread)`` for a park's turn: the week's pace when the shell that thread runs on is
-    ahead of it, else ``""``. The shell is the thread's latest lease's, else the configured body's."""
+    """``pace(thread)`` for a park's turn and the morning pass.
+
+    The week's pace when the shell that thread runs on is inside its initiative
+    share, else ``""``. The shell is the thread's latest lease's, else the
+    configured body's. The share is that shell's.
+    """
     from . import idle
     from .usage import reading
 
@@ -2181,7 +2185,8 @@ def _turn_pace(home, facts, config):
         if not shell:
             return ""
         value = reading(home, shell)
-        return idle.pace(value) if idle.ahead(value) else ""
+        share = idle.share_for(home, shell)
+        return idle.pace(value, share=share) if idle.ahead(value, share=share) else ""
     return pace
 
 

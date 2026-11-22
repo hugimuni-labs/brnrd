@@ -633,6 +633,7 @@ def test_usage_moves_the_header_fuel_without_a_recompute(parts, monkeypatch):
     assert computed == []
     fuel = parts.parts["index"]["fuel"]
     assert [row["shell"] for row in fuel] == ["claude", "grok", "vibe"]
+    assert "initiative_share" not in fuel[0]
     assert fuel[0]["gauges"] == [
         {"window": "session", "left_pct": 15}, {"window": "week", "left_pct": 48}]
     assert fuel[1]["gauges"] == [{"window": "week", "left_pct": 58}]
@@ -651,6 +652,19 @@ def test_usage_moves_the_header_fuel_without_a_recompute(parts, monkeypatch):
     assert [row["shell"] for row in parts.parts["index"]["fuel"]] == ["claude", "vibe"]
     assert "grok" not in shell_fuels(parts.home)
     assert parts.hashes["thread/web"] == held
+
+
+def test_a_share_below_100_is_on_the_fuel_row(parts):
+    from brr.loom.runtime.config import set_value
+    root = parts.home.root
+    set_value(root, "initiative_share_grok", 40)
+    inject_letter(root, to="thread:web", body="first")
+    assert parts.step()
+    _reading(root / "loom/usage", "grok", [{"name": "week", "left_pct": 58}])
+    assert parts.step()
+    row = parts.parts["index"]["fuel"][0]
+    assert row["shell"] == "grok" and row["initiative_share"] == 40
+    assert "initiative_share" not in row["gauges"][0]
 
 
 def test_the_index_names_the_leading_machine_and_the_others(parts):
