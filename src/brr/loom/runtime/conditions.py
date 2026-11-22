@@ -228,10 +228,22 @@ def _pass_lines(home, facts) -> str:
 
 
 def pass_due(home, facts, now: datetime, known: set[str]) -> list[Firing]:
-    """One firing for today's local date, once the local hour has been reached."""
+    """One firing for today's local date, once the local hour has been reached.
+
+    The pass is the resident's own initiative. A share of 0 on the home
+    thread's shell, the same shell :func:`pace_shell` prices, sends none.
+    Any share above 0 fires, and the pace line stays off when that shell
+    is behind.
+    """
+    from . import idle
+    from .config import load_config
     from .home import HOME_THREAD, notice_id
+    from .loom import pace_shell
     hour = _pass_hour(home)
     if hour is None:
+        return []
+    shell = pace_shell(facts, load_config(home.root), HOME_THREAD)
+    if shell and idle.share_for(home, shell) <= 0:
         return []
     local = _local_now(now)
     if local < local.replace(hour=hour, minute=0, second=0, microsecond=0):
