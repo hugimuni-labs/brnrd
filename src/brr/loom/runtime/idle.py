@@ -19,9 +19,7 @@ and ``port/in/unease.md``; the jack reads those and the gauge, never the ledger.
 from __future__ import annotations
 
 import json
-import os
 import re
-import tempfile
 import time
 from datetime import datetime
 from pathlib import Path
@@ -356,16 +354,16 @@ def _fixed_total(wake, root: Path, thread: str, key: tuple) -> int | None:
     if slot and time.monotonic() - slot[0] < EVERY:
         return slot[1]
     from .selfrepo import default_loom_part
-    handle = tempfile.NamedTemporaryFile("w", prefix="loom-owed-", delete=False)
+    # A named temp opens the process temp directory, and a boundary records that
+    # open. The other strand's temp then re-renders this one. The empty occasion
+    # stays under this home's loom/, one file per thread.
+    owed = root.parent / "loom" / "wake-owed" / (thread.replace("/", "_") or "_")
+    owed.parent.mkdir(parents=True, exist_ok=True)
+    owed.write_text("[]", encoding="utf-8")
     try:
-        handle.write("[]")
-        handle.close()
-        try:
-            parts = wake.fixed_parts(root, thread, default_loom_part(root, thread), Path(handle.name))
-        except SystemExit:
-            return None
-    finally:
-        os.unlink(handle.name)
+        parts = wake.fixed_parts(root, thread, default_loom_part(root, thread), owed)
+    except SystemExit:
+        return None
     total = sum(len(part.encode("utf-8")) for part in parts.values())
     _FIXED[key] = (time.monotonic(), total)
     return total
