@@ -2186,13 +2186,15 @@ def _turn_pace(home, facts, config):
 
 
 def _idle_acts(home, facts, strand, context, proposal, children) -> str:
-    """Writes ``port/in/idle.md`` for the jack's keepalive and ``port/in/unease.md`` every boundary.
+    """Writes ``port/in/idle.md`` for the jack's keepalive and ``port/in/unease.md``.
 
-    Returns the idle block when the face is quiet and the week is ahead of pace
-    (w-i1xohccy9ht0), plus the one unease line whenever the face is quiet. The
-    unease line is not gated on pace and is not cached in ``idle.md``: its shown
-    count moves at each quiet face, while the acts stay on the ``idle.EVERY`` stamp.
-    Information only: a failure costs no boundary.
+    Both files are stamped by their own mtime and derived at most once per
+    ``idle.EVERY``. Returns the idle block when the face is quiet and the week
+    is ahead of pace (w-i1xohccy9ht0), plus the one unease line whenever the
+    face is quiet. The line is not gated on pace and is not stored in
+    ``idle.md``. Its shown count is applied when the line is shown, so a cached
+    ``unease.md`` still counts every quiet face. Information only: a failure
+    costs no boundary.
     """
     from . import idle
     from .faces import PROPOSED
@@ -2216,11 +2218,17 @@ def _idle_acts(home, facts, strand, context, proposal, children) -> str:
                 fuel = idle.fuel_line(home) if thread == HOME_THREAD else ""
                 block = idle.render(idle.candidates(home, facts, thread, children), fuel)
                 atomic_write(path, block)
+        unease_path = room / "port" / "in" / "unease.md"
         try:
-            key, line = idle.unease(home, facts, thread, room)
-            idle.publish_unease(room, key, line)
-        except Exception as exc:  # noqa: BLE001 - the acts still show if the one line cannot be built
-            _log(home, f"unease: skipped ({type(exc).__name__}: {exc})")
+            fresh_unease = time.time() - unease_path.stat().st_mtime < idle.EVERY
+        except OSError:
+            fresh_unease = False
+        if not fresh_unease:
+            try:
+                key, line = idle.unease(home, facts, thread, room)
+                idle.publish_unease(room, key, line)
+            except Exception as exc:  # noqa: BLE001 - the acts still show if the one line cannot be built
+                _log(home, f"unease: skipped ({type(exc).__name__}: {exc})")
         quiet = bool(proposal) and proposal["face"] == PROPOSED["quiet"]
         if not quiet:
             return ""

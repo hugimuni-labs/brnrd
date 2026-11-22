@@ -484,31 +484,13 @@ def _ask_unease(home, facts, now: float) -> tuple[str, str] | None:
             "follow it up once, or close it")
 
 
-def _scar_unease(room: Path, now: float) -> tuple[str, str] | None:
-    """The scar that blocked most often, three times or more in seven days."""
-    from .notes import hands, load, scar_block_count
-    record = hands(room)
-    best = None
-    for note in load(room):
-        if not note.path.startswith("memory/scars/"):
-            continue
-        count = scar_block_count(note, record, now)
-        if count < 3:
-            continue
-        if best is None or count > best[0] or (count == best[0] and note.path < best[1]):
-            best = (count, note.path)
-    if best is None:
-        return None
-    count, path = best
-    return (f"scar:{path}",
-            f"unease: {path} blocked {count} times in 7d: make it a check, or rewrite it")
-
-
 def unease(home, facts, thread: str, room, now: float | None = None) -> tuple[str, str]:
     """``(key, line)`` for the one mess, first source wins; ``("", "")`` when there is none.
 
     A README cut at wake, then (inbox only) the oldest unanswered ask to a person
-    older than seven days, then a scar that blocked three times in seven days.
+    older than seven days. A scar's block count is not a source: ``hands.json`` is
+    keyed by program, so the same count would land on every scar that names it.
+    Per-scar attribution is a later step.
     """
     from .home import HOME_THREAD
     now = time.time() if now is None else now
@@ -519,21 +501,22 @@ def unease(home, facts, thread: str, room, now: float | None = None) -> tuple[st
         found = _ask_unease(home, facts, now)
         if found:
             return found
-    found = _scar_unease(Path(room), now)
-    if found:
-        return found
     return "", ""
 
 
 def publish_unease(room, key: str, line: str) -> None:
-    """``port/in/unease.md`` is the line without its shown-count. No key drops the record."""
+    """``port/in/unease.md`` is the line without its shown-count.
+
+    No key clears the count and leaves an empty file. The file's mtime is the
+    stamp: the next boundary inside ``EVERY`` does not recompute.
+    """
     from .home import atomic_write
     room = Path(room)
     path = room / "port" / "in" / "unease.md"
     record = room / "port" / "unease.json"
     if not key or not line:
-        path.unlink(missing_ok=True)
         record.unlink(missing_ok=True)
+        atomic_write(path, "")
         return
     atomic_write(path, key.rstrip("\n") + "\n" + line.rstrip("\n") + "\n")
 
@@ -541,7 +524,8 @@ def publish_unease(room, key: str, line: str) -> None:
 def present_unease(room, now: float | None = None) -> str:
     """The line as shown, counting this show. Five or more adds the acted-on suffix.
 
-    A key that is not the one published is dropped. Nothing published clears the record.
+    A key that is not the one published is dropped. An empty file is a computed
+    miss: it stays, so its mtime still throttles, and the count record is cleared.
     """
     from .home import atomic_write
     room = Path(room)
@@ -555,7 +539,6 @@ def present_unease(room, now: float | None = None) -> str:
     key, _, base = text.partition("\n")
     key, base = key.strip(), base.strip()
     if not key or not base:
-        path.unlink(missing_ok=True)
         record_path.unlink(missing_ok=True)
         return ""
     now = time.time() if now is None else now

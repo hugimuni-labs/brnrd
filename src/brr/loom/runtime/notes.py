@@ -47,8 +47,6 @@ PRODUCT = Path(__file__).resolve().parent / "hand_notes"
 CACHE = "notes.json"
 HANDS = "hands.json"
 STALE = 30 * 86400
-# How far back a scar's blocks still count. ``saw`` prunes the list to this window.
-BLOCK_WINDOW = 7 * 86400
 # At most this many notes at one call: the rest open at a later call that names them.
 AT_ONCE = 5
 MIN = 2
@@ -209,12 +207,6 @@ def saw(room: Path, payload: dict, failed: bool, why: str = "") -> str | None:
     now = time.time()
     if failed:
         entry.update(blocked=now, why=why[:200], by=Path(room).name)
-        # The latest stamp stays ``blocked``. ``blocks`` is every block still inside the window,
-        # so a scar can be counted. An entry written before this list existed counts as one.
-        kept = [t for t in entry.get("blocks") or []
-                if isinstance(t, (int, float)) and now - BLOCK_WINDOW <= t <= now]
-        kept.append(now)
-        entry["blocks"] = kept
     else:
         entry["worked"] = now
     try:
@@ -229,32 +221,6 @@ def saw(room: Path, payload: dict, failed: bool, why: str = "") -> str | None:
 
 def _when(seconds: float) -> str:
     return time.strftime("%Y-%m-%d %H:%MZ", time.gmtime(seconds))
-
-
-def blocks_in(entry, now: float) -> int:
-    """How many times this program or host blocked inside ``BLOCK_WINDOW``.
-
-    ``blocks`` is the list ``saw`` keeps. An older entry has only ``blocked``,
-    the latest stamp, and counts as one when that stamp is inside the window.
-    """
-    if not isinstance(entry, dict):
-        return 0
-    if "blocks" in entry:
-        stamps = entry.get("blocks") or []
-        return sum(1 for t in stamps if isinstance(t, (int, float)) and now - BLOCK_WINDOW <= t <= now)
-    blocked = entry.get("blocked")
-    if isinstance(blocked, (int, float)) and now - BLOCK_WINDOW <= blocked <= now:
-        return 1
-    return 0
-
-
-def scar_block_count(note: Note, record: dict, now: float) -> int:
-    """The most times any phrase of this scar, or the program that phrase opens, blocked.
-
-    The max, not the sum: ``gh`` and ``gh pr checks`` are one program's record read twice.
-    """
-    keys = {p for p in note.phrases} | {p.split()[0] for p in note.phrases if p.split()}
-    return max((blocks_in(record.get(key), now) for key in keys), default=0)
 
 
 def stamp(note: Note, record: dict, now: float | None = None) -> str:
