@@ -88,6 +88,7 @@ def test_the_loom_writes_what_worked_and_what_blocked_and_the_stop_asks_one_line
                                     error="Exit code 4\nHTTP 401: Bad credentials"))
         record = notes.hands(room)["gh"]
         assert record["worked"] and record["blocked"] and record["why"] == "HTTP 401: Bad credentials"
+        assert record["blocks"] == [record["blocked"]]
         said = _context(execute("pre", room, _call("gh pr checks 14", session="s9")))
         assert "last worked " in said and "last blocked " in said and "(HTTP 401: Bad credentials)" in said
         # The line rides a stop that already holds (here: the owed letter), once per body.

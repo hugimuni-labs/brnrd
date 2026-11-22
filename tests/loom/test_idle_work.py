@@ -1,15 +1,17 @@
 """An idle wake works: ahead of pace the keepalive names what the thread could move (w-i1xohccy9ht0)."""
 import json
 import os
+import re
 import time
 from datetime import datetime, timezone
 from types import SimpleNamespace
 
-from brr.loom.runtime import idle, jack, loom, usage
+from brr.loom.runtime import idle, jack, loom, notes, usage
 from brr.loom.runtime.faces import PROPOSED
-from brr.loom.runtime.ledger import inject_letter, read_facts
+from brr.loom.runtime.ledger import Fact, append, inject_letter, read_facts
 from brr.loom.runtime.port import render_boundary
 from test_never_quit import STRAND, worker  # noqa: F401  (worker is a fixture)
+from test_wake import commit
 from test_wishes import command, ledger  # noqa: F401  (ledger is a fixture)
 
 
@@ -75,8 +77,10 @@ def test_a_quiet_face_ahead_of_pace_carries_the_threads_acts(ledger, monkeypatch
     block = loom._idle_acts(home, read_facts(home), "s-aaaa-test", context, quiet, ())
     assert block.startswith(idle.HEAD)
     assert wish in block
-    # The jack's copy is written whatever the face; another face carries nothing on the boundary.
-    assert (home.room("s-aaaa-test") / "port/in/idle.md").read_text() == block
+    # The jack's copy is the acts. A quiet face may add one unease line; the file never carries the count.
+    filed = (home.room("s-aaaa-test") / "port/in/idle.md").read_text()
+    assert "unease:" not in filed
+    assert block == filed or (block.startswith(filed) and block[len(filed):].startswith("unease:"))
     assert block.rstrip("\n") in render_boundary("s-aaaa-test", 1, "work", [], set(), {}, idle=block)
     letter = {"face": PROPOSED["letter"], "token": "your x", "fact": "x"}
     assert loom._idle_acts(home, read_facts(home), "s-aaaa-test", context, letter, ()) == ""
@@ -106,7 +110,10 @@ def test_a_render_behind_pace_derives_nothing(ledger, monkeypatch):
     path.write_text(BLOCK)
     monkeypatch.setattr(idle, "candidates", lambda *args: (_ for _ in ()).throw(AssertionError("derived")))
     quiet = {"face": PROPOSED["quiet"], "token": "quiet since 20:00", "fact": "quiet:x"}
-    assert loom._idle_acts(home, read_facts(home), "s-aaaa-test", context, quiet, ()) == ""
+    got = loom._idle_acts(home, read_facts(home), "s-aaaa-test", context, quiet, ())
+    # Behind pace derives no acts. Unease is not gated on pace, so a line may still be said.
+    assert got == "" or got.startswith("unease:")
+    assert idle.HEAD not in got
     # A stale list never outlives the pace that asked for it.
     assert not path.exists()
 
@@ -177,3 +184,235 @@ def test_nothing_to_move_is_stamped_too(ledger, monkeypatch):
         assert loom._idle_acts(home, read_facts(home), "s-aaaa-test", context, None, ()) == ""
     assert (home.room("s-aaaa-test") / "port/in/idle.md").read_text() == ""
     assert len(calls) == 1
+
+
+def _card(now: float, ci: str) -> dict:
+    pushed = datetime.fromtimestamp(now - 2 * 86400 - 50, timezone.utc).isoformat()
+    return {"state": "open", "ci": ci, "pushed": pushed}
+
+
+def _pull(home, thread: str, number: int) -> None:
+    append(home, Fact(kind="pr.opened", by="strand:s-aaaa-test", data={
+        "thread": thread, "repo": "o/r", "number": number, "head": "abc",
+        "url": f"https://github.com/o/r/pull/{number}"}))
+
+
+def test_the_inbox_ranks_across_threads_and_a_thread_keeps_its_own_order(ledger, monkeypatch):
+    home, seat = ledger
+    wish, _ = _seat(home, seat, monkeypatch, AHEAD)
+    now = time.time()
+    _pull(home, "work", 8)
+    _pull(home, "work", 9)
+    _pull(home, "other", 7)
+    (home.root / "loom").mkdir(exist_ok=True)
+    (home.root / "loom" / "prs.json").write_text(json.dumps({
+        "o/r#8": _card(now, "green"), "o/r#9": _card(now, "red"), "o/r#7": _card(now, "red")}))
+    facts = read_facts(home)
+    work = idle.candidates(home, facts, "work", now=now)
+    assert work[0].startswith(wish) and "#8 green, untouched 2d" in work[1] and "#9 is red" in work[2]
+    assert all(not line.startswith(("work:", "other:", "inbox:")) for line in work)
+    assert not any("#7" in line for line in work)
+    inbox = idle.candidates(home, facts, "inbox", now=now)
+    assert inbox == [
+        "other: #7 is red: read the failing run, fix and push",
+        "work: #9 is red: read the failing run, fix and push",
+        f"work: {work[0]}",
+    ]
+
+
+def test_the_inbox_prefixes_a_quiet_child_it_opened(ledger):
+    home, _ = ledger
+    row = {"thread": "kid", "now": "idle 4d", "owed": 0, "prs": [], "waits": "", "status": "open"}
+    assert idle.candidates(home, read_facts(home), "inbox", [row]) == [
+        "inbox: thread kid quiet 4d with nothing in hand: write to it with its next step, or settle it"]
+
+
+def test_the_inbox_reads_each_shared_source_once(ledger, monkeypatch):
+    home, _ = ledger
+    counts = {}
+
+    def wrap(module, name):
+        real = getattr(module, name)
+        def wrapped(*args, **kwargs):
+            counts[name] = counts.get(name, 0) + 1
+            return real(*args, **kwargs)
+        monkeypatch.setattr(module, name, wrapped)
+
+    from brr.loom.runtime import lifecycle, queues, receipts, threads, wishes
+    wrap(wishes, "told")
+    wrap(queues, "queues")
+    wrap(threads, "pr_cards")
+    wrap(receipts, "receipts")
+    wrap(lifecycle, "main_snapshot")
+    wrap(idle, "_people")
+    idle.candidates(home, read_facts(home), "inbox")
+    assert counts == {"told": 1, "queues": 1, "pr_cards": 1, "receipts": 1,
+                      "main_snapshot": 1, "_people": 1}
+
+
+def test_the_fuel_line_names_every_engine_ahead_of_pace(ledger, monkeypatch):
+    home, _ = ledger
+    now = time.time()
+
+    def gauge(pct, days):
+        reset = datetime.fromtimestamp(now + days * 86400, timezone.utc).isoformat()
+        return {"at": now, "windows": [{"name": "week", "left_pct": pct, "resets_at": reset}]}
+
+    gauges = {"codex": gauge(65, 3.8), "grok": gauge(71, 1.5), "claude": gauge(20, 5.5)}
+    monkeypatch.setattr(usage, "shells", lambda home: ["codex", "grok", "claude", "none"])
+    monkeypatch.setattr(usage, "reading", lambda home, shell, *args, **kwargs: gauges.get(shell))
+    assert idle.fuel_line(home, now) == "fuel to burn: codex week 65% left, 3.8d to reset; grok 71% left, 1.5d"
+    text = idle.render(["do the thing"], idle.fuel_line(home, now))
+    assert text.startswith(idle.HEAD) and 'wish <id> --pick "<why>"' in text and "nothing more" in text
+    assert "\nfuel to burn: codex week 65% left, 3.8d to reset; grok 71% left, 1.5d\n  - do the thing\n" in text
+    out = idle.keepalive(text, AHEAD, "NEWS")
+    assert out.startswith("cache keepalive, fuel ahead of pace (week 92% left")
+    assert "fuel to burn: codex" in out and "  - do the thing" in out and ": stop" not in out
+    assert "or end with one line saying why not" in out
+    # The inbox block shows when another engine is ahead, even if this shell is behind.
+    (home.room("s-aaaa-test") / "port/in").mkdir(parents=True, exist_ok=True)
+    context = SimpleNamespace(thread="inbox", shell="claude")
+    quiet = {"face": PROPOSED["quiet"], "token": "quiet since 20:00", "fact": "quiet:x"}
+    block = loom._idle_acts(home, read_facts(home), "s-aaaa-test", context, quiet, ())
+    assert "fuel to burn: codex week 65% left, 3.8d to reset; grok 71% left, 1.5d" in block
+    assert (home.room("s-aaaa-test") / "port/in/idle.md").read_text().count("fuel to burn:") == 1
+    work = SimpleNamespace(thread="work", shell="claude")
+    got = loom._idle_acts(home, read_facts(home), "s-aaaa-test", work, quiet, ())
+    assert "fuel to burn" not in got and idle.HEAD not in got
+    assert not (home.room("s-aaaa-test") / "port/in/idle.md").exists()
+
+
+def test_keepalive_follows_the_fuel_line_when_the_room_shell_is_behind(worker, monkeypatch):
+    room, _ = worker
+    monkeypatch.setattr(usage, "dry_until", lambda *args: None)
+    monkeypatch.setattr(usage, "reading", lambda *args, **kwargs: BEHIND)
+    text = idle.render(["w-aaaa is heard, never read"], "fuel to burn: codex week 65% left, 3.8d to reset")
+    (room / "port/in/idle.md").write_text(text)
+    result = json.loads(jack.execute("stop", room, "{}"))
+    assert result["decision"] == "block"
+    reason = result["reason"]
+    assert "codex week 65% left, 3.8d to reset" in reason and "w-aaaa is heard, never read" in reason
+    assert ": stop" not in reason
+
+
+def test_bytes_removed_counts_a_folded_section_and_not_the_note():
+    wake = idle._seed_wake()
+    body = "x" * 200 + "\n"
+    original = "## Spec\nkeep\n## Notes\n" + body
+    rendered = wake.fold(original, 50)
+    assert idle._bytes_removed(original, rendered) == len(body.encode())
+
+
+def test_a_readme_cut_at_wake_names_the_recipes_own_numbers(ledger, monkeypatch):
+    home, seat = ledger
+    path = home.root / "self" / "threads" / "work" / "README.md"
+    path.write_text("line of the readme\n" * 4000, encoding="utf-8")
+    text = path.read_text(encoding="utf-8")
+    root = home.root / "self"
+    stat = path.stat()
+    key = (str(root), "work", stat.st_mtime_ns, stat.st_size)
+    idle._FIXED.clear()
+    idle._AROUND.clear()
+    monkeypatch.setenv("LOOM_BUDGET_BYTES", "10000000")
+    wake = idle._seed_wake()
+    total = idle._fixed_total(wake, root, "work", key)
+    reserved = idle._around(home, root, "work", read_facts(home), key)
+    excess = 2500
+    monkeypatch.setenv("LOOM_BUDGET_BYTES", str(total - excess + reserved))
+    key_line, line = idle.unease(home, read_facts(home), "work", seat)
+    size = len(text.encode())
+    folded = wake.fold(text, excess)
+    saved = size - len(folded.encode())
+    recipe_limit = total - excess
+    rendered = wake.clip(folded, excess - saved, recipe_limit) if excess - saved > 0 else folded
+    cut = idle._bytes_removed(text, rendered)
+    note = re.search(r"cut (\d+) of this README's (\d+) bytes", rendered)
+    assert note and int(note.group(1)) == cut and int(note.group(2)) == size
+    assert (key_line, line) == ("readme:work",
+                                f"unease: this README is cut at wake ({cut} of its {size} bytes cut): trim it")
+
+
+def test_the_oldest_unanswered_ask_is_the_inbox_unease(ledger, monkeypatch):
+    home, seat = ledger
+    monkeypatch.setenv("LOOM_BUDGET_BYTES", "10000000")
+    idle._FIXED.clear()
+    idle._AROUND.clear()
+    wish, _ = _seat(home, seat, monkeypatch, AHEAD)
+    ask = command(home, seat, "ask", "Pick a colour", "--for", wish)
+    from brr.loom.runtime.wishes import wishes
+    born = idle._epoch(wishes(read_facts(home))[ask].born)
+    room = home.room("s-aaaa-test")
+    assert not idle.unease(home, read_facts(home), "inbox", room, born + idle.WEEK)[0].startswith("ask:")
+    key, line = idle.unease(home, read_facts(home), "inbox", room, born + 8 * 86400 + 60)
+    assert (key, line) == (f"ask:{ask}",
+                           f"unease: ask {ask} to test unanswered 8d: follow it up once, or close it")
+    assert not idle.unease(home, read_facts(home), "work", room, born + 8 * 86400 + 60)[0].startswith("ask:")
+
+
+def test_a_scar_that_blocked_three_times_is_unease_and_five_shows_say_so(ledger, monkeypatch):
+    home, seat = ledger
+    monkeypatch.setenv("LOOM_BUDGET_BYTES", "10000000")
+    idle._FIXED.clear()
+    idle._AROUND.clear()
+    monkeypatch.setattr(usage, "reading", lambda *args, **kwargs: BEHIND)
+    monkeypatch.setattr(idle, "candidates", lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("derived")))
+    scar = home.root / "self" / "memory" / "scars" / "tests" / "sample.md"
+    scar.parent.mkdir(parents=True, exist_ok=True)
+    scar.write_text("# Sample\ntrigger: gate.py, git commit\ndate: 2026-11-22\n\nThe rule.\n", encoding="utf-8")
+    commit(home.root / "self", "scar")
+    now = time.time()
+    blocks = [now - 3600 * i for i in range(4)]
+    (home.root / "loom").mkdir(exist_ok=True)
+    (home.root / "loom" / "hands.json").write_text(json.dumps({
+        "gate.py": {"blocks": blocks, "blocked": blocks[0]},
+        "git": {"blocks": blocks[:2], "blocked": blocks[0]},
+    }))
+    assert notes.blocks_in({"blocked": now}, now) == 1
+    assert notes.blocks_in({"blocks": [], "blocked": now}, now) == 0
+    room = home.room("s-aaaa-test")
+    (room / "port/in").mkdir(parents=True, exist_ok=True)
+    context = SimpleNamespace(thread="work", shell="claude")
+    quiet = {"face": PROPOSED["quiet"], "token": "quiet since 20:00", "fact": "quiet:x"}
+    path = room / "port/in/idle.md"
+    path.write_text("stale\n")
+    line = "unease: memory/scars/tests/sample.md blocked 4 times in 7d: make it a check, or rewrite it"
+    assert loom._idle_acts(home, read_facts(home), "s-aaaa-test", context, quiet, ()) == line + "\n"
+    assert not path.exists()
+    for _ in range(3):
+        assert "shown" not in loom._idle_acts(home, read_facts(home), "s-aaaa-test", context, quiet, ())
+    fifth = loom._idle_acts(home, read_facts(home), "s-aaaa-test", context, quiet, ())
+    assert "shown 5 times since" in fifth and "nothing changed: act, take it to the person, or retire it" in fifth
+    assert "shown" not in (room / "port/in/unease.md").read_text()
+
+
+def test_a_shown_key_that_stops_is_dropped(tmp_path):
+    room = tmp_path / "room"
+    line = "unease: memory/scars/x.md blocked 4 times in 7d: make it a check, or rewrite it"
+    idle.publish_unease(room, "scar:memory/scars/x.md", line)
+    now = datetime(2026, 11, 22, 1, 10, tzinfo=timezone.utc).timestamp()
+    for _ in range(4):
+        assert idle.present_unease(room, now) == line
+    assert idle.present_unease(room, now) == (
+        line + " (shown 5 times since 2026-11-22 01:10Z, nothing changed: "
+        "act, take it to the person, or retire it)")
+    nxt = "unease: ask w-1 to test unanswered 8d: follow it up once, or close it"
+    idle.publish_unease(room, "ask:w-1", nxt)
+    assert idle.present_unease(room, now) == nxt
+    assert list(json.loads((room / "port" / "unease.json").read_text())) == ["ask:w-1"]
+    idle.publish_unease(room, "", "")
+    assert not (room / "port" / "unease.json").exists()
+    assert not (room / "port" / "in" / "unease.md").exists()
+    assert idle.present_unease(room, now) == ""
+
+
+def test_the_stop_shows_unease_behind_pace(worker, monkeypatch):
+    room, _ = worker
+    monkeypatch.setattr(usage, "dry_until", lambda *args: None)
+    monkeypatch.setattr(usage, "reading", lambda *args, **kwargs: BEHIND)
+    (room / "port/in/idle.md").write_text(BLOCK)
+    idle.publish_unease(room, "scar:memory/scars/x.md",
+                        "unease: memory/scars/x.md blocked 4 times in 7d: make it a check, or rewrite it")
+    result = json.loads(jack.execute("stop", room, "{}"))
+    assert "nothing new arrived: stop" in result["reason"]
+    assert "unease: memory/scars/x.md blocked 4 times" in result["reason"]
+    assert json.loads((room / "port" / "unease.json").read_text())["scar:memory/scars/x.md"]["n"] == 1
