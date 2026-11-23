@@ -59,6 +59,19 @@ def test_boundary_round_trip_compacts_what_was_shown():
     assert again.ids == parsed.ids
 
 
+def test_boundary_round_trip_puts_person_letters_first_in_arrival_order():
+    worker = _letter()
+    people = [
+        Fact(kind="letter", by="person:test", id=ident,
+             data={"id": ident, "from": "p-test", "to": "thread:ta", "body": ident})
+        for ident in ("p-test/first", "p-test/second")
+    ]
+    text = render_boundary(STRAND, 1, "ta", [people[0], worker, people[1]], {worker.id}, {})
+    parsed = parse_boundary(text)
+    assert parsed.ids == [people[0].id, people[1].id, worker.id]
+    assert [letter.compact for letter in parsed.letters] == [False, False, True]
+
+
 def test_post_with_nothing_owed_prints_nothing(tmp_path):
     room = _room(tmp_path)
     assert execute("post", room, "{}") == ""
