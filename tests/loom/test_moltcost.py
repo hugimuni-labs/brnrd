@@ -460,3 +460,50 @@ def test_the_next_wake_opens_on_the_last_molt_line(tmp_path: Path) -> None:
     delivered = core.read_bytes() + out.read_bytes()
     assert got["total"] == len(delivered)
     assert sum(got["parts"].values()) == got["total"]
+
+
+def test_an_unowed_wake_holds_the_map_and_keeps_the_carry() -> None:
+    wake = (
+        "last molt: tokens unknown · 0 parks set again · 0 asks set again · 0 scars again · "
+        "carry 4 B against 1 B read before the first act\n"
+        "Molted at 01:00Z. Carried across:\n"
+        "keep this\n"
+        "## threads/t/README.md\n"
+        "spec\n"
+        "## Topics close to this wake\n"
+        "topics/wake.md\n"
+        "## Tree\n"
+        "threads/a/README.md\n"
+        "## Topics\n"
+        "topics/wake.md · 2026-11-02 · title\n"
+        "## Loom\n"
+        "Molted notes stay\n"
+        "you are strand s-ab12-newnew on thread t\n"
+        "loom: runs abc\n"
+        "repo brnrd: somewhere\n"
+        "to send a repo's branch out: publish\n"
+        "## Occasion\n"
+        "the letter\n"
+    )
+    kept, later = selfrepo.hold_back(wake)
+    assert kept.startswith("last molt:")
+    assert "keep this" in kept and "spec" in kept and "Molted notes stay" in kept
+    assert "the letter" in kept
+    assert "## Tree" not in kept and "you are strand" not in kept and "loom: runs abc" not in kept
+    assert "## Tree" in later and "topics/wake.md" in later and "you are strand" in later
+    assert "Molted notes stay" not in later and "keep this" not in later
+
+
+def test_the_first_boundary_says_what_the_wake_held_back(tmp_path: Path) -> None:
+    from brr.loom.runtime.port import render_boundary
+    strand = "s-ab12-aaaaaa"
+    room = tmp_path / "rooms" / strand
+    (room / "port" / "in").mkdir(parents=True)
+    (room / "port" / "out").mkdir()
+    (room / "port" / "in" / "boundary.md").write_text(
+        render_boundary(strand, 1, "ta", [], set(), {}))
+    (room / "port" / "later.md").write_text("## Tree\nthreads/a/README.md\n")
+    out = execute("start", room, "{}")
+    assert "## Tree" in out and "threads/a/README.md" in out
+    assert not (room / "port" / "later.md").is_file()
+    assert "## Tree" not in execute("start", room, "{}")

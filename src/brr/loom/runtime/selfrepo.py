@@ -855,6 +855,49 @@ def _wake_topics(clone: Path, thread: str, owed: Path | None) -> str:
         return ""
 
 
+_HELD = {"Tree", "Topics", "Topics close to this wake", "Status"}
+_LOOM_FACT = ("you are strand ", "loom: ", "status:", "repo ", "to send a repo's branch out:")
+
+
+def hold_back(text: str) -> tuple[str, str]:
+    """(kept, later). Status, topics, the tree and loom facts leave the wake.
+
+    A ``## Loom`` section keeps every other line, so a molt's notes stay.
+    The caller keeps the pair together when something is owed.
+    """
+    lines = text.splitlines(keepends=True)
+    kept: list[str] = []
+    later: list[str] = []
+    i = 0
+    while i < len(lines):
+        title = lines[i][3:].strip() if lines[i].startswith("## ") else None
+        if title in _HELD:
+            later.append(lines[i])
+            i += 1
+            while i < len(lines) and not lines[i].startswith("## "):
+                later.append(lines[i])
+                i += 1
+            continue
+        if title == "Loom":
+            body: list[str] = []
+            i += 1
+            while i < len(lines) and not lines[i].startswith("## "):
+                body.append(lines[i])
+                i += 1
+            facts = [line for line in body if line.startswith(_LOOM_FACT)]
+            rest = [line for line in body if line.strip() and not line.startswith(_LOOM_FACT)]
+            if facts:
+                later.append("## Loom\n")
+                later.extend(facts)
+            if rest:
+                kept.append("## Loom\n")
+                kept.extend(rest)
+            continue
+        kept.append(lines[i])
+        i += 1
+    return "".join(kept), "".join(later)
+
+
 def insert_topics(prompt: str, section: str) -> str:
     """Before the tree: a head carries a decision, a tree line only names a file."""
     for mark in ("## Tree\n", "## Loom\n", "## Occasion\n"):

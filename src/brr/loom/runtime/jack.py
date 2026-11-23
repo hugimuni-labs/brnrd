@@ -845,6 +845,19 @@ def _first_word(room: Path, stdin_text: str = "", *, refuse: bool = False) -> tu
     return text, True
 
 
+def _take_later(room: Path) -> str:
+    """The sections the wake held back, once. The first boundary returns them."""
+    path = room / "port" / "later.md"
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError:
+        return ""
+    path.unlink(missing_ok=True)
+    if text and not text.endswith("\n"):
+        text += "\n"
+    return text
+
+
 def execute(event: str, room: Path, stdin_text: str) -> str:
     """Return the hook's stdout. Raise on trouble; ``run`` turns that into fail-open."""
     room = Path(room)
@@ -935,6 +948,7 @@ def execute(event: str, room: Path, stdin_text: str) -> str:
     plan = next((line.partition(" · plan ")[2] for line in text.splitlines()
                  if line.startswith("status:")), "")
     if event == "start":
+        later = _take_later(room)
         _soft(room, _people, room, parsed, "start")
         broken = _guards(room)[1]
         if broken:
@@ -944,7 +958,9 @@ def execute(event: str, room: Path, stdin_text: str) -> str:
         first = _first_word(room)[0]
         if first:
             text = first + "\n" + text
-        if not parsed.ids and not opened and not plan and not broken and not left:
+        if later:
+            text = later + text
+        if not parsed.ids and not opened and not plan and not broken and not left and not later:
             return ""
         if parsed.ids:
             _shown(room, parsed)
@@ -969,17 +985,18 @@ def execute(event: str, room: Path, stdin_text: str) -> str:
         # Every line is news the first time it appears; only the status line waits on the plan.
         news, said, told = _news(text, state, plan_changed)
         _set_state(room, said=said, told=told)
+        later = _take_later(room)
         if not news:
             if parsed.ids:
                 _shown(room, parsed)
             _set_state(room, plan=plan)
             if parsed.settled is not None:
                 _set_state(room, settled=parsed.settled)
-            if not paused and not over and not guarded and not left and not people:
+            if not paused and not over and not guarded and not left and not people and not later:
                 return ""
             return _json({"hookSpecificOutput": {"hookEventName": hook, "additionalContext": "\n".join(
-                filter(None, (guarded, paused, over, left, people)))}})
-        text = news
+                filter(None, (later, guarded, paused, over, left, people)))}})
+        text = later + news if later else news
         if people:
             text = text.rstrip("\n") + "\n" + people + "\n"
         if over:

@@ -742,12 +742,29 @@ def _prepare(home: Home, strand: str, thread: str, gen: int,
     core = core_path.read_text() if core_path.is_file() else ""
     _record_sizes(home, room, strand, gen, thread)
     atomic_write(core_path, core)
+    from .moltcost import wake_line
+    cost = wake_line(facts, thread)
+    if cost and occasion.startswith(cost + "\n"):
+        occasion = occasion[len(cost) + 1:]
     if carry:
         header, _, _ = gone.partition("\n")
         opening = header + "\n" + (carry if carry.endswith("\n") else carry + "\n")
         if gone.startswith(opening):
             before, _, after = occasion.partition(opening)
             occasion = opening + before + after
+    if cost:
+        occasion = cost + "\n" + occasion
+    # Nothing owed: status, topics, the tree and loom facts wait for the first boundary.
+    later_path = room / "port" / "later.md"
+    if not rows:
+        from .selfrepo import hold_back
+        occasion, later = hold_back(occasion)
+        if later:
+            atomic_write(later_path, later if later.endswith("\n") else later + "\n")
+        else:
+            later_path.unlink(missing_ok=True)
+    else:
+        later_path.unlink(missing_ok=True)
     atomic_write(room / "port" / "occasion.md", occasion)
     atomic_write(room / "port" / "wake.md", core + occasion)
     from .threads import thread_table
