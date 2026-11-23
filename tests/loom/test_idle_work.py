@@ -453,7 +453,7 @@ def test_unanswered_ask_unease_names_the_waiting_thread_and_counts_its_wishes(le
     born = idle._epoch(wishes(facts)[ask].born)
     room = home.room("s-aaaa-test")
     assert idle.unease(home, facts, "inbox", room, born + 8 * 86400) == (
-        f"ask:{ask}", f"unease: ask {ask} to test unanswered 8d: write to thread:work first · 2 wait on it",
+        f"ask:{ask}", f"unease: ask {ask} to test unanswered 8d: write to thread:work first · 2 ride on this",
     )
 
 

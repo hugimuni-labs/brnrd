@@ -89,10 +89,15 @@ def held_rows_for(found: dict[str, Wish], heads: dict[str, str], thread: str, ho
 
 
 def movable(q: Queues, thread: str, parked: set[str]) -> list[Wish]:
-    """Person-ranked work in queue order, including ranked rows below the display cap."""
-    return [wish for wish in (*q.mine, *q.idle)
-            if wish.ranked_at and wish.thread == thread and wish.id not in parked
-            and (wish.id not in q.blocked or (wish.left or {}).get("steps"))]
+    """Queue order, including rows below the cap and unranked work with a stated step."""
+    free = []
+    for wish in (*q.mine, *q.idle):
+        if wish.thread != thread or wish.id in parked:
+            continue
+        steps = (wish.left or {}).get("steps")
+        if steps or wish.ranked_at and wish.id not in q.blocked:
+            free.append(wish)
+    return free
 
 
 def render(q: Queues) -> str:

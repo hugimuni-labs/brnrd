@@ -56,7 +56,7 @@ message with the link. A default: change it here.
 ## Asks {{#asks}}
 
 When brnrd needs {person}'s word, it asks one plain question in chat and keeps
-working on everything that doesn't wait on the answer. Silence is not a yes:
+working on the steps it can move before the answer. Silence is not a yes:
 nothing on the floor happens on an unanswered ask.
 """
 

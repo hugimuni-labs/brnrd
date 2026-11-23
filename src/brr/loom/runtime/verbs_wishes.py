@@ -98,7 +98,7 @@ def _wish_arguments(parser):
     action.add_argument("--result")
     action.add_argument("--accept", choices=("word", "act", "implied"))
     action.add_argument("--drop")
-    parser.add_argument("--force", action="store_true", help="drop even while other wishes wait on it")
+    parser.add_argument("--force", action="store_true", help="drop even while other wishes ride on it")
     parser.add_argument("--deliver", action="store_true")
     parser.add_argument("--ref")
     parser.add_argument("--wait", help="the condition that reopens the park: " + GRAMMAR)

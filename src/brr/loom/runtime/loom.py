@@ -2208,7 +2208,7 @@ def _held_boundary(home, facts, main, thread):
         held_next = f"{top.id} · {held_move(top, queue.blocked.get(top.id, []))}"
     else:
         held_next = f"rest costs {rest_price}"
-    return {"held_next": held_next, "rest_price": rest_price}
+    return {"held_next": held_next, "rest_price": rest_price if free else ""}
 
 
 def _render_boundary(home, facts, strand, gen, context):
