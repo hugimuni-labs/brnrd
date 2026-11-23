@@ -315,23 +315,14 @@ def installed_shells(home) -> list[str]:
     return [shell for shell in body_order(home) if shutil.which(shell)]
 
 
-def spend_choice(home) -> str | None:
-    """Pin an eligible engine in spend order when there is a choice of engines."""
+def _spend_readings(home, installed, candidates, reserved, now):
+    """Yield the current displayed windows for candidate engines above the floor."""
     import json
-    import time
 
     from .config import load_config
-    from .idle import ahead, share_for
-    from .usage import _past_reset, collector_failed, fuels, gauge_windows, week_pace
+    from .usage import _past_reset, collector_failed, gauge_windows, week_pace
 
-    installed = installed_shells(home)
-    if len(installed) < 2:
-        return None
-    preferences = _preferences(home)[1]
-    reserved = preferences.get("spend.keep")
-    candidates = preferences.get("spend.burn", installed)
     floor = load_config(home.root).hold_floor_pct
-    now = time.time()
     for shell in candidates:
         if shell == reserved or shell not in installed:
             continue
@@ -346,9 +337,39 @@ def spend_choice(home) -> str | None:
         week = next((window for window in windows if window["name"] == "week"), None)
         if week is None or week_pace(week, now) is None:
             continue
-        if all(window["left_pct"] > floor for window in windows) and ahead(
-            {"windows": windows}, now, share=share_for(home, shell)
+        if all(window["left_pct"] > floor for window in windows):
+            yield shell, windows
+
+
+def burn_fuel(home) -> tuple[str, float] | None:
+    """The first explicitly configured burn engine above its fuel floor."""
+    import time
+
+    preferences = _preferences(home)[1]
+    candidates = preferences.get("spend.burn", [])
+    if candidates:
+        for shell, windows in _spend_readings(
+            home, installed_shells(home), candidates, preferences.get("spend.keep"), time.time()
         ):
+            return shell, min(window["left_pct"] for window in windows)
+    return None
+
+
+def spend_choice(home) -> str | None:
+    """Pin an eligible engine in spend order when there is a choice of engines."""
+    import time
+
+    from .idle import ahead, share_for
+    from .usage import fuels
+
+    installed = installed_shells(home)
+    if len(installed) < 2:
+        return None
+    preferences = _preferences(home)[1]
+    candidates = preferences.get("spend.burn", installed)
+    now = time.time()
+    for shell, windows in _spend_readings(home, installed, candidates, preferences.get("spend.keep"), now):
+        if ahead({"windows": windows}, now, share=share_for(home, shell)):
             return shell
     line = fuels(home, installed[0])
     where = f" ({line})" if line else ""

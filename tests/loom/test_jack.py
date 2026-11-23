@@ -585,3 +585,83 @@ def test_jack_clocks_messages_without_headers(monkeypatch):
         result = json.loads(jack._json(payload))
         text = result.get("reason") or result["hookSpecificOutput"]["additionalContext"]
         assert text.startswith("now: 2026-11-06 20:01Z\n")
+
+
+@pytest.fixture
+def rest_room(tmp_path, monkeypatch):
+    from datetime import datetime, timedelta, timezone
+
+    room = _room(tmp_path)
+    _write(room, [])
+    monkeypatch.setenv("BRNRD_THREAD", "ta")
+    monkeypatch.setenv("BRNRD_BODY_JACK", "hand")
+    monkeypatch.delenv("BRNRD_BODY_SHELL", raising=False)
+    monkeypatch.setattr("shutil.which", lambda name: f"/bin/{name}")
+    (room / "port" / "wait").write_text("0")
+    usage = tmp_path / "loom" / "usage"
+    usage.mkdir(parents=True)
+    (usage.parent / "preferences.toml").write_text('spend.burn = ["codex"]\nspend.keep = "claude"\n')
+    now = datetime.now(timezone.utc)
+    for shell, left in (("codex", 35), ("claude", 99)):
+        (usage / f"{shell}.json").write_text(json.dumps({
+            "at": now.timestamp(),
+            "windows": [{"name": "week", "left_pct": left,
+                         "resets_at": (now + timedelta(days=1)).isoformat()}],
+        }))
+    return room
+
+
+def _rest_wish(home, ident="w-free", *, thread="ta", parent=None):
+    from brr.loom.runtime.ledger import append
+
+    return append(home, Fact(kind="wish", id=ident, by="strand:" + STRAND if parent else "person:test",
+                             data={"wish": ident, "says": [] if parent else ["p-test/abcde"],
+                                   "from": "resident" if parent else "person", "line": "Build it",
+                                   "thread": thread, **({"parent": parent} if parent else {})}))
+
+
+def test_stop_holds_until_rest_why_and_records_passed_wishes(rest_room, capsys):
+    from brr.loom.runtime.__main__ import main
+    from brr.loom.runtime.home import home_of_room
+    from brr.loom.runtime.ledger import read_facts
+
+    home = home_of_room(rest_room)
+    _rest_wish(home)
+    _rest_wish(home, "w-top")
+    _rest_wish(home, "w-away", thread="tb")
+    for _ in range(4):
+        code, out = run("stop", rest_room, "{}")
+        assert code == 0 and json.loads(out)["decision"] == "block"
+        assert "w-top waits on nothing and codex has 35% left" in out
+    assert main(["rest", "--room", str(rest_room), "--why", "Waiting for a clearer brief"]) == 0
+    assert "resting because Waiting for a clearer brief" in capsys.readouterr().out
+    execute("post", rest_room, "{}")
+    assert run("stop", rest_room, "{}") == (0, "")
+    fact, = [f for f in read_facts(home) if f.kind == "rest.why"]
+    assert fact.data == {"strand": STRAND, "gen": 1, "why": "Waiting for a clearer brief",
+                         "wishes": ["w-top", "w-free"]}
+    assert json.loads(run("stop", rest_room, "{}")[1])["decision"] == "block"
+
+
+@pytest.mark.parametrize("which", ["park", "ask", "empty fuel", "no burn", "empty queue", "other thread"])
+def test_stop_passes_without_runnable_work_and_burn_fuel(rest_room, which):
+    from brr.loom.runtime.home import home_of_room
+    from brr.loom.runtime.ledger import append
+
+    home = home_of_room(rest_room)
+    if which != "empty queue":
+        _rest_wish(home, thread="tb" if which == "other thread" else "ta")
+    if which == "park":
+        append(home, Fact(kind="wish.read", id="wish.read:park", by=f"strand:{STRAND}",
+                          data={"wish": "w-free", "reading": "waiting: CI", "by": "resident",
+                                "wait": {"on": "ci:owner/repo@abcd"}}))
+    if which == "ask":
+        _rest_wish(home, "w-ask", parent="w-free")
+    if which == "empty fuel":
+        path = home.root / "loom" / "usage" / "codex.json"
+        payload = json.loads(path.read_text())
+        payload["windows"][0]["left_pct"] = 0
+        path.write_text(json.dumps(payload))
+    if which == "no burn":
+        (home.root / "loom" / "preferences.toml").write_text('spend.keep = "claude"\n')
+    assert execute("stop", rest_room, "{}") == ""
