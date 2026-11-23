@@ -163,7 +163,7 @@ def test_the_wake_opens_with_what_happened_since_the_predecessor(gone):
     assert HEADER + "\n" in section
     assert len(section.encode()) <= 1500
     ended = next(f for f in facts if f.id == f"attempt.ended:{PREV}:1")
-    assert f"the last context ended at {ended.at[11:16]}Z (restart)." in section
+    assert f"Cut off at {ended.at[11:16]}Z (the machine restarted)." in section
     assert ended.id not in section
     assert "note by person:test: moved the host to 585f1321 by hand (hand-1)" in section
     assert ("degraded now: publisher since 2026-10-23T09:00:00Z: ValueError: too many values "
@@ -237,7 +237,7 @@ def test_another_installs_loom_facts_stay_off_this_wake(tmp_path):
     part = (room / "port/loom.md").read_text()
     section = part[:part.index("you are strand")]
     ended = next(f for f in facts if f.id == f"attempt.ended:{PREV}:1")
-    assert f"the last context ended at {ended.at[11:16]}Z (failed, code -9)." in section
+    assert f"Cut off at {ended.at[11:16]}Z (failed, code -9)." in section
     assert "the loom started 1 time (at 9b1254f5); the ledger was silent 2h" in section
     assert "bbbb" not in section
     assert "degraded" not in (room / "port/in/boundary.md").read_text()

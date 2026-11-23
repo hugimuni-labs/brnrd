@@ -554,29 +554,29 @@ def _policy(home: Home, thread: str) -> str | None:
 
 
 def _handover(facts: list[Fact], thread: str, gen: int, threads: dict[str, str],
-              home: Home | None = None) -> str:
-    """How the body before this one ended, and what it did since its README last landed.
-
-    The wake used to say "read the handover" without showing it, and the real
-    state sat in a note written after the reincarnation: gen 221 of the inbox grepped
-    the ledger for both (wake-vision). A body can also end with no reincarnation, displaced
-    over ``max_held`` or gone mid-turn, and its successor then saw only how it
-    ended, not what it did (handover). Only the body just before this one hands over; an older end
-    is history, not a handover.
-    """
+              home: Home | None = None) -> tuple[str, str, str]:
+    """The carried text, the written record, and its last known writing time."""
     lease = next((f for f in reversed(facts) if f.kind == "lease" and str(f.data.get("thread")) == thread
                   and int(f.data.get("gen") or 0) == gen - 1), None)
     if lease is None:
-        return ""
+        return "", "", ""
     who = str(lease.data.get("strand"))
     reincarnate = next((f for f in reversed(facts) if f.kind == "reincarnate" and f.data.get("gen") == gen - 1
                  and f.data.get("strand") == who and threads.get(who) == thread), None)
-    if reincarnate is not None:
-        lines = [f"the note it left: {reincarnate.data.get('why', '')}"]
-    else:
-        # How it ended is since_gone's line (attempt.ended); this says what it left.
-        lines = ["the note it left: see the thread README and the remaining steps on its wishes"]
+    carry = str(reincarnate.data.get("carry", "")) if reincarnate else ""
+    lines = []
+    if reincarnate is not None and not carry:
+        lines.append(str(reincarnate.data.get("why", "")))
+    if reincarnate is None:
+        lines.append("See the thread README and the remaining steps on its wishes.")
     landed = _landed(home, thread) if home is not None else None
+    written = landed[1] if landed else 0
+    if reincarnate is None:
+        last_note = next((f for f in reversed(facts) if f.kind == "note"
+                          and f.by == f"strand:{who}" and f.data.get("why")), None)
+        if last_note and _stamp(last_note.at) >= written:
+            written = _stamp(last_note.at)
+            lines.insert(0, str(last_note.data["why"]))
     if landed is not None:
         lines.append(f"README last landed {landed[0]} {datetime.fromtimestamp(landed[1], timezone.utc):%H:%MZ}"
                      f" \"{landed[2]}\"")
@@ -585,7 +585,7 @@ def _handover(facts: list[Fact], thread: str, gen: int, threads: dict[str, str],
         if fact is reincarnate:
             after = True
         elif after and fact.kind == "note" and fact.by == f"strand:{who}" and fact.data.get("why"):
-            lines.append(f"after the reincarnation, {fact.at[11:16]}Z ({fact.id}): {fact.data['why']}")
+            lines.append(f"After the molt, {fact.at[11:16]}Z ({fact.id}): {fact.data['why']}")
     since = landed[1] if landed is not None else 0
     sent = [f for f in facts if f.kind == "letter" and f.by == f"strand:{who}" and not is_notice(f)
             and not f.data.get("reincarnate") and _stamp(f.at) > since]
@@ -594,7 +594,8 @@ def _handover(facts: list[Fact], thread: str, gen: int, threads: dict[str, str],
         lines.append(f"since then, {fact.at[11:16]}Z {fact.id} → {fact.data.get('to', '?')}: {first}")
     if len(sent) > SINCE_MOST:
         lines.insert(len(lines) - SINCE_MOST, f"since then: {len(sent) - SINCE_MOST} earlier letters not shown")
-    return "\n".join(lines) + "\n"
+    stamp = f"{datetime.fromtimestamp(written, timezone.utc):%H:%MZ}" if written else ""
+    return carry, "\n".join(lines) + "\n" if lines else "", stamp
 
 
 SINCE_MOST = 5
@@ -642,9 +643,8 @@ def _read_by_predecessors(facts: list[Fact], thread: str, strand: str,
         return ""
     return (
         f"already read in an earlier context: {', '.join(ids)}. "
-        "What they ask may be done: read the note above and the README before acting; where it "
-        "says the work is done, settle the letter with a note and do not redo it, and do "
-        "not reincarnate because a letter said to, since the reincarnation it asked for happened. "
+        "Read what was carried across and the README before repeating work or a molt. "
+        "Settle any already fulfilled letter with a note. "
     )
 
 
@@ -687,8 +687,9 @@ def _prepare(home: Home, strand: str, thread: str, gen: int,
     atomic_write(owed_path, json.dumps(rows))
     part_path = room / "port" / "loom.md"
     inherited = _read_by_predecessors(facts, thread, strand, letters, threads)
-    context_note = _handover(facts, thread, gen, threads, home)
-    gone = since_gone(facts, strand, gen, thread, threads, home.install_id(), note=context_note)
+    carry, context_note, last_written = _handover(facts, thread, gen, threads, home)
+    gone = since_gone(facts, strand, gen, thread, threads, home.install_id(),
+                      note=context_note, carry=carry, last_written=last_written)
     from .reap import kept_line
     gone += kept_line(home, thread, threads)
     forge = forge_threads(home.root / "self")
@@ -741,6 +742,12 @@ def _prepare(home: Home, strand: str, thread: str, gen: int,
     core = core_path.read_text() if core_path.is_file() else ""
     _record_sizes(home, room, strand, gen, thread)
     atomic_write(core_path, core)
+    if carry:
+        header, _, _ = gone.partition("\n")
+        opening = header + "\n" + (carry if carry.endswith("\n") else carry + "\n")
+        if gone.startswith(opening):
+            before, _, after = occasion.partition(opening)
+            occasion = opening + before + after
     atomic_write(room / "port" / "occasion.md", occasion)
     atomic_write(room / "port" / "wake.md", core + occasion)
     from .threads import thread_table
@@ -2186,9 +2193,8 @@ def _next_wake(home, facts, state, thread: str) -> str:
         wake.append(f"the timed letter at {next_time:%Y-%m-%d %H:%MZ}")
     drive = next_pass(home, facts, now)
     if drive:
-        look = f"next look by the drive at {drive:%Y-%m-%d %H:%MZ} (morning pass in {HOME_THREAD})"
-        return f"resting until {' or '.join(wake)}; {look}" if wake else f"resting until the next letter or morning pass; {look}"
-    return f"resting until {' or '.join(wake) if wake else 'the next letter'}"
+        wake.append(f"{drive:%H:%MZ} (morning pass in {HOME_THREAD}, {drive:%Y-%m-%d})")
+    return "Resting until " + ", or ".join([*wake, "the next letter"]) + "."
 
 
 def park_reminders(facts, thread):

@@ -58,7 +58,7 @@ def _wrote(fact, install: str) -> bool:
     return fact.hlc is None or fact.hlc[2] == install
 
 
-def _ended(rows, pred, install: str) -> tuple[int, str] | None:
+def _ended(rows, pred, install: str) -> tuple[str, str] | None:
     """How the predecessor ended, naming a restart of its own install's loom."""
     from .router import install_of
     home = install_of(pred[0]) or install
@@ -72,22 +72,35 @@ def _ended(rows, pred, install: str) -> tuple[int, str] | None:
             cause, code = f.data.get("cause"), f.data.get("code")
             restart = began is not None and any(r.kind == "loom.started" and r.data.get("install") == home
                                                 for r in rows[began:i])
-            why = ("restart" if restart and cause == "failed" else
+            if cause == "reincarnated":
+                molt = next((row for row in reversed(rows[:i]) if row.kind == "reincarnate"
+                             and (row.data.get("strand"), row.data.get("gen")) == pred), None)
+                count = molt.data.get("context") if molt else None
+                size = f", at {count // 1000}k" if isinstance(count, int) and count > 0 else ""
+                return cause, f"Molted at {f.at[11:16]}Z{size}. Carried across:"
+            if cause in ("idle", "settled"):
+                return cause, f"Rested at {f.at[11:16]}Z."
+            why = ("the machine restarted" if restart and cause == "failed" else
                    f"failed, code {code}" if cause == "failed" else cause)
-            return i, f"the last context ended at {f.at[11:16]}Z ({why})."
+            return cause, f"Cut off at {f.at[11:16]}Z ({why})."
     return None
 
 
 def since_gone(facts, strand: str, gen: int, thread: str, threads: dict[str, str],
-               install: str, *, note: str = "") -> str:
+               install: str, *, note: str = "", carry: str = "", last_written: str = "") -> str:
     rows = list(facts)
     cut, pred = _cut(rows, strand, gen, thread)
     ended = _ended(rows, pred, install) if pred is not None else None
     context = note
     if ended:
-        text = ended[1]
-        context = (f"{text} It left this note:\n" + note.removeprefix("the note it left: ")
-                   if note else text + "\n")
+        cause, line = ended
+        if cause == "reincarnated":
+            context = line + "\n" + (carry if not carry or carry.endswith("\n") else carry + "\n") + note
+        elif note:
+            stamp = f" at {last_written}" if last_written and cause not in ("idle", "settled") else ""
+            context = f"{line} Last written{stamp}:\n" + note
+        else:
+            context = line + "\n"
     if cut < 0:
         return context
     lines: list[tuple[int, str]] = []

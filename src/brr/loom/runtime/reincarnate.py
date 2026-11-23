@@ -24,15 +24,15 @@ from .ledger import renamed
 #: Facts that settle a turn rather than act in it.
 SETTLING = {"shown", "note", "wish.read", "left.asked", "reincarnate", "hold"}
 
-STAKES = "The notes are the memory. What is not written down is gone when this context ends."
+STAKES = "Carried across a molt: only what is written. Kept in the ledger: everything else."
 
 #: Past this context a park asks what would die: when to ask, never what to do.
 MARK = 150_000
 #: A hold, or an ask left unanswered, covers the context until it grows this much more.
 REARM = 50_000
 
-DIE = "What in it would die if you reincarnated now?"
-ANSWER = ('Answer with `brnrd runtime reincarnate --why "<what the next context needs>"` '
+DIE = "What would be lost in a molt now?"
+ANSWER = ('Answer with `brnrd runtime molt --carry <file>` '
           'or `brnrd runtime hold --why "<what would die, by name>"`.')
 
 

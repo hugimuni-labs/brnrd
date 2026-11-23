@@ -323,7 +323,7 @@ def test_a_quiet_stop_names_the_morning_pass_that_will_wake_the_resident(ledger,
     room = _prepare(home, strand, "inbox", 1, [], sender_threads(facts), facts, "hold")
     (room / "port/wait").write_text("0\n")
     monkeypatch.setenv("BRNRD_BODY_JACK", "hand")
-    assert f"next look by the drive at {wake:%Y-%m-%d %H:%MZ} (morning pass in inbox)" in (
+    assert f"Resting until {wake:%H:%MZ} (morning pass in inbox, {wake:%Y-%m-%d}), or the next letter." in (
         jack.execute("stop", room, "{}"))
     assert told(home, wake - timedelta(seconds=1)) == []
     [letter] = told(home, wake)

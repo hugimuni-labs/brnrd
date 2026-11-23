@@ -296,7 +296,7 @@ def _order(room: Path) -> str:
 
 def _rest(text: str) -> str:
     return next((line.removeprefix("next wake: ") for line in text.splitlines()
-                 if line.startswith("next wake: ")), "resting until the next letter")
+                 if line.startswith("next wake: ")), "Resting until the next letter.")
 
 
 def _poll(room: Path, stdin_text: str = '') -> str:
@@ -366,7 +366,7 @@ def _poll(room: Path, stdin_text: str = '') -> str:
             rest = _rest(text) + "\n"
             extra = _unease(room)
             reason = idle(rest + news, extra) if idle else (
-                "cache keepalive: " + rest + news + (extra + "\n" if extra else ""))
+                rest + news + (extra + "\n" if extra else ""))
             return _json({"decision": "block", "reason": reason})
         time.sleep(min(0.2, remaining))
 
@@ -1114,10 +1114,10 @@ def _readme_miss(room: Path, state: dict) -> str:
     return README.format(did=", ".join(did), thread=thread, facts=f"\n  {facts}" if facts else "")
 
 
-MARK = """context {k}k, past the {mark}k mark, before resting: what in it would die if you reincarnated now?
+MARK = """context {k}k, past the {mark}k mark, before resting: what would be lost in a molt now?
 {census}
 The burden is on holding: name what would die, or go. A conversation with a person that is mid-way counts as live.
-- go: brnrd runtime reincarnate --why "<what the next context needs>"
+- go: brnrd runtime molt --carry <file>
 - hold: brnrd runtime hold --why "<what would die, by name>"
 Asked once; it comes back when the context grows {rearm}k past this."""
 
