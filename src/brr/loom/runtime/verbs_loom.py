@@ -268,8 +268,8 @@ def _rest(argv: list[str]) -> int:
     parser.add_argument("--why", required=True)
     args = parser.parse_args(argv)
     why = " ".join(args.why.split())
-    if not why:
-        return refuse("rest", "rest: --why is empty")
+    if bare(why):
+        return refuse("rest", "rest: name why the runnable work can wait; a generic why is no reason.")
     try:
         room = _room(args.room)
         boundary = parse_boundary(_boundary_text(room))

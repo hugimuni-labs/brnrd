@@ -1036,7 +1036,7 @@ def rest_reason(state: dict, gen: int) -> str:
 
 
 def _rest_hold(room: Path, parsed: Boundary) -> str:
-    """Hold on runnable work until it moves or this stop records a reason."""
+    """Hold once per generation and top wish, then record the reason for resting."""
     from brr.daemon2.facts import Fact
 
     from .adapters import burn_fuel
@@ -1049,19 +1049,24 @@ def _rest_hold(room: Path, parsed: Boundary) -> str:
     thread = os.environ.get("BRNRD_THREAD")
     if not (thread and parsed.strand and parsed.gen) or _dry(room):
         return ""
-    pending = _state(room).get("rest_pending") or {}
+    state = _state(room)
+    held = state.get("rest_held") or {}
+    held_wishes = held["wishes"] if held.get("gen") == parsed.gen else []
+    pending = state.get("rest_pending") or {}
     if pending.get("gen") != parsed.gen:
         pending = {}
     home = home_of_room(room)
     fuel = burn_fuel(home)
-    if not fuel and not pending:
+    if not (fuel or pending or held_wishes):
         return ""
     facts = read_facts(home)
     found = told(facts)
     queue = queues(found, waits_on(found, main_snapshot(home)))
     parked = {wish.id for wish, _ in unresolved(found, facts)}
-    free = [wish.id for wish in [*queue.mine, *queue.idle]
+    free = [wish.id for wish in queue.mine
             if wish.thread == thread and wish.id not in queue.blocked and wish.id not in parked]
+    if not pending and free and free[0] in held_wishes:
+        pending = {"id": f"rest.why:{parsed.strand}:{parsed.gen}:{free[0]}", "why": "no reason given"}
     if pending:
         if not any(fact.id == pending["id"] for fact in kind_facts(facts, "rest.why")):
             append(home, Fact(kind="rest.why", by=f"strand:{parsed.strand}", id=pending["id"],
@@ -1069,10 +1074,10 @@ def _rest_hold(room: Path, parsed: Boundary) -> str:
                                     "why": pending["why"], "wishes": free}))
         _set_state(room, rest_pending=None, rest_reason={"gen": parsed.gen, "why": pending["why"]})
         return ""
-    if not free:
+    if not free or not fuel:
         return ""
     shell, left = fuel
-    _working(room)
+    _working(room, rest_held={"gen": parsed.gen, "wishes": [*held_wishes, free[0]]})
     return _json({"decision": "block", "reason":
                   f"Rest held: {free[0]} waits on nothing and {shell} has {left:g}% left. "
                   'Open it (send --spend), park it with a real wait, or rest with '
