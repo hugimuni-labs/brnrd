@@ -70,11 +70,13 @@ const PART_ONLY = new Set(['letters', 'wishes', 'tools', 'live', 'chain', 'more'
 
 // The header line. One shell per provider, in the index's order (name order, the status line's without a seat
 // pulled forward). A collector error with no window is the word the index carries (`fails`); the error text stays off.
+// `unmetered` is that word when the collector named the state and wrote no error.
 export function headerFuel(fuel: Fuel[] | undefined): string {
 	return (fuel ?? [])
 		.map((f) => {
 			const gauges = (f.gauges ?? []).map((g) => `${g.window} ${g.left_pct}%`).join(' ');
-			const word = gauges || f.error || '';
+			const word =
+				gauges || (f.state === 'unmetered' && !f.error ? 'unmetered' : '') || f.error || '';
 			const share =
 				typeof f.initiative_share === 'number' && f.initiative_share !== 100
 					? ` share ${f.initiative_share}%`

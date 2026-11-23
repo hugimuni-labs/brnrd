@@ -380,10 +380,17 @@ def test_one_installed_harness_keeps_todays_fuel_line_and_briefing(tmp_path, mon
     assert "burn" not in " ".join(usage.shell_fuels(home).values())
 
 
-def test_vibe_collector_reports_absence_without_inventing_fuel(tmp_path):
+def test_vibe_collector_reports_unmetered_without_inventing_fuel(tmp_path):
+    """The real vibe script names a known gap. The line says unmetered, and no percent is invented."""
     home = Home(tmp_path)
+    script = Path(usage.__file__).resolve().parent / "bodies/vibe/usage"
+    assert 'state="unmetered"' in script.read_text()
     path = tmp_path / "loom/usage/vibe.json"
-    usage._refresh(path, Path(usage.__file__).parent / "bodies/vibe/usage")
+    usage._refresh(path, script)
     result = usage.reading(home, "vibe")
     assert result["windows"] == []
-    assert "token totals only" in result["error"]
+    assert result["state"] == "unmetered"
+    assert "quota API" in result["reason"] and "browser session" in result["reason"]
+    assert "error" not in result
+    assert usage.shell_fuels(home)["vibe"] == "unmetered"
+    assert usage.fuels(home, "vibe") == "fuel vibe unmetered"

@@ -60,6 +60,7 @@ test('the header names every provider, and a collector error is the word it was 
 		]),
 		'claude session 15% week 48%   codex session 95% week 99%   grok week 58%   vibe fails'
 	);
+	equal(headerFuel([{ shell: 'vibe', gauges: [], state: 'unmetered' }]), 'vibe unmetered');
 	equal(
 		headerFuel([
 			{ shell: 'codex', gauges: [{ window: 'week', left_pct: 40 }], initiative_share: 50 },

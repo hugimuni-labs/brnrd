@@ -10,7 +10,10 @@ after the person dropped or answered the ask; a different error on the same
 collector ends the old ask and files a fresh one; a reading with windows and
 no error ends the open ask as moot, and is kept (``<shell>.clean``) so the
 same error coming back after it is a new fault that asks again, whatever the
-person did with the last ask. The marker is this home's: a router that moves
+person did with the last ask. A reading whose state is ``unmetered``, with no
+error and no windows, is a known steady state: the open ask ends (``is
+unmetered``), nothing is filed, and the same marker is written so a later
+error is a new fault. The marker is this home's: a router that moves
 to another install has none there and stays quiet, the side that never asks
 twice. One reading is no error: a network blip heals by
 the next refresh, so an error asks only once two readings carry it.
@@ -99,10 +102,12 @@ def observe_collectors(home, facts, armed: bool):
             continue
         error = _held(home, shell, payload)
         clean = not payload.get("error") and bool(payload.get("windows"))
-        if clean and float(payload["at"]) > _last_clean(home, shell):
+        # No windows and no error is unknown, unless the collector named unmetered.
+        unmetered = usage.known_unmetered(payload) and not payload.get("windows")
+        if (clean or unmetered) and float(payload["at"]) > _last_clean(home, shell):
             from .home import atomic_write
             atomic_write(_clean_path(home, shell), f"{payload['at']}\n")
-        if error is None and not clean:
+        if error is None and not clean and not unmetered:
             continue
         found = told(facts)
         parent = next((w.id for w in found.values() if (w.thread, w.line) == (thread, FUEL_WISH)), None)
@@ -111,7 +116,7 @@ def observe_collectors(home, facts, armed: bool):
         want = line(shell, error) if error else None
         for ask in mine:
             if ask.open and ask.line != want:
-                why = "reads again" if clean else "fails otherwise now"
+                why = "is unmetered" if unmetered else "reads again" if clean else "fails otherwise now"
                 facts.append(append(home, Fact(kind="wish.verdict", by=by, id="wish.verdict:" + mint(12), data={
                     "wish": ask.id, "as": "dropped", "evidence": "word", "ref": MOOT + why})))
         if want is None:
