@@ -668,12 +668,14 @@ def write_send(room: Path, *, to: str, sender: str, body: str = "",
                budget: int | None = None, chatter: list[str] | None = None,
                echo: list[str] | None = None, reopen: bool = False,
                ask_for: str | None = None, attach: str | None = None,
-               triage: tuple[str, str] | None = None, receipt: bool = False) -> str:
+               triage: tuple[str, str] | None = None, receipt: bool = False,
+               may_deliver: bool = False) -> str:
     """Write one letter (or note) into port/out, with the wish stamps it carries.
 
     ``receipt`` is the loom's own letter for a verified delivery (verbs_wishes): its words are
-    the loom's, it goes to the chat the person asked in, and it passes the door under the
-    wish's grant with no mark. The fence still holds it.
+    the loom's. When addressed to a person's chat, it passes the door with no mark.
+    The fence still holds it. ``may_deliver`` grants a new thread that route for its
+    opening wishes.
 
     ``attach`` is ``<sha256> <name>``: a file from the home's blob store that a
     channel which carries files sends beside the text (a ``host:`` delivery).
@@ -745,6 +747,8 @@ def write_send(room: Path, *, to: str, sender: str, body: str = "",
             if note is not None or reincarnate is not None:
                 raise PortError(f"send: no thread {thread} on main")
             opening = thread
+    if may_deliver and opening is None:
+        raise PortError("send: --may-deliver is only for opening a new thread")
     if opening is not None:
         from .library import entries
         known = [entry for entry in entries(home)[0] if entry.source]
@@ -1026,7 +1030,8 @@ def write_send(room: Path, *, to: str, sender: str, body: str = "",
         from .lifecycle import open_thread
         open_thread(Path(room), opening, sender, body, body_choice, repo_sources,
                     opened_for=[stamp.data["wish"] for stamp in wish_stamps],
-                    wish_lines={stamp.data["wish"]: stamp.data.get("line", "") for stamp in wish_stamps})
+                    wish_lines={stamp.data["wish"]: stamp.data.get("line", "") for stamp in wish_stamps},
+                    may_deliver=may_deliver)
     write_port(room, stem, text)
     if wish_stamps:
         from .ledger import append
