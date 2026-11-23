@@ -122,7 +122,7 @@ def _collect(rows: Iterable[dict], now: float) -> tuple[float | None, list[dict]
 
 
 def history(path: Path, now: float) -> tuple[float | None, list[dict]]:
-    """Read a rolling window. Only reports lock, to serialize rotation."""
+    """Read a rolling window. Readers and the reaper lock to serialize rotation."""
     if not path.parent.is_dir():
         return None, []
     archive = path.with_suffix(".archive.jsonl")
