@@ -70,6 +70,7 @@ VERB: dict[str, str] = {
     "send": 'send --re <letter id> --to thread:inbox "reply"',
     "settle": 'settle <thread> --why "what it became"',
     "molt": "molt --carry <file>",
+    "rest": 'rest --why "<why the runnable work can wait>"',
     "reincarnate": 'reincarnate --why "mostly residue; the README has the rest"',
     "hold": 'hold --why "mid-way on <what>, by name"',
     "wish": 'wish <w-id> --left "next step"',
