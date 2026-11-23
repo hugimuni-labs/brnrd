@@ -92,7 +92,7 @@ REGISTRY = (
     _kind("attempt.ended",     "attempt", "thread strand gen ids cause code dispositions evidence", "loom",  "global",  once=True),
     _kind("wake.sizes",        "wake",    "thread strand gen budget total parts",             "loom",        "global",  once=True),
     # Measured on the wake a molt opened, at its first act that moved something.
-    _kind("molt.cost",         "molt",    "thread strand gen opened tokens reset repeated carry_bytes read_bytes", "loom", "global", once=True),
+    _kind("molt.cost",         "molt",    "thread strand gen opened first_s? tokens reset repeated carry_bytes read_bytes", "loom", "global", once=True),
     _kind("port.drained",      "port",    "thread strand gen",                                "loom",        "global",  once=True),
     _kind("update.offered", "update", "install root offer subject old new own dirty pulls omitted?", "loom", "machine"),
     _kind("update.decided", "update", "install root offer tip action why", "loom", "machine"),

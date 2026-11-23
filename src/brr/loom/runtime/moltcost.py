@@ -1,7 +1,7 @@
 """What a molt cost, measured on the wake it opened, at that wake's first act.
 
 ``molt.cost`` is written once, when the new context's first act moves something.
-The wake after that opens with the last reading's line. Tokens, the carry's
+The wake after that opens with the last reading's line. Time, tokens, the carry's
 bytes and the bytes read before the act are null where they are not known:
 an unknown is said, never counted as zero.
 
@@ -148,26 +148,41 @@ def carry_bytes(room: Path, molt: Fact) -> int | None:
     return None
 
 
+def first_seconds(data: dict) -> int | None:
+    seconds = data.get("first_s")
+    return seconds if type(seconds) is int and seconds >= 0 else None
+
+
+def _minutes(seconds: int) -> str:
+    return "<1 min" if seconds < 60 else f"{seconds // 60} min"
+
+
+def _redone(parks: int, asks: int, scars: int) -> list[str]:
+    return [
+        f"{count(n, noun)} {suffix}"
+        for n, noun, suffix in (
+            (parks, "park", "set again"),
+            (asks, "ask", "set again"),
+            (scars, "scar", "again"),
+        )
+        if n
+    ] or ["nothing redone"]
+
+
 def line(data: dict) -> str:
     """One line for the last molt. A null reading is said."""
     from .spend import format_tokens
 
-    tokens = data.get("tokens")
-    token = (
-        f"{format_tokens(tokens)} to first act"
-        if isinstance(tokens, int)
-        else "tokens unknown"
-    )
+    seconds = first_seconds(data)
+    time = "time unknown" if seconds is None else f"back at work {_minutes(seconds)} after waking"
     reset = data.get("reset") or {}
-    carry = data.get("carry_bytes")
-    read = data.get("read_bytes")
-    return (
-        f"last molt: {token} · {count(len(reset.get('parks') or []), 'park')} set again · "
-        f"{count(len(reset.get('asks') or []), 'ask')} set again · "
-        f"{count(len(data.get('repeated') or []), 'scar')} again · "
-        f"carry {bytes_of(carry) if isinstance(carry, int) else 'unknown'} against "
-        f"{bytes_of(read) if isinstance(read, int) else 'unknown'} read before the first act"
-    )
+    return " · ".join([
+        f"last molt: {time}",
+        *_redone(len(reset.get("parks") or []), len(reset.get("asks") or []),
+                 len(data.get("repeated") or [])),
+        _sum_reading([data.get("tokens")], 1, format_tokens, "tokens"),
+        _carried([data.get("carry_bytes")], [data.get("read_bytes")], 1),
+    ])
 
 
 def wake_line(facts, thread: str) -> str:
@@ -179,8 +194,27 @@ def wake_line(facts, thread: str) -> str:
     return line(latest.data)
 
 
+def _sum_reading(values, molts: int, fmt, unit: str) -> str:
+    known = [value for value in values if isinstance(value, int)]
+    if not known:
+        return f"{unit} unknown" if unit else "unknown"
+    total = fmt(sum(known))
+    if unit:
+        total += f" {unit}"
+    if len(known) < molts:
+        total += f" ({molts - len(known)} unknown)"
+    return total
+
+
+def _carried(carry, read, molts: int) -> str:
+    carried = _sum_reading(carry, molts, bytes_of, "")
+    reading = _sum_reading(read, molts, bytes_of, "")
+    return f"carried {carried} of {reading} read"
+
+
 def clause(
     molts: int,
+    seconds: list[int],
     tokens: list[int],
     parks: int,
     asks: int,
@@ -188,36 +222,22 @@ def clause(
     carry: list[int],
     read: list[int],
 ) -> str:
-    """The gauge's molt clause. No reading yet is unknown, not a zero."""
+    """The gauge's molt clause, with total time across measured wakes."""
     from .spend import format_tokens
 
     if not molts:
         return "molt cost unknown (no molt.cost yet)"
-    if tokens and len(tokens) == molts:
-        token = f"{format_tokens(sum(tokens))} to first act"
-    elif tokens:
-        token = (
-            f"{format_tokens(sum(tokens))} to first act ({molts - len(tokens)} unknown)"
-        )
-    else:
-        token = "tokens unknown"
-    if carry and read:
-        against = f"carry {bytes_of(sum(carry))} against {bytes_of(sum(read))} read"
-        missing = []
-        if len(carry) != molts:
-            missing.append(f"{molts - len(carry)} carry unknown")
-        if len(read) != molts:
-            missing.append(f"{molts - len(read)} read unknown")
-        if missing:
-            against += f" ({', '.join(missing)})"
-    elif read:
-        against = f"carry unknown against {bytes_of(sum(read))} read"
-    else:
-        against = "carry unknown against read unknown"
-    return (
-        f"{count(molts, 'molt')} · {token} · {count(parks, 'park')} set again · "
-        f"{count(asks, 'ask')} set again · {count(scars, 'scar')} again · {against}"
-    )
+    time = "time unknown"
+    if seconds:
+        time = f"back at work after {_minutes(sum(seconds))} total from waking"
+        if len(seconds) < molts:
+            time += f" ({molts - len(seconds)} unknown)"
+    return " · ".join([
+        f"{time} across {count(molts, 'molt')}",
+        *_redone(parks, asks, scars),
+        _sum_reading(tokens, molts, format_tokens, "tokens"),
+        _carried(carry, read, molts),
+    ])
 
 
 def _before(room: Path, started: Fact) -> dict | None:
@@ -332,6 +352,7 @@ def _observe(room: Path, facts=None, *, place=None, reads=None) -> None:
                     "strand": strand,
                     "gen": gen,
                     "opened": molt.id,
+                    "first_s": reads["first_s"],
                     "tokens": spent if isinstance(spent, int) else None,
                     "reset": {"parks": parks, "asks": asks},
                     "repeated": repeated(room, boot),

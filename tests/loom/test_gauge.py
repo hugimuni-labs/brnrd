@@ -119,7 +119,7 @@ def test_the_line_says_boots_spend_wake_and_reads_and_names_its_unknowns() -> No
                     "1 boots, 0 delivered · 30% of read bytes before a first line (1 bodies traced) · "
                     "molt cost unknown (no molt.cost yet)")
     facts.append(fact("molt.cost", {
-        "thread": "t", "strand": "s1", "gen": 2, "opened": "s0/a", "tokens": 40000,
+        "thread": "t", "strand": "s1", "gen": 2, "opened": "s0/a", "first_s": 180, "tokens": 40000,
         "reset": {"parks": ["w-9"], "asks": []}, "repeated": ["memory/scars/loom/x.md"],
         "carry_bytes": 120, "read_bytes": 50,
     }, "molt.cost:s1:2"))
@@ -128,8 +128,8 @@ def test_the_line_says_boots_spend_wake_and_reads_and_names_its_unknowns() -> No
     assert measured["before_bytes"] == 300 and measured["molt_read"] == [50]
     got = gauge.line(measured)
     assert "30% of read bytes before a first line (1 bodies traced)" in got
-    assert ("1 molt · 40k to first act · 1 park set again · 0 asks set again · "
-            "1 scar again · carry 120 B against 50 B read") in got
+    assert ("back at work after 3 min total from waking across 1 molt · 1 park set again · "
+            "1 scar again · 40k tokens · carried 120 B of 50 B read") in got
 
 
 def test_gauge_and_attention_find_the_home_from_the_room_like_every_body_verb(tmp_path: Path) -> None:
