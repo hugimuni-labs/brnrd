@@ -117,12 +117,12 @@ def test_a_letter_mid_work_is_answered_and_a_killed_bodys_letter_bounces(tmp_pat
         starts = [f for f in facts if f.kind == "body.started"
                   and f.data.get("strand") == caught["strand"]]
         assert len(starts) == 1
-    wake = next(f for f in facts if f.id == f"shown:wake:{caught['strand']}:1")
-    reading = wake.data["wait"]
-    assert reading["thread"] == "ta"
-    assert reading["event"] == "wake"
-    assert reading["previous_gap"] is None
-    assert reading["letters"][0]["sender"] == "person"
+        wake = next(f for f in facts if f.id == f"shown:wake:{caught['strand']}:1")
+        reading = wake.data["wait"]
+        assert reading["thread"] == "ta"
+        assert reading["event"] == "wake"
+        assert reading["previous_gap"] is None
+        assert reading["letters"][0]["sender"] == "person"
         exits = [f for f in facts if f.kind == "body.exited"
                  and f.data.get("code") == -signal.SIGKILL]
         assert len(exits) == 1
