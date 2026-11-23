@@ -1,4 +1,4 @@
-"""``python -m brr.loom.runtime <loom|send|reincarnate|hold|jack|attention>``."""
+"""``python -m brr.loom.runtime <loom|send|molt|hold|jack|attention>``."""
 
 from __future__ import annotations
 
@@ -147,6 +147,8 @@ def _send(argv: list[str]) -> int:
     parser.add_argument("--body", dest="body_choice", metavar="SHELL[/CORE]")
     parser.add_argument("--spend", action="store_true",
                         help="when there is a choice, open on the first eligible engine in spend order")
+    parser.add_argument("--may-deliver", action="store_true",
+                        help="allow a new thread to deliver its opening wishes to the person")
     parser.add_argument("--repo", action="append", default=[])
     parser.add_argument("--budget", metavar="TOKENS",
                         help="weighted tokens, e.g. 2m: a new thread's allocation, or the opener's raise")
@@ -174,14 +176,14 @@ def _send(argv: list[str]) -> int:
             from .home import thread_of
             from .lifecycle import land_status
             if (args.body is not None or args.note is not None or args.body_choice is not None
-                    or args.repo or args.spend):
-                raise PortError("send: --reopen supplies the letter text; drop the body, --note and --spend")
+                    or args.repo or args.spend or args.may_deliver):
+                raise PortError("send: --reopen supplies the letter text; drop the body, --note, --spend and --may-deliver")
             land_status(room, thread_of(args.to), "open", f"reopen {thread_of(args.to)}")
         letter_id = write_send(
             room, to=args.to, sender=strand_of_room(room), body=args.reopen if args.reopen is not None else args.body or "",
             re=args.re, note=args.note, clean=args.clean, kind=args.kind,
             refs=tuple(args.ref or ()), body_choice=args.body_choice, spend=args.spend,
-            repo_sources=args.repo, at=args.at,
+            repo_sources=args.repo, at=args.at, may_deliver=args.may_deliver,
             wish=args.wish, budget=None if args.budget is None else parse_tokens(args.budget),
             chatter=chatter, ask_for=args.ask_for, triage=branches[0] if branches else None,
             echo=echo, reopen=args.reopen is not None,
@@ -195,23 +197,18 @@ def _send(argv: list[str]) -> int:
 
 
 def _molt(argv: list[str]) -> int:
-    return _reincarnate(argv, verb="molt")
-
-
-def _reincarnate(argv: list[str], *, verb: str = "reincarnate") -> int:
     """End the context with a carry, accepting the legacy why and fresh start."""
-    parser = Parser(verb=verb, prog=f"python -m brr.loom.runtime {verb}")
+    parser = Parser(verb="molt", prog="brnrd runtime molt")
     parser.add_argument("--room")
     handover = parser.add_mutually_exclusive_group(required=True)
     handover.add_argument("--carry", type=Path, metavar="FILE")
-    if verb == "reincarnate":
-        handover.add_argument("--why")
-        parser.add_argument("--fresh", action="store_true")
+    handover.add_argument("--why", help="leave a text note instead of a carry file")
+    parser.add_argument("--fresh", action="store_true", help="start from main (requires --why)")
     parser.add_argument("--cites", metavar="LETTER_ID", help="the letter on this thread it answers: its receipt")
     args = parser.parse_args(argv)
     try:
         room = _room(args.room)
-        fresh = getattr(args, "fresh", False)
+        fresh = args.fresh
         carry = None
         if args.carry is not None:
             if fresh:
@@ -226,7 +223,10 @@ def _reincarnate(argv: list[str], *, verb: str = "reincarnate") -> int:
                 sys.stderr.write(_stakes(room))
         fact_id = write_reincarnate(room, why, fresh=fresh, carry=carry, cites=args.cites)
     except (PortError, SelfError, ValueError, OSError) as exc:
-        return refuse(verb, exc)
+        return refuse("molt", exc)
+    if not fresh:
+        from .reincarnate import wake_preview
+        sys.stderr.write(wake_preview(room, why, carry, args.carry))
     sys.stdout.write(fact_id + "\n")
     return 0
 

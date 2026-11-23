@@ -227,7 +227,7 @@ boundary. Each claim says whether code enforces it or the design only states it.
 - **The receipt check at stop** (C2,
   [#2615](https://github.com/hugimuni-labs/brnrd/pull/2615), merged at
   489667fb). At stop it lists every irreversible act since the last stop that
-  cites no grant letter: the five classes plus settle, reincarnate and a send
+  cites no grant letter: the five classes plus settle, molt and a send
   outside the thread's grant. It holds the stop until each one cites a letter or
   is written up as a miss. It is designed to work after the fact, as
   accountability rather than permission.

@@ -16,6 +16,7 @@ import re
 import subprocess
 import time
 from datetime import datetime, timezone
+from io import StringIO
 from pathlib import Path
 
 from .home import home_of_room
@@ -23,6 +24,8 @@ from .ledger import renamed
 
 #: Facts that settle a turn rather than act in it.
 SETTLING = {"shown", "note", "wish.read", "left.asked", "reincarnate", "hold"}
+
+CARRY_BUDGET_SHARE = 0.10
 
 STAKES = "Carried across a molt: only what is written. Kept in the ledger: everything else."
 
@@ -34,6 +37,43 @@ REARM = 50_000
 DIE = "What would be lost in a molt now?"
 ANSWER = ('Answer with `brnrd runtime molt --carry <file>` '
           'or `brnrd runtime hold --why "<what would die, by name>"`.')
+
+
+def wake_preview(room: Path, why: str, carry: str | None, carry_path: Path | None) -> str:
+    """Read the current wake inputs with the new handover and an empty occasion."""
+    from .jack import _state
+    from .ledger import read_facts
+    from .home import strand_of_room
+    from .project import sender_threads
+    from .selfrepo import run_wake, wake_budget
+
+    lines = []
+    try:
+        cap = int(wake_budget() * CARRY_BUDGET_SHARE)
+    except ValueError:
+        return ""
+    if carry is not None:
+        size = len(carry.encode("utf-8"))
+        if size > cap:
+            lines.append(f"Wake preview: carry {carry_path} is {size - cap} bytes over its "
+                         f"{CARRY_BUDGET_SHARE:.0%} share ({size} of {cap} bytes).")
+    try:
+        thread = sender_threads(read_facts(home_of_room(room)))[strand_of_room(room)]
+        port = room / "port"
+        part, repos = port / "loom.md", port / "repos"
+        now = datetime.now(timezone.utc)
+        context = int(_state(room).get("context") or 0)
+        count = f", at {context // 1000}k" if context else ""
+        handover = f"Molted at {now:%H:%M}Z{count}. Carried across:\n"
+        handover += (carry if carry is not None else why).removesuffix("\n") + "\n"
+        output = StringIO()
+        if run_wake(room, thread, loom_part=part if part.is_file() else None,
+                    repos=repos if repos.is_file() else None, stdout=output,
+                    stderr=subprocess.DEVNULL, preview_handover=handover) == 0:
+            lines.extend(output.getvalue().splitlines())
+    except Exception:  # noqa: BLE001 - a reading never prevents a molt
+        pass
+    return "".join(line + "\n" for line in lines)
 
 
 def contexts(stdin_text: str, boot: int | None = None) -> tuple[int, int]:

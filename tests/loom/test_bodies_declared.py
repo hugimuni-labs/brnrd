@@ -127,8 +127,8 @@ class MemoryBody:
                 if crash_at_exit:
                     self.check_prefix(o)
                     return
-            elif name in {"end", "end_failed", "end_settled", "end_reincarnated", "end_moved"}:
-                cause = ("failed" if name == "end_failed" else "reincarnated" if name == "end_reincarnated"
+            elif name in {"end", "end_failed", "end_settled", "end_molted", "end_moved"}:
+                cause = ("failed" if name == "end_failed" else "reincarnated" if name == "end_molted"
                          else exit_cause(self.facts, o, owed=False))
                 if fact_for(self.facts, "attempt.ended", self.strand, self.gen) is None:
                     self.add("attempt.ended", cause=cause)

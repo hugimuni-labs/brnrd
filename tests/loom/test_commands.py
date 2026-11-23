@@ -10,7 +10,7 @@ from _step import Loom, kill_bodies, wait_until, mail
 from test_composer_wake import _home, _Composer, _leases
 
 
-@pytest.mark.parametrize("text, core", [("wake claude/opus", "opus"), ("reincarnate claude/opus", "opus"), ("/WAKE claude/opus", "opus"), ("wake claude", "")])
+@pytest.mark.parametrize("text, core", [("wake claude/opus", "opus"), ("/molt claude/opus", "opus"), ("reincarnate claude/opus", "opus"), ("/WAKE claude/opus", "opus"), ("wake claude", "")])
 def test_idle_exact_command_selects_body_before_routing(tmp_path, monkeypatch, text, core):
     home = _home(tmp_path, monkeypatch)
     loom = Loom(home.root)
@@ -28,7 +28,7 @@ def test_idle_exact_command_selects_body_before_routing(tmp_path, monkeypatch, t
     assert not loom.errors
 
 
-@pytest.mark.parametrize("text, target", [("wake claude/opus", ("claude", "opus")), ("reincarnate", ("spare", "y"))])
+@pytest.mark.parametrize("text, target", [("wake claude/opus", ("claude", "opus")), ("reincarnate", ("spare", "y")), ("molt", ("spare", "y"))])
 def test_running_exact_command_replaces_body_and_keeps_original_work(tmp_path, monkeypatch, text, target):
     home = _home(tmp_path, monkeypatch)
     # The real process is signalled through the normal grace/proof path.

@@ -103,6 +103,7 @@ def test_a_delivery_writes_the_person_a_letter_on_the_chat_they_said_it_in(monke
     import brr.loom.runtime.project as project
     import brr.loom.runtime.verbs_loom as verbs_loom
     from brr.loom.runtime import verbs_wishes
+    from brr.loom.runtime.home import Home
     sent = []
     monkeypatch.setattr(verbs_wishes, "read_facts", lambda home: [])
     monkeypatch.setattr(project, "reply_channels", lambda facts, home: {"L1": "channel:mine/42"})
@@ -111,8 +112,8 @@ def test_a_delivery_writes_the_person_a_letter_on_the_chat_they_said_it_in(monke
     monkeypatch.setattr(verbs_wishes, "strand_of_room", lambda room: "s-aaaa-work")
     found = wishes(base())
     result = {"line": "PR #1", "ref": "#1"}
-    verbs_wishes._tell_delivered(None, SimpleNamespace(room=None), found["w-want"], result)
-    verbs_wishes._tell_delivered(None, SimpleNamespace(room=None), found["w-ask"], result)
+    verbs_wishes._tell_delivered(Home(tmp_path), SimpleNamespace(room=None), found["w-want"], result, "inbox")
+    verbs_wishes._tell_delivered(Home(tmp_path), SimpleNamespace(room=None), found["w-ask"], result, "inbox")
     assert len(sent) == 1 and sent[0]["to"] == "channel:mine/42"
     assert sent[0]["body"].startswith("delivered &w-want: w-want\nPR #1: #1\nReply ok")
 

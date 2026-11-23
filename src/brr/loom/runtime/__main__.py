@@ -13,7 +13,6 @@ VERBS = {
     "send": ("verbs_loom", "_send"),
     "settle": ("verbs_loom", "_settle"),
     "molt": ("verbs_loom", "_molt"),
-    "reincarnate": ("verbs_loom", "_reincarnate"),
     "hold": ("verbs_loom", "_hold"),
     "rest": ("verbs_loom", "_rest"),
     "jack": ("verbs_loom", "_jack"),
@@ -53,7 +52,6 @@ SUMMARY = {
     "recall": "the topic pages (with heads) and threads closest to some words",
     "settle": "close a thread whose work is done",
     "molt": "end the context and carry a file across",
-    "reincarnate": "end the context with a note (legacy alias)",
     "hold": "keep the seat past the context mark, naming what would die",
     "rest": "give a reason to rest with runnable work",
     "send-self": "land this room's self commits on main",
@@ -96,7 +94,7 @@ def main(argv: list[str] | None = None) -> int:
     if argv[:1] in (["-h"], ["--help"], ["help"]):
         sys.stdout.write(usage())
         return 0
-    target = VERBS.get(argv[0]) if argv else None
+    target = VERBS.get("molt" if argv[0] == "reincarnate" else argv[0]) if argv else None
     if target is None:
         if argv:
             sys.stderr.write(f"brnrd runtime: no verb {argv[0]!r}\n")

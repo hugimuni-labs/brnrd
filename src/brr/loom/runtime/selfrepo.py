@@ -953,10 +953,15 @@ _LEGACY_WAKE_RECEIPTS = (
 )
 
 
+def wake_budget() -> int:
+    return int(os.environ.get("LOOM_BUDGET_BYTES") or 24000)
+
+
 def run_wake(room_dir: Path, thread: str, owed: Path | None = None, *,
              loom_part: Path | None = None, repos: Path | None = None,
              core: Path | None = None, stdout=None, stderr=None,
-             recipe: Path | None = None, sizes: Path | None = None) -> int:
+             recipe: Path | None = None, sizes: Path | None = None,
+             preview_handover: str | None = None) -> int:
     """Run the self recipe and add the loom briefing and thread wishes within the wake budget.
 
     With ``core``, a recipe that knows ``LOOM_CORE`` writes the core there and
@@ -964,9 +969,13 @@ def run_wake(room_dir: Path, thread: str, owed: Path | None = None, *,
     ``recipe`` runs another recipe (the packaged one) against the same clone.
     With ``sizes``, a wake that ran writes there its bytes per part and its
     ``total``, measured on what it delivered (``wake_sizes``).
+    ``preview_handover`` measures pressure on the README with the packaged recipe
+    and the proposed handover in place of the previous wake's handover.
     """
     _segment(thread, "thread")
     clone = resolve_clone(room_dir)
+    if preview_handover is not None:
+        recipe = seed_root() / "core" / "loom" / "wake"
     if recipe is not None:
         argv = [sys.executable, str(recipe)]
     else:
@@ -982,6 +991,9 @@ def run_wake(room_dir: Path, thread: str, owed: Path | None = None, *,
     except ValueError:
         names_repo = clone
     env["LOOM_PERSON_NAMES"] = json.dumps(names(names_repo))
+    env.pop("LOOM_PREVIEW", None)
+    if preview_handover is not None:
+        env["LOOM_PREVIEW"] = "1"
     if loom_part is not None:
         env["LOOM_PART"] = str(loom_part)
     if repos is not None:
@@ -1026,7 +1038,7 @@ def run_wake(room_dir: Path, thread: str, owed: Path | None = None, *,
         cost = wake_line(facts, thread)
     # Reserve what the loom adds before the recipe fits its tree/README to the budget:
     # the tree is what gives way to the topic heads.
-    limit = int(env.get("LOOM_BUDGET_BYTES") or 24000)
+    limit = wake_budget()
     env["LOOM_BUDGET_BYTES"] = str(max(0, limit - len(
         (section + briefing + topics + ((cost + "\n") if cost else "")).encode("utf-8"))))
     if core is not None:
@@ -1046,15 +1058,29 @@ def run_wake(room_dir: Path, thread: str, owed: Path | None = None, *,
             owed_arg = handle.name
         else:
             owed_arg = str(owed)
-        if not env.get("LOOM_PART"):
+        if preview_handover is not None or not env.get("LOOM_PART"):
+            part = default_loom_part(clone, thread)
+            if preview_handover is not None:
+                if loom_part is not None:
+                    # The predecessor's handover is replaced at every wake.
+                    current = loom_part.read_text(encoding="utf-8")
+                    marker = f"strand {clone.parent.name} · thread {thread}"
+                    offset = ("\n" + current).find("\n" + marker)
+                    if offset >= 0:
+                        part = current[offset:]
+                part = preview_handover + part
             handle = tempfile.NamedTemporaryFile("w", prefix="loom-part-", delete=False)
-            handle.write(default_loom_part(clone, thread))
+            handle.write(part)
             handle.close()
             part_file = handle.name
             env["LOOM_PART"] = handle.name
         proc = subprocess.run([*argv, thread, owed_arg], cwd=clone, env=env,
-                              stdout=subprocess.PIPE, stderr=stderr, timeout=60)
+                              stdout=subprocess.PIPE, stderr=stderr,
+                              timeout=5 if preview_handover is not None else 60)
         output = proc.stdout.decode("utf-8")
+        if preview_handover is not None:
+            (stdout or sys.stdout).write(output)
+            return proc.returncode
         if proc.returncode == 0:
             above, occasion, letters = output.partition("\n## Occasion\n")
             for pattern, wording in _LEGACY_WAKE_RECEIPTS:

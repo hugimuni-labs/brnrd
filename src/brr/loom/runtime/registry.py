@@ -73,6 +73,7 @@ REGISTRY = (
     _kind("ask.answer",        "wish",    "wish as ref",                                      "strand person loom", "global"),
     _kind("wish.read",         "wish",    "wish reading by wait?",                             "strand person", "global"),
     _kind("wish.result",       "wish",    "wish kind ref line delivered cmd? sha256? size? name? mime? verified? word? unverified? weakened?", "strand loom", "global"),
+    _kind("wish.delivery.grant", "wish",  "thread wishes",                                    "strand",        "global"),
     _kind("wish.verdict",      "wish",    "wish as evidence ref",                              "strand person loom", "global"),
     _kind("wish.left",         "wish",    "wish steps gen same?",                              "strand",        "global"),
     _kind("wish.top",          "wish",    "wish ref",                                          "strand person", "global"),

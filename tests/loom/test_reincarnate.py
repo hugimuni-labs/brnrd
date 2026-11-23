@@ -269,15 +269,19 @@ def test_a_park_before_the_first_stop_reads_the_scroll_itself(room, tmp_path, ca
     assert said.startswith("since waking") and "scroll: tool output 60%" in said
 
 
-def test_a_ledger_written_before_the_rename_reads_in_todays_words(tmp_path):
+@pytest.mark.parametrize(("kind", "body", "cause"), [
+    ("molt", "Fresh molt: start from main.", "molted"),
+    ("reincarnate", "Fresh reincarnation: start from main.", "reincarnated"),
+])
+def test_a_ledger_written_before_the_rename_reads_in_todays_words(tmp_path, kind, body, cause):
     # 10052: no old names in the code, but the ledgers keep what they were written with.
     from brr.loom.runtime.ledger import read_file
     path = tmp_path / "old.jsonl"
     rows = [
-        {"kind": "molt", "by": f"strand:{STRAND}", "id": f"{STRAND}/a", "data": {"strand": STRAND, "gen": 1, "why": "w"}},
+        {"kind": kind, "by": f"strand:{STRAND}", "id": f"{STRAND}/a", "data": {"strand": STRAND, "gen": 1, "why": "w"}},
         {"kind": "letter", "by": f"strand:{STRAND}", "id": f"{STRAND}/b",
-         "data": {"to": "thread:work", "body": "Fresh molt: start from main.", "molt": f"{STRAND}/a"}},
-        {"kind": "attempt.ended", "by": "loom:ab12", "id": "e", "data": {"cause": "molted"}},
+         "data": {"to": "thread:work", "body": body, kind: f"{STRAND}/a"}},
+        {"kind": "attempt.ended", "by": "loom:ab12", "id": "e", "data": {"cause": cause}},
         {"kind": "note", "by": f"strand:{STRAND}", "id": f"{STRAND}/c", "data": {"why": "molt"}},
     ]
     from brr.daemon2.facts import VERSION
@@ -285,6 +289,6 @@ def test_a_ledger_written_before_the_rename_reads_in_todays_words(tmp_path):
                             for row in rows))
     molt, letter, ended, note = read_file(path)
     assert molt.kind == "reincarnate" and molt.data["why"] == "w"
-    assert letter.data == {"to": "thread:work", "body": "Fresh reincarnation: start from main.",
+    assert letter.data == {"to": "thread:work", "body": "Fresh molt: start from main.",
                            "reincarnate": f"{STRAND}/a"}
     assert ended.data["cause"] == "reincarnated" and note.data == {"why": "molt"}
