@@ -528,7 +528,7 @@ def test_an_unowed_wake_holds_the_map_and_keeps_the_carry() -> None:
         "loom: runs abc\n"
         "repo brnrd: somewhere\n"
         "to send a repo's branch out: publish\n"
-        "## Occasion\n"
+        "## Letters\n"
         "the letter\n"
     )
     kept, later = selfrepo.hold_back(wake)

@@ -156,7 +156,7 @@ or merged and loaded, not loaded or unknown by the loom's latest start.
 Merging your own pull request under the merges agreement ends with
 `--merged N`. What you need from the person is an ask: `ask
 "<the decision or act>" --for <w-id> --rec "<what you recommend>"`, where
-`--for` names the wish it unblocks; their verdict closes it. An ask waits on
+`--for` names the wish it unblocks; their verdict closes it. An ask goes to
 your thread's opener; when that is a thread, the ask mails it, and it answers
 or asks onward with `--for <your ask>`, so the wait passes along until it
 reaches a person. The same ask again (same line, same `--for`) while it is

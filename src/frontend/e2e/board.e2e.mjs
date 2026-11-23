@@ -209,7 +209,7 @@ test('the inbox stacks the calls as one counted line that opens on a tap', async
 	assert.equal(await calls.locator('.call').count(), 0);
 	assert.equal(
 		await calls.locator('.cfold').innerText(),
-		'▸ 1 asks you · 1 verdict waits on you · 1 answered'
+		'▸ 1 asks you · 1 verdict to give · 1 answered'
 	);
 	await calls.locator('.cfold').click();
 	assert.equal(await calls.locator('.call').count(), 3);

@@ -15,7 +15,7 @@
 	const line = (f: NonNullable<typeof S.fold>) =>
 		[
 			f.asks ? `${f.asks} ask${f.asks == 1 ? 's' : ''} you` : '',
-			f.verdicts ? `${f.verdicts} verdict${f.verdicts == 1 ? ' waits' : 's wait'} on you` : '',
+			f.verdicts ? `${f.verdicts} verdict${f.verdicts == 1 ? '' : 's'} to give` : '',
 			f.stale ? `${f.stale} not marked` : '',
 			f.answered ? `${f.answered} answered` : ''
 		]
@@ -70,7 +70,8 @@
 					<div class="more">
 						{c.wish} · {ask ? 'asked' : 'delivered'}
 						{hm(c.at)}{#if ask}
-							· waits on {c.waits || ''}{:else}<br /><Ref ref={c.ref} />
+							· your word moves: {c.line}
+							{#if c.next}<br />next: {c.next}{/if}{:else}<br /><Ref ref={c.ref} />
 							{c.result || ''}{/if}
 					</div>
 				{/if}

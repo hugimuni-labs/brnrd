@@ -82,7 +82,7 @@ def test_asks_lists_buckets_over_every_thread(loom):
     text = run("asks", "--home", str(home.root))
     # The plan is work's person wishes; the ask is not one of them.
     assert "in hand\ninbox · s-aaaa-inbx · plan —\nwork · s-aaaa-work · plan 0/1\n" in text
-    assert f"yours\n{ask} · heard · merge #1? rec: yes · - · waits on operator\n" in text
+    assert f"yours\n{ask} · heard · merge #1? rec: yes · - · their word moves: operator\n" in text
     assert "done\n1 · asks --all\n" in text
     rows = run("asks", "--home", str(home.root), "--all", "--thread", "work")
     assert "work · pr https://example.test/pull/1 — the fix" in rows
@@ -168,5 +168,5 @@ def test_asks_person_wait_uses_main_name_without_changing_opener(loom):
     merge = run("wish", "new", "--room", str(seat), "--say", pr, "--line", "merge #1").strip()
     run("ask", "merge #1? rec: yes", "--room", str(seat), "--for", merge)
     text = run("asks", "--home", str(home.root))
-    assert "waits on Test Human Name" in text
+    assert "their word moves: Test Human Name" in text
     assert read_thread(home, "work")["opened-by"] == "person:test"

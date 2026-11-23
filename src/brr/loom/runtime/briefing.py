@@ -13,7 +13,7 @@ TITLE = "loom briefing"
 
 BRIEFING = f"""Holding the seat. Rendered at each wake.
 
-- Resting between turns at no cost. Waking here on the next letter. One turn per addressed reply, then the same seat.
+- Rest is a choice. The stop shows what it costs. The next letter wakes the same seat.
 - A sleep or poll loop is never the wait. No tool boundary inside it, no incoming letters. For CI, a PR, a command, a person or a time, park and stop: `brnrd runtime wish <w-id> --read "waiting: <what>" --wait <{GRAMMAR}>`. Waits kept in the ledger across a molt and listed at wake. Waking by letter when the condition is met. Clear with `brnrd runtime wish <w-id> --clear-wait` or record a wish result.
 - To stay warm while waiting on letters or the board, call `brnrd runtime attend` (default 110s). For longer, pass `--for <N>` with a tool timeout above N (claude: Bash timeout, up to 600000 ms).
 - For a command started here, run `(cmd; echo $? > <path>) &` and park on `file:<path>`.

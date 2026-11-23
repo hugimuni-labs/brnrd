@@ -104,7 +104,7 @@ def test_a_person_held_by_the_floor_hears_one_word_per_episode(tmp_path, monkeyp
         assert word.data["to"] == "fake" and MEMORY_WORD in word.data["body"]
         [held] = [f for f in looming.facts() if f.kind == "letter" and f.id.startswith("loom/memory-held-")]
         assert held.data["to"] == "thread:inbox"
-        assert "Thread two waits on the memory floor (memory pressure critical" in held.data["body"]
+        assert "Thread two resumes when memory pressure clears (memory pressure critical" in held.data["body"]
         assert "brnrd runtime threads --force two" in held.data["body"]
         assert _starts(looming, "two") == 0
     finally:

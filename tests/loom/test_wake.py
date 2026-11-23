@@ -274,7 +274,7 @@ def test_the_loom_briefing_wakes_after_the_stance_within_the_budget(tmp_path: Pa
     with out.open("w", encoding="utf-8") as stdout:
         assert selfrepo.run_wake(clone, "w-1", owed, loom_part=part, stdout=stdout) == 0
     inline = out.read_text(encoding="utf-8")
-    assert f"## memory/stance.md\n{stance}{brief}## threads/w-1/README.md\n" in inline
+    assert f"## memory/stance.md\n{stance}{brief}## Held\nNo goals or queue rows recorded.\n## threads/w-1/README.md\n" in inline
 
 
 def test_the_self_decides(tmp_path: Path) -> None:
@@ -303,9 +303,9 @@ def test_the_self_decides(tmp_path: Path) -> None:
     custom = selfrepo.room(home, "custom")
     via_cli = cli(["wake", "--room", str(custom), "--thread", "w-1", "--owed", str(owed)])
     assert via_cli.returncode == 0, via_cli.stderr
-    # The self decides its wake; the loom's briefing is the one part it adds.
+    # The self decides its recipe. The loom adds its briefing and the held work.
     from brr.loom.runtime.briefing import section as briefing
-    assert via_cli.stdout == briefing(Home(home)) + "custom\n"
+    assert via_cli.stdout == briefing(Home(home)) + "## Held\nNo goals or queue rows recorded.\ncustom\n"
     seed_line = "I am a placeholder."
     assert seed_line not in via_cli.stdout
 
@@ -318,15 +318,16 @@ def test_installed_wake_rewords_existing_recipe_receipts_without_changing_letter
     recipe = self_dir / "core" / "loom" / "wake"
     old = ("[the wake cut 1148 of this README's 2220 bytes from its end to fit the "
            "20033-byte budget; the file is whole on disk: trim it]")
+    letter = f"## Letters\n{old}"
     recipe.write_text(f"#!/bin/sh\ncat <<'EOF'\n## threads/w-1/README.md\n{old}\n"
-                      f"\n## Occasion\n{old}\nEOF\n", encoding="utf-8")
+                      f"\n## Occasion\n{letter}\nEOF\n", encoding="utf-8")
     commit(self_dir, "use legacy receipt")
     clone = selfrepo.room(home, "legacy")
     result = cli(["wake", "--room", str(clone), "--thread", "w-1"])
     assert result.returncode == 0, result.stderr
-    before, letters = result.stdout.split("## Occasion\n", 1)
+    before, letters = result.stdout.split("## Letters\n", 1)
     assert "[Cut 1148 of 2220 README bytes (20033-byte budget). Whole on disk.]" in before
-    assert old not in before and letters.strip() == old
+    assert old not in before and letters.strip() == letter
 
 
 def test_budget_cuts_the_tree_and_refuses_a_fat_identity(tmp_path: Path) -> None:
@@ -617,7 +618,7 @@ def test_the_people_in_hand_wake_with_their_lists_and_latest_line(tmp_path: Path
     assert "between us, latest: 11-03: newest-line-77 [10176]" in people
     assert "older-line-55" not in people
     assert "whole page: people/arseni/page.md" in people
-    assert out.index("## People\n") < out.index("## Loom\n") < out.index("## Occasion\n")
+    assert out.index("## People\n") < out.index("## Loom\n") < out.index("## Letters\n")
 
     # A strand's letter: nobody in hand, so every page gives its latest line and nothing more.
     owed.write_text(json.dumps([{"id": "s-1/x", "from": "s-1", "body": "go\n"}]), encoding="utf-8")
@@ -698,7 +699,7 @@ def test_the_wake_shows_each_topic_pages_newest_entry_newest_first(tmp_path: Pat
         "topics/beta.md · 2026-11-02 · beta-tie-56",
     ]
     assert "older-alpha-12" not in out and "not-a-topic-31" not in out and "undated-78" not in out
-    assert out.index("## Topics\n") < out.index("## Loom\n") < out.index("## Occasion\n")
+    assert out.index("## Topics\n") < out.index("## Loom\n") < out.index("## Letters\n")
 
 
 def test_eleven_topic_pages_show_ten(tmp_path: Path) -> None:
@@ -763,7 +764,7 @@ def test_the_seed_wakes_a_fixture_home_with_the_live_selfs_tail(tmp_path: Path) 
         "topics/wake.md · 2026-11-02 · the-wake-entry-61\n"
         "## Loom\n"
         "loom part goes here verbatim\n"
-        "## Occasion\n"
+        "## Letters\n"
         "### p-arseni/ab12 from person:arseni · reply -\n"
         "letter-body-42\n"
     )
@@ -801,3 +802,37 @@ def test_runtime_wake_labels_from_main_even_when_room_has_another_name(tmp_path)
     out = io.StringIO()
     assert selfrepo.run_wake(clone, "w-1", owed, stdout=out) == 0
     assert "Arseni Human Name: 11-03: newest-line-77" in out.getvalue()
+
+
+def test_wake_opens_with_held_goals_and_queue(tmp_path):
+    from io import StringIO
+
+    from brr.daemon2.facts import Fact
+    from brr.loom.runtime.ledger import append
+
+    assert cli(["init", "--home", str(tmp_path)]).returncode == 0
+    home = Home(tmp_path)
+    repo = tmp_path / "self"
+    thread = home.main_thread()
+    write_thread(repo, thread, "The inbox")
+    goals = repo / "goals"
+    goals.mkdir()
+    (goals / "launch.md").write_text(
+        '---\nstatus: active\nstands: First draft\nnext: Get a read\n'
+        'now: Send to the team\nstake: Ship this week\n---\n# Launch\n')
+    commit(repo, "goal")
+    append(home, Fact(kind="letter", id="p-test/abcde", by="person:test",
+                      data={"id": "p-test/abcde", "from": "p-test", "to": f"thread:{thread}"}))
+    append(home, Fact(kind="wish", id="w-held", by="person:test",
+                      data={"wish": "w-held", "from": "person", "thread": thread,
+                            "line": "Send the draft", "says": [{"letter": "p-test/abcde"}]}))
+    clone = selfrepo.room(tmp_path, "seeded")
+    sizes = tmp_path / "wake.sizes"
+    out = StringIO()
+    assert selfrepo.run_wake(clone, thread, stdout=out, sizes=sizes) == 0
+    wake = out.getvalue()
+    beginning, held = wake.split("## Held\n", 1)
+    assert "## memory/stance.md" in beginning
+    assert held.index("goal launch: First draft") < held.index('held w-held')
+    assert wake.index("## Held\n") < wake.index(f"## threads/{thread}/README.md") < wake.index("## Letters\n")
+    assert json.loads(sizes.read_text())["parts"]["held"] > 0

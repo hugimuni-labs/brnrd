@@ -565,7 +565,7 @@ def _ask_unease(home, facts, now: float) -> tuple[str, str] | None:
     advice = "follow it up once, or close it"
     if waiters:
         threads = ", ".join(f"thread:{thread}" for thread in sorted({thread for _, _, thread in waiters}))
-        advice = f"write to {threads} first · {len(waiters)} wait on it"
+        advice = f"write to {threads} first · {len(waiters)} ride on this"
     return (f"ask:{wish.id}",
             f"unease: ask {wish.id} to {_who(home, head)} unanswered {_age(age)}: {advice}")
 

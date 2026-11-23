@@ -218,6 +218,8 @@ def calls_of(threads: list[dict], told: dict, facts=()) -> dict[str, list[dict]]
     Either is ``closed`` once the person's verdict letter for the wish lands after it was raised (your-call.md, 4907):
     the card collapses, and the loom's own verdict stays the resident's to stamp.
     """
+    from .queues import held_move
+
     raised, said = verdict_letters(facts)
     main = {t["id"]: {"opened-by": t.get("opened_by"), "status": t.get("status")} for t in threads}
     live = {t["id"] for t in threads if t.get("status") not in CLOSED}
@@ -229,8 +231,11 @@ def calls_of(threads: list[dict], told: dict, facts=()) -> dict[str, list[dict]]
     for ident, head in waits_on(told, main).items():
         w = told[ident]
         if not head.startswith("thread:") and w.state != "delivered":
-            calls.setdefault(w.thread, []).append({"kind": "ask", "wish": ident, "line": w.line, "waits": head,
-                                                   "at": _iso(raised.get(ident, w.at)), "raised": raised.get(ident, w.at)})
+            call = {"kind": "ask", "wish": ident, "line": w.line, "waits": head,
+                    "at": _iso(raised.get(ident, w.at)), "raised": raised.get(ident, w.at)}
+            if parent := told.get(w.parent):
+                call["next"] = held_move(parent, [w])
+            calls.setdefault(w.thread, []).append(call)
     for w in told.values():
         if w.verdict or w.state not in {"delivered", "expired"}:
             continue

@@ -192,7 +192,7 @@ def occasion(path: Path) -> str:
         die(f"owed.json: not utf-8: {exc}")
     if not isinstance(data, list):
         die("owed.json: expected a list")
-    chunks = ["## Occasion\n"]
+    chunks = ["## Letters\n"]
     for item in data:
         if not isinstance(item, dict) or any(key not in item for key in ("id", "from", "body")):
             die("owed.json: each letter needs id, from, body")

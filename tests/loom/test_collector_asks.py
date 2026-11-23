@@ -93,7 +93,7 @@ def test_an_error_held_two_readings_is_one_ask_mailed_with_its_fix(home):
     facts = read_facts(home)
     assert waits_on(wishes(facts), main_snapshot(home))[second.id] == "operator"
     yours = board(facts, main_snapshot(home), install="aaaa").split("yours\n")[1].split("\nunanswered")[0]
-    assert any(second.id in row and row.endswith("waits on operator") for row in yours.splitlines())
+    assert any(second.id in row and row.endswith("their word moves: operator") for row in yours.splitlines())
 
 
 def test_a_clean_reading_ends_the_ask_and_the_error_back_asks_again(home):

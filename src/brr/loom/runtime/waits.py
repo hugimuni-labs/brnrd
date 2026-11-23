@@ -378,9 +378,9 @@ def _advice(wish, read, resolved: bool, said: str = "") -> str:
                 "budget or an outward act is never defaulted: re-ask")
     if wait.get("on") is None:
         nxt = PROSE[min(int(wait.get("step") or 1), len(PROSE) - 1)]
-        return (f"re-check {wait.get('step', 1)} of a prose park. If it waits on something the loom can "
-                f"watch, re-park with wish {wish.id} --read \"waiting: …\" --wait <{GRAMMAR}>; "
-                f"if it still waits on words, re-park in prose (next re-check in {_span(nxt)}), "
+        return (f"re-check {wait.get('step', 1)} of a prose park. If the loom can watch the "
+                f"condition, re-park with wish {wish.id} --read \"waiting: …\" --wait <{GRAMMAR}>; "
+                f"if their word moves the work, re-park in prose (next re-check in {_span(nxt)}), "
                 "or deliver, ask or settle")
     if resolved and str(wait.get("on", "")).startswith("pr:") and "cannot be read" in said:
         return f"the forge has no such pull request: re-park {wish.id} with the repo and number corrected"
