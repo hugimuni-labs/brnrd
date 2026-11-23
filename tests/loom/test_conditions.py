@@ -73,8 +73,8 @@ def test_a_flapping_disk_is_told_once_and_its_dips_carry_the_episode(disk):
     assert line == ""
     at(1, 11.3); guard(h)
     line = body_line(read_facts(home), home.install_id(), now=clock.now)
-    assert line.startswith("body: disk ") and line.endswith("for <1 min")
-    assert h.episodes["disk"].dips == 5
+    assert line.startswith("body: disk ") and "for <1 min" in line
+    assert f"dip 5 since {downs[0].data['since'][11:16]}Z" in line
 
 
 def test_a_restart_inside_an_episode_tells_nothing_new(disk):
@@ -147,7 +147,7 @@ def test_the_wake_folds_an_episodes_dips_into_one_line(tmp_path):
     assert f"disk dipped 3 times since {first}, the last at 2026-10-28T05:16:00.000Z" in section
 
 
-def test_a_pass_still_under_the_floor_prunes_caches_and_clears_the_gauge(disk, monkeypatch):
+def test_a_pass_still_under_the_floor_prunes_caches_and_the_gauge_says_so(disk, monkeypatch):
     home, clock, guard, at = disk
     ran = []
 
@@ -174,9 +174,11 @@ def test_a_pass_still_under_the_floor_prunes_caches_and_clears_the_gauge(disk, m
     assert ran == ["uv cache prune", "npm cache verify"]
     [pruned] = [f for f in read_facts(home) if f.kind == "loom.pruned"]
     assert pruned.data["bytes"] == int(13.0 * GB) - int(11.3 * GB)
-    guard(h)
     line = body_line(read_facts(home), home.install_id(), now=clock.now)
-    assert line == ""
+    assert line.startswith("body: disk ")
+    assert "did: pruned caches, 1.7 GB freed" in line
+    guard(h)
+    assert body_line(read_facts(home), home.install_id(), now=clock.now) == ""
 
 
 def test_a_pass_over_the_floor_prunes_nothing(disk, monkeypatch):

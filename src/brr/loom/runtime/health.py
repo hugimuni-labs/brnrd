@@ -121,6 +121,23 @@ def _episodes(facts, install: str | None, now: float) -> dict[str, tuple[Fact, F
     return standing
 
 
+def acted(facts, install: str | None, since: str) -> str:
+    """What the loom did about the disk since an episode began: reaped paths and pruned caches."""
+    start, reaped, pruned, freed = _seconds(since), 0, 0, 0
+    for kind in ("room.reaped", "loom.pruned"):
+        for fact in kind_facts(facts, kind):
+            if (install is not None and fact.by != f"loom:{install}") or _seconds(fact.at) < start:
+                continue
+            freed += int(fact.data.get("bytes") or 0)
+            if kind == "room.reaped":
+                reaped += 1
+            else:
+                pruned += 1
+    done = ([f"reaped {reaped} path{'s' * (reaped > 1)}"] if reaped else []) + (
+        [f"pruned caches{f' {pruned}x' if pruned > 1 else ''}"] if pruned else [])
+    return f"did: {', '.join(done)}, {freed / 1024 ** 3:.1f} GB freed" if done else ""
+
+
 def _duration(seconds: float) -> str:
     minutes = max(0, int(seconds // 60))
     hours, rest = divmod(minutes, 60)
@@ -150,8 +167,17 @@ def body_line(facts, install: str, now: float | None = None) -> str:
         elif step == "board":
             detail = error or detail
         age = now - _seconds(since)
-        parts.append(f"{step} {' '.join(detail.split())} for {_duration(age)}"
-                     + (" (long)" if age > 7200 else ""))
+        episode = data.get("episode") or since
+        dips = int(data.get("dips") or 1)
+        notes = [f"dip {dips} since {episode[11:16]}Z"] if dips > 1 else []
+        if step == "disk" and (did := acted(facts, install, episode)):
+            notes.append(did)
+        part = f"{step} {' '.join(detail.split())} for {_duration(age)}"
+        if age > 7200:
+            part += " (long)"
+        if notes:
+            part += f" ({'; '.join(notes)})"
+        parts.append(part)
     if since := refusal_since(facts, install):
         age = now - _seconds(since)
         parts.append(f"github credential refused since {since[11:16]}Z"
