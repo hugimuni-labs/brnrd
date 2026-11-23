@@ -372,7 +372,7 @@ def _tell_delivered(home, args, wish, result, thread) -> None:
     if thread != home.main_thread():
         opener = read_thread(home, thread).get("opened-by") or ""
         writers = sender_threads(facts)
-        granted = any(
+        granted = opener.startswith("person:") or any(
             grant.data["thread"] == thread and wish.id in grant.data["wishes"]
             and f"thread:{writers.get(grant.by.removeprefix('strand:'))}" == opener
             for grant in kind_facts(facts, "wish.delivery.grant")

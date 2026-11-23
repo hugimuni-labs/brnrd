@@ -9,7 +9,7 @@ from brr.loom.runtime.loom import _ingest
 from brr.loom.runtime.selfrepo import room
 from brr.loom.runtime.wishes import wishes
 from test_reply_address import _relayed
-from test_wake import cli
+from test_wake import cli, commit
 from test_wishes import command, ledger  # noqa: F401 - fixture
 
 
@@ -26,17 +26,23 @@ def _seat(home, thread, strand, gen=1):
     ("opener", "thread:work"),
     ("grant", "channel:relay/telegram:42"),
     ("face", "channel:relay/telegram:42"),
+    ("person", "channel:relay/telegram:42"),
 ])
 def test_delivery_reaches_only_its_authorized_recipient(ledger, route, target):
     home, opener = ledger
     (home.root / "loom/config.toml").write_text('connectors = ["relay"]\n')
     face = route == "face"
     seat = _seat(home, "inbox", "s-aaaa-face") if face else opener
+    if route == "person":
+        self_dir = home.root / "self"
+        page = self_dir / "threads/work/README.md"
+        page.write_text(page.read_text().replace("tense: plan\n", "tense: plan\nopened-by: person:test\n"))
+        commit(self_dir, "Record person as work opener")
     source, letter = _relayed("telegram")
     append(home, source)
     append(home, replace(letter, data=dict(letter.data, to="thread:inbox" if face else "thread:work")))
     ident = command(home, seat, "wish", "new", "--line", "A result", "--say", letter.id)
-    if not face:
+    if route in {"opener", "grant"}:
         grant = ["--may-deliver"] if route == "grant" else []
         command(home, opener, "send", "--to", "thread:worker", "--wish", ident, *grant, "Do the work")
         # The delivery body reads its grant from the ledger, even in a later generation.
