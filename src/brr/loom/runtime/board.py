@@ -285,7 +285,8 @@ def board_state(t: dict, calls: list[dict], left: int = 0, end: tuple | None = N
     calling = {"open": len(calls), "red": any(c["kind"] == "ask" for c in calls)} if calls else {}
     if held or (t.get("turn") == "mine" and (left or from_person)):
         word = held["state"] if held else (t.get("strands") or [{}])[-1].get("state") or "starting"
-        return {"state": "seated", "strand": word, **shown, **calling}
+        rest = {"why": t["rest"]} if word == "holding" and t.get("rest") else {}
+        return {"state": "seated", "strand": word, **rest, **shown, **calling}
     if calls:
         return {"state": "your-call", **calling, **shown, "since": min(c["at"] for c in calls)}
     last = (t.get("strands") or [{}])[-1].get("state")

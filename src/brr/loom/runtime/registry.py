@@ -53,7 +53,7 @@ def _kind(kind: str, resource: str, fields: str, writer: str, scope: str, once: 
     return Kind(kind, resource, tuple(fields.split()), tuple(writer.split()), scope, once)
 
 
-CLOSED = ("body", "wish", "pr", "loom", "board")
+CLOSED = ("body", "wish", "pr", "loom", "board", "rest")
 ROLES = ("loom", "strand", "person")
 SCOPES = ("global", "machine")
 
@@ -88,6 +88,7 @@ REGISTRY = (
     _kind("shown",             "letter",  "strand gen ids wait?",                                   "loom strand", "global"),
     _kind("reincarnate",              "letter",  "strand gen why fresh? cites? carry?",              "strand",      "global"),
     _kind("hold",              "letter",  "strand gen why context",                           "strand",      "global"),
+    _kind("rest.why",          "rest",    "strand gen why wishes",                            "strand",      "global"),
     _kind("guard.granted",     "letter",  "strand gen thread class target letter wish",       "strand",      "global"),
     _kind("guard.refused",     "letter",  "strand gen thread class target",                   "strand",      "global"),
     _kind("attempt.ended",     "attempt", "thread strand gen ids cause code dispositions evidence", "loom",  "global",  once=True),

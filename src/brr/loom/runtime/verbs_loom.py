@@ -259,6 +259,29 @@ def bare(why: str) -> bool:
     return sum(1 for w in words if w and w not in _GENERIC and len(w) > 1) < 3
 
 
+def _rest(argv: list[str]) -> int:
+    from .jack import _boundary_text, _set_state
+    from .port import parse_boundary
+
+    parser = Parser(verb="rest", prog="python -m brr.loom.runtime rest")
+    parser.add_argument("--room")
+    parser.add_argument("--why", required=True)
+    args = parser.parse_args(argv)
+    why = " ".join(args.why.split())
+    if bare(why):
+        return refuse("rest", "rest: name why the runnable work can wait; a generic why is no reason.")
+    try:
+        room = _room(args.room)
+        boundary = parse_boundary(_boundary_text(room))
+        if not boundary.gen or boundary.strand != strand_of_room(room):
+            return refuse("rest", "rest: no active boundary for this room")
+        _set_state(room, rest_pending={"gen": boundary.gen, "why": why, "id": "rest.why:" + mint(12)})
+    except (PortError, OSError, ValueError) as exc:
+        return refuse("rest", str(exc))
+    print(f"resting because {why}")
+    return 0
+
+
 def _hold(argv: list[str]) -> int:
     """``hold``: keep the seat past the context mark, naming what would die if it went.
     A bare why is refused; the hold is a fact, so the whys can be read back later."""

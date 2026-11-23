@@ -887,3 +887,14 @@ def test_verdicts_age_on_an_idle_board_but_asks_stay_open(parts, monkeypatch):
     assert web["open"] == 1
     assert web["red"] is True
     assert web["since"] == board._iso(asked_at)
+
+
+def test_holding_strand_shows_its_rest_reason():
+    from brr.loom.runtime.board import board_state
+
+    thread = {"strands": [{"state": "holding"}], "rest": "resting because CI is saturated"}
+    assert board_state(thread, []) == {
+        "state": "seated", "strand": "holding", "why": "resting because CI is saturated",
+    }
+    thread["strands"][0]["state"] = "working"
+    assert board_state(thread, []) == {"state": "seated", "strand": "working"}

@@ -1,5 +1,4 @@
-"""The jack. It reads boundary.md, idle.md and stdin, and the ledger only through
-``reap.left`` for its own room. It fails open."""
+"""The jack speaks the hook protocol and fails open."""
 
 from __future__ import annotations
 
@@ -320,7 +319,7 @@ def _block(room: Path, text: str, parsed: Boundary) -> str:
 
 def _working(room: Path, **state) -> None:
     """A stop that blocks gives the body work: it is no longer held, dry or displaced."""
-    _set_state(room, held_at=None, dry=None, **state)
+    _set_state(room, held_at=None, dry=None, rest_reason=None, **state)
     (room / "port" / DISPLACED).unlink(missing_ok=True)
 
 
@@ -401,7 +400,7 @@ def _poll(room: Path, stdin_text: str = '') -> str:
             # happens only at the hook ceiling.
             news = _stop_news(room, text, parsed)
             idle = _idle(room, home, shell)
-            rest = _rest(text) + "\n"
+            rest = "\n".join(filter(None, (rest_reason(_state(room), parsed.gen), _rest(text)))) + "\n"
             extra = _unease(room)
             reason = idle(rest + news, extra) if idle else (
                 rest + news + (extra + "\n" if extra else ""))
@@ -954,7 +953,7 @@ def execute(event: str, room: Path, stdin_text: str) -> str:
                                                  "additionalContext": guarded}}) if guarded else ""
         # A call begun before this is not the body's current one (pausing.py):
         # a background call returns at once, so a boundary always follows it.
-        _set_state(room, stop_blocks=0, boundary_at=time.time(), held_at=None, turn_open=True)
+        _set_state(room, stop_blocks=0, boundary_at=time.time(), held_at=None, turn_open=True, rest_reason=None)
         (room / "port" / DISPLACED).unlink(missing_ok=True)
     elif event == "start":
         from .reincarnate import base, heads, readme_hash
@@ -1044,10 +1043,64 @@ def execute(event: str, room: Path, stdin_text: str) -> str:
     path = _transcript_path(stdin_text) or state.get("transcript") or ""
     _set_state(room, stops=int(state.get("stops") or 0) + 1, transcript=path)
     _soft(room, _turn, room, stdin_text)
-    out = _stop_block(room, text, plan) or _poll(room, stdin_text)
+    out = _stop_block(room, text, plan) or _rest_hold(room, parsed) or _poll(room, stdin_text)
     if out:
         _opened(room)
     return out
+
+
+def rest_reason(state: dict, gen: int) -> str:
+    said = state.get("rest_reason") or {}
+    return f"resting because {said['why']}" if said.get("gen") == gen else ""
+
+
+def _rest_hold(room: Path, parsed: Boundary) -> str:
+    """Hold once per generation and top wish, then record the reason for resting."""
+    from brr.daemon2.facts import Fact
+
+    from .adapters import burn_fuel
+    from .ledger import append, kind_facts, read_facts
+    from .lifecycle import main_snapshot
+    from .queues import queues
+    from .waits import unresolved
+    from .wishes import told, waits_on
+
+    thread = os.environ.get("BRNRD_THREAD")
+    if not (thread and parsed.strand and parsed.gen) or _dry(room):
+        return ""
+    state = _state(room)
+    held = state.get("rest_held") or {}
+    held_wishes = held["wishes"] if held.get("gen") == parsed.gen else []
+    pending = state.get("rest_pending") or {}
+    if pending.get("gen") != parsed.gen:
+        pending = {}
+    home = home_of_room(room)
+    fuel = burn_fuel(home)
+    if not (fuel or pending or held_wishes):
+        return ""
+    facts = read_facts(home)
+    found = told(facts)
+    queue = queues(found, waits_on(found, main_snapshot(home)))
+    parked = {wish.id for wish, _ in unresolved(found, facts)}
+    free = [wish.id for wish in queue.mine
+            if wish.thread == thread and wish.id not in queue.blocked and wish.id not in parked]
+    if not pending and free and free[0] in held_wishes:
+        pending = {"id": f"rest.why:{parsed.strand}:{parsed.gen}:{free[0]}", "why": "no reason given"}
+    if pending:
+        if not any(fact.id == pending["id"] for fact in kind_facts(facts, "rest.why")):
+            append(home, Fact(kind="rest.why", by=f"strand:{parsed.strand}", id=pending["id"],
+                              data={"strand": parsed.strand, "gen": parsed.gen,
+                                    "why": pending["why"], "wishes": free}))
+        _set_state(room, rest_pending=None, rest_reason={"gen": parsed.gen, "why": pending["why"]})
+        return ""
+    if not free or not fuel:
+        return ""
+    shell, left = fuel
+    _working(room, rest_held={"gen": parsed.gen, "wishes": [*held_wishes, free[0]]})
+    return _json({"decision": "block", "reason":
+                  f"Rest held: {free[0]} waits on nothing and {shell} has {left:g}% left. "
+                  'Open it (send --spend), park it with a real wait, or rest with '
+                  '`brnrd runtime rest --why "<reason>"`.'})
 
 
 _OVER = re.compile(r" of (\S+), \+(\d+)%\)")

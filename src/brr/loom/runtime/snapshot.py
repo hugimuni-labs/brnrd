@@ -281,7 +281,7 @@ def thread(v: View, row: dict) -> dict:
     last = v.activity.get(thread)
     told = v.told
     entry = {"id": thread, "title": _SENTENCE.split(data.get("headline", ""), 1)[0],
-             "status": data.get("status"), "turn": turn,
+             "status": data.get("status"), "turn": turn, "rest": row.get("rest"),
              "blocked_on": row["restart"] if turn == "blocked" else None,
              "opened_by": data.get("opened-by"),
              "waits_on": v.waits.get(thread),

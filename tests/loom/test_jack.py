@@ -33,9 +33,9 @@ def _letter(body="ping-1\nmore"):
     )
 
 
-def _write(room: Path, letters, shown=None) -> str:
+def _write(room: Path, letters, shown=None, *, gen=1) -> str:
     text = render_boundary(
-        STRAND, 1, "ta", letters, shown or set(), {"s-ab12-bbbbbb": "tb"},
+        STRAND, gen, "ta", letters, shown or set(), {"s-ab12-bbbbbb": "tb"},
     )
     (room / "port" / "in" / "boundary.md").write_text(text)
     return text
@@ -585,3 +585,116 @@ def test_jack_clocks_messages_without_headers(monkeypatch):
         result = json.loads(jack._json(payload))
         text = result.get("reason") or result["hookSpecificOutput"]["additionalContext"]
         assert text.startswith("now: 2026-11-06 20:01Z\n")
+
+
+@pytest.fixture
+def rest_room(tmp_path, monkeypatch):
+    from datetime import datetime, timedelta, timezone
+
+    room = _room(tmp_path)
+    _write(room, [])
+    monkeypatch.setenv("BRNRD_THREAD", "ta")
+    monkeypatch.setenv("BRNRD_BODY_JACK", "hand")
+    monkeypatch.delenv("BRNRD_BODY_SHELL", raising=False)
+    monkeypatch.setattr("shutil.which", lambda name: f"/bin/{name}")
+    (room / "port" / "wait").write_text("0")
+    from brr.loom.runtime.home import home_of_room
+    from brr.loom.runtime.ledger import append
+
+    append(home_of_room(room), Fact(kind="letter", by="person:test", id="p-test/abcde",
+                                    data={"id": "p-test/abcde", "to": "thread:ta",
+                                          "from": "p-test", "body": "Build it"}))
+    append(home_of_room(room), Fact(kind="letter", by=f"strand:{STRAND}", id=f"{STRAND}/idle1",
+                                    data={"id": f"{STRAND}/idle1", "to": "thread:ta",
+                                          "from": STRAND, "body": "Consider this someday"}))
+    usage = tmp_path / "loom" / "usage"
+    usage.mkdir(parents=True)
+    (usage.parent / "preferences.toml").write_text('spend.burn = ["codex"]\nspend.keep = "claude"\n')
+    now = datetime.now(timezone.utc)
+    for shell, left in (("codex", 35), ("claude", 99)):
+        (usage / f"{shell}.json").write_text(json.dumps({
+            "at": now.timestamp(),
+            "windows": [{"name": "week", "left_pct": left,
+                         "resets_at": (now + timedelta(days=1)).isoformat()}],
+        }))
+    return room
+
+
+def _rest_wish(home, ident="w-free", *, thread="ta", parent=None, ranked=True):
+    from brr.loom.runtime.ledger import append
+
+    letter = "p-test/abcde" if ranked else f"{STRAND}/idle1"
+    return append(home, Fact(kind="wish", id=ident, by="strand:" + STRAND if parent else "person:test",
+                             data={"wish": ident, "says": [] if parent else [{"letter": letter}],
+                                   "from": "resident" if parent else "person", "line": "Build it",
+                                   "thread": thread, **({"parent": parent} if parent else {})}))
+
+
+def test_stop_holds_until_rest_why_and_records_passed_wishes(rest_room, capsys):
+    from brr.loom.runtime.__main__ import main
+    from brr.loom.runtime.home import home_of_room
+    from brr.loom.runtime.ledger import read_facts
+
+    home = home_of_room(rest_room)
+    _rest_wish(home)
+    _rest_wish(home, "w-top")
+    _rest_wish(home, "w-away", thread="tb")
+    _rest_wish(home, "w-idle", ranked=False)
+    code, out = run("stop", rest_room, "{}")
+    assert code == 0 and json.loads(out)["decision"] == "block"
+    assert "w-top waits on nothing and codex has 35% left" in out
+    assert main(["rest", "--room", str(rest_room), "--why", "x"]) == 1
+    assert main(["rest", "--room", str(rest_room), "--why", "Waiting for a clearer brief"]) == 0
+    assert "resting because Waiting for a clearer brief" in capsys.readouterr().out
+    execute("post", rest_room, "{}")
+    assert run("stop", rest_room, "{}") == (0, "")
+    fact, = [f for f in read_facts(home) if f.kind == "rest.why"]
+    assert fact.data == {"strand": STRAND, "gen": 1, "why": "Waiting for a clearer brief",
+                         "wishes": ["w-top", "w-free"]}
+
+
+def test_stop_holds_once_per_gen_and_top_wish(rest_room):
+    from brr.loom.runtime.home import home_of_room
+    from brr.loom.runtime.ledger import append, read_facts
+
+    home = home_of_room(rest_room)
+    _rest_wish(home)
+    _rest_wish(home, "w-top")
+    assert "w-top waits on nothing" in execute("stop", rest_room, "{}")
+    assert run("stop", rest_room, "{}") == (0, "")
+    assert run("stop", rest_room, "{}") == (0, "")
+    fact, = [f for f in read_facts(home) if f.kind == "rest.why"]
+    assert fact.data == {"strand": STRAND, "gen": 1, "why": "no reason given",
+                         "wishes": ["w-top", "w-free"]}
+
+    append(home, Fact(kind="wish.top", by="person:test", data={"wish": "w-free", "ref": "p-test/abcde"}))
+    assert "w-free waits on nothing" in execute("stop", rest_room, "{}")
+    append(home, Fact(kind="wish.top", by="person:test", data={"wish": "w-top", "ref": "p-test/abcde"}))
+    assert run("stop", rest_room, "{}") == (0, "")
+
+    _write(rest_room, [], gen=2)
+    assert "w-top waits on nothing" in execute("stop", rest_room, "{}")
+
+
+@pytest.mark.parametrize("which", ["park", "ask", "empty fuel", "no burn", "empty queue", "other thread", "idle"])
+def test_stop_passes_without_runnable_work_and_burn_fuel(rest_room, which):
+    from brr.loom.runtime.home import home_of_room
+    from brr.loom.runtime.ledger import append
+
+    home = home_of_room(rest_room)
+    if which != "empty queue":
+        _rest_wish(home, thread="tb" if which == "other thread" else "ta", ranked=which != "idle")
+    if which == "park":
+        append(home, Fact(kind="wish.read", id="wish.read:park", by=f"strand:{STRAND}",
+                          data={"wish": "w-free", "reading": "waiting: CI", "by": "resident",
+                                "wait": {"on": "ci:owner/repo@abcd"}}))
+    if which == "ask":
+        _rest_wish(home, "w-ask", parent="w-free")
+    if which == "empty fuel":
+        path = home.root / "loom" / "usage" / "codex.json"
+        payload = json.loads(path.read_text())
+        payload["windows"][0]["left_pct"] = 0
+        path.write_text(json.dumps(payload))
+    if which == "no burn":
+        (home.root / "loom" / "preferences.toml").write_text('spend.keep = "claude"\n')
+    assert execute("stop", rest_room, "{}") == ""
