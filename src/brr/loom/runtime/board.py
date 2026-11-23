@@ -196,7 +196,7 @@ def steps_of(self_root: Path, thread: str) -> list[dict]:
 
 
 def verdict_letters(facts) -> tuple[dict, dict]:
-    """``(raised, said)``: when each wish was last raised (its last ``wish`` fact), and his latest verdict
+    """``(raised, said)``: when each wish was last raised (its last ``wish`` fact), and the person's latest verdict
     letter per wish (a person letter carrying ``wish`` and ``verdict`` agree|correct), both read from the ledger."""
     raised, said = {}, {}
     for f in facts:
@@ -210,12 +210,12 @@ def verdict_letters(facts) -> tuple[dict, dict]:
 
 
 def calls_of(threads: list[dict], told: dict, facts=()) -> dict[str, list[dict]]:
-    """Each thread's calls: the one action each wish waiting on him names (your-call.md, 4uwjt agreed in 4886).
+    """Each thread's calls: the one action each wish waiting on the person names (your-call.md, 4uwjt agreed in 4886).
 
     ask (red): an open ask whose wait reaches a person (waits_on, the loom's own rule); its line is
     the question. verdict: a delivered or expired wish with no verdict, on the open thread opened for it,
     else the open thread it was said on, else the inbox; its last delivered result is the link.
-    Either is ``closed`` once his verdict letter for the wish lands after it was raised (your-call.md, 4907):
+    Either is ``closed`` once the person's verdict letter for the wish lands after it was raised (your-call.md, 4907):
     the card collapses, and the loom's own verdict stays the resident's to stamp.
     """
     from .queues import held_move
@@ -264,7 +264,7 @@ def board_state(t: dict, calls: list[dict], left: int = 0, end: tuple | None = N
     settled: status is closed. seated: a held strand works or holds, or the resident has the turn
     and an open wish still needs work, or an owed letter is from a person (``from_person``; a loom
     notice alone is not, and the column stays quiet until a body is held). your call: a call names
-    his action (red when one is an ask). Old verdicts
+    the person's action (red when one is an ask). Old verdicts
     stay on the card without making a call. mine: the resident owes a move the loom will not make
     (a parked or failed strand, a letter owed by the
     operator, or an open thread with work left and no body that declared its end: wake or settle).
@@ -273,7 +273,7 @@ def board_state(t: dict, calls: list[dict], left: int = 0, end: tuple | None = N
     ``since`` orders your call by when the thread entered it; ``why`` names the move a mine column waits on.
     ``left`` counts its open wishes not yet delivered; ``end`` is the last body's (cause, at); ``parked`` is the
     newest resident `waiting:` read on one of them, ``parked_at`` when it was written: a read that names
-    ``person`` waits on him, so the column is his call and reads so (9mswfh0474 4): an ask call on
+    ``person`` waits on the person, so the column is their call and reads so (9mswfh0474 4): an ask call on
     ``parked_wish`` with the read as its line, the one block every call renders as (5092).
     """
     if t.get("status") in CLOSED:
@@ -298,9 +298,9 @@ def board_state(t: dict, calls: list[dict], left: int = 0, end: tuple | None = N
     if t.get("turn") == "blocked" or last in {"parked", "failed"}:
         return {"state": "mine", "why": f"{last or 'strand'}: {t.get('blocked_on') or 'restart'}", **shown}
     answered = [c["wish"] for c in shown.get("calls", []) if c["kind"] == "ask"]
-    if answered:  # his done is on record and the ask is still open: accepting it is the thread's move
-        return {"state": "mine", "why": f"his done is in: wish {answered[0]} --accept", **shown}
-    if t.get("turn") == "yours":  # no ask reaches him, so the operator owns a letter here
+    if answered:  # the person has said done and the ask is still open: accepting it is the thread's move
+        return {"state": "mine", "why": f"the person said done: wish {answered[0]} --accept", **shown}
+    if t.get("turn") == "yours":  # no ask reaches the person, so the operator owns a letter here
         return {"state": "mine", "why": f"{t.get('owed') or 'a'} letter(s) owed by the operator: retry or attention --note", **shown}
     if not left:
         return {"state": "quiet", **shown}
@@ -327,7 +327,7 @@ def thread_marks(threads: list[dict], told: dict, unanswered: dict[str, tuple[st
 
     ready: every wish on the thread or opened for it is delivered or past it (the settle candidate).
     unanswered: the loom's own list (owners.unanswered_by_thread, the one the wake and status line read):
-    his letters with no delivered reply on his channel, placed on each thread whose Plan cites them (8u0ru).
+    the person's letters with no delivered reply on their channel, placed on each thread whose Plan cites them (8u0ru).
     """
     marks: dict[str, dict] = {}
     for t in threads:

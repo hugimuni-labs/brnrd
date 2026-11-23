@@ -25,7 +25,7 @@ def _land(home, seat, sent):
     (["--correction", "threads/work/README.md", "--note", "spec fixed"], "correction threads/work/README.md"),
     (["--silent", "mistake", "--note", "a cat on the keys"], "silent mistake"),
     (["--silent", "joke", "ha"], "silent joke"),
-    (["--hold", "not-him", "Was that you?"], "held not-him"),
+    (["--hold", "sender-mismatch", "Was that you?"], "held sender-mismatch"),
     (["--hold", "out-of-pattern", "Did you mean to delete the rooms?"], "held out-of-pattern"),
 ])
 def test_each_branch_disposes_the_letter(ledger, args, field):
@@ -43,12 +43,12 @@ def test_each_branch_disposes_the_letter(ledger, args, field):
 @pytest.mark.parametrize("args,said", [
     (["--silent", "mistake", "sorry, did you mean something?"], "one word or nothing"),
     (["--silent", "typo", "--note", "x"], "joke, test, mistake"),
-    (["--hold", "not-him", "--note", "held"], "never a --note"),
-    (["--hold", "tired", "Was that you?"], "out-of-pattern, not-him"),
+    (["--hold", "sender-mismatch", "--note", "held"], "never a --note"),
+    (["--hold", "tired", "Was that you?"], "out-of-pattern, sender-mismatch"),
     (["--correction", "src/brr/x.py", "ok"], "people/ or memory/scars/"),
     (["--correction", "people/../core/identity.md", "ok"], "people/ or memory/scars/"),
     (["--silent", "joke", "--chatter", "ha"], "branch of its own"),
-    (["--silent", "joke", "--hold", "not-him", "ha"], "one branch per letter"),
+    (["--silent", "joke", "--hold", "sender-mismatch", "ha"], "one branch per letter"),
 ])
 def test_a_branch_refuses_what_is_not_it(ledger, args, said):
     home, seat = ledger

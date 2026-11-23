@@ -206,8 +206,8 @@ def letter_replies(facts: list[Fact]) -> dict[str, str]:
     return cached_projection(facts, "reply-context", (), _letter_replies)
 
 
-# A non-reply is read against the last turns on its channel, his and ours;
-# a letter within BURST seconds of his previous one, with nothing of ours
+# A non-reply is read against the last turns on its channel, from the person and the resident;
+# a letter within BURST seconds of the person's previous one, with nothing of ours
 # between, follows that one directly and carries nothing extra.
 TURNS = 4
 BURST = 600
@@ -262,7 +262,7 @@ def _seconds_between(earlier: Fact, later: Fact) -> float | None:
 
 
 def _follows(previous: Fact, letter: Fact) -> bool:
-    """``letter`` is a later letter of a burst: his previous one came just before, unanswered."""
+    """``letter`` is a later letter of a burst: the person's previous one came just before, unanswered."""
     if is_channel(str(previous.data.get("to") or "")):
         return False
     seconds = _seconds_between(previous, letter)
@@ -648,7 +648,7 @@ def _latest_between(facts, sender: str, to: str) -> str | None:
 def _refuse_unopened(room: Path, re: str) -> None:
     """The first answer to a letter whose file this body never opened is refused, once.
 
-    His 11349 was a photo of a notebook page; the body answered the caption.
+    Letter 11349 was a photo of a notebook page; the body answered the caption.
     The refusal names the file; a second send goes as written."""
     from .attachment import unopened
     from .jack import _set_state, _state
@@ -920,7 +920,7 @@ def write_send(room: Path, *, to: str, sender: str, body: str = "",
                 + ' [--says "quote"] [--ref kind:ref] [--answered]; --chatter if it wants nothing;'
                 ' --correction <path> if it changes a page, scar or README;'
                 ' --silent joke|test|mistake with one word or a --note;'
-                ' --hold out-of-pattern|not-him with the check, when it is irreversible and unlike them'
+                ' --hold out-of-pattern|sender-mismatch with the check, when it is irreversible and unlike them'
                 ' or not them (out of pattern but reversible: --wish, and say it loudly)')
     if echo is not None and re in letters and not asked and reincarnate is None:
         from .dispositions import is_person

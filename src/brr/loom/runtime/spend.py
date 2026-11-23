@@ -284,7 +284,7 @@ def body_spent(room: Path, shell: str) -> tuple[int | None, int | None]:
 def over_line(thread: str, door: str, spent: int, allocated: int,
               body: int | None = None, boot: int | None = None) -> str:
     """The fact a strand past its allocation reads at the crossing and every +5% (jack ``_over``).
-    Nothing is refused: the boot already spent what a refusal would save (his 10224, 10228)."""
+    Nothing is refused: the boot already spent what a refusal would save (letters 10224 and 10228)."""
     over = (spent - allocated) * 100 // allocated
     this = ("; this body " + format_tokens(body) + (f", its boot {format_tokens(boot)}" if boot else "")) if body else ""
     return (f"budget: thread {thread} is over its allocation by {format_tokens(spent - allocated)} "

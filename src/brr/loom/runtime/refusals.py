@@ -42,7 +42,7 @@ FLAGS: dict[str, list[tuple[str, str]]] = {
         ("--left same", 'wish <w-id> --left "first step" --left "second step"'),
         ("--left", 'wish <w-id> --left "first step" --left "second step"'),
         ("--wait", 'wish <w-id> --read "waiting: CI on #12" --wait ci:<owner>/<repo>@<sha>'),
-        ("--until", 'wish <w-id> --read "waiting: his answer" --wait letter:<id> --until +1d'),
+        ("--until", 'wish <w-id> --read "waiting: a reply from the person" --wait letter:<id> --until +1d'),
         ("--ref", "wish <w-id> --accept word --ref <letter id>"),
         ("--say", 'wish <w-id> --read "what it asks" --say <letter id>'),
         ("--parent", 'wish new --line "<line>" --parent <w-id>'),

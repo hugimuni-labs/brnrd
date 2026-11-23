@@ -20,8 +20,8 @@ strand has not written the same one (class, target, letter) in the last
 :data:`SAME_ACT` seconds. The hook writes only once nothing else refuses the call.
 
 A bare number is the end of a letter id only for a letter of the last
-:data:`RECENT_DAYS` days: his Telegram letters ran through the numbers pull
-requests carry now, and "for 2771" meaning the PR must not lean on his letter
+:data:`RECENT_DAYS` days: the person's Telegram letters ran through the numbers pull
+requests carry now, and "for 2771" meaning the PR must not lean on the person's letter
 2771 of last spring. An older or standing letter is cited by its full id.
 """
 
@@ -142,7 +142,7 @@ def record(home, strand: str, gen: int | None, thread: str, cls: str, target: st
 
 
 def refused(home, strand: str, gen: int | None, thread: str, cls: str, target: str) -> Fact:
-    """A final act stopped for want of his sentence: the other side of ``guard.granted``, counted by ``trust``."""
+    """A final act stopped for want of the person's sentence: the other side of ``guard.granted``, counted by ``trust``."""
     from .ledger import append
     from .home import mint
     return append(home, Fact(kind="guard.refused", by=f"strand:{strand}", id="guard.refused:" + mint(12),
@@ -163,7 +163,7 @@ def judge(room: Path, what: str, cited: str) -> Judged:
         return Judged(False, (f"refused: {what} cannot be undone, and {cited or 'its mark'} names no letter of {who}'s "
                               f"(a bare number names only a letter of the last {RECENT_DAYS} days; an older one, "
                               f"its full id). Ask: `brnrd runtime ask \"{what}?\" --for <w-id> --rec \"yes\"`; "
-                              f"his answer is the letter the mark then cites."), what)
+                              f"the person's answer is the letter the mark then cites."), what)
     return Judged(True, f"granted: {what} (final) by {grant.said()}", what, grant)
 
 
