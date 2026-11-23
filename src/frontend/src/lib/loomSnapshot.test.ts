@@ -54,6 +54,13 @@ test('fetchLoom: 401 is signed out, 404/204/200 {} are no snapshot', async () =>
 	await assert.rejects(fetchLoom(answer(502)), /loom fetch failed: 502/);
 });
 
+test('fetchLoom renders strand states from older snapshots as molted', async () => {
+	const snap = (await fetchLoom(
+		answer(200, { v: 1, threads: [{ id: 'work', strands: [{ id: 's1', state: 'reincarnated' }] }] })
+	)) as LoomSnapshot;
+	assert.equal(snap.threads?.[0].strands?.[0].state, 'molted');
+});
+
 test('postLetter: sends body only when chosen; 202 is queued; 401 throws', async () => {
 	const sent: unknown[] = [];
 	const capture = (async (_url: string, init: RequestInit) => {
@@ -211,7 +218,7 @@ test('liveStrand: working or holding is live; idle, parked and absent threads ar
 		{
 			id: 'a',
 			strands: [
-				{ id: 's1', state: 'reincarnated' },
+				{ id: 's1', state: 'molted' },
 				{ id: 's2', body: 'claude/opus', state: 'holding' }
 			]
 		},

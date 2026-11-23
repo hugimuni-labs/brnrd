@@ -29,7 +29,7 @@ from pathlib import Path
 from .ledger import kind_facts
 
 # The verb and act an ask is for: a short list the loom keeps, so the table has rows.
-ASK_KINDS = ("merge", "settle", "publish", "delete", "spend", "send-outside", "reincarnate",
+ASK_KINDS = ("merge", "settle", "publish", "delete", "spend", "send-outside", "molt",
              "design-pick", "scope", "other")
 # What a body records; ``lapsed`` is the loom's, at the default-at park.
 ANSWERS = ("took", "changed", "never")

@@ -1,4 +1,4 @@
-"""``python -m brr.loom.runtime <loom|send|reincarnate|hold|jack|attention>``."""
+"""``python -m brr.loom.runtime <loom|send|molt|hold|jack|attention>``."""
 
 from __future__ import annotations
 
@@ -195,23 +195,18 @@ def _send(argv: list[str]) -> int:
 
 
 def _molt(argv: list[str]) -> int:
-    return _reincarnate(argv, verb="molt")
-
-
-def _reincarnate(argv: list[str], *, verb: str = "reincarnate") -> int:
     """End the context with a carry, accepting the legacy why and fresh start."""
-    parser = Parser(verb=verb, prog=f"python -m brr.loom.runtime {verb}")
+    parser = Parser(verb="molt", prog="brnrd runtime molt")
     parser.add_argument("--room")
     handover = parser.add_mutually_exclusive_group(required=True)
     handover.add_argument("--carry", type=Path, metavar="FILE")
-    if verb == "reincarnate":
-        handover.add_argument("--why")
-        parser.add_argument("--fresh", action="store_true")
+    handover.add_argument("--why", help="leave a text note instead of a carry file")
+    parser.add_argument("--fresh", action="store_true", help="start from main (requires --why)")
     parser.add_argument("--cites", metavar="LETTER_ID", help="the letter on this thread it answers: its receipt")
     args = parser.parse_args(argv)
     try:
         room = _room(args.room)
-        fresh = getattr(args, "fresh", False)
+        fresh = args.fresh
         carry = None
         if args.carry is not None:
             if fresh:
@@ -226,7 +221,7 @@ def _reincarnate(argv: list[str], *, verb: str = "reincarnate") -> int:
                 sys.stderr.write(_stakes(room))
         fact_id = write_reincarnate(room, why, fresh=fresh, carry=carry, cites=args.cites)
     except (PortError, SelfError, ValueError, OSError) as exc:
-        return refuse(verb, exc)
+        return refuse("molt", exc)
     sys.stdout.write(fact_id + "\n")
     return 0
 

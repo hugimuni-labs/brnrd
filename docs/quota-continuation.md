@@ -47,7 +47,7 @@ notice in the thread says which subscription ran out and where the fresh body
 will continue; the next lease and `body.started` facts confirm actual startup.
 
 
-Exact `wake`, `wake <shell>[/<core>]`, and `reincarnate` commands in the enrolled
+Exact `wake`, `wake <shell>[/<core>]`, and `molt` commands in the enrolled
 person's direct chat are consumed by the loom in every body state. A malformed
 body argument gets the valid choices; ordinary sentences reach the seat. A
 composer model choice continues to accompany its work and is applied when idle,

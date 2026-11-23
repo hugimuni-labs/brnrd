@@ -13,9 +13,19 @@ def test_runtime_help_lists_every_verb_with_a_line(capsys):
     assert runtime.main(["--help"]) == 0
     out = capsys.readouterr().out
     assert out.startswith("usage: brnrd runtime <verb>")
+    assert "reincarnate" not in out
     for verb in runtime.VERBS:
         assert verb in runtime.SUMMARY, verb
         assert f"  {verb} " in out
+
+
+@pytest.mark.parametrize("verb", ["molt", "reincarnate"])
+def test_molt_help_uses_canonical_name(verb, capsys):
+    with pytest.raises(SystemExit) as help_exit:
+        runtime.main([verb, "--help"])
+    assert help_exit.value.code == 0
+    out = capsys.readouterr().out
+    assert "brnrd runtime molt" in out and "reincarnate" not in out
 
 
 def test_runtime_unknown_verb_names_it_and_exits_2(capsys):

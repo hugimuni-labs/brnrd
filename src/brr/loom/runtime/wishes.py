@@ -172,7 +172,8 @@ def wishes(facts: Iterable[Fact]) -> dict[str, Wish]:
             wish.sender, wish.line, wish.thread = d["from"], d["line"], d["thread"]
             wish.parent = d.get("parent") or wish.parent
             wish.rec = d.get("rec") or wish.rec
-            wish.kind = d.get("kind") or wish.kind
+            kind = d.get("kind")
+            wish.kind = ("molt" if kind == "reincarnate" else kind) or wish.kind
             wish.verdict = None
         else:
             if ident not in found:

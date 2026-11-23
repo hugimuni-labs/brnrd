@@ -307,6 +307,7 @@ def board_state(t: dict, calls: list[dict], left: int = 0, end: tuple | None = N
     cause, at = end or (None, None)
     if cause in {"paced", "stopped"}:
         return {"state": "waiting", "why": f"{cause} {at[:16].replace('T', ' ')}", **shown}
+    cause = "molted" if cause == "reincarnated" else cause
     ended = f"ended {cause} {at[:16].replace('T', ' ')}" if cause else "no body yet"
     return {"state": "mine", "stall": True,
             "why": f"no body, {left} open wish{'es' if left > 1 else ''} ({ended}): wake or settle", **shown}
