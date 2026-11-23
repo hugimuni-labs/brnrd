@@ -35,7 +35,7 @@ NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*")
 # Each library entry takes at most one bounded line in the wake.
 LINE_CAP = 200
 SHOWN = 12
-# His edits left this long with nobody committing them become a problem.
+# The person's edits become a problem if they remain uncommitted this long.
 DIRTY_AFTER = 3600.0
 CHECK_EVERY = 60.0
 # A first commit past this is a folder to know, or a narrower .gitignore.
@@ -166,7 +166,7 @@ def _where(entry: Entry, here: str) -> str:
 
 
 def _git(folder: Path, *args: str) -> subprocess.CompletedProcess[str] | None:
-    """A read in his folder: bounded, never raising, None when git could not run."""
+    """A read in the person's folder: bounded, never raising, None when git could not run."""
     try:
         return subprocess.run(["git", *args], cwd=folder, capture_output=True, text=True,
                               timeout=20, env={**os.environ, "GIT_OPTIONAL_LOCKS": "0"})
@@ -341,7 +341,7 @@ def drop(self_dir: Path, name: str) -> None:
 def link(room: Path, found: list[Entry], host: str | None = None) -> list[str]:
     """Link each kept folder of this machine at ``room/lib/<name>``; drop stale links.
 
-    Only symlinks are ever removed here, so nothing of his is deleted.
+    Only symlinks are ever removed here, so the person's files stay in place.
     Returns one line per folder that could not be linked.
     """
     host = host or machine()
@@ -540,7 +540,7 @@ def written_since(room: Path, since: float, host: str | None = None) -> list[str
     """Uncommitted paths in this room's kept folders changed after ``since``.
 
     Read from the folder, not from tool calls, so a write through the shell
-    counts too. His concurrent edits count as well; the stop names them and
+    counts too. The person's concurrent edits count as well; the stop names them and
     lets the body judge, once.
     """
     host = host or machine()

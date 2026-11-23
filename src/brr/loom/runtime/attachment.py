@@ -1,7 +1,7 @@
 """What a letter's file is, read from its bytes, and the line a body reads it by.
 
 A connector may type a file ``application/octet-stream`` (the Telegram relay
-does, for a photo): his 11349 was a 960x1280 JPEG shown as octet-stream bytes
+does, for a photo): letter 11349 was a 960x1280 JPEG shown as octet-stream bytes
 under the conversation tail, and the body answered the caption without the
 page. So the bytes decide the type when the name did not, the blob gets a
 sibling with its extension (an image tool opens by extension), and the line

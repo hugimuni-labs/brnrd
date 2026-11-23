@@ -14,7 +14,7 @@ Irreversible acts without a grant are the misses: lines under ``## Misses`` in
 the thread READMEs on the self's main, which the stop's receipt check (cites.py)
 makes a body write for an act that cited nothing. ``guard.granted`` and
 ``guard.refused`` (grants.py) stand beside it: the acts that ran on a grant and
-the ones the one rule stopped (an act marked final with no letter of his, mark.py). The number should read zero.
+the ones the one rule stopped (an act marked final with no letter from the person, mark.py). The number should read zero.
 """
 
 from __future__ import annotations

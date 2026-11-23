@@ -1,6 +1,6 @@
 """Notes that open themselves: any note with a ``trigger:`` line is shown at the call that touches it.
 
-One mechanism for all memory (threads/judged-acts, his 11339): a scar, a
+One mechanism for all memory (threads/judged-acts, letter 11339): a scar, a
 library page, a person's page and a service note are all notes. A note is a
 markdown file on the self's main under ``memory/``, ``people/`` or
 ``library/``, or a product note in brnrd's ``limbs/``, with a ``trigger:``

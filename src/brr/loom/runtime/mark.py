@@ -414,7 +414,7 @@ def door_refusal(room: Path | str | None = None, look: bool = False) -> str | No
             return None
         room = room or os.environ.get("BRNRD_ROOM")
         if not room:
-            return "refused at the door: a final act needs its room to find his letter (BRNRD_ROOM is unset)"
+            return "refused at the door: a final act needs its room to find the person's letter (BRNRD_ROOM is unset)"
         from .grants import final
         granted, line = final(Path(room), mark.what, mark.for_)
         return None if granted else "refused at the door: " + line

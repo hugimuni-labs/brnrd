@@ -4,7 +4,7 @@ at the boundary in one ``asks:`` band.
 All derived at every render. The band is news only when it changes
 (design.md §4 of threads/requests in the self). A person's order is the
 body's judgement on reading the letter, recorded with ``wish --top``; no
-keyword match asks for it (prompts-remake, his 10095).
+keyword match asks for it (prompts-remake, letter 10095).
 """
 
 from __future__ import annotations

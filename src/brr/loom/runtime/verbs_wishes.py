@@ -570,7 +570,7 @@ def _person_dm(home, facts, person: str | None) -> str | None:
 
     The chat their latest letter came from, as a reply would go: the first entry
     in channels.toml is only the fallback. An ask that went there reached an old
-    own bot for days while he wrote from the cloud one (11-03). The operator is
+    own bot for days while they wrote from the cloud one (11-03). The operator is
     the first person page with a channel, else whoever wrote last.
     """
     from .board import person_of
@@ -667,7 +667,7 @@ def cmd_ask(args):
             _say([f"mailed {head}: a body there wakes on it"])
         elif head == "operator" or head.startswith("person:"):
             # Typing an ask is sending it (requests R3): any thread may write the
-            # person, and the &ref binds his reply-to on this message to the ask.
+            # person, and the &ref binds their reply-to on this message to the ask.
             to = _person_dm(home, facts, head.removeprefix("person:") if head != "operator" else None)
             if to is None:
                 print(f"ask: {ident} waits on the person, but no person has a direct channel: "

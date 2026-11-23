@@ -515,7 +515,7 @@ def pointed(found: dict[str, Wish], thread: str, body: str) -> list[Wish]:
 
 def untouched_line(found: dict[str, Wish], thread: str | None, letter: str, body: str) -> str:
     """Said at the act, once: a reply to a person letter that touched no wish,
-    and what the letter's words point at (prompts-remake, his 10095)."""
+    and what the letter's words point at (prompts-remake, letter 10095)."""
     rows = pointed(found, thread, body) if thread else []
     if not rows:
         return f"{letter} touched no wish"

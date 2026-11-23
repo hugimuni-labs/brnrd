@@ -835,7 +835,7 @@ def _first_word(room: Path, stdin_text: str = "", *, refuse: bool = False) -> tu
         age = max(0, int(time.time() - datetime.fromisoformat(at).timestamp()))
         if age > 60:
             late.append((ident, age))
-    text = "\n".join(f"owed {ident} for {age} s: one line to him first, saying what you will do"
+    text = "\n".join(f"owed {ident} for {age} s: one line to the person first, saying what you will do"
                      for ident, age in late)
     if not refuse:
         return text, False
@@ -1110,7 +1110,7 @@ OVER_STEP = 5
 def _over(room: Path, line: str) -> str:
     """The ``budget:`` line when the allocation is crossed and at every further
     +5%, never at every call: going over is an exchange with the opener, said
-    when it moves (prompts-remake, his 10095)."""
+    when it moves (prompts-remake, letter 10095)."""
     if not line:
         return ""
     found = _OVER.search(line)
