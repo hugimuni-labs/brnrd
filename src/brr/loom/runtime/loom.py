@@ -2228,11 +2228,12 @@ def _idle_acts(home, facts, strand, context, proposal, children) -> str:
                 fresh = time.time() - path.stat().st_mtime < idle.EVERY
             except OSError:
                 fresh = False
-            if fresh:
-                block = path.read_text()
-            else:
-                fuel = idle.fuel_line(home) if thread == HOME_THREAD else ""
-                block = idle.render(idle.candidates(home, facts, thread, children), fuel)
+            block = path.read_text() if fresh else ""
+            if not fresh or (thread == HOME_THREAD and not idle.is_goal_block(block)):
+                if thread == HOME_THREAD:
+                    block = idle.inbox_block(home)
+                else:
+                    block = idle.render(idle.candidates(home, facts, thread, children))
                 atomic_write(path, block)
         unease_path = room / "port" / "in" / "unease.md"
         try:
@@ -2253,11 +2254,7 @@ def _idle_acts(home, facts, strand, context, proposal, children) -> str:
         except Exception as exc:  # noqa: BLE001 - a count that fails leaves the acts as they were
             _log(home, f"unease: skipped ({type(exc).__name__}: {exc})")
             shown = ""
-        if shown:
-            if block and not block.endswith("\n"):
-                block += "\n"
-            block += shown + "\n"
-        return block
+        return idle.close_block(block, shown)
     except Exception as exc:  # noqa: BLE001 - information only; never costs a boundary
         _log(home, f"idle: skipped ({type(exc).__name__}: {exc})")
         return ""

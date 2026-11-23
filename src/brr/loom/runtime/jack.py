@@ -358,12 +358,10 @@ def _poll(room: Path, stdin_text: str = '') -> str:
             # happens only at the hook ceiling.
             news = _stop_news(room, text, parsed)
             idle = _idle(room, home, shell)
-            reason = idle(news) if idle else (
-                "cache keepalive, nothing new arrived: stop, unless the boundary"
-                " below shows work you already owed\n" + news)
             extra = _unease(room)
-            if extra:
-                reason += extra + "\n"
+            reason = idle(news, extra) if idle else (
+                "cache keepalive, nothing new arrived: stop, unless the boundary"
+                " below shows work you already owed\n" + news + (extra + "\n" if extra else ""))
             return _json({"decision": "block", "reason": reason})
         time.sleep(min(0.2, remaining))
 
@@ -386,7 +384,7 @@ def _unease(room: Path) -> str:
 
 
 def _idle(room: Path, home, shell: str | None):
-    """The keepalive's candidates, when the loom wrote some and this shell is inside its share; else None.
+    """The keepalive's idle block, when the loom wrote one and an engine is inside its share.
 
     The room's own gauge is the first word, read against this shell's initiative
     share. A ``fuel to burn:`` line is the loom's word that some other engine is
@@ -403,11 +401,14 @@ def _idle(room: Path, home, shell: str | None):
         share = idle.share_for(home, shell)
         fuel = next((line.removeprefix("fuel to burn: ").strip()
                      for line in lines.splitlines() if line.startswith("fuel to burn:")), "")
-        if not lines.strip() or not (idle.ahead(value, share=share) or fuel):
+        ahead = idle.ahead(value, share=share)
+        if not lines.strip() or not (ahead or fuel):
             return None
-        if idle.ahead(value, share=share):
-            return lambda news: idle.keepalive(lines, value, news, share=share)
-        return lambda news: idle.keepalive(lines, value, news, pace_text=fuel)
+        if idle.is_goal_block(lines):
+            return lambda news, extra: news + idle.close_block(lines, extra)
+        pace_text = None if ahead else fuel
+        return lambda news, extra: idle.close_block(
+            idle.keepalive(lines, value, news, pace_text=pace_text, share=share), extra)
     except Exception:
         try:
             with (room / "port" / "idle-errors.log").open("a") as handle:

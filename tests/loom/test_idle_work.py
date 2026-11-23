@@ -564,3 +564,89 @@ def test_the_stop_shows_unease_behind_pace(worker, monkeypatch):
     assert "nothing new arrived: stop" in result["reason"]
     assert "unease: this README is cut at wake" in result["reason"]
     assert json.loads((room / "port" / "unease.json").read_text())["readme:work"]["n"] == 1
+
+
+_GOAL_LINE = ("goal growth: 1 of 4 accounts pays · next: 3 paying · now: find why 3 of 4 do not pay"
+              " · stake: brnrd has no future without paying users")
+_GOAL_CLOSE = "nothing new arrived: move a goal, or write why none can move today"
+
+
+def _write_goal(home, name, status="active", date=None):
+    repo = home.root / "self"
+    path = repo / "goals" / f"{name}.md"
+    path.parent.mkdir(exist_ok=True)
+    path.write_text(
+        f"---\nstatus: {status}\n"
+        'stands: "1 of 4 accounts pays"\nnext: 3 paying\n'
+        "now: find why 3 of 4 do not pay\nstake: brnrd has no future without paying users\n"
+        "---\n# Growth\n\nRoute and history.\n", encoding="utf-8")
+    commit(repo, f"goal {name}", date)
+
+
+def _inbox_idle(home):
+    context = SimpleNamespace(thread="inbox", shell="claude")
+    quiet = {"face": PROPOSED["quiet"], "fact": "quiet:x"}
+    return loom._idle_acts(home, read_facts(home), STRAND, context, quiet, ())
+
+
+def test_inbox_idle_shows_goals_and_stakes_without_a_pick_menu(ledger, monkeypatch):
+    home, seat = ledger
+    wish, context = _seat(home, seat, monkeypatch, AHEAD)
+    _write_goal(home, "growth")
+    _write_goal(home, "retention")
+    monkeypatch.setattr(idle, "fuel_line", lambda home: "fuel to burn: codex week 65% left, 3.8d to reset")
+    monkeypatch.setattr(idle, "unease", lambda *args: ("goal:test", "unease: check growth"))
+    quiet = {"face": PROPOSED["quiet"], "fact": "quiet:x"}
+    old_menu = loom._idle_acts(home, read_facts(home), STRAND, context, quiet, ())
+    assert wish in old_menu and "--pick" in old_menu
+
+    block = _inbox_idle(home)
+    assert block.splitlines() == [
+        _GOAL_LINE,
+        _GOAL_LINE.replace("growth:", "retention:", 1),
+        "fuel to burn: codex week 65% left, 3.8d to reset",
+        "unease: check growth",
+        _GOAL_CLOSE,
+    ]
+
+
+def test_paused_goals_are_absent_from_the_inbox_idle_block(ledger, monkeypatch):
+    home, seat = ledger
+    _seat(home, seat, monkeypatch, AHEAD)
+    _write_goal(home, "paused-goal", status="paused")
+    _write_goal(home, "growth")
+    block = _inbox_idle(home)
+    assert _GOAL_LINE in block
+    assert "paused-goal" not in block
+
+
+def test_inbox_goal_is_unmoved_at_three_days_since_its_last_landed_change(ledger, monkeypatch):
+    home, seat = ledger
+    _seat(home, seat, monkeypatch, AHEAD)
+    now = int(time.time())
+    monkeypatch.setattr(idle.time, "time", lambda: now)
+    _write_goal(home, "growth", date=datetime.fromtimestamp(now - 3 * 86400, timezone.utc).isoformat())
+    _write_goal(home, "recent", date=datetime.fromtimestamp(now - 3 * 86400 + 1, timezone.utc).isoformat())
+    lines = _inbox_idle(home).splitlines()
+    assert lines[:2] == [_GOAL_LINE + " · unmoved 3d", _GOAL_LINE.replace("growth:", "recent:", 1)]
+
+
+def test_inbox_idle_with_no_goals_prompts_for_one(ledger, monkeypatch):
+    home, seat = ledger
+    _seat(home, seat, monkeypatch, AHEAD)
+    block = _inbox_idle(home)
+    prompt = "no active goal: write one under goals/"
+    assert block.splitlines()[0] == prompt
+    assert block.count(prompt) == 1
+
+
+def test_inbox_keepalive_shows_goals_before_unease_and_the_closing_line(worker, monkeypatch):
+    room, _ = worker
+    monkeypatch.setattr(usage, "dry_until", lambda *args: None)
+    monkeypatch.setattr(usage, "reading", lambda *args, **kwargs: BEHIND)
+    fuel = "fuel to burn: codex week 65% left, 3.8d to reset"
+    (room / "port/in/idle.md").write_text(f"{_GOAL_LINE}\n{fuel}\n", encoding="utf-8")
+    idle.publish_unease(room, "goal:test", "unease: check growth")
+    reason = json.loads(jack.execute("stop", room, "{}"))["reason"]
+    assert reason.endswith(f"{_GOAL_LINE}\n{fuel}\nunease: check growth\n{_GOAL_CLOSE}\n")
+    assert "--pick" not in reason

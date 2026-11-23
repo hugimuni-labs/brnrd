@@ -198,6 +198,14 @@ def parse_readme(text: str) -> dict:
     ``id`` against the folder is not knowable from text. :func:`check_readme_file`
     adds it, and so does ``seed/core/immune.d/10-readme``.
     """
+    data, body = parse_frontmatter(text)
+    _require(data)
+    data["headline"] = _headline(body)
+    return data
+
+
+def parse_frontmatter(text: str) -> tuple[dict, list[str]]:
+    """Read a self file's frontmatter and remaining lines."""
     lines = text.splitlines()
     if not lines or lines[0] != "---":
         raise ReadmeError("frontmatter missing")
@@ -222,9 +230,7 @@ def parse_readme(text: str) -> dict:
         if key == "for" and value.startswith("["):
             raise ReadmeError("for must be a string")
         data[key] = _parse_list(value, key) if value.startswith("[") else _unquote(value)
-    _require(data)
-    data["headline"] = _headline(lines[end + 1 :])
-    return data
+    return data, lines[end + 1 :]
 
 
 def check_readme_file(path: Path) -> dict:
