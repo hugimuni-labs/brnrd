@@ -2996,9 +2996,12 @@ def _read_usage(home, usage) -> None:
 def _serve_board(board, port):
     from .board import serve
     try:
-        return serve(board, int(port))
+        server = serve(board, int(port))
     except (OSError, ValueError, OverflowError) as exc:
         raise RuntimeError(f"board port {port}: {exc}") from exc
+    from .connectors.web.common import link
+    _log(board.home, f"board: serving {link(server.server_address[1])}")
+    return server
 
 
 def run(root: Path | str, *, adapter: str = "fake", core: str = "haiku",

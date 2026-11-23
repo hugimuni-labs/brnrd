@@ -43,7 +43,9 @@ at a time, right here in the terminal:
 brnrd run "summarize the test layout; do not change files"
 ```
 
-Good for a smoke test; [Connect](../connect/) is the real front door.
+Good for a smoke test; [Connect](../connect/) is the real front door. The
+nearest one is the [local board](../install/#open-the-local-board), a page on
+this computer that one command turns on.
 
 ## A brand-new repository needs one commit
 
