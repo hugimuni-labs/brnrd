@@ -443,7 +443,7 @@ def notice(home: Home, facts: list[Fact], kind: str, subject: str, what: str, ca
            thread: str | None = None, about: Fact | None = None, stands: bool = False,
            taint: bool = False, channel: str | None = None,
            source_strand: str | None = None, passive: bool = False,
-           draft_only: bool = False, supersedes=False, links=()) -> bool | Fact:
+           draft_only: bool = False, supersedes=False, links=(), closes_ask: str | None = None) -> bool | Fact:
     """The one writer of loom notices: what the loom cannot settle, a body is told.
 
     A notice is an owed letter from ``loom``, so it is shown at every
@@ -465,6 +465,8 @@ def notice(home: Home, facts: list[Fact], kind: str, subject: str, what: str, ca
     lines = [what]
     data: dict = {"id": ident, "from": "loom",
                   "to": channel or f"thread:{thread if home.routable(thread) else home.main_thread()}"}
+    if closes_ask is not None:
+        data["closes_ask"] = closes_ask
     if passive:
         data["notice"] = True
     if links:

@@ -1123,7 +1123,8 @@ def _stop_block(room: Path, text: str, plan: str) -> str:
 END = """Work left on this thread (plan {plan}), with no disposition recorded. Choose one:
 - a result: brnrd runtime wish <w-id> --result <kind>:<ref> --line "<what it is>" [--deliver]
 - the steps still left: brnrd runtime wish <w-id> --left "<step>" --left "<step>"
-- an ask to a person: brnrd runtime ask "<question>" --for <w-id> --rec "<your call>"
+- an ask: brnrd runtime ask "<question>" --for <w-id> --rec "<your call>"
+  Use --answered-by with reply (default), press for a board press, merge:<owner/repo>#N, file:<self path> on main, or date:<when>.
 - a park with its reason: brnrd runtime wish <w-id> --read "waiting: <on what>" --wait <condition>
 - done: brnrd runtime settle {thread} --why "<what it became>"
 `brnrd runtime wishes` lists the w-ids, and `--wait` takes {grammar}.
