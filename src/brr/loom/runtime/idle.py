@@ -43,9 +43,9 @@ _NO_GOALS = "no active goal: write one under goals/"
 _GOAL_CLOSE = "nothing new arrived: move a goal, or write why none can move today"
 _GOAL_FIELDS = ("stands", "next", "now", "stake")
 _ASK = (': take one and log the pick in one line (`wish <id> --pick "<why>"`), '
-        "or say in one line why not; nothing more. 'nothing new arrived' is no reason to stop")
-_KEEP = ("cache keepalive, fuel ahead of pace ({pace}): nothing new arrived, which is no reason"
-         ' to stop; take one of these, log the pick in one line (`wish <id> --pick "<why>"`),'
+        "or say in one line why not; nothing more")
+_KEEP = ("cache keepalive, fuel ahead of pace ({pace}): take one of these"
+         ', log the pick in one line (`wish <id> --pick "<why>"`),'
          " and work it, or end with one line saying why not; nothing more\n")
 # Words that put a wish's next step in a person's hands; their names are added from the ledger.
 WAITS_ON = r"his|her|hers|him|he|she|the person"

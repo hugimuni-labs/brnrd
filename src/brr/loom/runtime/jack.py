@@ -121,7 +121,8 @@ def _slot(key: str) -> str:
     return head if head.endswith((":", "?")) else key
 
 
-def _news(text: str, state: dict, plan_changed: bool) -> tuple[str, list[str], list[str]]:
+def _news(text: str, state: dict, plan_changed: bool, *,
+          letters_only: bool = False) -> tuple[str, list[str], list[str]]:
     """The boundary minus what an earlier boundary already said: (news, said, told).
 
     The wake shows everything; a post shows a line only when it is new, the
@@ -137,7 +138,7 @@ def _news(text: str, state: dict, plan_changed: bool) -> tuple[str, list[str], l
     for line in text[header.end():].splitlines():
         if line.startswith("  ") and units:
             units[-1].append(line)
-        elif line.startswith("first-word: "):
+        elif line.startswith(("first-word: ", "next wake: ")):
             continue
         elif line.strip() and line != "owed:":
             units.append([line])
@@ -160,6 +161,8 @@ def _news(text: str, state: dict, plan_changed: bool) -> tuple[str, list[str], l
             else:
                 letters.extend(unit)
             continue
+        if letters_only:
+            continue
         status = unit[0].startswith("status:")
         key = ("status: · plan " + unit[0].partition(" · plan ")[2] if status
                else _ageless(unit[0]) if unit[0].startswith(("opened: ", "asks: ")) else "\n".join(unit))
@@ -170,14 +173,32 @@ def _news(text: str, state: dict, plan_changed: bool) -> tuple[str, list[str], l
     # A thread line that changed is said anew, not gone: its slot (``opened: <thread>``, ``idle:``) is still here.
     slots = {_slot(key) for key in said}
     body.extend("gone: " + key.split("\n")[0] for key in state.get("said", [])
-                if key not in said and not key.startswith("status:") and _slot(key) not in slots)
+                if not letters_only and key not in said and not key.startswith("status:") and _slot(key) not in slots)
     if not body and not letters:
         return "", said, told
     shown = [item.group(1) for line in letters if (item := _ITEM_LINE.match(line))]
-    owed = (["owed: " + " ".join(skipped) + " (shown before)"] if skipped else []) \
+    owed = (["owed: " + " ".join(skipped) + " (shown before)"] if skipped and not letters_only else []) \
         + (["owed:"] if letters else [])
     head = f"<!-- port {header.group(1)} gen {header.group(2)} · {clock()} · owed {' '.join(shown)} -->"
     return "\n".join([head, *body, *owed, *letters, ""]), said, told
+
+
+def attend_letters(room: Path) -> str:
+    """The letter portion of a post, with the same shown receipt and state."""
+    text = _boundary_text(room)
+    parsed = parse_boundary(text)
+    state = _state(room)
+    known = set(state.get("told", []))
+    unshown = {letter.id for letter in parsed.letters if not letter.compact} - known
+    if not unshown:
+        return ""
+    known.update(set(parsed.ids) - unshown | answered(room))
+    news, _, _ = _news(text, {"told": known}, False, letters_only=True)
+    if news:
+        shown = parse_boundary(news)
+        _shown(room, shown)
+        _set_state(room, told=sorted(set(state.get("told", [])) | set(shown.ids)))
+    return news
 
 
 def _stop_news(room: Path, text: str, parsed: Boundary) -> str:
@@ -294,6 +315,11 @@ def _order(room: Path) -> str:
     return path.read_text().strip() if path.is_file() else ""
 
 
+def _rest(text: str) -> str:
+    return next((line.removeprefix("next wake: ") for line in text.splitlines()
+                 if line.startswith("next wake: ")), "Resting until the next letter.")
+
+
 def _poll(room: Path, stdin_text: str = '') -> str:
     from .usage import dry_until
     home = home_of_room(room)
@@ -358,10 +384,10 @@ def _poll(room: Path, stdin_text: str = '') -> str:
             # happens only at the hook ceiling.
             news = _stop_news(room, text, parsed)
             idle = _idle(room, home, shell)
+            rest = _rest(text) + "\n"
             extra = _unease(room)
-            reason = idle(news, extra) if idle else (
-                "cache keepalive, nothing new arrived: stop, unless the boundary"
-                " below shows work you already owed\n" + news + (extra + "\n" if extra else ""))
+            reason = idle(rest + news, extra) if idle else (
+                rest + news + (extra + "\n" if extra else ""))
             return _json({"decision": "block", "reason": reason})
         time.sleep(min(0.2, remaining))
 
@@ -1088,7 +1114,7 @@ Restate each one's whole list:
 - or a park: wish <w-id> --read "waiting: <on what>"; a delivery: --result <kind>:<ref> --line "<what>" --deliver"""
 
 README = """before resting: since threads/{thread}/README.md last changed this body did {did}. Any end can
-come while it rests, and the README is what its successor boots into. Rewrite it to the current state
+come while it rests, and the next context starts from the README. Rewrite it to the current state
 (a decision with its why, `## Now`, a done row cut to its receipt; never a log line) and land it with
 `brnrd runtime send-self --room .`; or stop again: it still is.{facts}"""
 
@@ -1104,10 +1130,10 @@ def _readme_miss(room: Path, state: dict) -> str:
     return README.format(did=", ".join(did), thread=thread, facts=f"\n  {facts}" if facts else "")
 
 
-MARK = """context {k}k, past the {mark}k mark, before resting: what in it would die if you reincarnated now?
+MARK = """context {k}k, past the {mark}k mark, before resting: what would be lost in a molt now?
 {census}
 The burden is on holding: name what would die, or go. A conversation with a person that is mid-way counts as live.
-- go: brnrd runtime reincarnate --why "<what the successor picks up>"
+- go: brnrd runtime molt --carry <file>
 - hold: brnrd runtime hold --why "<what would die, by name>"
 Asked once; it comes back when the context grows {rearm}k past this."""
 

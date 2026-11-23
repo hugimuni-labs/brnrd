@@ -297,7 +297,7 @@ def test_stop_holds_for_the_shells_cache_or_the_hook_ceiling(
     monkeypatch.setattr(jack.time, 'sleep', lambda seconds: now.__setitem__(0, now[0] + seconds))
     result = json.loads(jack.execute('stop', room, json.dumps({'transcript_path': str(transcript)})))
     assert result['decision'] == 'block'
-    assert result['reason'].split('\n', 1)[1].startswith('cache keepalive, nothing new arrived')
+    assert result['reason'].split('\n', 1)[1].startswith('Resting until the next letter.')
     assert now[0] == pytest.approx(expected)
 
 
@@ -478,7 +478,7 @@ def test_a_reply_waiting_in_port_out_counts_as_answered_at_the_stop(tmp_path, mo
     _write(room, [_letter()])
     _reply(room, "p-test/abcde")
     held = json.loads(execute("stop", room, "{}"))
-    assert held["reason"].split("\n", 1)[1].startswith("cache keepalive, nothing new arrived")
+    assert held["reason"].split("\n", 1)[1].startswith("Resting until the next letter.")
     assert "send --re p-test/abcde" not in held["reason"]
 
 
@@ -499,7 +499,7 @@ def test_a_reply_the_loom_drained_still_counts_while_the_boundary_lags(tmp_path,
         append(Home(tmp_path), fact_from_port(parse_frontmatter(path.read_text()), STRAND, 1, room=room))
         path.unlink()
     held = json.loads(execute("stop", room, "{}"))
-    assert held["reason"].split("\n", 1)[1].startswith("cache keepalive, nothing new arrived")
+    assert held["reason"].split("\n", 1)[1].startswith("Resting until the next letter.")
     assert "send --re p-test/abcde" not in held["reason"]
 
 

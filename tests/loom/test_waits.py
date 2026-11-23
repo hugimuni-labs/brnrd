@@ -381,7 +381,7 @@ def verb(*args):
                           capture_output=True, text=True)
     assert proc.returncode == 0, proc.stderr
     return proc.stdout.strip()
-wake = ctx.wake()
+wake = ctx.wake() + (ctx.room / "port/in/boundary.md").read_text()
 if "carry the PR wait" in wake:
     atomic_write(Path({str(root / "successor")!r}), wake)
 for letter in ctx.owed():
@@ -404,7 +404,10 @@ for letter in ctx.owed():
         wait_until((root / "successor").exists, 60, loom.dump)
         wish = (root / "parked").read_text()
         waiting = f"waiting: {wish} on pr:{REPO}#5 since "
-        assert waiting in (root / "successor").read_text()
+        successor = (root / "successor").read_text()
+        assert waiting in successor
+        next_wake = f"next wake: Resting until the park on pr:{REPO}#5"
+        assert next_wake in successor
         assert any(f.kind == "attempt.ended" and f.data["cause"] == "reincarnated" for f in loom.facts())
         wait_until(lambda: holder(loom.facts(), "work") is None, 60, loom.dump)
         wait_until(lambda: polled, 10, loom.dump)
@@ -413,6 +416,7 @@ for letter in ctx.owed():
         wait_until((root / "woken").exists, 60, loom.dump)
         woken = json.loads((root / "woken").read_text())
         assert waiting not in woken["wake"]
+        assert next_wake not in woken["wake"]
         assert woken["id"].startswith("loom/wait-")
         assert f"wait on {wish} resolved: pr:{REPO}#5 merged" in woken["body"]
     finally:

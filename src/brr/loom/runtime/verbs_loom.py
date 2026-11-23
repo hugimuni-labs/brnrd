@@ -194,28 +194,45 @@ def _send(argv: list[str]) -> int:
     return 0
 
 
-def _reincarnate(argv: list[str]) -> int:
-    """``reincarnate``: hand the seat on. The stakes and the README's facts come
-    first, on stderr, so the choice is an informed one."""
-    parser = Parser(verb="reincarnate", prog="python -m brr.loom.runtime reincarnate")
+def _molt(argv: list[str]) -> int:
+    return _reincarnate(argv, verb="molt")
+
+
+def _reincarnate(argv: list[str], *, verb: str = "reincarnate") -> int:
+    """End the context with a carry, accepting the legacy why and fresh start."""
+    parser = Parser(verb=verb, prog=f"python -m brr.loom.runtime {verb}")
     parser.add_argument("--room")
-    parser.add_argument("--why", required=True)
-    parser.add_argument("--fresh", action="store_true")
+    handover = parser.add_mutually_exclusive_group(required=True)
+    handover.add_argument("--carry", type=Path, metavar="FILE")
+    if verb == "reincarnate":
+        handover.add_argument("--why")
+        parser.add_argument("--fresh", action="store_true")
     parser.add_argument("--cites", metavar="LETTER_ID", help="the letter on this thread it answers: its receipt")
     args = parser.parse_args(argv)
-    room = _room(args.room)
     try:
-        if not args.fresh:
-            sys.stderr.write(_stakes(room))
-        fact_id = write_reincarnate(room, args.why, fresh=args.fresh, cites=args.cites)
+        room = _room(args.room)
+        fresh = getattr(args, "fresh", False)
+        carry = None
+        if args.carry is not None:
+            if fresh:
+                raise PortError("--fresh requires --why")
+            carry = args.carry.read_bytes().decode("utf-8")
+            if not carry.strip():
+                raise PortError("--carry file is empty")
+            why = "Carried across the molt."
+        else:
+            why = args.why
+            if not fresh:
+                sys.stderr.write(_stakes(room))
+        fact_id = write_reincarnate(room, why, fresh=fresh, carry=carry, cites=args.cites)
     except (PortError, SelfError, ValueError, OSError) as exc:
-        return refuse("reincarnate", exc)
+        return refuse(verb, exc)
     sys.stdout.write(fact_id + "\n")
     return 0
 
 
 def _stakes(room) -> str:
-    """What the successor boots into, said once more before the seat goes."""
+    """What the next context starts from, said once more before the seat goes."""
     from .jack import _state
     from .ledger import read_facts
     from .project import sender_threads
@@ -257,7 +274,7 @@ def _hold(argv: list[str]) -> int:
     if bare(why):
         return refuse("hold", "hold: name what would die, by name (a decision mid-way, a person's "
                               "conversation, a reasoning not yet written); a generic why is no hold. "
-                              "If nothing would, reincarnate --why \"<what the successor picks up>\".")
+                              "If nothing would, molt --carry <file>.")
     try:
         room = _room(args.room)
         state = _state(room)

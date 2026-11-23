@@ -24,16 +24,15 @@ from .ledger import renamed
 #: Facts that settle a turn rather than act in it.
 SETTLING = {"shown", "note", "wish.read", "left.asked", "reincarnate", "hold"}
 
-STAKES = ("What isn't in the README is lost on any end, a reincarnation or a crash, and the body that "
-          "picks up after a careless handover pays for it.")
+STAKES = "Carried across a molt: only what is written. Kept in the ledger: everything else."
 
 #: Past this context a park asks what would die: when to ask, never what to do.
 MARK = 150_000
 #: A hold, or an ask left unanswered, covers the context until it grows this much more.
 REARM = 50_000
 
-DIE = "What in it would die if you reincarnated now?"
-ANSWER = ('Answer with `brnrd runtime reincarnate --why "<what the successor picks up>"` '
+DIE = "What would be lost in a molt now?"
+ANSWER = ('Answer with `brnrd runtime molt --carry <file>` '
           'or `brnrd runtime hold --why "<what would die, by name>"`.')
 
 
@@ -354,7 +353,7 @@ def census(room: Path, thread: str, state: dict, facts, now: float | None = None
     readme = readme_facts(room, thread, facts, base) if thread else ""
     head = f"since this gen booted{f' ({_ago(now - booted)} ago)' if booted else ''}"
     if landed is not None:
-        lines.append(f"{head}, landed in the README (the successor gets it for free): {readme}")
+        lines.append(f"{head}, landed in the README (available to the next context): {readme}")
     else:
         lines.append(f"{head}: nothing landed in the README" + (f" ({readme})" if readme else ""))
     mine = _mine(room, landed if landed is not None else booted)

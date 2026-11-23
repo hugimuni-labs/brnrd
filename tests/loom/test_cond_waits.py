@@ -303,3 +303,30 @@ for letter in ctx.owed():
         loom.halt()
         kill_bodies(loom)
     assert not loom.errors, loom.errors
+
+
+def test_a_quiet_stop_names_the_morning_pass_that_will_wake_the_resident(ledger, monkeypatch):
+    from brr.loom.runtime import jack
+    from brr.loom.runtime.loom import _prepare
+    from brr.loom.runtime.project import sender_threads
+
+    _arm_pass(monkeypatch)
+    home, _ = ledger
+    facts = read_facts(home)
+    now = datetime.now(timezone.utc)
+    # Choose a wall-clock hour still ahead, or mark today's pass sent.
+    if now.astimezone().hour >= 8:
+        told(home, now)
+        facts = read_facts(home)
+    wake = conditions.next_pass(home, facts, now)
+    strand = "s-aaaa-rest"
+    room = _prepare(home, strand, "inbox", 1, [], sender_threads(facts), facts, "hold")
+    (room / "port/wait").write_text("0\n")
+    monkeypatch.setenv("BRNRD_BODY_JACK", "hand")
+    assert f"Resting until {wake:%H:%MZ} (morning pass in inbox, {wake:%Y-%m-%d}), or the next letter." in (
+        (room / "port/in/boundary.md").read_text())
+    assert jack.execute("stop", room, "{}") == ""
+    assert told(home, wake - timedelta(seconds=1)) == []
+    [letter] = told(home, wake)
+    assert letter.data["to"] == "thread:inbox"
+    assert letter.data["body"].startswith(f"pass: {wake.astimezone().date().isoformat()}.")
