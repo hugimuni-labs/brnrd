@@ -133,10 +133,13 @@ def frontmatter_text(value: str) -> str:
 def open_thread(room: Path, thread: str, sender: str, text: str,
                 body_choice: str | None = None, repo_sources: tuple[str, ...] | list[str] = (),
                 opened_for: tuple[str, ...] | list[str] = (),
-                wish_lines: dict[str, str] | None = None) -> None:
+                wish_lines: dict[str, str] | None = None, *, may_deliver: bool = False) -> None:
+    from brr.daemon2.facts import Fact
+    from .ledger import append
     from .port import _current_label
     check_thread_id(thread)
-    own = sender_threads(read_facts(home_of_room(room))).get(sender)
+    home = home_of_room(room)
+    own = sender_threads(read_facts(home)).get(sender)
     if own is None:
         raise PortError("send: opening a thread requires a sender with a thread")
     if _current_label(resolve_clone(room), sender).taint:
@@ -172,6 +175,9 @@ def open_thread(room: Path, thread: str, sender: str, text: str,
         return files
 
     land(room, f"open {thread} from thread:{own}", edit)
+    if may_deliver:
+        append(home, Fact(kind="wish.delivery.grant", by=f"strand:{sender}",
+                          data={"thread": thread, "wishes": list(opened_for)}))
     # A thread seated on a repo is a place the ask put work in (library.record).
     from .library import record_repo
     for source in repo_sources:

@@ -147,6 +147,8 @@ def _send(argv: list[str]) -> int:
     parser.add_argument("--body", dest="body_choice", metavar="SHELL[/CORE]")
     parser.add_argument("--spend", action="store_true",
                         help="when there is a choice, open on the first eligible engine in spend order")
+    parser.add_argument("--may-deliver", action="store_true",
+                        help="allow a new thread to deliver its opening wishes to the person")
     parser.add_argument("--repo", action="append", default=[])
     parser.add_argument("--budget", metavar="TOKENS",
                         help="weighted tokens, e.g. 2m: a new thread's allocation, or the opener's raise")
@@ -174,14 +176,14 @@ def _send(argv: list[str]) -> int:
             from .home import thread_of
             from .lifecycle import land_status
             if (args.body is not None or args.note is not None or args.body_choice is not None
-                    or args.repo or args.spend):
-                raise PortError("send: --reopen supplies the letter text; drop the body, --note and --spend")
+                    or args.repo or args.spend or args.may_deliver):
+                raise PortError("send: --reopen supplies the letter text; drop the body, --note, --spend and --may-deliver")
             land_status(room, thread_of(args.to), "open", f"reopen {thread_of(args.to)}")
         letter_id = write_send(
             room, to=args.to, sender=strand_of_room(room), body=args.reopen if args.reopen is not None else args.body or "",
             re=args.re, note=args.note, clean=args.clean, kind=args.kind,
             refs=tuple(args.ref or ()), body_choice=args.body_choice, spend=args.spend,
-            repo_sources=args.repo, at=args.at,
+            repo_sources=args.repo, at=args.at, may_deliver=args.may_deliver,
             wish=args.wish, budget=None if args.budget is None else parse_tokens(args.budget),
             chatter=chatter, ask_for=args.ask_for, triage=branches[0] if branches else None,
             echo=echo, reopen=args.reopen is not None,
