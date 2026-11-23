@@ -153,10 +153,11 @@ def answer_waits(found):
 
 
 def board_press(ident: str, data: dict) -> bool:
-    """Board verdicts use the board's own native message id on the connector."""
+    """Board verdicts arrive from either the loopback board or the relay's loom channel."""
+    native = ident.split(":", 2)[-1]
     return (data.get("verdict") in ("agree", "correct")
             and str(data.get("from", "")).startswith("person:")
-            and re.search(r":board-[a-z0-9]+$", ident) is not None)
+            and (native.startswith("loom:") or re.search(r":board-[a-z0-9]+$", native) is not None))
 
 
 @lru_cache(maxsize=256)
