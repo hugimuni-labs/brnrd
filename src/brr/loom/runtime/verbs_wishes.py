@@ -621,12 +621,14 @@ def cmd_ask(args):
         # (thread, parent, line) is reused, and mailed only if no mail for it left.
         same = next((w for w in wishes(facts).values() if w.open and w.sender == "resident"
                      and (w.thread, w.parent, w.line) == (thread, args.wish, args.what)), None)
+        from .waits import answer_shape
         if args.default_at is not None and args.rec is None:
             raise ValueError("ask --default-at needs --rec: the default is what you recommend")
         if same is None:
             # The rec rides on the ask itself: a wish.read would read as the person's answer.
             fact = wish_fact(facts, by=by, ident="new", line=args.what, thread=thread,
                              sender="resident", parent=args.wish, rec=args.rec, kind=args.kind)
+            fact.data["answered_by"] = answer_shape(args.answered_by, datetime.fromisoformat(fact.at))
             from .lifecycle import reopen_for
             from .verbs_loom import _room
             # A body that settled its own thread and asks again holds open work there.
@@ -639,6 +641,10 @@ def cmd_ask(args):
             ident = fact.data["wish"]
         else:
             ident = same.id
+            if args.answered_by is not None:
+                proposed = answer_shape(args.answered_by, datetime.fromisoformat(same.born.replace("Z", "+00:00")))
+                if proposed != same.answered_by:
+                    raise ValueError(f"ask: {ident} already waits for {same.answered_by}")
             print(f"ask: reused {ident}, the open ask with this line for {args.wish}", file=sys.stderr)
         if same is not None and ((args.rec is not None and same.rec != args.rec)
                                  or (args.kind is not None and same.kind != args.kind)):
@@ -697,6 +703,8 @@ def _ask_arguments(parser):
     parser.add_argument("--home")
     parser.add_argument("what")
     parser.add_argument("--for", dest="wish", required=True, help="the wish this ask unblocks")
+    parser.add_argument("--answered-by", metavar="SHAPE",
+                        help="reply (default), press, merge:<owner/repo>#N, file:<self path>, or date:<when>")
     parser.add_argument("--rec", help="what you recommend; kept on the ask as its rec, apart from the answer")
     parser.add_argument("--default-at", dest="default_at",
                         help="if nobody answers by then, you are woken to carry out your rec")

@@ -1118,10 +1118,10 @@ def run_wake(room_dir: Path, thread: str, owed: Path | None = None, *,
             if core is not None and Path(core).is_file():
                 with open(core, "a", encoding="utf-8") as handle:
                     handle.write(briefing)
+                if held:
+                    output = insert_briefing(output, held)
             else:
-                output = insert_briefing(output, briefing)
-            if held:
-                output = insert_briefing(output, held)
+                output = insert_briefing(output, briefing + held)
         if proc.returncode == 0 and section:
             output = insert_wishes(output, section)
         if proc.returncode == 0 and topics:

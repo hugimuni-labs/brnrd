@@ -67,6 +67,7 @@ FLAGS: dict[str, list[tuple[str, str]]] = {
 VERB: dict[str, str] = {
     "update": "update take",
     "attend": "attend --for 30s",
+    "letter-wait": "letter-wait inbox --limit 10",
     "send": 'send --re <letter id> --to thread:inbox "reply"',
     "settle": 'settle <thread> --why "what it became"',
     "molt": "molt --carry <file>",

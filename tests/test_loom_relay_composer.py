@@ -275,3 +275,22 @@ def test_the_local_boards_agree_dropped_for_the_inbox_lands_on_the_wishs_thread(
     assert kinds(owner, "wish.verdict")[0].data["as"] == "accepted"
     assert [f.data["from"] for f in owed(owner, "first")] == ["loom"]
     assert [f.data["from"] for f in owed(owner, "inbox")] == ["loom"]
+
+
+def test_cloud_board_press_closes_a_shaped_ask_on_its_thread(owner):
+    from brr.daemon2.facts import Fact
+    from brr.loom.runtime.ledger import append
+    from brr.loom.runtime.waits import observe_waits
+    from brr.loom.runtime.wishes import wishes
+
+    wish(owner)
+    ask = "w-press"
+    append(owner, Fact(kind="wish", by="strand:s-aaaa-first1", id=ask, data={
+        "wish": ask, "says": [], "from": "resident", "line": "Ready?", "thread": "first",
+        "parent": "w-board1", "answered_by": "press"}))
+    relay.pull_once(owner, FakeClient([verdict(wish=ask)]), 0)
+    observe_waits(owner, read_facts(owner), True)
+    assert wishes(read_facts(owner))[ask].state == "answered"
+    [closure] = owed(owner, "first")
+    assert closure.data["body"].startswith(f"closed &{ask}: board press agree (letter:relay:loom:")
+    assert owed(owner, "inbox") == []

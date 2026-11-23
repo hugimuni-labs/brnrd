@@ -48,6 +48,8 @@ import time
 import urllib.error
 import urllib.request
 from datetime import datetime, timedelta, timezone
+from functools import lru_cache
+from pathlib import PurePosixPath
 
 from .timers import parse_instant, stored_when
 
@@ -120,6 +122,49 @@ def canonical(text: str, now: datetime, repo=None) -> str:
         # Relative to the parker's cwd, which the loom does not share.
         return "file:" + os.path.abspath(os.path.expanduser(text[5:].strip()))
     raise ValueError(f"--wait {text}: expected one of {GRAMMAR}")
+
+
+def answer_shape(text: str | None, now: datetime) -> str:
+    """Keep the answer's vocabulary while normalizing refs with the wait parser."""
+    if text is None:
+        return "reply"
+    if text in ("reply", "press"):
+        return text
+    kind, _, ref = text.partition(":")
+    if kind == "merge" and _PR.fullmatch("pr:" + ref) and "/" in ref:
+        return "merge:" + canonical("pr:" + ref, now)[3:]
+    if kind == "date":
+        return "date:" + when(ref, now, "--answered-by date:")
+    if kind == "file" and ref.strip() and "\x00" not in ref:
+        path = PurePosixPath(ref.strip())
+        if path.parts and not path.is_absolute() and ".." not in path.parts:
+            return f"file:{path}"
+    raise ValueError("--answered-by: expected reply, press, merge:<owner/repo>#N, file:<self path>, or date:<when>")
+
+
+def answer_waits(found):
+    """Open non-reply asks enter the same observer as parked wishes."""
+    for ask in found.values():
+        if not ask.open or ask.sender != "resident" or ask.answered_by == "reply":
+            continue
+        kind, sep, ref = ask.answered_by.partition(":")
+        on = {"merge": "pr", "date": "at"}.get(kind, kind) + sep + ref
+        yield ask, {"at": ask.born, "wait": {"on": on}, "closes_ask": True}
+
+
+def board_press(ident: str, data: dict) -> bool:
+    """Board verdicts arrive from either the loopback board or the relay's loom channel."""
+    native = ident.split(":", 2)[-1]
+    return (data.get("verdict") in ("agree", "correct")
+            and str(data.get("from", "")).startswith("person:")
+            and (native.startswith("loom:") or re.search(r":board-[a-z0-9]+$", native) is not None))
+
+
+@lru_cache(maxsize=256)
+def _main_has_file(repo, tip, path) -> bool:
+    from .selfrepo import git
+    result = git(repo, "cat-file", "-t", f"{tip}:{path}", check=False)
+    return result.returncode == 0 and result.stdout.strip() == "blob"
 
 
 def park(wish, condition: str | None, until: str | None, now: datetime, *, found=None,
@@ -229,7 +274,7 @@ def thread_lines(home, facts, thread):
 
 def forge_wants(found: dict, facts=None) -> set[str]:
     rows = live(found) if facts is None else unresolved(found, facts)
-    return {want(read) for _wish, read in rows
+    return {want(read) for _wish, read in [*rows, *answer_waits(found)]
             if str(read["wait"].get("on", "")).startswith(("pr:", "ci:"))}
 
 
@@ -255,10 +300,11 @@ def _answers(facts, target: str, since: str, replied: str | None = None,
     return None
 
 
-def outcome(wish, read, facts, found: dict, forge: dict, now: datetime) -> str | None:
+def outcome(wish, read, facts, found: dict, forge: dict, now: datetime, *, self_repo=None) -> str | None:
     """What came true for this park, in words, or None while it still waits."""
     wait = read["wait"]
     on = wait.get("on")
+    closing = read.get("closes_ask", False)
     if on is None:
         pass
     elif on.startswith("pr:"):
@@ -271,9 +317,9 @@ def outcome(wish, read, facts, found: dict, forge: dict, now: datetime) -> str |
             if merged.data.get("repo") in names and int(merged.data.get("number") or 0) == number:
                 return f"{on} merged ({merged.data.get('merge_commit', '')[:8]})"
         state = forge.get(on)
-        if state and state.get("state") in ("merged", "closed"):
+        if state and (state.get("state") == "merged" or (not closing and state.get("state") == "closed")):
             return f"{on} {state['state']} at {state.get('at')}: {state.get('url')}"
-        if state and state.get("state") == "unreadable":
+        if not closing and state and state.get("state") == "unreadable":
             return f"{on} cannot be read: {state.get('error')}"
     elif on.startswith("ci:"):
         state = forge.get(want(read))
@@ -283,10 +329,11 @@ def outcome(wish, read, facts, found: dict, forge: dict, now: datetime) -> str |
         target = found.get(on[5:])
         if target is not None and target.state in SETTLED and target.state != wait.get("was"):
             return f"{target.id} is {target.state}"
-        from .wishes import _person
-        answer = _answers(facts, on[5:], read["at"], citer=_person)
-        if answer is not None:
-            return f"{on[5:]} was answered by {answer}"
+        if target is None or target.answered_by == "reply":
+            from .wishes import _person
+            answer = _answers(facts, on[5:], read["at"], citer=_person)
+            if answer is not None:
+                return f"{on[5:]} was answered by {answer}"
     elif on.startswith("letter:"):
         answer = _answers(facts, on[7:], read["at"], replied="")
         if answer is not None:
@@ -295,7 +342,19 @@ def outcome(wish, read, facts, found: dict, forge: dict, now: datetime) -> str |
         due = parse_instant(on[3:])
         if due is not None and due <= now:
             return f"{on[3:]} has passed"
+    elif on == "press":
+        from .ledger import kind_facts
+        for letter in reversed(kind_facts(facts, "letter")):
+            if letter.at < wish.born:
+                break
+            if letter.data.get("wish") == wish.id and board_press(letter.id, letter.data):
+                return f"board press {letter.data['verdict']} ({letter.id})"
     elif on.startswith("file:"):
+        if closing:
+            from .lifecycle import main_tip
+            tip = main_tip(self_repo)
+            path = on[5:]
+            return f"{on} exists on self main ({tip})" if tip and _main_has_file(self_repo, tip, path) else None
         try:
             with open(on[5:], "rb") as handle:
                 head = handle.read(200).decode("utf-8", "replace").strip()
@@ -417,8 +476,8 @@ class _Pending:
         self.due = []
         self.first = True
         self.retry = set()
-        for wish, read in unresolved(found, facts):
-            key = subject(wish, read)
+        for wish, read in [*unresolved(found, facts), *answer_waits(found)]:
+            key = wish.id if read.get("closes_ask") else subject(wish, read)
             self.rows[key] = (wish, read)
             on = str(read["wait"].get("on") or "")
             if on.startswith("file:"):
@@ -488,7 +547,7 @@ def observe_waits(home, facts, armed: bool, forge: dict | None = None, now: date
         rows = pending.candidates(facts, forge or {}, now)
     else:
         pending = None
-        rows = unresolved(found, facts)
+        rows = [*unresolved(found, facts), *answer_waits(found)]
     if not rows:
         return facts
     from functools import cache
@@ -498,6 +557,12 @@ def observe_waits(home, facts, armed: bool, forge: dict | None = None, now: date
         from .project import fold
         return frozenset(fold(facts).holder)
     for wish, read in rows:
+        if read.get("closes_ask"):
+            said = outcome(wish, read, facts, found, forge or {}, now, self_repo=home.root / "self")
+            if said is not None:
+                notice(home, facts, "ask-closed", wish.id, f"closed &{wish.id}: {said}",
+                       "The ask is answered.", thread=wish.thread, closes_ask=wish.id)
+            continue
         said = outcome(wish, read, facts, found, forge or {}, now)
         if said is None:
             if pace is not None and read["wait"].get("turn"):

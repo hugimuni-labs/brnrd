@@ -69,7 +69,7 @@ REGISTRY = (
     _kind("body.stopped",      "body",    "strand gen pid why",                               "loom",        "machine", once=True),
     _kind("body.unidentified", "body",    "strand gen pid why",                               "loom",        "machine"),
     _kind("body.exited",       "body",    "strand gen code why? failure_origin? failure_letters?",                             "loom",        "global",  once=True),
-    _kind("wish",              "wish",    "wish says from line thread parent? rec? kind?",     "strand person loom", "global"),
+    _kind("wish",              "wish",    "wish says from line thread parent? rec? kind? answered_by?",     "strand person loom", "global"),
     _kind("ask.answer",        "wish",    "wish as ref",                                      "strand person loom", "global"),
     _kind("wish.read",         "wish",    "wish reading by wait?",                             "strand person", "global"),
     _kind("wish.result",       "wish",    "wish kind ref line delivered cmd? sha256? size? name? mime? verified? word? unverified? weakened?", "strand loom", "global"),
@@ -85,7 +85,7 @@ REGISTRY = (
     # Read by the body's table, owned elsewhere, not enforced here.
     _kind("lease",             "thread",  "thread strand gen install router_gen shell core repos parent? pin? body_source?", "loom", "global", once=True),
     _kind("released",          "thread",  "thread strand gen why install router_gen?",        "loom",        "global",  once=True),
-    _kind("shown",             "letter",  "strand gen ids",                                   "loom strand", "global"),
+    _kind("shown",             "letter",  "strand gen ids wait?",                                   "loom strand", "global"),
     _kind("reincarnate",              "letter",  "strand gen why fresh? cites? carry?",              "strand",      "global"),
     _kind("hold",              "letter",  "strand gen why context",                           "strand",      "global"),
     _kind("rest.why",          "rest",    "strand gen why wishes",                            "strand",      "global"),
@@ -181,5 +181,7 @@ def admit(fact: Fact) -> None:
             found.append("a wish fact is a birth (id = the wish) or a touch (id wish:…)")
         if "rec" in fact.data and fact.data["from"] != "resident":
             found.append("only an ask carries a rec")
+        if "answered_by" in fact.data and fact.data["from"] != "resident":
+            found.append("only an ask carries an answer shape")
     if found:
         raise UndeclaredFact(f"registry refused {fact.id}: " + "; ".join(found))

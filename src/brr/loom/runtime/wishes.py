@@ -86,6 +86,7 @@ class Wish:
     # An ask's answer: the first letter of whoever it waits on that replies to it,
     # cites it, replies to a letter that raised it, or is stamped on it.
     answer: str = ""
+    answered_by: str = "reply"
     # The last time a person's letter named the wish (a stamp, or a verdict letter):
     # one after the delivery means they looked, so it stays delivered and never expires.
     heard_at: str = ""
@@ -174,6 +175,7 @@ def wishes(facts: Iterable[Fact]) -> dict[str, Wish]:
             wish.rec = d.get("rec") or wish.rec
             kind = d.get("kind")
             wish.kind = ("molt" if kind == "reincarnate" else kind) or wish.kind
+            wish.answered_by = d.get("answered_by") or wish.answered_by
             wish.verdict = None
         else:
             if ident not in found:
@@ -247,7 +249,13 @@ def _answer(asked: list[Wish], letters: dict, ordered: list[Fact]) -> None:
     for ident, letter in letters.items():
         for link in letter.data.get("links") or ():
             raised.setdefault(ident, set()).add(str(link))
+    closed = {letter.data["closes_ask"]: ident for ident, letter in letters.items()
+              if letter.by.startswith("loom:") and letter.data.get("closes_ask")}
     for ask in asked:
+        if ask.answered_by != "reply":
+            ask.answer = closed.get(ask.id, "")
+            continue
+
         def answers(letter) -> bool:
             if letter.at < ask.born:
                 return False

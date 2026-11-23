@@ -303,9 +303,9 @@ def test_the_self_decides(tmp_path: Path) -> None:
     custom = selfrepo.room(home, "custom")
     via_cli = cli(["wake", "--room", str(custom), "--thread", "w-1", "--owed", str(owed)])
     assert via_cli.returncode == 0, via_cli.stderr
-    # The self decides its wake; the loom's briefing is the one part it adds.
+    # The self decides its recipe. The loom adds its briefing and the held work.
     from brr.loom.runtime.briefing import section as briefing
-    assert via_cli.stdout == briefing(Home(home)) + "custom\n"
+    assert via_cli.stdout == briefing(Home(home)) + "## Held\nNo goals or queue rows recorded.\ncustom\n"
     seed_line = "I am a placeholder."
     assert seed_line not in via_cli.stdout
 

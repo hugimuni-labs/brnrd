@@ -248,6 +248,12 @@ def heard(home, letter_id, data):
     from .loom import notice
     facts = read_facts(home)
     found = wishes(facts).get(data.get('wish'))
+    from .waits import board_press
+    if found is not None and found.answered_by == 'press' and board_press(letter_id, data):
+        if not any(f.kind == 'note' and f.data.get('re') == letter_id for f in facts):
+            append(home, Fact(kind='note', by=f'loom:{home.install_id()}', id=f'note:verdict:{letter_id}',
+                              data={'re': letter_id, 'body': 'the ask closure carries this board press'}))
+        return
     line = f' "{found.line}"' if found is not None and found.line else ''
     thread = data['to'].removeprefix('thread:')
     words = f"verdict: {data['verdict']} on {data['wish']}{line} from {data['from']} ({letter_id})"
