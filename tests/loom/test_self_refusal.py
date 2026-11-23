@@ -52,18 +52,29 @@ def test_a_home_that_cannot_build_its_wake_boots_on_the_minimal_wake(tmp_path, f
     assert not loom.errors
 
 
-def test_intrinsically_oversized_letter_keeps_input_failure_path(tmp_path):
+def test_an_oversized_letter_is_cut_in_the_wake_and_kept_whole_in_port(tmp_path):
+    """No input-failure path either (his 11739): the letter boots, cut, with where it is whole."""
     root = tmp_path / "home"
     write_thread(root, "work", "The ask", "answer-fast", wait="0")
-    ident = inject_letter(root, to="thread:work", body="x" * 30000)
+    body = "head-of-the-letter " + "x" * 30000 + " tail-of-the-letter"
+    ident = inject_letter(root, to="thread:work", body=body)
     loom = Loom(root)
     loom.start()
     try:
-        wait_until(lambda: letter_owners(loom.facts(), main_snapshot(loom.home))[ident].owner == "operator",
-                   15, loom.dump)
-        ends = [f for f in loom.facts() if f.kind == "attempt.ended" and f.data["thread"] == "work"]
-        assert len(ends) == 2
-        assert ends[0].data["dispositions"][0]["reason"] == "first failed attempt"
+        wait_until(lambda: letter_owners(loom.facts(), main_snapshot(loom.home))[ident].done, 15, loom.dump)
+        facts = loom.facts()
+        ends = [f for f in facts if f.kind == "attempt.ended" and f.data["thread"] == "work"]
+        assert not any(f.data["cause"] == "failed" for f in ends)
+        [cut] = [f for f in facts if f.kind == "wake.fallback" and f.data.get("want") == "letter"]
+        assert cut.data["letter"] == ident
+        room = loom.home.room(cut.data["strand"])
+        wake = (room / "port/wake.md").read_text()
+        assert "head-of-the-letter" in wake and "tail-of-the-letter" not in wake
+        assert f"the whole letter is at {cut.data['path']}.]" in wake
+        from pathlib import Path
+        assert Path(cut.data["path"]).read_text() == body
+        assert not any(f.kind == "letter" and f.id.startswith(("loom/failed-message-", "loom/self-refusal-"))
+                       for f in facts)
     finally:
         loom.halt()
         kill_bodies(loom)
