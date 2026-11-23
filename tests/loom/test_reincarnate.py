@@ -113,7 +113,7 @@ def test_a_long_park_states_the_stakes_and_a_short_one_says_nothing():
     assert not reincarnate.long_wait("ci:o/r@abc", now) and not reincarnate.long_wait("file:/x", now)
     line = reincarnate.rest_line("letter:a/b", 134_000)
     assert line.startswith("resting until letter:a/b. Context 134k. Carried across a molt: only what is written. "
-                           "What is not written down is gone when this context ends.")
+                           "Kept in the ledger: everything else.")
     assert line.endswith("What does the next hour need that isn't written yet?") and "due" not in line
 
 def test_a_broken_tally_never_ends_the_stop(room, tmp_path, monkeypatch):
