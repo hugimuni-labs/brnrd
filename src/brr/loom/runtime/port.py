@@ -397,7 +397,8 @@ def render_boundary(strand: str, gen: int, thread: str, letters: list[Fact],
     if idle:
         children.append(f"idle: {idle} more opened here (brnrd runtime threads)")
     lines[2:2] = children
-    for letter in letters:
+    # A person's letter leads, whoever else wrote first: it is why the work exists.
+    for letter in sorted(letters, key=lambda letter: not is_person(letter)):
         compact = str(letter.data["id"]) in shown
         reply = replies.get(letter.id, "-") if replies is not None else _reply(letter, sender_threads, thread, channels or {})
         lines.extend(_letter_lines(letter, reply, compact, (attachments or {}).get(letter.id, ()),

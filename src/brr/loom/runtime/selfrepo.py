@@ -832,7 +832,7 @@ def default_loom_part(clone: Path, thread: str) -> str:
     lines.append(
         "Letters received at tool boundaries. "
         "Reply with `brnrd runtime send`. "
-        "Carry the next move from Held into the boundary."
+        "A person's letter first, then what you hold."
     )
     return "\n".join(lines) + "\n"
 

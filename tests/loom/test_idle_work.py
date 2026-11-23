@@ -350,7 +350,7 @@ def test_the_fuel_line_names_every_engine_ahead_of_pace(ledger, monkeypatch):
     monkeypatch.setattr(usage, "reading", lambda home, shell, *args, **kwargs: gauges.get(shell))
     assert idle.fuel_line(home, now) == "fuel readings: codex week 65% left, 3.8d to reset; grok 71% left, 1.5d"
     text = idle.render(["do the thing"], idle.fuel_line(home, now))
-    assert text.startswith(idle.HEAD) and 'wish <id> --pick "<why>"' in text and "nothing more" in text
+    assert text.startswith(idle.HEAD) and 'wish <id> --pick "<why>"' in text and "need most now" in text
     assert "\nfuel readings: codex week 65% left, 3.8d to reset; grok 71% left, 1.5d\n  - do the thing\n" in text
     out = idle.keepalive(text, AHEAD, "NEWS")
     assert out.startswith("cache keepalive, fuel ahead of pace (week 92% left")
@@ -571,7 +571,8 @@ def test_the_stop_shows_unease_behind_pace(worker, monkeypatch):
 
 _GOAL_LINE = ("goal growth: 1 of 4 accounts pays · next: 3 paying · now: find why 3 of 4 do not pay"
               " · stake: brnrd has no future without paying users")
-_GOAL_CLOSE = "No new letters. Move a goal, or record why none can move today."
+_GOAL_CLOSE = ("No letter owed. Which of these goals matters most now, and what is its next move? "
+               "Make that move, or record what it waits on.")
 
 
 def _write_goal(home, name, status="active", date=None):

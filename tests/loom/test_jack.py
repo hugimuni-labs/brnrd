@@ -722,5 +722,6 @@ def test_inbox_stop_carries_the_held_move(tmp_path, monkeypatch, plan):
     result = json.loads(execute("stop", room, "{}"))
     reason = result["reason"]
     assert "runtime settle inbox" not in reason
-    assert reason.splitlines()[-1] == "keep going: w-held · Send the draft"
+    assert reason.splitlines()[-1] == ("keep going on what you and the person need most now, not on what is next"
+                                      " · top held: w-held · Send the draft")
     assert ("rest price: codex week 35%" in reason) == (not plan)
