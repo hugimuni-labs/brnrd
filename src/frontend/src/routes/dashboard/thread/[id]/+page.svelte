@@ -9,5 +9,9 @@
 </svelte:head>
 
 {#key page.params.id}
-	<LoomThreadPage id={page.params.id ?? ''} />
+	<LoomThreadPage
+		id={page.params.id ?? ''}
+		wish={page.url.searchParams.get('wish')}
+		next={page.url.pathname + page.url.search}
+	/>
 {/key}

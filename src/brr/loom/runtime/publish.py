@@ -21,7 +21,7 @@ import subprocess
 import sys
 from dataclasses import dataclass
 from pathlib import Path
-from urllib.parse import urlsplit
+from urllib.parse import quote, urlsplit
 
 from .config import ConfigError, load_config, resolve_secret
 from .home import check_thread_id, home_of_room, strand_of_room
@@ -564,9 +564,12 @@ class Claimed:
 
 
 #: The line a pull request's body carries once ``publish --pr`` recorded it.
+#: A linked footer still starts here, so ``sign`` and ``verify.with_line`` keep matching old and new bodies.
 _FOOTER = re.compile(r"^Opened by resident brnrd\b", re.M)
 #: Wish ids a footer names before it counts the rest.
 _WISHES = 3
+#: The cloud dashboard. A configured gate means this install's board is there.
+_CLOUD_DASHBOARD = "https://brnrd.dev"
 
 
 class _Forge:
@@ -602,9 +605,55 @@ def _forge_for(home, source: str) -> _Forge | None:
     return _Forge(GitHubChecks(load_config(home.root).forge_token)._token, repo)
 
 
+def dashboard_base(home) -> str | None:
+    """Where a footer link opens the thread page.
+
+    The cloud dashboard when this install has a cloud gate, else the local
+    board on ``board_port``, else nowhere and the footer stays plain text.
+    """
+    try:
+        config = load_config(home.root)
+    except (ConfigError, OSError):
+        return None
+    from .gates import state_dir
+    if state_dir(home.root, config) is not None:
+        return _CLOUD_DASHBOARD
+    port = str(config.board_port or "").strip()
+    if port.isdigit() and int(port) > 0:
+        return f"http://127.0.0.1:{int(port)}"
+    return None
+
+
+def _person_letter(letters, say) -> bool:
+    letter = letters.get(say.letter)
+    sender = str((letter.data if letter else {}).get("from") or "")
+    return sender.startswith("person:")
+
+
+def _verified_ids(wishes, letters) -> set[str]:
+    """Wishes whose says resolve to a person's letter. A missing letter is not provenance."""
+    return {w.id for w in wishes if any(_person_letter(letters, say) for say in w.says)}
+
+
+def _thread_url(base: str, thread: str, wish: str | None = None) -> str:
+    url = f"{base}/dashboard/thread/{quote(thread, safe='')}"
+    if wish is None:
+        return url
+    return url + "?wish=" + quote(wish, safe="")
+
+
+def _link(label: str, url: str) -> str:
+    return f"[{label}]({url})"
+
+
 def footer(who: _Caller) -> str:
     """Whose the pull request is: the resident, the person its wishes came from,
-    the install, the thread and its wishes, read from the ledger."""
+    the install, the thread and its wishes, read from the ledger.
+
+    The thread name and each verified wish id are links when a dashboard base
+    exists. The request text stays off the line. No verified wish: plain text,
+    the same as no base.
+    """
     from .wishes import told
     found = [w for w in told(who.facts).values() if w.thread == who.thread and w.sender == "person"]
     found.sort(key=lambda w: w.born)
@@ -612,18 +661,23 @@ def footer(who: _Caller) -> str:
     people: list[str] = []
     for wish in found:
         for say in wish.says:
-            letter = letters.get(say.letter)
-            sender = str((letter.data if letter else {}).get("from") or "")
-            name = sender.removeprefix("person:")
-            if sender.startswith("person:") and name not in people:
+            if not _person_letter(letters, say):
+                continue
+            name = str(letters[say.letter].data.get("from") or "").removeprefix("person:")
+            if name not in people:
                 people.append(name)
+    verified = _verified_ids(found, letters)
+    base = dashboard_base(who.home) if verified else None
+    thread = _link(who.thread, _thread_url(base, who.thread)) if base else who.thread
     parts = ["Opened by resident brnrd" + (f" for {', '.join(people)}" if people else ""),
-             f"install {who.home.install_id()}", f"thread {who.thread}"]
+             f"install {who.home.install_id()}", f"thread {thread}"]
     # A long thread has said many wishes: the open ones name the work, a few at most.
     named = [w.id for w in found if w.open] or [w.id for w in found]
     if named:
+        bits = [_link(wid, _thread_url(base, who.thread, wid)) if base and wid in verified else wid
+                for wid in named[:_WISHES]]
         more = len(named) - _WISHES
-        parts.append(f"wish {', '.join(named[:_WISHES])}" + (f" +{more}" if more > 0 else ""))
+        parts.append("wish " + ", ".join(bits) + (f" +{more}" if more > 0 else ""))
     return " · ".join(parts)
 
 
