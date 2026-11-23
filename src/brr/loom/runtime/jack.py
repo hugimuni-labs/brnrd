@@ -313,6 +313,22 @@ def _hand() -> bool:
     return os.environ.get("BRNRD_BODY_JACK") == "hand"
 
 
+def _harness_stop(stdin_text: str) -> bool:
+    """This Stop belongs to a harness that turns a block into a model turn.
+
+    Claude, Codex and Grok send ``stop_hook_active`` on Stop: false on the
+    first stop, true after a block continued the turn. A quiet deadline must
+    not answer with a block. That would be inference with nothing new to say.
+    A payload without the key is the fake body and the older tests, which
+    still take the keepalive block.
+    """
+    try:
+        payload = json.loads(stdin_text or "{}")
+    except ValueError:
+        return False
+    return isinstance(payload, dict) and "stop_hook_active" in payload
+
+
 def _block(room: Path, text: str, parsed: Boundary) -> str:
     count = int(_state(room).get("stop_blocks") or 0)
     if _hand() and count >= 3:
@@ -414,12 +430,21 @@ def _poll(room: Path, stdin_text: str = '') -> str:
         if remaining <= 0:
             if _hand():
                 return ""
-            # Hold again by blocking, never by waiting on in this call: the
-            # shell ends a hook that outlives its timeout, and the body would
-            # then leave while it still owes. With no cache lifetime this
-            # happens only at the hook ceiling.
-            news = _stop_news(room, text, parsed)
             idle = _idle(room, home, shell)
+            # A harness quiet deadline stays in this hook. Returning a block
+            # would start a model turn with nothing new to say, and returning
+            # empty before the ceiling would end the session. A letter above
+            # still blocks. The ceiling is the resource limit: leave then,
+            # without a turn. The fake body sends no stop_hook_active, so it
+            # still takes the keepalive block below.
+            if _harness_stop(stdin_text) and idle is None:
+                if time.monotonic() >= ceiling:
+                    return ""
+                deadline = ceiling
+                continue
+            # First quiet stop: hold again by blocking. The shell ends a hook
+            # that outlives its timeout. With no cache lifetime this is the ceiling.
+            news = _stop_news(room, text, parsed)
             wakes = _boundary_line(text, "wakes at: ") or "the next letter"
             rest = "\n".join(filter(None, (rest_reason(_state(room), parsed.gen), f"wakes at: {wakes}"))) + "\n"
             extra = _unease(room)

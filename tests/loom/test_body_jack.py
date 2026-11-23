@@ -58,11 +58,11 @@ def test_unquoted_jack_runs_in_zsh(tmp_path, monkeypatch):
 
 
 def test_hook_command_lines_quote_the_jack(tmp_path, monkeypatch):
-    """Claude and grok hand their hook a shell line built from the path."""
+    """Claude, Codex and grok hand their hook a shell line built from the path."""
     import shlex
     room = _room_with_shim(tmp_path, monkeypatch)
     env = _env(room)
-    for body in ("claude", "grok"):
+    for body in ("claude", "codex", "grok"):
         source = (Path(__file__).parents[2] / "src/brr/loom/runtime/bodies" / body / "run").read_text()
         assert 'shlex.quote(os.environ["BRNRD_JACK"]) + " --event "' in source
     line = shlex.quote(env["BRNRD_JACK"]) + " --event stop"
