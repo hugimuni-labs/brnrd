@@ -15,6 +15,7 @@ VERBS = {
     "reincarnate": ("verbs_loom", "_reincarnate"),
     "hold": ("verbs_loom", "_hold"),
     "jack": ("verbs_loom", "_jack"),
+    "attend": ("attend", "main"),
     "resume": ("verbs_loom", "_resume"),
     "drop": ("verbs_loom", "_drop"),
     "wish": ("verbs_wishes", "_wish"),
@@ -75,6 +76,7 @@ SUMMARY = {
     "reap": "remove a finished strand's room",
     "loom": "the loom process itself (loom machinery)",
     "jack": "a body's hook (loom machinery)",
+    "attend": "wait warm on letters or the board",
     "merge-driver": "git merge driver for the self (loom machinery)",
 }
 
