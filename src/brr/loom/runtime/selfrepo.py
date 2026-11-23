@@ -1107,14 +1107,14 @@ def run_wake(room_dir: Path, thread: str, owed: Path | None = None, *,
             (stdout or sys.stdout).write(output)
             return proc.returncode
         if proc.returncode == 0:
-            above, heading, letters = output.partition("\n## Letters\n")
-            legacy_letters = False
-            if not heading:
-                above, heading, letters = output.partition("\n## Occasion\n")
-                legacy_letters = bool(heading)
+            # Match either recipe heading in read order. A letter can quote
+            # the newer heading while the pinned recipe still writes the old one.
+            heading = re.search(r"^## (Letters|Occasion)\n", output, re.MULTILINE)
+            legacy_letters = heading is not None and heading[1] == "Occasion"
+            above = output[:heading.start()] if heading else output
             for pattern, wording in _LEGACY_WAKE_RECEIPTS:
                 above = pattern.sub(wording, above)
-            output = above + ("\n## Letters\n" + letters if heading else "")
+            output = above + ("## Letters\n" + output[heading.end():] if heading else "")
             if core is not None and Path(core).is_file():
                 with open(core, "a", encoding="utf-8") as handle:
                     handle.write(briefing)

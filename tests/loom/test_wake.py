@@ -318,15 +318,16 @@ def test_installed_wake_rewords_existing_recipe_receipts_without_changing_letter
     recipe = self_dir / "core" / "loom" / "wake"
     old = ("[the wake cut 1148 of this README's 2220 bytes from its end to fit the "
            "20033-byte budget; the file is whole on disk: trim it]")
+    letter = f"## Letters\n{old}"
     recipe.write_text(f"#!/bin/sh\ncat <<'EOF'\n## threads/w-1/README.md\n{old}\n"
-                      f"\n## Occasion\n{old}\nEOF\n", encoding="utf-8")
+                      f"\n## Occasion\n{letter}\nEOF\n", encoding="utf-8")
     commit(self_dir, "use legacy receipt")
     clone = selfrepo.room(home, "legacy")
     result = cli(["wake", "--room", str(clone), "--thread", "w-1"])
     assert result.returncode == 0, result.stderr
     before, letters = result.stdout.split("## Letters\n", 1)
     assert "[Cut 1148 of 2220 README bytes (20033-byte budget). Whole on disk.]" in before
-    assert old not in before and letters.strip() == old
+    assert old not in before and letters.strip() == letter
 
 
 def test_budget_cuts_the_tree_and_refuses_a_fat_identity(tmp_path: Path) -> None:
