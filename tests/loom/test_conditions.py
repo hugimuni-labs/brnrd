@@ -5,7 +5,7 @@ import sys
 import pytest
 
 from brr.loom.runtime import health, reap
-from brr.loom.runtime.health import Health, degraded_line
+from brr.loom.runtime.health import Health, body_line
 from brr.loom.runtime.home import Home
 from brr.loom.runtime.ledger import read_facts
 from brr.loom.runtime.reap import Reaper
@@ -69,11 +69,12 @@ def test_a_flapping_disk_is_told_once_and_its_dips_carry_the_episode(disk):
     downs = sorted((f for f in read_facts(home) if f.kind == "loom.degraded"), key=lambda f: f.data["since"])
     assert [f.data["dips"] for f in downs] == [1, 2, 3, 4]
     assert {f.data["episode"] for f in downs} == {downs[0].data["since"]}
-    line = degraded_line(read_facts(home), home.install_id(), now=clock.now)
-    assert line.startswith("degraded: disk up since") and "after 4 dips" in line and "told, watching" in line
+    line = body_line(read_facts(home), home.install_id(), now=clock.now)
+    assert line == ""
     at(1, 11.3); guard(h)
-    line = degraded_line(read_facts(home), home.install_id(), now=clock.now)
-    assert "dip 5 since" in line and "DiskFloor at reap.py" in line
+    line = body_line(read_facts(home), home.install_id(), now=clock.now)
+    assert line.startswith("body: disk ") and line.endswith("for <1 min")
+    assert h.episodes["disk"].dips == 5
 
 
 def test_a_restart_inside_an_episode_tells_nothing_new(disk):
@@ -105,7 +106,7 @@ def test_an_episode_that_stays_up_is_cleared_once_and_owed_by_nobody(disk):
     at(health.CLEAR_AFTER / 60 + 1, 12.5); guard(h); guard(h)
     [cleared] = _letters(home, "cleared")
     assert cleared.data["notice"] is True and "is clear" in cleared.data["body"]
-    assert degraded_line(read_facts(home), home.install_id(), now=_clock.now) == ""
+    assert body_line(read_facts(home), home.install_id(), now=_clock.now) == ""
     # A dip after the clear is a new episode, told again.
     at(1, 11.3); guard(h); at(6, 11.3); guard(h)
     assert len(_letters(home, "degraded")) == 2
@@ -115,7 +116,7 @@ def test_an_untold_dip_never_clears_and_leaves_no_gauge(disk):
     home, clock, guard, at = disk
     h = Health(home, read_facts(home), lambda *_: None)
     at(1, 11.3); guard(h); at(1, 12.5); guard(h)   # two minutes under: never told
-    assert degraded_line(read_facts(home), home.install_id(), now=clock.now) == ""
+    assert body_line(read_facts(home), home.install_id(), now=clock.now) == ""
     at(health.CLEAR_AFTER / 60 + 1, 12.5); guard(h)
     assert _letters(home, "degraded") == [] and _letters(home, "cleared") == []
 
@@ -146,7 +147,7 @@ def test_the_wake_folds_an_episodes_dips_into_one_line(tmp_path):
     assert f"disk dipped 3 times since {first}, the last at 2026-10-28T05:16:00.000Z" in section
 
 
-def test_a_pass_still_under_the_floor_prunes_caches_and_the_gauge_says_so(disk, monkeypatch):
+def test_a_pass_still_under_the_floor_prunes_caches_and_clears_the_gauge(disk, monkeypatch):
     home, clock, guard, at = disk
     ran = []
 
@@ -174,8 +175,8 @@ def test_a_pass_still_under_the_floor_prunes_caches_and_the_gauge_says_so(disk, 
     [pruned] = [f for f in read_facts(home) if f.kind == "loom.pruned"]
     assert pruned.data["bytes"] == int(13.0 * GB) - int(11.3 * GB)
     guard(h)
-    line = degraded_line(read_facts(home), home.install_id(), now=clock.now)
-    assert "did: pruned caches, 1.7 GB freed" in line and "told, watching" in line
+    line = body_line(read_facts(home), home.install_id(), now=clock.now)
+    assert line == ""
 
 
 def test_a_pass_over_the_floor_prunes_nothing(disk, monkeypatch):

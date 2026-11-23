@@ -17,6 +17,7 @@ that was told and then stays up ``CLEAR_AFTER`` seconds ends with one passive
 
 from __future__ import annotations
 
+import re
 import threading
 import time
 import traceback
@@ -120,44 +121,42 @@ def _episodes(facts, install: str | None, now: float) -> dict[str, tuple[Fact, F
     return standing
 
 
-def acted(facts, install: str | None, since: str) -> str:
-    """What the loom did about the disk since an episode began: reaped paths and pruned caches."""
-    start, reaped, pruned, freed = _seconds(since), 0, 0, 0
-    for kind in ("room.reaped", "loom.pruned"):
-        for fact in kind_facts(facts, kind):
-            if (install is not None and fact.by != f"loom:{install}") or _seconds(fact.at) < start:
-                continue
-            freed += int(fact.data.get("bytes") or 0)
-            if kind == "room.reaped":
-                reaped += 1
-            else:
-                pruned += 1
-    done = ([f"reaped {reaped} path{'s' * (reaped > 1)}"] if reaped else []) + (
-        [f"pruned caches{f' {pruned}x' if pruned > 1 else ''}"] if pruned else [])
-    return f"; did: {', '.join(done)}, {freed / 1024 ** 3:.1f} GB freed" if done else ""
+def _duration(seconds: float) -> str:
+    minutes = max(0, int(seconds // 60))
+    hours, rest = divmod(minutes, 60)
+    if hours:
+        return f"{hours}h {rest} min" if rest else f"{hours}h"
+    return f"{minutes} min" if minutes else "<1 min"
 
 
-def degraded_line(facts, install: str | None = None, now: float | None = None) -> str:
-    """The gauge: per standing condition, since when, where it broke, and how often it dipped."""
+def body_line(facts, install: str, now: float | None = None) -> str:
+    """Current out-of-range streaks, using the reading captured at onset."""
+    from .github_health import refusal_since
+
+    now = time.time() if now is None else now
     parts = []
-    standing = _episodes(facts, install, time.time() if now is None else now)
-    for step, (fact, back) in sorted(standing.items(), key=lambda kv: str(kv[1][0].data.get("since"))):
+    for fact in open_streaks(facts, install):
         data = fact.data
-        kind = cause(str(data.get("error", "")), str(data.get("where") or ""))
-        if step == "board":  # the body needs the port and bind error, not only the exception's type
-            kind = str(data.get("error", ""))
-        dips = int(data.get("dips") or 1)
-        first = str(data.get("episode") or data.get("since", ""))[11:16]
-        since = str(data.get("since", ""))[11:16]
-        did = acted(facts, install, str(data.get("episode") or data.get("since"))) if step == "disk" else ""
-        if back is None:
-            part = f"{step} since {since}Z ({kind}"
-            part += (f"; dip {dips} since {first}Z" if dips > 1 else "") + did + ")"
-        else:
-            part = (f"{step} up since {_iso(_up(back))[11:16]}Z after {dips} dip{'s' * (dips > 1)} "
-                    f"since {first}Z ({kind}{did}; told, watching)")
-        parts.append(part)
-    return "degraded: " + "; ".join(parts) if parts else ""
+        step, since = data["step"], data.get("since") or fact.at
+        error = str(data.get("error", ""))
+        detail = cause(error, str(data.get("where") or ""))
+        if step == "cpu":
+            reading = re.search(r"used (\d+% of a core)", error)
+            if reading:
+                detail = reading[1]
+        elif step in {"disk", "memory"}:
+            detail = error.partition(": ")[2].split(": no new body", 1)[0] or detail
+            detail = detail.removeprefix("memory ")
+        elif step == "board":
+            detail = error or detail
+        age = now - _seconds(since)
+        parts.append(f"{step} {' '.join(detail.split())} for {_duration(age)}"
+                     + (" (long)" if age > 7200 else ""))
+    if since := refusal_since(facts, install):
+        age = now - _seconds(since)
+        parts.append(f"github credential refused since {since[11:16]}Z"
+                     f" (for {_duration(age)}" + (", long)" if age > 7200 else ")"))
+    return "body: " + "; ".join(parts) if parts else ""
 
 
 def _about(about) -> dict:
@@ -298,7 +297,7 @@ class Health:
                    f"the loom's {step} step has failed since {streak.since}{dips}, "
                    f"{streak.count} times: {streak.error}",
                    f"the traceback is in loom/loom.log; the step retries with backoff, the "
-                   f"degraded: line on the boundary is its gauge, and further dips of the same "
+                   f"body: line on the boundary is its gauge, and further dips of the same "
                    f"cause stay silent until it worsens or clears "
                    f"(fact loom.degraded:{self.install}:{step}:{streak.since})",
                    thread=self.home.main_thread())
