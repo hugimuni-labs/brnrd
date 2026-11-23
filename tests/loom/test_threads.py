@@ -48,9 +48,9 @@ def test_send_opens_lands_routes_and_shows_working_idle_settled(tmp_path):
                                             ('ready', 'release', 'reply', 'opened', 'finish')]
     bodies(root, f'''import json, subprocess, sys, time
 from pathlib import Path
-from brr.loom.runtime.fakebody import Ctx, _own_thread
+from brr.loom.runtime.fakebody import Ctx
 ctx = Ctx(Path(sys.argv[1]))
-own = _own_thread(ctx.wake())
+own = ctx.thread
 if own == "opener":
     for letter in ctx.owed():
         ctx.send("thread:opener", note="begin", re=letter.id)

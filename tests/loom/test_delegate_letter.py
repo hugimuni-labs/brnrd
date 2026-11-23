@@ -15,9 +15,9 @@ def test_held_body_receives_its_background_delegate_report_as_a_letter(tmp_path)
     report = "PINEAPPLE " + "x" * 2000
     bodies(root, f'''import json, sys, threading, time
 from pathlib import Path
-from brr.loom.runtime.fakebody import Ctx, _own_thread
+from brr.loom.runtime.fakebody import Ctx
 ctx = Ctx(Path(sys.argv[1]))
-own = _own_thread(ctx.wake())
+own = ctx.thread
 for letter in ctx.owed():
     ctx.send(f"thread:{{own}}", note="delegated", re=letter.id)
 while ctx.jack("post").letters:

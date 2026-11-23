@@ -70,10 +70,10 @@ def test_worker_bounces_once_and_authors_resend_is_answered(tmp_path):
     starts = root / "worker-starts"
     bodies(root, f'''import json, sys, time
 from pathlib import Path
-from brr.loom.runtime.fakebody import Ctx, _own_thread
+from brr.loom.runtime.fakebody import Ctx
 from brr.loom.runtime.home import atomic_write
 ctx = Ctx(Path(sys.argv[1]))
-own = _own_thread(ctx.wake())
+own = ctx.thread
 if own == "worker":
     with Path({str(starts)!r}).open("a") as out:
         out.write("start\\n")

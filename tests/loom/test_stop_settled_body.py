@@ -46,9 +46,9 @@ def _script(root: Path) -> str:
     out_path = str(root / "settle-out")
     return f"""import os, subprocess, sys, time
 from pathlib import Path
-from brr.loom.runtime.fakebody import Ctx, _own_thread
+from brr.loom.runtime.fakebody import Ctx
 ctx = Ctx(Path(sys.argv[1]))
-own = _own_thread(ctx.wake())
+own = ctx.thread
 if own == "child":
     (ctx.room / "self" / "left-behind.md").write_text("kept\\n")
     Path({pid_path!r}).write_text(str(os.getpid()))

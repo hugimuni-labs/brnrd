@@ -20,10 +20,10 @@ def test_settle_climb_and_reopen_through_the_live_loop(tmp_path):
     ready, ended, climbed, answer = [root / name for name in ("ready", "ended", "climbed", "answer")]
     bodies(root, f'''import json, sys, time, subprocess
 from pathlib import Path
-from brr.loom.runtime.fakebody import Ctx, _own_thread
+from brr.loom.runtime.fakebody import Ctx
 from brr.loom.runtime.selfrepo import git
 ctx = Ctx(Path(sys.argv[1]))
-own = _own_thread(ctx.wake())
+own = ctx.thread
 def verb(*args):
     proc = subprocess.run([sys.executable, "-m", "brr.loom.runtime", *args,
                            "--room", str(ctx.room / "self" if args[0] == "send-self" else ctx.room)], text=True, capture_output=True)
