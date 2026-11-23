@@ -304,6 +304,8 @@ def test_continue_survives_restart_and_named_wake_is_one_off(tmp_path, monkeypat
 
     monkeypatch.setattr(adapters, "installed_shells", lambda home: ["codex"])
     home = _home(tmp_path, monkeypatch)
+    # Keep the test gauge fresh while the connector and router process the command.
+    monkeypatch.setattr(usage, "CACHE_TTL", 30)
     self_repo = home.root / "self"
     (self_repo / "threads/second/seat").write_text("body: claude/echo\n")
     git(self_repo, "add", "threads/second/seat")
