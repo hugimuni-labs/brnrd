@@ -18,7 +18,7 @@ opened. A non-negative int is a size already counted. Absent is unknown.
 from __future__ import annotations
 
 import json
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 from brr.daemon2.facts import Fact
@@ -40,11 +40,11 @@ def bytes_of(n: int) -> str:
 
 def _wait_key(read: dict) -> tuple:
     on = (read.get("wait") or {}).get("on")
-    return ("on", on) if on else ("prose",)
+    return ("on", on) if on else ("prose", (read.get("reading") or "").strip())
 
 
 def set_again(
-    facts, thread: str, old_strand: str, new_strand: str, started_at: str
+    facts, thread: str, old_strand: str, new_strand: str, started_at: str, ended_at: str | None = None
 ) -> tuple[list[str], list[str]]:
     """Wish ids the new context parked or asked with the same wait the old one had live.
 
@@ -79,6 +79,7 @@ def set_again(
             r
             for r in wish.reads
             if r.get("at", "") >= started_at
+            and (ended_at is None or r.get("at", "") <= ended_at)
             and r.get("writer") == new_by
             and str(r.get("reading") or "").startswith("waiting:")
             and r.get("wait")
@@ -89,17 +90,6 @@ def set_again(
             asks if str(after[0]["reading"]).startswith("waiting: ask ") else parks
         ).append(wish.id)
     return parks, asks
-
-
-def _names_refusal(note, why: str, keys: list[str], text: str) -> bool:
-    """The scar's trigger names the refused program, or its text names the refusal."""
-    low = (note.head + "\n" + text).lower()
-    if why and why.lower() in low:
-        return True
-    return any(
-        key.lower() in low or key.lower() in " ".join(note.phrases).lower()
-        for key in keys
-    )
 
 
 def repeated(room: Path, boot: float) -> list[str]:
@@ -132,7 +122,8 @@ def repeated(room: Path, boot: float) -> list[str]:
             text = "\n".join(notes.scar_text(room, note.path))
         except Exception:  # noqa: BLE001 - the head and the trigger still name it
             text = ""
-        if _names_refusal(note, blocked[keys[0]], keys, text):
+        named = (note.head + "\n" + text).casefold()
+        if any(blocked[key] and blocked[key].casefold() in named for key in keys):
             found.append(note.path)
     return found
 
@@ -291,27 +282,24 @@ def opened_by_molt(facts, thread: str, gen: int) -> tuple[Fact, str] | None:
     return (molts[-1] if molts else prev), old
 
 
-def _observe(room: Path) -> None:
+def _observe(room: Path, facts=None, *, place=None, reads=None) -> None:
     from .jack import _set_state, _state
     from .spend import body_spent
+    from .tooltrace import tokens_through
 
     if _state(room).get("molt_cost"):
         return
     home = home_of_room(room)
-    facts = read_facts(home)
-    place = _place(room, facts)
+    facts = read_facts(home) if facts is None else facts
+    place = place or _place(room, facts)
     if place is None:
         return
     strand, gen, thread = place
     started = fact_for(facts, "body.started", strand, gen)
     if started is None:
         return
-    reads = _before(room, started)
+    reads = _before(room, started) if reads is None else reads
     if not reads or reads.get("first_s") is None:
-        return
-    if reads["before"] + 1 != reads["calls"]:
-        # The first act already passed and was not recorded. A later act is a different span.
-        _set_state(room, molt_cost="skip")
         return
     opened = opened_by_molt(facts, thread, gen)
     if opened is None:
@@ -320,12 +308,14 @@ def _observe(room: Path) -> None:
     molt, old = opened
     lease = fact_for(facts, "lease", strand, gen)
     shell = str((lease.data.get("shell") if lease else "") or "")
-    spent, _boot = body_spent(room, shell)
-    parks, asks = set_again(facts, thread, old, strand, started.at)
-    try:
-        boot = datetime.fromisoformat(started.at).timestamp()
-    except (TypeError, ValueError):
-        boot = 0.0
+    boot = datetime.fromisoformat(started.at).timestamp()
+    first, end = reads["first_at"], reads["first_end"]
+    at = datetime.fromtimestamp(end, timezone.utc).isoformat()
+    parks, asks = set_again(facts, thread, old, strand, started.at, at)
+    if shell in {"codex", "claude"}:
+        spent = tokens_through(room, shell, boot, first, end)
+    else:
+        spent, _ = body_spent(room, shell) if reads["before"] + 1 == reads["calls"] else (None, None)
     read = reads.get("before_bytes")
     try:
         append(
@@ -351,6 +341,15 @@ def _observe(room: Path) -> None:
     except LedgerConflict:
         pass
     _set_state(room, molt_cost="done")
+
+
+def observe_hand(room: Path, facts, strand: str, gen: int, thread: str, reads=None) -> None:
+    """Codex has a rollout trace in place of tool hooks."""
+    try:
+        if opened_by_molt(facts, thread, gen) is not None:
+            _observe(room, facts, place=(strand, gen, thread), reads=reads)
+    except Exception:  # noqa: BLE001 - a reading never costs the body
+        return
 
 
 def observe(room: Path, stdin_text: str) -> None:

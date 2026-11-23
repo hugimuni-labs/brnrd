@@ -375,14 +375,21 @@ def _build_wake(home, strand, gen, clone, thread, rows, part, owed_path, part_pa
     return occasion
 
 
-def _record_sizes(home, room, strand, gen, thread):
+def _record_sizes(home, room, strand, gen, thread, wake, *, deferred=False):
     """``wake.sizes``, the wake gauge's fact for this boot; a failure costs the fact, never the wake."""
     try:
         sizes = json.loads((room / "port" / "sizes.json").read_text())
+        total = len(wake.encode("utf-8"))
+        parts = dict(sizes["parts"])
+        if deferred:
+            if total < sizes["total"] and total < parts.get("core", 0) + parts.get("briefing", 0):
+                parts = {"core": parts.get("core", 0), "carry": total - parts.get("core", 0)}
+            else:
+                parts = {"core": parts.get("core", 0), "recipe": total - parts.get("core", 0)}
         _record(home, "wake.sizes", {
             "thread": thread, "strand": strand, "gen": gen,
             "budget": int(os.environ.get("LOOM_BUDGET_BYTES") or 24000),
-            "total": int(sizes["total"]), "parts": dict(sizes["parts"])}, f"wake.sizes:{strand}:{gen}")
+            "total": total, "parts": parts}, f"wake.sizes:{strand}:{gen}")
     except Exception as exc:  # noqa: BLE001
         _log(home, f"start {strand}: wake sizes not recorded ({exc})")
 
@@ -740,29 +747,19 @@ def _prepare(home: Home, strand: str, thread: str, gen: int,
     # compaction do not wear it down. wake.md stays whole, so a body that
     # reads only BRNRD_WAKE never loses it. An older recipe writes no core.
     core = core_path.read_text() if core_path.is_file() else ""
-    _record_sizes(home, room, strand, gen, thread)
-    atomic_write(core_path, core)
     from .moltcost import wake_line
     cost = wake_line(facts, thread)
-    if cost and occasion.startswith(cost + "\n"):
-        occasion = occasion[len(cost) + 1:]
-    if carry:
-        header, _, _ = gone.partition("\n")
-        opening = header + "\n" + (carry if carry.endswith("\n") else carry + "\n")
-        if gone.startswith(opening):
-            before, _, after = occasion.partition(opening)
-            occasion = opening + before + after
-    if cost:
-        occasion = cost + "\n" + occasion
-    # Nothing owed: status, topics, the tree and loom facts wait for the first boundary.
+    # The handover letter wakes the room. Only actual mail needs the rich opening.
+    owed = any(not row.get("reincarnate") for row in rows)
+    # A note deliberately written after the carry updates its instructions.
+    amended = any(line.startswith("After the molt, ") for line in context_note.splitlines())
+    core, occasion, later = _wake_opening(core, occasion, gone, carry, cost,
+                                         owed=owed or amended, hand=jack == "hand")
+    _record_sizes(home, room, strand, gen, thread, core + occasion, deferred=bool(later))
+    atomic_write(core_path, core)
     later_path = room / "port" / "later.md"
-    if not rows:
-        from .selfrepo import hold_back
-        occasion, later = hold_back(occasion)
-        if later:
-            atomic_write(later_path, later if later.endswith("\n") else later + "\n")
-        else:
-            later_path.unlink(missing_ok=True)
+    if later:
+        atomic_write(later_path, later)
     else:
         later_path.unlink(missing_ok=True)
     atomic_write(room / "port" / "occasion.md", occasion)
@@ -788,6 +785,30 @@ def _prepare(home: Home, strand: str, thread: str, gen: int,
                         **_budget(home, thread, facts, strand)),
     )
     return room
+
+
+def _wake_opening(core, occasion, gone, carry, cost, *, owed, hand):
+    from .briefing import TITLE
+    from .selfrepo import hold_back
+
+    receipt = cost + "\n" if cost else ""
+    occasion = occasion.removeprefix(receipt)
+    if carry:
+        header = gone.partition("\n")[0] + "\n"
+        opening = header + (carry if carry.endswith("\n") else carry + "\n")
+        if core and not owed:
+            identity, title, briefing = core.partition(f"## {TITLE}\n")
+            rest = title + briefing + occasion.replace(opening, "", 1)
+            initial = receipt + opening
+            if hand:
+                initial += '\nCall `"$BRNRD_JACK" --event start` to read the room.\n'
+            return identity, initial, rest
+        if opening in occasion:
+            occasion = opening + occasion.replace(opening, "", 1)
+    if owed or carry:
+        return core, receipt + occasion, ""
+    kept, later = hold_back(occasion)
+    return core, receipt + kept, later
 
 
 def _port_files(room: Path) -> list[Path]:
@@ -1413,6 +1434,9 @@ def _end_attempt(home, facts, strand, thread, gen, code, letters, cause, failure
     changed = _readme(room, thread) != start.data.get("readme") if start else "unknown"
     tank = fuel(home, start.data["shell"]) if start else ""
     reads = _reads(room, start)
+    if start and start.data.get("shell") == "codex":
+        from .moltcost import observe_hand
+        observe_hand(room, facts, strand, gen, thread, reads)
     from .tooltrace import first_words
     first_word_s = first_words(facts, ids)
     dispositions = []
@@ -2203,9 +2227,10 @@ def _next_wake(home, facts, state, thread: str) -> str:
                      if fact.data.get("to") == f"thread:{thread}" and fact.id not in state.handled
                      and (at := parse_instant(fact.data.get("at"))) is not None and at > now),
                     default=None)
-    parks = [str(read["wait"].get("on") or read["reading"].removeprefix("waiting:").strip()).partition("\n")[0]
-             for wish, read in unresolved(told(facts), facts) if parker(home, facts, wish, read) == thread]
-    wake = [f"the park on {', '.join(parks)}"] if parks else []
+    parks = [(wish, read) for wish, read in unresolved(told(facts), facts)
+             if parker(home, facts, wish, read) == thread]
+    from .waits import rest_parks
+    wake = rest_parks(parks)
     if next_time:
         wake.append(f"the timed letter at {next_time:%Y-%m-%d %H:%MZ}")
     drive = next_pass(home, facts, now)
@@ -2606,6 +2631,9 @@ def _execute_body(home, bodies, facts, o, c):
         "window": empty.get("name"), "left_pct": empty.get("left_pct"), "until": o.until})
     commands = decide(facts, [o])
     if o.alive:
+        if c.shell == "codex":
+            from .moltcost import observe_hand
+            observe_hand(x.room, facts, o.strand, o.gen, c.thread)
         _boundary(home, facts, o.strand, o.gen, c)
         _pause_for_letters(home, o.strand, c)
     for command in commands:

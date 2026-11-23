@@ -916,13 +916,13 @@ def execute(event: str, room: Path, stdin_text: str) -> str:
         guarded = "\n".join(filter(None, (_first_word(room)[0], guarded)))
     if event == "post":
         tooltrace.note(room, stdin_text, "post")
-        from .moltcost import observe as molt_observe
-        molt_observe(room, stdin_text)
         from .audit import note as audit_note
         audit_note(room, stdin_text, "post")
         _keep_transcript(room, stdin_text)
         _touch(room, stdin_text)
         _saw(room, stdin_text)
+        from .moltcost import observe as molt_observe
+        molt_observe(room, stdin_text)
         guarded = "\n".join(filter(None, (guarded, _lib_changes(room))))
         _note_tool(room, stdin_text)
         if _delegate_call(stdin_text):

@@ -507,3 +507,19 @@ def test_the_first_boundary_says_what_the_wake_held_back(tmp_path: Path) -> None
     assert "## Tree" in out and "threads/a/README.md" in out
     assert not (room / "port" / "later.md").is_file()
     assert "## Tree" not in execute("start", room, "{}")
+
+
+def test_a_quiet_molt_keeps_the_carry_opaque_and_defers_the_room():
+    from brr.loom.runtime.loom import _wake_opening
+
+    identity = "## core/identity.md\nIdentity\n## memory/stance.md\nStance\n"
+    briefing = "## loom briefing\nHow to hold the seat\n"
+    carry = "Finish the checks.\n\n## Tree\nPart of the carry.\n"
+    gone = "Molted at 01:00Z. Carried across:\n" + carry
+    occasion = "## threads/t/README.md\nCurrent spec\n## Loom\n" + gone
+    core, opening, later = _wake_opening(
+        identity + briefing, occasion, gone, carry, "last molt: 120 tokens", owed=False, hand=False,
+    )
+    assert core == identity
+    assert opening == "last molt: 120 tokens\n" + gone
+    assert later == briefing + "## threads/t/README.md\nCurrent spec\n## Loom\n"
