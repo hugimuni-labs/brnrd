@@ -146,7 +146,7 @@ def _acted(fact: dict) -> bool:
 def _readme_act(fact: dict) -> str:
     """What a fact changes in the README, or ``""``: a result, a merge, a new
     wish, a park. A left, a stamp, a note or a read changes nothing it says
-    (prompts-remake, his 10095); a settle lands the README itself."""
+    (prompts-remake, letter 10095); a settle lands the README itself."""
     kind, data = fact.get("kind"), fact.get("data") or {}
     if kind == "wish":
         return "a new wish" if str(fact.get("id", "")).startswith("w-") else ""

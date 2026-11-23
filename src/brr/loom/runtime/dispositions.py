@@ -9,7 +9,7 @@ Every person letter lands in exactly one branch (threads/letter-triage):
   nothing (``--silent joke|test|mistake``); the person hears nothing on
   purpose, so the letter is not left unanswered;
 - **held**: out of the person's pattern and irreversible, or not them at
-  all (``--hold out-of-pattern|not-him``); the send is the check through a
+  all (``--hold out-of-pattern|sender-mismatch``); the send is the check through a
   second path, and a held letter grants nothing (grants.find).
 
 An out-of-pattern ask that is reversible is a wish, done and said loudly.
@@ -30,13 +30,13 @@ from .wishes import Say, read_says
 
 #: The details a triage branch takes, by its flag on ``send``.
 SILENT = ("joke", "test", "mistake")
-HOLD = ("out-of-pattern", "not-him")
+HOLD = ("out-of-pattern", "sender-mismatch")
 #: What a correction changes: a person's page, a scar, a README.
 CORRECTS = ("people/", "memory/scars/")
 
 
 def triage(branch: str, detail: str) -> str:
-    """``silent joke``, ``held not-him``, ``correction people/x/page.md``: the field a send carries."""
+    """``silent joke``, ``held sender-mismatch``, ``correction people/x/page.md``: the field a send carries."""
     detail = detail.strip()
     if branch == "silent" and detail not in SILENT:
         raise ValueError(f"--silent {detail!r}: one of {', '.join(SILENT)}")

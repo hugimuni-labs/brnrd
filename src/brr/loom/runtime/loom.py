@@ -212,7 +212,7 @@ def _write_jack(room: Path, line: str) -> Path:
 
     ``$BRNRD_JACK`` is a single word: zsh, which Codex runs commands through,
     never splits an unquoted variable, so a whole command line there was one
-    file name that did not exist (his 11405).
+    file name that did not exist (letter 11405).
     """
     path = room / "port" / "jack"
     text = f"#!/bin/sh\nexec {line} \"$@\"\n"

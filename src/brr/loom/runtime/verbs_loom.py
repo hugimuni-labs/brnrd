@@ -138,7 +138,7 @@ def _send(argv: list[str]) -> int:
     parser.add_argument("--chatter", action="store_true", help="cites the --re letter as no wish")
     parser.add_argument("--correction", metavar="PATH", help="the --re letter changes this page, scar or README")
     parser.add_argument("--silent", metavar="KIND", help="joke, test or mistake: one word or a --note")
-    parser.add_argument("--hold", metavar="WHY", help="out-of-pattern or not-him: this send is the check")
+    parser.add_argument("--hold", metavar="WHY", help="out-of-pattern or sender-mismatch: this send is the check")
     parser.add_argument("--for", dest="ask_for", metavar="W-ID",
                         help="a question to a person files an ask under this wish")
     parser.add_argument("--chatter-of", dest="chatter_of", default=None, help=argparse.SUPPRESS)

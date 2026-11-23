@@ -184,7 +184,7 @@ def ingest(home, name, fm, attachments, authorize=None):
                                    for i, _, b in (item.partition(':') for item in fm['large'].split())]
         if clean:
             data.update(clean=fm['kind'], refs=fm['refs'].split())
-        # A ref that names nothing never refuses his letter: it lands without that link.
+        # A ref that names nothing never refuses the person's letter: it lands without that link.
         from .lifecycle import main_snapshot
         links, misses = link(facts, main_snapshot(home), fm['body'])
         if links:
@@ -416,8 +416,8 @@ def thread_for_message(facts, channel, message_id):
 def route_bare(facts, chat, reply_thread=None, fallback='inbox'):
     """A reply's thread, else the home thread: never the last thread that spoke.
 
-    His rule (5474, 5482): any thread may write him, but only a reply-to carries
-    his answer back there; every other letter of his is the inbox's to place.
+    The person's rule (5474, 5482): any thread may write to them, but only a reply-to carries
+    their answer back there; the inbox places their other letters.
     """
     try:
         _platform, chat_id = channel_parts(f'channel:{chat}')

@@ -79,7 +79,7 @@ def pull_once(drop, state, client, cursor, failures=None):
             pointers = event.get('attachments') if isinstance(event.get('attachments'), list) else []
             missing, large = [], []
             for index, name in enumerate(names):
-                # The name's extension types the file (his 11349 came as a bare index).
+                # The name's extension types the file (letter 11349 came as a bare index).
                 suffix = Path(name).suffix
                 dest = attachments / (f'{index}{suffix}' if suffix[1:].isalnum() else str(index))
                 tmp = attachments / f'.{index}.tmp'
