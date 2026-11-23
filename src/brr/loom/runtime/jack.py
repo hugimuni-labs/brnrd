@@ -115,7 +115,7 @@ def _ageless(line: str) -> str:
 def _slot(key: str) -> str:
     """The place a line holds: a line that changed in place (``degraded:``, ``asks:``,
     one ``opened:`` thread) is said anew, never also as gone."""
-    if key.startswith("opened: "):
+    if key.startswith(("opened: ", "waiting: ")):
         return " ".join(key.split()[:2])
     head = key.split(" ", 1)[0]
     return head if head.endswith((":", "?")) else key
