@@ -184,7 +184,7 @@ def _room(root: Path, strand: str) -> tuple[Home, Path]:
     return home, room
 
 
-def _started(home: Home, strand: str, thread: str) -> None:
+def _lease(home: Home, strand: str, thread: str) -> None:
     loom = f"loom:{home.install_id()}"
     append(
         home,
@@ -204,6 +204,11 @@ def _started(home: Home, strand: str, thread: str) -> None:
             },
         ),
     )
+
+
+def _started(home: Home, strand: str, thread: str) -> None:
+    _lease(home, strand, thread)
+    loom = f"loom:{home.install_id()}"
     append(
         home,
         Fact(
@@ -222,6 +227,25 @@ def _started(home: Home, strand: str, thread: str) -> None:
             },
         ),
     )
+
+
+def test_producing_calls_read_the_ledger_once_without_body_started(
+    tmp_path: Path, monkeypatch
+) -> None:
+    strand = "s-ab12-newnew"
+    home, room = _room(tmp_path / "home", strand)
+    _lease(home, strand, "t-1")
+    reads = []
+
+    def count_reads(ledger_home: Home):
+        reads.append(ledger_home)
+        return read_facts(ledger_home)
+
+    monkeypatch.setattr(moltcost, "read_facts", count_reads)
+    _call(room, 1, "Bash", {"command": "git commit -qm 'land'"}, {"stdout": ""})
+    _call(room, 2, "Bash", {"command": "git commit -qm 'again'"}, {"stdout": ""})
+
+    assert len(reads) == 1
 
 
 def test_a_carry_string_is_the_recorded_text_not_a_path(tmp_path: Path) -> None:

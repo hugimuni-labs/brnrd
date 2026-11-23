@@ -293,10 +293,12 @@ def _observe(room: Path, facts=None, *, place=None, reads=None) -> None:
     facts = read_facts(home) if facts is None else facts
     place = place or _place(room, facts)
     if place is None:
+        _set_state(room, molt_cost="skip")
         return
     strand, gen, thread = place
     started = fact_for(facts, "body.started", strand, gen)
     if started is None:
+        _set_state(room, molt_cost="skip")
         return
     reads = _before(room, started) if reads is None else reads
     if not reads or reads.get("first_s") is None:
