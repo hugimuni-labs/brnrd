@@ -832,7 +832,7 @@ def default_loom_part(clone: Path, thread: str) -> str:
     lines.append(
         "Letters received at tool boundaries. "
         "Reply with `brnrd runtime send`. "
-        "Stop when done. Resting until the next letter."
+        "Carry the next move from Held into the boundary."
     )
     return "\n".join(lines) + "\n"
 
@@ -898,16 +898,33 @@ def hold_back(text: str) -> tuple[str, str]:
     return "".join(kept), "".join(later)
 
 
+def fit_held(rows: list[str], budget: int) -> str:
+    """Keep complete rows in priority order and leave a receipt for the cut."""
+    heading = "## Held\n"
+    body = "".join(f"{row}\n" for row in rows) or "No goals or queue rows recorded.\n"
+    if len((heading + body).encode("utf-8")) <= budget:
+        return heading + body
+    kept = heading
+    for index, row in enumerate(rows):
+        note = f"[Cut {len(rows) - index} held rows. Whole in goals/ and brnrd runtime wishes.]\n"
+        if len((kept + row + "\n" + note).encode("utf-8")) > budget:
+            block = kept + note
+            return block if len(block.encode("utf-8")) <= budget else ""
+        kept += row + "\n"
+    return kept if rows else ""
+
+
 def insert_topics(prompt: str, section: str) -> str:
     """Before the tree: a head carries a decision, a tree line only names a file."""
-    for mark in ("## Tree\n", "## Loom\n", "## Occasion\n"):
+    for mark in ("## Tree\n", "## Loom\n", "## Letters\n"):
         start = prompt.find(mark)
         if start >= 0 and (start == 0 or prompt[start - 1] == "\n"):
             return prompt[:start] + section + prompt[start:]
     return prompt + "\n" + section
 
 
-def wake_sizes(recipe_sizes: Path, wake: str, *, briefing: str, generated: str) -> dict:
+def wake_sizes(recipe_sizes: Path, wake: str, *, briefing: str, generated: str,
+               held: str = "", legacy_letters: bool = False) -> dict:
     """Bytes per part of a delivered wake, and its ``total``, measured on ``wake``.
 
     The recipe names its own parts in ``recipe_sizes`` (``LOOM_SIZES``); one
@@ -923,12 +940,17 @@ def wake_sizes(recipe_sizes: Path, wake: str, *, briefing: str, generated: str) 
         named = json.loads(recipe_sizes.read_text(encoding="utf-8"))
     except (OSError, ValueError):
         named = None
+    if held:
+        parts["held"] = size(held)
     rest = total - sum(parts.values())
     if isinstance(named, dict) and all(isinstance(v, int) and v >= 0 for v in named.values()) \
-            and sum(named.values()) == rest:
-        parts.update({str(k): v for k, v in named.items()})
-    else:
-        parts["recipe"] = rest
+            and not any(key in parts for key in named):
+        if legacy_letters and "occasion" in named:
+            named["letters"] = named.pop("occasion") - len("Occasion") + len("Letters")
+        if all(value >= 0 for value in named.values()) and sum(named.values()) == rest:
+            parts.update(named)
+            return {"total": total, "parts": parts}
+    parts["recipe"] = rest
     return {"total": total, "parts": parts}
 
 
@@ -1004,13 +1026,15 @@ def run_wake(room_dir: Path, thread: str, owed: Path | None = None, *,
     from .ledger import read_facts
     from .wishes import insert_wishes, wake_wishes
     section = ""
+    held_rows = []
     try:
         home = home_of_room(clone.parent)
     except ValueError:
         home = None  # A standalone self clone has no loom ledger.
     if home is not None:
         from .lifecycle import main_snapshot
-        rows = main_snapshot(home).get(thread, {}).get("plan_rows") or ()
+        main = main_snapshot(home)
+        rows = main.get(thread, {}).get("plan_rows") or ()
         facts = read_facts(home)
         from .wishes import wishes as fold_wishes
         told_wishes = fold_wishes(facts)
@@ -1021,12 +1045,12 @@ def run_wake(room_dir: Path, thread: str, owed: Path | None = None, *,
             from .library import WISHES
             ids = sorted(w.id for w in told_wishes.values() if w.thread == thread and w.open)
             (Path(owed).parent / WISHES).write_text(json.dumps(ids) + "\n")
-        if thread == home.main_thread():
-            # The center wakes with both queues and Next build, derived, never a prose line.
-            from .queues import queues, render
-            from .wishes import told, waits_on
-            found = told(facts)
-            section += render(queues(found, waits_on(found, main_snapshot(home))))
+        from .idle import goal_lines
+        from .queues import held_rows_for
+        from .wishes import waits_on
+
+        held_rows = goal_lines(home) + held_rows_for(
+            told_wishes, waits_on(told_wishes, main), thread, home.main_thread())
     from .briefing import section as briefing_section
     briefing = briefing_section(home)
     topics = _wake_topics(clone, thread, owed)
@@ -1039,8 +1063,9 @@ def run_wake(room_dir: Path, thread: str, owed: Path | None = None, *,
     # Reserve what the loom adds before the recipe fits its tree/README to the budget:
     # the tree is what gives way to the topic heads.
     limit = wake_budget()
+    held = fit_held(held_rows, limit // 8)
     env["LOOM_BUDGET_BYTES"] = str(max(0, limit - len(
-        (section + briefing + topics + ((cost + "\n") if cost else "")).encode("utf-8"))))
+        (section + briefing + topics + held + ((cost + "\n") if cost else "")).encode("utf-8"))))
     if core is not None:
         # Absent after the run means the recipe kept the core in stdout.
         Path(core).unlink(missing_ok=True)
@@ -1082,15 +1107,21 @@ def run_wake(room_dir: Path, thread: str, owed: Path | None = None, *,
             (stdout or sys.stdout).write(output)
             return proc.returncode
         if proc.returncode == 0:
-            above, occasion, letters = output.partition("\n## Occasion\n")
+            above, heading, letters = output.partition("\n## Letters\n")
+            legacy_letters = False
+            if not heading:
+                above, heading, letters = output.partition("\n## Occasion\n")
+                legacy_letters = bool(heading)
             for pattern, wording in _LEGACY_WAKE_RECEIPTS:
                 above = pattern.sub(wording, above)
-            output = above + occasion + letters
+            output = above + ("\n## Letters\n" + letters if heading else "")
             if core is not None and Path(core).is_file():
                 with open(core, "a", encoding="utf-8") as handle:
                     handle.write(briefing)
             else:
                 output = insert_briefing(output, briefing)
+            if held:
+                output = insert_briefing(output, held)
         if proc.returncode == 0 and section:
             output = insert_wishes(output, section)
         if proc.returncode == 0 and topics:
@@ -1101,7 +1132,7 @@ def run_wake(room_dir: Path, thread: str, owed: Path | None = None, *,
             kept = Path(core).read_text(encoding="utf-8") if core is not None and Path(core).is_file() else ""
             generated = section + topics + ((cost + "\n") if cost else "")
             Path(sizes).write_text(json.dumps(wake_sizes(
-                Path(sizes), kept + output, briefing=briefing, generated=generated)), encoding="utf-8")
+                Path(sizes), kept + output, briefing=briefing, generated=generated, held=held, legacy_letters=legacy_letters)), encoding="utf-8")
         (stdout or sys.stdout).write(output)
         return proc.returncode
     finally:

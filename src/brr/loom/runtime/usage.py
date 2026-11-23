@@ -293,14 +293,6 @@ def window_text(window):
     return text
 
 
-def _shown_windows(payload) -> list[str] | None:
-    """Window text for one on-disk reading, or None when it shows nothing."""
-    windows = gauge_windows(payload)
-    if not windows:
-        return None
-    return [window_text(w) for w in windows]
-
-
 def _past_reset(payload, now: float) -> bool:
     """True when ``at`` is older than the newest reset that has already passed.
 
@@ -310,6 +302,36 @@ def _past_reset(payload, now: float) -> bool:
     passed = [_reset(window) for window in payload["windows"]
               if isinstance(window, dict) and 0 < _reset(window) <= now]
     return bool(passed) and float(payload["at"]) < max(passed)
+
+
+def _shell_readings(home):
+    for path in sorted((home.root / "loom" / "usage").glob("*.json")):
+        name = path.stem
+        if not _SHELL_NAME.fullmatch(name):
+            continue
+        try:
+            payload = json.loads(path.read_text())
+        except (OSError, ValueError):
+            continue
+        if (windows := gauge_windows(payload)) is not None:
+            yield name, payload, windows
+
+
+def lapsing_fuel(home) -> str:
+    """Report each live window separately because quotas can overlap."""
+    now = time.time()
+    readings = []
+    for name, payload, windows in _shell_readings(home):
+        live = [f"{w['name']} {max(0, w['left_pct']):g}% at "
+                f"{datetime.fromtimestamp(_reset(w), timezone.utc):%Y-%m-%d %H:%MZ}"
+                for w in windows if _reset(w) > now]
+        if live:
+            readings.append(f"{name} " + ", ".join(live))
+        elif known_unmetered(payload):
+            readings.append(f"{name} unmetered")
+        else:
+            readings.append(f"{name} lapse unknown")
+    return "fuel lapsing if unspent: " + (" · ".join(readings) or "no readings")
 
 
 def shell_fuels(home) -> dict[str, str]:
@@ -323,19 +345,9 @@ def shell_fuels(home) -> dict[str, str]:
     passed is kept and marked with ``?``
     (``grok week 45%?``): dropping it is how a full tank was read as dry.
     """
-    directory = home.root / "loom" / "usage"
-    if not directory.is_dir():
-        return {}
     now, found = time.time(), {}
-    for path in sorted(directory.glob("*.json")):
-        name = path.name.removesuffix(".json")
-        if not _SHELL_NAME.fullmatch(name):
-            continue
-        try:
-            payload = json.loads(path.read_text())
-        except (OSError, ValueError):
-            continue
-        parts = _shown_windows(payload)
+    for name, payload, windows in _shell_readings(home):
+        parts = [window_text(window) for window in windows]
         if parts:
             found[name] = " ".join(parts) + ("?" if _past_reset(payload, now) else "")
         elif gauge_windows(payload) is not None and known_unmetered(payload):

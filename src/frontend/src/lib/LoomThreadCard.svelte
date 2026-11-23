@@ -80,7 +80,7 @@
 						<span class="text-ink-mute uppercase">blocked</span>
 					{/if}
 					{#if turn === 'blocked' && thread.blocked_on}
-						<span class="text-ink-quiet">waits on {thread.blocked_on}</span>
+						<span class="text-ink-quiet">resumes on {thread.blocked_on}</span>
 					{/if}
 					{#if settled}<span class="text-ink-mute uppercase">settled</span>{/if}
 					<span class="text-ink-mute">{thread.id}</span>

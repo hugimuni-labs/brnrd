@@ -418,7 +418,7 @@ for letter in ctx.owed():
         waiting = f"waiting: {wish} on pr:{REPO}#5 since "
         successor = (root / "successor").read_text()
         assert waiting in successor
-        next_wake = f"next wake: Resting until pull request {REPO}#5"
+        next_wake = f"wakes at: pull request {REPO}#5"
         assert next_wake in successor
         assert any(f.kind == "attempt.ended" and f.data["cause"] == "reincarnated" for f in loom.facts())
         wait_until(lambda: holder(loom.facts(), "work") is None, 60, loom.dump)

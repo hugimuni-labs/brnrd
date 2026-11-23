@@ -51,13 +51,13 @@ def test_ahead_of_pace_the_keepalive_carries_the_acts_and_never_says_stop(worker
 def test_behind_pace_the_keepalive_says_what_it_said(worker, monkeypatch):
     room, _ = worker
     result = _stop(room, monkeypatch, BEHIND)
-    assert result["reason"].partition(chr(10))[2].startswith("Resting until the next letter.")
+    assert result["reason"].partition(chr(10))[2].startswith("wakes at: the next letter")
     assert "w-aaaa" not in result["reason"]
 
 
 def test_an_unknown_gauge_is_not_ahead(worker, monkeypatch):
     room, _ = worker
-    assert _stop(room, monkeypatch, None)["reason"].partition(chr(10))[2].startswith("Resting until the next letter.")
+    assert _stop(room, monkeypatch, None)["reason"].partition(chr(10))[2].startswith("wakes at: the next letter")
     assert not idle.ahead({"windows": []})
     assert not idle.ahead({"windows": [AHEAD["windows"][0]]})
 
@@ -330,7 +330,7 @@ def test_the_keepalive_rests_past_the_share_and_names_it_when_still_inside(worke
     set_value(home.root, "initiative_share", 50)
     rested = _stop(room, monkeypatch, _window(33, 0.24, time.time()))
     assert rested["reason"].partition(chr(10))[2].startswith(
-        "Resting until the next letter.")
+        "wakes at: the next letter")
     kept = _stop(room, monkeypatch, _window(92, 5.5 / 7, time.time()))
     assert kept["decision"] == "block"
     assert "initiative share 50%" in kept["reason"]
@@ -564,7 +564,7 @@ def test_the_stop_shows_unease_behind_pace(worker, monkeypatch):
     idle.publish_unease(room, "readme:work",
                         "unease: cut 10 of 20 README bytes at wake. Whole on disk.")
     result = json.loads(jack.execute("stop", room, "{}"))
-    assert "Resting until the next letter." in result["reason"]
+    assert "wakes at: the next letter" in result["reason"]
     assert "unease: cut " in result["reason"]
     assert json.loads((room / "port" / "unease.json").read_text())["readme:work"]["n"] == 1
 
@@ -651,6 +651,6 @@ def test_inbox_keepalive_shows_goals_before_unease_and_the_closing_line(worker, 
     (room / "port/in/idle.md").write_text(f"{_GOAL_LINE}\n{fuel}\n", encoding="utf-8")
     idle.publish_unease(room, "goal:test", "unease: check growth")
     reason = json.loads(jack.execute("stop", room, "{}"))["reason"]
-    assert "Resting until the next letter.\n" in reason
+    assert "wakes at: the next letter\n" in reason
     assert reason.endswith(f"{_GOAL_LINE}\n{fuel}\nunease: check growth\n{_GOAL_CLOSE}\n")
     assert "--pick" not in reason

@@ -192,7 +192,7 @@ def occasion(path: Path) -> str:
         die(f"owed.json: not utf-8: {exc}")
     if not isinstance(data, list):
         die("owed.json: expected a list")
-    chunks = ["## Occasion\n"]
+    chunks = ["## Letters\n"]
     for item in data:
         if not isinstance(item, dict) or any(key not in item for key in ("id", "from", "body")):
             die("owed.json: each letter needs id, from, body")
@@ -393,7 +393,7 @@ def fixed_text(root: Path, thread: str, loom: str, owed: Path, excess: int = 0, 
 def split(parts: dict[str, str]) -> tuple[str, str]:
     """(before the tree, after the tree)."""
     head = parts["core"] + parts["readme"] + parts["notes"]
-    return head, parts["people"] + parts["topics"] + parts["loom"] + parts["occasion"]
+    return head, parts["people"] + parts["topics"] + parts["loom"] + parts["letters"]
 
 
 def fixed_parts(root: Path, thread: str, loom: str, owed: Path, excess: int = 0, limit: int = 0) -> dict[str, str]:
@@ -413,7 +413,7 @@ def fixed_parts(root: Path, thread: str, loom: str, owed: Path, excess: int = 0,
         "people": people_block(root, owed),
         "topics": topics_block(root),
         "loom": section("Loom", loom),
-        "occasion": occasion(owed),
+        "letters": occasion(owed),
     }
 
 

@@ -101,7 +101,7 @@ def _wish_arguments(parser):
     parser.add_argument("--force", action="store_true", help="drop even while other wishes wait on it")
     parser.add_argument("--deliver", action="store_true")
     parser.add_argument("--ref")
-    parser.add_argument("--wait", help="what the park waits on: " + GRAMMAR)
+    parser.add_argument("--wait", help="the condition that reopens the park: " + GRAMMAR)
     parser.add_argument("--until", help="when the park re-asks its thread if nothing resolved")
     parser.add_argument("--top", metavar="LETTER",
                         help="the person's letter that puts this wish on top of their order")
@@ -664,7 +664,7 @@ def cmd_ask(args):
             # person, and the &ref binds his reply-to on this message to the ask.
             to = _person_dm(home, facts, head.removeprefix("person:") if head != "operator" else None)
             if to is None:
-                print(f"ask: {ident} waits on the person, but no person has a direct channel: "
+                print(f"ask: their word moves {ident}. No person has a direct channel: "
                       "it is on the board only; raise it from the inbox", file=sys.stderr)
             elif not _mailed(facts, room, to, marker):
                 body = marker + args.what + "\n"

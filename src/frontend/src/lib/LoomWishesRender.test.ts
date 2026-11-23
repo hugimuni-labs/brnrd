@@ -69,7 +69,7 @@ test('an owed verdict offers agree and correct, a try-it link, and is counted', 
 	ok(row.includes('href="https://brnrd.dev/"'), 'the newest result is the one to try');
 	ok(row.includes('+1 earlier'), 'the older result is counted, not shown');
 	ok(row.includes('“Body choice belongs on the fuel strip.”'), 'his words, quoted');
-	ok(html.includes('1 waits on you'), 'the header counts it');
+	ok(html.includes('1 for your word'), 'the header counts it');
 });
 
 test('an undelivered wish offers only correct; its PR is a link, not a try-it', async () => {
@@ -114,7 +114,7 @@ test('an answer replaces the buttons: agree is sent, not recorded; correct is se
 	const corrected = rowOf(html, 'w-corrected');
 	ok(corrected.includes('you asked for a correction · 9m ago · sent to brnrd'), 'correct is sent');
 	ok(corrected.includes('“Shorter.”'), 'his correction, quoted');
-	ok(html.includes('nothing waits on you'), 'the header has nothing to count');
+	ok(html.includes('nothing for your word'), 'the header has nothing to count');
 });
 
 test('a derived wish is labelled as brnrd’s reading; a resident ask is brnrd asking', async () => {
@@ -157,5 +157,5 @@ test('no wishes is one quiet line, not a blank', async () => {
 	const html = await renderWishes([]);
 	ok(html.includes('data-testid="wishes-empty"'), 'the empty line renders');
 	ok(html.includes('no wishes yet'), 'and says why');
-	equal(html.includes('waits on you'), false, 'no count over nothing');
+	equal(html.includes('for your word'), false, 'no count over nothing');
 });

@@ -125,7 +125,7 @@ def test_render_names_next_build_and_both_queues():
     facts = [*base(), wish("w-ask", at(1), sender="resident", parent="w-old"), delivered("w-new", at(1))]
     out = render(queues(wishes(facts), {"w-ask": "person:arseni"}))
     assert out.startswith("## Queues\nNext build: none")
-    assert "- ask w-ask" in out and "- delivered w-new" in out and "1. w-old" in out
+    assert "- ask w-ask" in out and "- delivered w-new" in out and "1. held w-old" in out
 
 
 def test_a_merged_result_the_loom_runs_leaves_the_queue(monkeypatch):

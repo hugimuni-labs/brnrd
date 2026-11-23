@@ -297,7 +297,7 @@ def test_stop_holds_for_the_shells_cache_or_the_hook_ceiling(
     monkeypatch.setattr(jack.time, 'sleep', lambda seconds: now.__setitem__(0, now[0] + seconds))
     result = json.loads(jack.execute('stop', room, json.dumps({'transcript_path': str(transcript)})))
     assert result['decision'] == 'block'
-    assert result['reason'].split('\n', 1)[1].startswith('Resting until the next letter.')
+    assert result['reason'].split('\n', 1)[1].startswith('wakes at: the next letter')
     assert now[0] == pytest.approx(expected)
 
 
@@ -478,7 +478,7 @@ def test_a_reply_waiting_in_port_out_counts_as_answered_at_the_stop(tmp_path, mo
     _write(room, [_letter()])
     _reply(room, "p-test/abcde")
     held = json.loads(execute("stop", room, "{}"))
-    assert held["reason"].split("\n", 1)[1].startswith("Resting until the next letter.")
+    assert held["reason"].split("\n", 1)[1].startswith("wakes at: the next letter")
     assert "send --re p-test/abcde" not in held["reason"]
 
 
@@ -499,7 +499,7 @@ def test_a_reply_the_loom_drained_still_counts_while_the_boundary_lags(tmp_path,
         append(Home(tmp_path), fact_from_port(parse_frontmatter(path.read_text()), STRAND, 1, room=room))
         path.unlink()
     held = json.loads(execute("stop", room, "{}"))
-    assert held["reason"].split("\n", 1)[1].startswith("Resting until the next letter.")
+    assert held["reason"].split("\n", 1)[1].startswith("wakes at: the next letter")
     assert "send --re p-test/abcde" not in held["reason"]
 
 
@@ -642,7 +642,7 @@ def test_stop_holds_until_rest_why_and_records_passed_wishes(rest_room, capsys):
     _rest_wish(home, "w-idle", ranked=False)
     code, out = run("stop", rest_room, "{}")
     assert code == 0 and json.loads(out)["decision"] == "block"
-    assert "w-top waits on nothing and codex has 35% left" in out
+    assert "w-top can move and codex has 35% left" in out
     assert main(["rest", "--room", str(rest_room), "--why", "x"]) == 1
     assert main(["rest", "--room", str(rest_room), "--why", "Waiting for a clearer brief"]) == 0
     assert "resting because Waiting for a clearer brief" in capsys.readouterr().out
@@ -660,7 +660,7 @@ def test_stop_holds_once_per_gen_and_top_wish(rest_room):
     home = home_of_room(rest_room)
     _rest_wish(home)
     _rest_wish(home, "w-top")
-    assert "w-top waits on nothing" in execute("stop", rest_room, "{}")
+    assert "w-top can move" in execute("stop", rest_room, "{}")
     assert run("stop", rest_room, "{}") == (0, "")
     assert run("stop", rest_room, "{}") == (0, "")
     fact, = [f for f in read_facts(home) if f.kind == "rest.why"]
@@ -668,12 +668,12 @@ def test_stop_holds_once_per_gen_and_top_wish(rest_room):
                          "wishes": ["w-top", "w-free"]}
 
     append(home, Fact(kind="wish.top", by="person:test", data={"wish": "w-free", "ref": "p-test/abcde"}))
-    assert "w-free waits on nothing" in execute("stop", rest_room, "{}")
+    assert "w-free can move" in execute("stop", rest_room, "{}")
     append(home, Fact(kind="wish.top", by="person:test", data={"wish": "w-top", "ref": "p-test/abcde"}))
     assert run("stop", rest_room, "{}") == (0, "")
 
     _write(rest_room, [], gen=2)
-    assert "w-top waits on nothing" in execute("stop", rest_room, "{}")
+    assert "w-top can move" in execute("stop", rest_room, "{}")
 
 
 @pytest.mark.parametrize("which", ["park", "ask", "empty fuel", "no burn", "empty queue", "other thread", "idle"])
@@ -698,3 +698,29 @@ def test_stop_passes_without_runnable_work_and_burn_fuel(rest_room, which):
     if which == "no burn":
         (home.root / "loom" / "preferences.toml").write_text('spend.keep = "claude"\n')
     assert execute("stop", rest_room, "{}") == ""
+def test_boundary_ends_on_the_held_move():
+    text = render_boundary(
+        STRAND, 1, "ta", [_letter()], set(), {},
+        next_wake="the timed letter at 2026-11-23 18:00Z",
+        held_next="w-held · Send the draft",
+    )
+    assert text.splitlines()[-2:] == [
+        "wakes at: the timed letter at 2026-11-23 18:00Z",
+        "held next: w-held · Send the draft",
+    ]
+
+
+@pytest.mark.parametrize("plan", ["", "plan 0/1"])
+def test_inbox_stop_carries_the_held_move(tmp_path, monkeypatch, plan):
+    room = _room(tmp_path)
+    monkeypatch.setenv("BRNRD_THREAD", "inbox")
+    monkeypatch.setattr("brr.loom.runtime.jack._poll", lambda *args: '{"decision":"block","reason":"Holding"}')
+    (room / "port" / "in" / "boundary.md").write_text(render_boundary(
+        STRAND, 1, "inbox", [], set(), {}, plan=plan,
+        held_next="w-held · Send the draft", rest_price="codex week 35% at 2026-11-24 18:00Z · 1 movable row",
+    ))
+    result = json.loads(execute("stop", room, "{}"))
+    reason = result["reason"]
+    assert "runtime settle inbox" not in reason
+    assert reason.splitlines()[-1] == "keep going: w-held · Send the draft"
+    assert ("rest price: codex week 35%" in reason) == (not plan)

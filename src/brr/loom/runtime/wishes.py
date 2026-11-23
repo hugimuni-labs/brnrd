@@ -530,7 +530,7 @@ def _short(value: str, size: int) -> str:
 
 
 def waits_word(head: str) -> str:
-    return f" · waits on {head}"
+    return f" · their word moves: {head}"
 
 
 def wish_line(wish: Wish) -> str:

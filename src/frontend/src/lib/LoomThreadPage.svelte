@@ -104,7 +104,7 @@
 					<span class="text-sky-300/80 uppercase">mine</span>
 				{:else if turn === 'blocked'}
 					<span class="uppercase"
-						>blocked{thread.blocked_on ? ` · waits on ${thread.blocked_on}` : ''}</span
+						>blocked{thread.blocked_on ? ` · resumes on ${thread.blocked_on}` : ''}</span
 					>
 				{/if}
 				{#if thread.status}<span>{thread.status}</span>{/if}

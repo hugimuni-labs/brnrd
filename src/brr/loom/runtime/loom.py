@@ -382,10 +382,11 @@ def _record_sizes(home, room, strand, gen, thread, wake, *, deferred=False):
         total = len(wake.encode("utf-8"))
         parts = dict(sizes["parts"])
         if deferred:
-            if total < sizes["total"] and total < parts.get("core", 0) + parts.get("briefing", 0):
-                parts = {"core": parts.get("core", 0), "carry": total - parts.get("core", 0)}
-            else:
-                parts = {"core": parts.get("core", 0), "recipe": total - parts.get("core", 0)}
+            name = ("carry" if total < sizes["total"] and
+                    total < parts.get("core", 0) + parts.get("briefing", 0) + parts.get("held", 0)
+                    else "recipe")
+            parts = {key: size for key, size in parts.items() if key in {"core", "held"}}
+            parts[name] = total - sum(parts.values())
         _record(home, "wake.sizes", {
             "thread": thread, "strand": strand, "gen": gen,
             "budget": int(os.environ.get("LOOM_BUDGET_BYTES") or 24000),
@@ -775,6 +776,7 @@ def _prepare(home: Home, strand: str, thread: str, gen: int,
                         replies={f.letter.id: f.reply_to for f in active_owners(facts, main_snapshot(home))},
                         attachments=attachments, reply_context=reply_context,
                         next_wake=_next_wake(home, facts, state, thread),
+                        **_held_boundary(home, facts, main_snapshot(home), thread),
                         repaired=_repaired(facts, strand, gen),
                         degraded=degraded_line(facts, home.install_id()), room=room_line(facts),
                         library=problem_line(facts, home.install_id()),
@@ -798,8 +800,14 @@ def _wake_opening(core, occasion, gone, carry, cost, *, owed, hand):
         opening = header + (carry if carry.endswith("\n") else carry + "\n")
         if core and not owed:
             identity, title, briefing = core.partition(f"## {TITLE}\n")
-            rest = title + briefing + occasion.replace(opening, "", 1)
-            initial = receipt + opening
+            rest = occasion.replace(opening, "", 1)
+            held = ""
+            if rest.startswith("## Held\n"):
+                end = rest.find("\n## ", len("## Held\n") - 1)
+                end = end + 1 if end >= 0 else len(rest)
+                held, rest = rest[:end], rest[end:]
+            rest = title + briefing + rest
+            initial = receipt + held + opening
             if hand:
                 initial += '\nCall `"$BRNRD_JACK" --event start` to read the room.\n'
             return identity, initial, rest
@@ -1777,7 +1785,7 @@ def _memory_hold(home, facts, thread, squeeze, letters):
         return
     episode = str(streak.data.get("episode") or streak.data.get("since"))
     notice(home, facts, "memory-held", f"{thread} {episode}",
-           f"Thread {thread} waits on the memory floor ({squeeze.held}).",
+           f"Thread {thread} resumes when memory pressure clears ({squeeze.held}).",
            f"to start it anyway: brnrd runtime threads --force {thread}", thread=home.main_thread())
     for letter, channel in letters:
         notice(home, facts, "memory", f"{channel} {episode}", MEMORY_WORD,
@@ -2184,6 +2192,25 @@ def _boundary(home, facts, strand, gen, context):
         os.utime(path)
 
 
+def _held_boundary(home, facts, main, thread):
+    from .queues import held_move, movable, queues
+    from .usage import lapsing_fuel
+    from .waits import unresolved
+    from .wishes import told, waits_on
+
+    found = told(facts)
+    queue = queues(found, waits_on(found, main))
+    parked = {wish.id for wish, _ in unresolved(found, facts)}
+    free = movable(queue, thread, parked)
+    rest_price = f"{lapsing_fuel(home)} · {len(free)} movable rows"
+    if free:
+        top = free[0]
+        held_next = f"{top.id} · {held_move(top, queue.blocked.get(top.id, []))}"
+    else:
+        held_next = f"rest costs {rest_price}"
+    return {"held_next": held_next, "rest_price": rest_price}
+
+
 def _render_boundary(home, facts, strand, gen, context):
     from .threads import thread_table
     main, state = main_snapshot(home), fold(facts)
@@ -2197,6 +2224,7 @@ def _render_boundary(home, facts, strand, gen, context):
         opened=opened, forge=_forge(home),
         park_reminder=park_reminders(facts, context.thread),
         next_wake=_next_wake(home, facts, state, context.thread),
+        **_held_boundary(home, facts, main, context.thread),
         waits=wait_lines(home, facts, context.thread),
         plan=_plan(home, context.thread, facts),
         replies={f.letter.id: f.reply_to for f in active_owners(facts, main)},
@@ -2238,7 +2266,7 @@ def _next_wake(home, facts, state, thread: str) -> str:
     drive = next_pass(home, facts, now)
     if drive:
         wake.append(f"{drive:%H:%MZ} (morning pass in {HOME_THREAD}, {drive:%Y-%m-%d})")
-    return "Resting until " + ", or ".join([*wake, "the next letter"]) + "."
+    return ", or ".join([*wake, "the next letter"])
 
 
 def park_reminders(facts, thread):

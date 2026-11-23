@@ -91,16 +91,16 @@ def test_an_ask_waits_on_the_opener_until_it_asks_onward(ledger):
     # mid was opened by work, and work has not asked anyone: work's turn, not the person's.
     assert turns(home)["mid"][0] != "yours"
     assert turns(home)["mid"][1] == ["thread:work"]
-    assert f"{ask} · heard · Which half first? · - · waits on thread:work" in command(home, seat, "asks")
-    assert "waits on thread:work" in command(home, seat, "wishes")
+    assert f"{ask} · heard · Which half first? · - · their word moves: thread:work" in command(home, seat, "asks")
+    assert "their word moves: thread:work" in command(home, seat, "wishes")
     onward = command(home, seat, "ask", "Which half first?", "--for", ask, "--rec", "the parser")
     assert mail(seat, onward) == []  # work's head is the operator: no thread to wake.
     # work asked onward for mid's ask; work has no opener on record, so both wait on the operator.
     assert turns(home)["mid"] == ("yours", ["operator"])
     assert turns(home)["work"] == ("yours", ["operator"])
     lines = command(home, seat, "asks").splitlines()
-    assert any(line.startswith(ask) and line.endswith("waits on operator") for line in lines)
-    assert any(line.startswith(onward) and line.endswith("waits on operator") for line in lines)
+    assert any(line.startswith(ask) and line.endswith("their word moves: operator") for line in lines)
+    assert any(line.startswith(onward) and line.endswith("their word moves: operator") for line in lines)
     # Once the person answers work's ask, the wait falls back to work.
     command(home, seat, "wish", onward, "--accept", "word", "--ref", "parser first", person=True)
     assert turns(home)["mid"][1] == ["thread:work"]

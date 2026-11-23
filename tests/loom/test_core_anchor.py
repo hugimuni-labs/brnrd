@@ -64,7 +64,7 @@ def test_core_is_split_out_and_the_wake_stays_whole(home):
     occasion = (room / "port/occasion.md").read_text()
     assert identity in core and stance in core
     assert identity not in occasion and stance not in occasion
-    assert "## threads/brnrd/README.md" in occasion and "## Occasion" in occasion
+    assert "## threads/brnrd/README.md" in occasion and "## Letters" in occasion
     assert "## Loom" not in occasion
     assert "## Loom" in (room / "port/later.md").read_text()
     # A body that reads only BRNRD_WAKE still gets the core, at the head.
@@ -81,13 +81,13 @@ def test_claude_and_codex_carry_the_core_in_their_system_slot(home, tmp_path, mo
     assert Path(argv[flag + 1]).read_text() == core
     assert "--system-prompt" not in argv and "--system-prompt-file" not in argv
     assert argv[-2] == "--" and identity not in argv[-1]
-    assert "## Occasion" in argv[-1]
+    assert "## Letters" in argv[-1]
 
     argv = exec_body(home, room, "codex", tmp_path, monkeypatch)
     flag = argv.index("-c", argv.index("-c") + 1)
     assert tomllib.loads(argv[flag + 1]) == {"developer_instructions": core}
     assert argv[-2] == "--" and identity not in argv[-1]
-    assert "## Occasion" in argv[-1]
+    assert "## Letters" in argv[-1]
 
     # Grok's --rules is appended to its own system prompt.
     argv = exec_body(home, room, "grok", tmp_path, monkeypatch)

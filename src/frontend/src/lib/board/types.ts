@@ -56,6 +56,7 @@ export type Call = {
 	line: string;
 	at: string;
 	waits?: string;
+	next?: string;
 	ref?: string;
 	result?: string;
 	stale?: boolean;

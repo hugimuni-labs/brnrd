@@ -137,7 +137,7 @@ def _news(text: str, state: dict, plan_changed: bool, *,
     for line in text[header.end():].splitlines():
         if line.startswith("  ") and units:
             units[-1].append(line)
-        elif line.startswith(("first-word: ", "next wake: ")):
+        elif line.startswith(("first-word: ", "next wake: ", "<!-- rest price: ")):
             continue
         elif line.strip() and line != "owed:":
             units.append([line])
@@ -179,7 +179,11 @@ def _news(text: str, state: dict, plan_changed: bool, *,
     owed = (["owed: " + " ".join(skipped) + " (shown before)"] if skipped and not letters_only else []) \
         + (["owed:"] if letters else [])
     head = f"<!-- port {header.group(1)} gen {header.group(2)} · {clock()} · owed {' '.join(shown)} -->"
-    return "\n".join([head, *body, *owed, *letters, ""]), said, told
+    footer = []
+    if not letters_only:
+        footer = [line for line in text.splitlines() if line.startswith(("wakes at: ", "held next: "))]
+        body = [line for line in body if line not in footer]
+    return "\n".join([head, *body, *owed, *letters, *footer, ""]), said, told
 
 
 def attend_letters(room: Path) -> str:
@@ -211,7 +215,8 @@ def _stop_news(room: Path, text: str, parsed: Boundary) -> str:
     """
     state = _state(room)
     if "said" not in state:
-        return text
+        return "".join(line for line in text.splitlines(keepends=True)
+                       if not line.startswith("<!-- rest price: "))
     plan = next((line.partition(" · plan ")[2] for line in text.splitlines()
                  if line.startswith("status:")), "")
     news, said, told = _news(text, state, plan != state.get("plan", ""))
@@ -314,9 +319,20 @@ def _order(room: Path) -> str:
     return path.read_text().strip() if path.is_file() else ""
 
 
-def _rest(text: str) -> str:
-    return next((line.removeprefix("next wake: ") for line in text.splitlines()
-                 if line.startswith("next wake: ")), "Resting until the next letter.")
+def _boundary_line(text: str, prefix: str) -> str:
+    return next((line.removeprefix(prefix) for line in text.splitlines()
+                 if line.startswith(prefix)), "")
+
+
+def _stop_footer(text: str, *, resting: bool) -> str:
+    move = _boundary_line(text, "held next: ")
+    if not move:
+        return ""
+    price = _boundary_line(text, "<!-- rest price: ").removesuffix(" -->")
+    keep = f"keep going: {move}"
+    if resting and price and move != f"rest costs {price}":
+        return f"rest price: {price}\n{keep}"
+    return keep
 
 
 def _poll(room: Path, stdin_text: str = '') -> str:
@@ -383,7 +399,8 @@ def _poll(room: Path, stdin_text: str = '') -> str:
             # happens only at the hook ceiling.
             news = _stop_news(room, text, parsed)
             idle = _idle(room, home, shell)
-            rest = "\n".join(filter(None, (rest_reason(_state(room), parsed.gen), _rest(text)))) + "\n"
+            wakes = _boundary_line(text, "wakes at: ") or "the next letter"
+            rest = "\n".join(filter(None, (rest_reason(_state(room), parsed.gen), f"wakes at: {wakes}"))) + "\n"
             extra = _unease(room)
             reason = idle(rest + news, extra) if idle else (
                 rest + news + (extra + "\n" if extra else ""))
@@ -964,13 +981,15 @@ def execute(event: str, room: Path, stdin_text: str) -> str:
             text = first + "\n" + text
         if later:
             text = later + text
-        if not parsed.ids and not opened and not plan and not broken and not left and not later:
+        if not (parsed.ids or opened or plan or broken or left or later or _boundary_line(text, "held next: ")):
             return ""
         if parsed.ids:
             _shown(room, parsed)
         _over(room, next((line for line in text.splitlines() if line.startswith("budget: ")), ""))
         _set_state(room, plan=plan,
                    **dict(zip(("said", "told"), _news(text, {}, True)[1:])))
+        text = "".join(line for line in text.splitlines(keepends=True)
+                       if not line.startswith("<!-- rest price: "))
         return _clocked(text if text.endswith("\n") else text + "\n")
     if event == "post":
         state = _state(room)
@@ -1024,9 +1043,18 @@ def execute(event: str, room: Path, stdin_text: str) -> str:
     path = _transcript_path(stdin_text) or state.get("transcript") or ""
     _set_state(room, stops=int(state.get("stops") or 0) + 1, transcript=path)
     _soft(room, _turn, room, stdin_text)
-    out = _stop_block(room, text, plan) or _rest_hold(room, parsed) or _poll(room, stdin_text)
+    out = _stop_block(room, text, plan) or _rest_hold(room, parsed)
+    resting = not out
+    if resting:
+        out = _poll(room, stdin_text)
     if out:
         _opened(room)
+        footer = _stop_footer(_boundary_text(room), resting=resting)
+        if footer:
+            payload = json.loads(out)
+            if isinstance(payload.get("reason"), str):
+                payload["reason"] = payload["reason"].rstrip() + "\n" + footer
+                out = json.dumps(payload, separators=(",", ":")) + "\n"
     return out
 
 
@@ -1042,7 +1070,7 @@ def _rest_hold(room: Path, parsed: Boundary) -> str:
     from .adapters import burn_fuel
     from .ledger import append, kind_facts, read_facts
     from .lifecycle import main_snapshot
-    from .queues import queues
+    from .queues import movable, queues
     from .waits import unresolved
     from .wishes import told, waits_on
 
@@ -1063,8 +1091,7 @@ def _rest_hold(room: Path, parsed: Boundary) -> str:
     found = told(facts)
     queue = queues(found, waits_on(found, main_snapshot(home)))
     parked = {wish.id for wish, _ in unresolved(found, facts)}
-    free = [wish.id for wish in queue.mine
-            if wish.thread == thread and wish.id not in queue.blocked and wish.id not in parked]
+    free = [wish.id for wish in movable(queue, thread, parked)]
     if not pending and free and free[0] in held_wishes:
         pending = {"id": f"rest.why:{parsed.strand}:{parsed.gen}:{free[0]}", "why": "no reason given"}
     if pending:
@@ -1079,7 +1106,7 @@ def _rest_hold(room: Path, parsed: Boundary) -> str:
     shell, left = fuel
     _working(room, rest_held={"gen": parsed.gen, "wishes": [*held_wishes, free[0]]})
     return _json({"decision": "block", "reason":
-                  f"Rest held: {free[0]} waits on nothing and {shell} has {left:g}% left. "
+                  f"Rest held: {free[0]} can move and {shell} has {left:g}% left. "
                   'Open it (send --spend), park it with a real wait, or rest with '
                   '`brnrd runtime rest --why "<reason>"`.'})
 
@@ -1178,9 +1205,8 @@ END = """Work left on this thread (plan {plan}), with no disposition recorded. C
 - the steps still left: brnrd runtime wish <w-id> --left "<step>" --left "<step>"
 - an ask to a person: brnrd runtime ask "<question>" --for <w-id> --rec "<your call>"
 - a park with its reason: brnrd runtime wish <w-id> --read "waiting: <on what>" --wait <condition>
-- done: brnrd runtime settle {thread} --why "<what it became>"
-`brnrd runtime wishes` lists the w-ids, and `--wait` takes {grammar}.
-Resting until the wait is met, then waking by letter. Park without a sleep loop."""
+{settle}`brnrd runtime wishes` lists the w-ids, and `--wait` takes {grammar}.
+A park wakes by letter when its condition is met."""
 
 
 LEFT = """what is left on a wish moved since it was last said: {named}
@@ -1305,7 +1331,10 @@ def _end_miss(room: Path, plan: str) -> str:
     if not (done.isdigit() and total.isdigit() and int(done) < int(total)) or _state(room).get("declared"):
         return ""
     thread = os.environ.get("BRNRD_THREAD") or "<thread>"
-    return END.format(plan=f"{done}/{total}", thread=thread, grammar=GRAMMAR)
+    from .home import HOME_THREAD
+    settle = (f'- settle: brnrd runtime settle {thread} --why "<what it became>"\n'
+              if thread != HOME_THREAD else "")
+    return END.format(plan=f"{done}/{total}", settle=settle, grammar=GRAMMAR)
 
 
 def _dry(room: Path) -> bool:

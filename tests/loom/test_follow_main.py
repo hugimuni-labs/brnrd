@@ -832,7 +832,7 @@ def test_fifteen_large_pr_bodies_reach_a_real_wake_under_budget(world, monkeypat
     assert selfrepo.run_wake(clone, "w-1", owed, stdout=out) == 0
     text = out.getvalue()
     assert len(text.encode()) <= 24000
-    occasion = text.split("## Occasion\n", 1)[1]
+    occasion = text.split("## Letters\n", 1)[1]
     assert letter.data["body"].strip() in occasion
     print(f"offer={len(json.dumps(offered).encode())} bytes; "
           f"letter={len(letter.data['body'].encode())} bytes; "

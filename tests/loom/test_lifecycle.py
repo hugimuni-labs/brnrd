@@ -40,7 +40,7 @@ ctx = Ctx(Path(sys.argv[1]))
 assert os.environ["BRNRD_BODY_JACK"] == "hand"
 for letter in ctx.owed():
     ctx.send("thread:work", note="settled", re=letter.id)
-assert "next wake: Resting until " in (ctx.room / "port/in/boundary.md").read_text()
+assert "wakes at: " in (ctx.room / "port/in/boundary.md").read_text()
 assert ctx.jack("stop").raw == ""
 ''')
     inject_letter(root, to="thread:work", body="rest when settled")

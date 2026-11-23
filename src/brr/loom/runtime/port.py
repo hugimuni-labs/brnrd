@@ -317,7 +317,8 @@ def render_boundary(strand: str, gen: int, thread: str, letters: list[Fact],
                     library: str = "", forge: str = "", band: str = "",
                     done: str = "", room: str = "", cited: str = "", idle: str = "",
                     park_reminder: str = "", next_wake: str = "",
-                    waits: tuple[str, ...] | list[str] = ()) -> str:
+                    waits: tuple[str, ...] | list[str] = (), held_next: str = "",
+                    rest_price: str = "") -> str:
     """Shown letters keep their first line, reply context and attachments when compacted.
 
     ``budget`` sits before the plan: the jack compares what follows `` · plan ``,
@@ -332,8 +333,6 @@ def render_boundary(strand: str, gen: int, thread: str, letters: list[Fact],
         "owed:",
     ]
     lines[2:2] = waits
-    if next_wake:
-        lines.insert(2, f"next wake: {next_wake}")
     if park_reminder:
         lines.insert(2, park_reminder)
     from .dispositions import is_person
@@ -403,6 +402,12 @@ def render_boundary(strand: str, gen: int, thread: str, letters: list[Fact],
         reply = replies.get(letter.id, "-") if replies is not None else _reply(letter, sender_threads, thread, channels or {})
         lines.extend(_letter_lines(letter, reply, compact, (attachments or {}).get(letter.id, ()),
                                    (reply_context or {}).get(letter.id, "")))
+    if rest_price:
+        lines.append(f"<!-- rest price: {rest_price} -->")
+    if next_wake:
+        lines.append(f"wakes at: {next_wake}")
+    if held_next:
+        lines.append(f"held next: {held_next}")
     lines.append("")
     return "\n".join(lines)
 

@@ -267,7 +267,7 @@ else:
         assert "at 172k. Carried across:" in wake
         assert "NEXT: merge #7 when its re-run is green" in wake
         assert "done after the molt: #7 merged as abc123" in wake
-        assert wake.index("NEXT: merge #7") < wake.index("## Occasion")
+        assert wake.index("NEXT: merge #7") < wake.index("## Letters")
         assert wake.index("NEXT: merge #7") < wake.index("done after the molt")
         recorded = next(f for f in loom.facts() if f.kind == "reincarnate")
         assert recorded.data["carry"] == "NEXT: merge #7 when its re-run is green\n\nKeep this line too.\n"
