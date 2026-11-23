@@ -171,8 +171,10 @@ def _news(text: str, state: dict, plan_changed: bool, *,
     # A row that left (a child settled, a line cleared) is news too; the status line moves, it never leaves.
     # A thread line that changed is said anew, not gone: its slot (``opened: <thread>``, ``idle:``) is still here.
     slots = {_slot(key) for key in said}
+    footer_prefixes = ("wakes at: ", "held next: ")
     body.extend("gone: " + key.split("\n")[0] for key in state.get("said", [])
-                if not letters_only and key not in said and not key.startswith("status:") and _slot(key) not in slots)
+                if not letters_only and key not in said and _slot(key) not in slots
+                and not key.startswith(("status:", *footer_prefixes)))
     if not body and not letters:
         return "", said, told
     shown = [item.group(1) for line in letters if (item := _ITEM_LINE.match(line))]
@@ -181,7 +183,7 @@ def _news(text: str, state: dict, plan_changed: bool, *,
     head = f"<!-- port {header.group(1)} gen {header.group(2)} · {clock()} · owed {' '.join(shown)} -->"
     footer = []
     if not letters_only:
-        footer = [line for line in text.splitlines() if line.startswith(("wakes at: ", "held next: "))]
+        footer = [line for line in text.splitlines() if line.startswith(footer_prefixes)]
         body = [line for line in body if line not in footer]
     return "\n".join([head, *body, *owed, *letters, *footer, ""]), said, told
 
