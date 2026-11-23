@@ -13,6 +13,18 @@ from test_wishes import command, heard, ledger, view  # noqa: F401  (ledger is a
 REPO = "hugimuni-labs/brnrd"
 
 
+def test_rest_names_only_the_two_nearest_parks():
+    parks = [(None, {"wait": wait}) for wait in (
+        {"on": f"pr:{REPO}#7", "until": "2026-11-23T10:00:00Z"},
+        {"on": "cond:memory"},
+        {"on": "at:2026-11-23T09:00:00Z"},
+        {"on": "file:/room/tmp/check", "until": "2026-11-23T09:30:00Z"},
+    )]
+    assert waits.rest_parks(parks) == [
+        "2026-11-23 09:00Z", "the result in check (2 more parks)",
+    ]
+
+
 def test_indexed_observer_skips_unchanged_and_resolved_parks(ledger, monkeypatch):
     from brr.loom.runtime.ledger import LedgerView
     home, seat = ledger
@@ -406,7 +418,7 @@ for letter in ctx.owed():
         waiting = f"waiting: {wish} on pr:{REPO}#5 since "
         successor = (root / "successor").read_text()
         assert waiting in successor
-        next_wake = f"next wake: Resting until the park on pr:{REPO}#5"
+        next_wake = f"next wake: Resting until pull request {REPO}#5"
         assert next_wake in successor
         assert any(f.kind == "attempt.ended" and f.data["cause"] == "reincarnated" for f in loom.facts())
         wait_until(lambda: holder(loom.facts(), "work") is None, 60, loom.dump)

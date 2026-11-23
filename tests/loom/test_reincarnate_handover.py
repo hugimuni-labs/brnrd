@@ -353,3 +353,53 @@ else:
     finally:
         loom.halt()
     assert not loom.errors
+
+
+def test_carry_only_wake_defers_room_to_one_boundary_and_latches_cost(tmp_path):
+    root = tmp_path / "home"
+    init_self(root, person="test")
+    write_thread(root, "work", "Work\n\nA room detail from the README.", "work", wait="0")
+    letter = inject_letter(root, to="thread:work", body="Begin work")
+    seen = root / "seen.json"
+    bodies(root, f'''import json, subprocess, sys
+from pathlib import Path
+from brr.loom.runtime.fakebody import Ctx
+
+ctx = Ctx(Path(sys.argv[1]))
+wake = ctx.wake()
+if "A carry line for the successor." not in wake:
+    ctx.owed()
+    ctx.send("thread:work", note="read", re={letter!r})
+    carry = ctx.room / "carry.md"
+    carry.write_text("A carry line for the successor.\\n")
+    subprocess.run([sys.executable, "-m", "brr.loom.runtime", "molt", "--carry", str(carry)],
+                   env=ctx.env, cwd=ctx.room, check=True)
+else:
+    first = ctx.jack("start").raw
+    call = {{"tool_name": "Read", "tool_input": {{"file_path": "detail"}}, "tool_use_id": "read"}}
+    ctx.jack("pre", call)
+    second = ctx.jack("post", dict(call, tool_response="detail")).raw
+    write = {{"tool_name": "Write", "tool_input": {{"file_path": "done"}}, "tool_use_id": "write"}}
+    ctx.jack("pre", write)
+    (ctx.room / "done").write_text("done")
+    third = ctx.jack("post", dict(write, tool_response="ok")).raw
+    ctx.handoff({str(seen)!r}, json.dumps([wake, first, second, third]))
+''')
+    loom = Loom(root)
+    loom.start()
+    try:
+        wait_until(seen.exists, 30, loom.dump)
+        wake, first, second, third = json.loads(seen.read_text())
+        assert "Last molt cost · no reading yet" in wake
+        assert wake.index("core/identity.md") < wake.index("memory/stance.md") < wake.index("A carry line")
+        assert "A room detail" not in wake and "## loom briefing" not in wake
+        assert "A room detail" not in first
+        assert "A room detail" in second and "## loom briefing" in second
+        assert "A room detail" not in third
+        wait_until(lambda: any(f.kind == "molt.cost" for f in loom.facts()), 10, loom.dump)
+        cost, = [f.data for f in loom.facts() if f.kind == "molt.cost"]
+        assert cost["carry_bytes"] == len("A carry line for the successor.\n")
+        assert cost["before_bytes"] == len("detail")
+    finally:
+        loom.halt()
+    assert not loom.errors

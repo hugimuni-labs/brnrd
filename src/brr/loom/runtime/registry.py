@@ -82,6 +82,9 @@ REGISTRY = (
     _kind("pr.opened",         "pr",      "thread repo number url head",                       "strand",        "global"),
     _kind("pr.merged",         "pr",      "thread repo number head merge_commit",              "strand",        "global"),
     # Read by the body's table, owned elsewhere, not enforced here.
+    _kind("molt.cost",         "molt",    "strand gen thread tokens before_bytes parks asks scars carry_bytes", "loom", "global", once=True),
+    _kind("molt.ask-reused",   "molt",    "wish",                                               "strand", "global"),
+    _kind("molt.scar-refused", "molt",    "scar key",                                           "strand", "machine"),
     _kind("lease",             "thread",  "thread strand gen install router_gen shell core repos parent? pin? body_source?", "loom", "global", once=True),
     _kind("released",          "thread",  "thread strand gen why install router_gen?",        "loom",        "global",  once=True),
     _kind("shown",             "letter",  "strand gen ids",                                   "loom strand", "global"),

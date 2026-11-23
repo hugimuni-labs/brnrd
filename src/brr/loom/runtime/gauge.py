@@ -97,7 +97,29 @@ def main(argv):
     home = home_for(args.home, args.room)
     facts = read_facts(home)
     print(line(gauge(facts, args.days, spent=_spent(home, facts))))
+    cost = next(iter(reversed(kind_facts(facts, "molt.cost"))), None)
+    if cost is not None:
+        print(molt_line(cost.data))
     return 0
+
+
+def last_molt(facts, thread):
+    return next((f.data for f in reversed(kind_facts(facts, "molt.cost"))
+                 if f.data.get("thread") == thread), None)
+
+
+def molt_line(cost):
+    if cost is None:
+        return "Last molt cost · no reading yet"
+
+    def value(key):
+        reading = cost.get(key)
+        return f"{reading:,}" if reading is not None else "unknown"
+
+    return (f"Last molt cost · {value('tokens')} tokens to first act · "
+            f"{value('parks')} parks and {value('asks')} asks set again · "
+            f"{value('scars')} repeated scar refusals · "
+            f"{value('carry_bytes')} carry bytes / {value('before_bytes')} read bytes before first act")
 
 
 if __name__ == "__main__":

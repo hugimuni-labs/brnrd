@@ -375,14 +375,20 @@ def _build_wake(home, strand, gen, clone, thread, rows, part, owed_path, part_pa
     return occasion
 
 
-def _record_sizes(home, room, strand, gen, thread):
+def _record_sizes(home, room, strand, gen, thread, wake, *, compact=False):
     """``wake.sizes``, the wake gauge's fact for this boot; a failure costs the fact, never the wake."""
     try:
         sizes = json.loads((room / "port" / "sizes.json").read_text())
+        total = len(wake.encode("utf-8"))
+        parts = dict(sizes["parts"])
+        if compact:
+            parts = {"core": parts.get("core", 0), "carry": total - parts.get("core", 0)}
+        elif total != sizes["total"]:
+            parts["loom"] = parts.get("loom", 0) + total - int(sizes["total"])
         _record(home, "wake.sizes", {
             "thread": thread, "strand": strand, "gen": gen,
             "budget": int(os.environ.get("LOOM_BUDGET_BYTES") or 24000),
-            "total": int(sizes["total"]), "parts": dict(sizes["parts"])}, f"wake.sizes:{strand}:{gen}")
+            "total": total, "parts": parts}, f"wake.sizes:{strand}:{gen}")
     except Exception as exc:  # noqa: BLE001
         _log(home, f"start {strand}: wake sizes not recorded ({exc})")
 
@@ -740,14 +746,16 @@ def _prepare(home: Home, strand: str, thread: str, gen: int,
     # compaction do not wear it down. wake.md stays whole, so a body that
     # reads only BRNRD_WAKE never loses it. An older recipe writes no core.
     core = core_path.read_text() if core_path.is_file() else ""
-    _record_sizes(home, room, strand, gen, thread)
+    deferred = room / "port" / "deferred-wake.md"
+    deferred.unlink(missing_ok=True)
+    from .gauge import last_molt
+    core, occasion, later = _wake_opening(core, occasion, gone, carry, last_molt(facts, thread),
+                                         owed=any(not f.data.get("reincarnate") for f in letters),
+                                         hand=jack == "hand")
+    if later:
+        atomic_write(deferred, later)
+    _record_sizes(home, room, strand, gen, thread, core + occasion, compact=deferred.exists())
     atomic_write(core_path, core)
-    if carry:
-        header, _, _ = gone.partition("\n")
-        opening = header + "\n" + (carry if carry.endswith("\n") else carry + "\n")
-        if gone.startswith(opening):
-            before, _, after = occasion.partition(opening)
-            occasion = opening + before + after
     atomic_write(room / "port" / "occasion.md", occasion)
     atomic_write(room / "port" / "wake.md", core + occasion)
     from .threads import thread_table
@@ -771,6 +779,25 @@ def _prepare(home: Home, strand: str, thread: str, gen: int,
                         **_budget(home, thread, facts, strand)),
     )
     return room
+
+
+def _wake_opening(core, occasion, gone, carry, cost, *, owed, hand):
+    from .briefing import TITLE
+    from .gauge import molt_line
+
+    receipt = molt_line(cost) + "\n" if carry or cost is not None else ""
+    if not carry or not core:
+        return core, receipt + occasion, ""
+    identity, title, briefing = core.partition(f"## {TITLE}\n")
+    text = carry if carry.endswith("\n") else carry + "\n"
+    old_opening = gone.partition("\n")[0] + "\n" + text
+    remaining = title + briefing + occasion.replace(old_opening, "", 1)
+    opening = receipt + text
+    if owed:
+        return identity, opening + remaining, ""
+    if hand:
+        opening += '\nAt the first tool boundary, call `"$BRNRD_JACK" --event post` to read the room.\n'
+    return identity, opening, remaining
 
 
 def _port_files(room: Path) -> list[Path]:
@@ -1360,6 +1387,61 @@ def _reads(room, start):
         return None
 
 
+def _molt_cost(home, facts, strand, gen, thread, *, start=None, reads=None):
+    """Latch the gauge's first producing call once per successor."""
+    from .gauge import last_molt
+    from .tooltrace import tokens_through
+    from .waits import live
+    from .wishes import told
+
+    molts = kind_facts(facts, "reincarnate")
+    if not molts:
+        return
+    cost = last_molt(facts, thread)
+    if cost and cost.get("strand") == strand and cost.get("gen") == gen:
+        return
+    lease = fact_for(facts, "lease", strand, gen)
+    if lease is None:
+        return
+    previous = lease.data.get("parent")
+    molt = next((f for f in reversed(molts) if f.data.get("strand") == previous
+                 and f.data.get("gen") == gen - 1), None)
+    if molt is None:
+        return
+    start = start or fact_for(facts, "body.started", strand, gen)
+    room = home.room(strand)
+    reads = reads if reads is not None else _reads(room, start)
+    if not reads or reads.get("first_at") is None:
+        return
+    first = reads["first_at"]
+    end = reads["first_end"]
+    author = f"strand:{strand}"
+    predecessor = f"strand:{previous}"
+    try:
+        before = [f for f in facts if _stamp(f.at) < _stamp(start.at)]
+
+        def key(read):
+            return read["wait"].get("on") or read["reading"].strip()
+
+        old_parks = {(wish.id, key(read)) for wish, read in live(told(before))
+                     if read.get("writer") == predecessor}
+        new_parks = {(f.data.get("wish"), key(f.data)) for f in kind_facts(facts, "wish.read")
+                     if f.by == author and f.data.get("wait") and _stamp(start.at) <= _stamp(f.at) <= end}
+        old_asks = {f.data.get("wish") for f in kind_facts(before, "wish") if f.by == predecessor}
+        asks = {f.data.get("wish") for f in kind_facts(facts, "molt.ask-reused")
+                if f.by == author and _stamp(f.at) <= end} & old_asks
+        scars = {f.data.get("scar") for f in kind_facts(facts, "molt.scar-refused")
+                 if f.by == author and _stamp(f.at) <= end}
+        data = {"strand": strand, "gen": gen, "thread": thread,
+                "tokens": tokens_through(room, start.data.get("shell"), _stamp(start.at), first, end),
+                "before_bytes": reads["before_bytes"], "parks": len(old_parks & new_parks),
+                "asks": len(asks), "scars": len(scars) if start.data.get("shell") == "claude" else None,
+                "carry_bytes": len(str(molt.data.get("carry") or "").encode("utf-8"))}
+        _record(home, "molt.cost", data, f"molt.cost:{strand}:{gen}")
+    except Exception as exc:  # noqa: BLE001 - telemetry never costs the body
+        _log(home, f"molt cost skipped for {strand}: {exc}")
+
+
 def _body_origin(facts, strand, gen):
     lease = fact_for(facts, "lease", strand, gen)
     if not lease:
@@ -1396,6 +1478,7 @@ def _end_attempt(home, facts, strand, thread, gen, code, letters, cause, failure
     changed = _readme(room, thread) != start.data.get("readme") if start else "unknown"
     tank = fuel(home, start.data["shell"]) if start else ""
     reads = _reads(room, start)
+    _molt_cost(home, facts, strand, gen, thread, start=start, reads=reads)
     from .tooltrace import first_words
     first_word_s = first_words(facts, ids)
     dispositions = []
@@ -2186,9 +2269,10 @@ def _next_wake(home, facts, state, thread: str) -> str:
                      if fact.data.get("to") == f"thread:{thread}" and fact.id not in state.handled
                      and (at := parse_instant(fact.data.get("at"))) is not None and at > now),
                     default=None)
-    parks = [str(read["wait"].get("on") or read["reading"].removeprefix("waiting:").strip()).partition("\n")[0]
-             for wish, read in unresolved(told(facts), facts) if parker(home, facts, wish, read) == thread]
-    wake = [f"the park on {', '.join(parks)}"] if parks else []
+    parks = [(wish, read) for wish, read in unresolved(told(facts), facts)
+             if parker(home, facts, wish, read) == thread]
+    from .waits import rest_parks
+    wake = rest_parks(parks)
     if next_time:
         wake.append(f"the timed letter at {next_time:%Y-%m-%d %H:%MZ}")
     drive = next_pass(home, facts, now)
@@ -2405,7 +2489,9 @@ def _hand_prepare(x, command, step):
         x.room = _prepare(x.home, x.o.strand, c.thread, x.o.gen, x.letters, sender_threads(x.facts), x.facts,
                           (x.folder / "jack").read_text().strip(), fuel=c.fuel, repos=c.repos)
         # Shown is what the wake carried; a letter left out arrives at a boundary.
-        carried = {str(row.get("id")) for row in json.loads((x.room / "port/owed.json").read_text())}
+        deferred = (x.room / "port/deferred-wake.md").is_file()
+        carried = {str(row.get("id")) for row in json.loads((x.room / "port/owed.json").read_text())
+                   if not deferred or not row.get("reincarnate")}
         x.letters = [f for f in x.letters if str(f.data.get("id", f.id)) in carried]
         policy = _policy(x.home, c.thread)
         if policy is not None:
@@ -2589,6 +2675,7 @@ def _execute_body(home, bodies, facts, o, c):
         "window": empty.get("name"), "left_pct": empty.get("left_pct"), "until": o.until})
     commands = decide(facts, [o])
     if o.alive:
+        _molt_cost(home, facts, o.strand, o.gen, c.thread)
         _boundary(home, facts, o.strand, o.gen, c)
         _pause_for_letters(home, o.strand, c)
     for command in commands:

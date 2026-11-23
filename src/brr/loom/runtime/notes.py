@@ -206,7 +206,10 @@ def saw(room: Path, payload: dict, failed: bool, why: str = "") -> str | None:
     entry = record.setdefault(key, {})
     now = time.time()
     if failed:
-        entry.update(blocked=now, why=why[:200], by=Path(room).name)
+        reason = why[:200]
+        if reason and entry.get("blocked") and entry.get("why") == reason:
+            _repeated_refusal(room, payload, key, record)
+        entry.update(blocked=now, why=reason, by=Path(room).name)
     else:
         entry["worked"] = now
     try:
@@ -217,6 +220,20 @@ def saw(room: Path, payload: dict, failed: bool, why: str = "") -> str | None:
     except OSError:
         return None
     return key
+
+
+def _repeated_refusal(room: Path, payload: dict, key: str, record: dict) -> None:
+    """Record a repeat only when a matching scar has a prior blocked reading."""
+    from brr.daemon2.facts import Fact
+    from .home import home_of_room, mint
+    from .ledger import append
+
+    for note, _ in touched(load(room), call_text(payload)):
+        if note.path.startswith("memory/scars/") and "last blocked " in stamp(note, record):
+            append(home_of_room(room), Fact(kind="molt.scar-refused", by=f"strand:{room.name}",
+                                          id=f"molt.scar-refused:{mint(12)}",
+                                          data={"scar": note.path, "key": key}))
+            break
 
 
 def _when(seconds: float) -> str:

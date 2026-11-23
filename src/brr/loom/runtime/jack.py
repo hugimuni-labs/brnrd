@@ -845,6 +845,16 @@ def _first_word(room: Path, stdin_text: str = "", *, refuse: bool = False) -> tu
     return text, True
 
 
+def _deferred_wake(room: Path) -> str:
+    path = room / "port" / "deferred-wake.md"
+    try:
+        text = path.read_text()
+    except FileNotFoundError:
+        return ""
+    path.unlink(missing_ok=True)
+    return text
+
+
 def execute(event: str, room: Path, stdin_text: str) -> str:
     """Return the hook's stdout. Raise on trouble; ``run`` turns that into fail-open."""
     room = Path(room)
@@ -933,6 +943,11 @@ def execute(event: str, room: Path, stdin_text: str) -> str:
     plan = next((line.partition(" · plan ")[2] for line in text.splitlines()
                  if line.startswith("status:")), "")
     if event == "start":
+        if (room / "port" / "deferred-wake.md").is_file():
+            rows = json.loads((room / "port" / "owed.json").read_text())
+            molt_letters = {row.get("id") for row in rows if row.get("reincarnate")}
+            if not (set(parsed.ids) - molt_letters):
+                return ""
         _soft(room, _people, room, parsed, "start")
         broken = _guards(room)[1]
         if broken:
@@ -952,7 +967,8 @@ def execute(event: str, room: Path, stdin_text: str) -> str:
         return _clocked(text if text.endswith("\n") else text + "\n")
     if event == "post":
         state = _state(room)
-        plan_changed = plan != state.get("plan", "")
+        deferred = _deferred_wake(room)
+        plan_changed = bool(deferred) or plan != state.get("plan", "")
         settled_changed = parsed.settled is not None and parsed.settled != state.get("settled")
         paused = describe(read_paused_record(room / "port"))
         hook = _hook_event(stdin_text)
@@ -966,6 +982,8 @@ def execute(event: str, room: Path, stdin_text: str) -> str:
             _set_state(room, left_said=left)
         # Every line is news the first time it appears; only the status line waits on the plan.
         news, said, told = _news(text, state, plan_changed)
+        if deferred:
+            news = _clocked(deferred) + "\n" + (news or text.partition("\n")[0] + "\n")
         _set_state(room, said=said, told=told)
         if not news:
             if parsed.ids:

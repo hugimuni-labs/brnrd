@@ -617,6 +617,8 @@ def cmd_ask(args):
             ident = fact.data["wish"]
         else:
             ident = same.id
+            append(home, Fact(kind="molt.ask-reused", by=by, id="molt.ask-reused:" + mint(12),
+                              data={"wish": ident}))
             print(f"ask: reused {ident}, the open ask with this line for {args.wish}", file=sys.stderr)
         if same is not None and ((args.rec is not None and same.rec != args.rec)
                                  or (args.kind is not None and same.kind != args.kind)):
