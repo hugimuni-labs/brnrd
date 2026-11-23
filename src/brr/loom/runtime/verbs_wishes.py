@@ -679,7 +679,7 @@ def _ask_arguments(parser):
     parser.add_argument("--default-at", dest="default_at",
                         help="if nobody answers by then, you are woken to carry out your rec")
     from .trust import ASK_KINDS
-    parser.add_argument("--kind", choices=ASK_KINDS,
+    parser.add_argument("--kind", type=lambda kind: "molt" if kind == "reincarnate" else kind, choices=ASK_KINDS,
                         help="the act the ask is for: the row its answer counts in (asks --calibrate)")
 
 

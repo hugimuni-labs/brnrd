@@ -10,7 +10,7 @@ from datetime import datetime
 from pathlib import Path
 
 from brr.daemon2.facts import Fact
-from .ledger import LedgerView, kind_facts
+from .ledger import FRESH_MOLT, LEGACY_FRESH_MOLT, LedgerView, kind_facts
 from .project import cached_projection
 from . import refs as refs_mod
 
@@ -1074,9 +1074,8 @@ def _carried(home, facts, stamped, re, target, sender) -> list:
 def write_reincarnate(room: Path, why: str, *, fresh: bool = False,
                       cites: str | None = None, carry: str | None = None) -> str:
     """Record a molt using the existing reincarnate wire and ledger kind."""
-    verb = "molt" if carry is not None else "reincarnate"
     if not why:
-        raise PortError("reincarnate: --why is empty")
+        raise PortError("molt: --why is empty")
     from .ledger import read_facts
     from .project import sender_threads
     from .merge import send_to_self
@@ -1088,7 +1087,7 @@ def write_reincarnate(room: Path, why: str, *, fresh: bool = False,
     facts = read_facts(home)
     thread = sender_threads(facts).get(strand)
     if thread is None:
-        raise PortError(f"{verb}: room has no thread")
+        raise PortError("molt: room has no thread")
     if cites:
         from .cites import check_cite
         check_cite(facts, cites, thread)
@@ -1096,24 +1095,24 @@ def write_reincarnate(room: Path, why: str, *, fresh: bool = False,
     owed = owed_lefts(wishes(facts), facts, thread, strand)
     if owed:
         # The successor reads what is left from the wish, not from this body's memory.
-        raise PortError(f"{verb}: say what is left first, then {verb}:\n" + "\n".join(
+        raise PortError("molt: say what is left first, then molt:\n" + "\n".join(
             f'  brnrd runtime wish {ident} --left "<step>" --left "<step>"   ({why}; --left same if nothing moved)'
             for ident, why in owed))
     held = unreplied_held(facts, strand, room)
     if held:
         # A person who wrote to this body hears from it before a stranger takes over.
-        raise PortError(f"{verb}: reply to each person letter you hold first, even with just an ack:\n" + "\n".join(
+        raise PortError("molt: reply to each person letter you hold first, even with just an ack:\n" + "\n".join(
             f'  brnrd runtime send --re {ident} --to {channel} "…"   (from {letter.data.get("from") or letter.by})'
             for ident, (letter, channel) in held.items()))
     clone = resolve_clone(room)
     path = f"threads/{thread}/README.md"
     if not fresh and git(clone, "diff", "HEAD", "--quiet", "--", path, check=False).returncode:
         git(clone, "add", "--", path)
-        git(clone, "commit", "--only", "-m", f"{verb}: {why}", "--", path)
+        git(clone, "commit", "--only", "-m", f"molt: {why}", "--", path)
     if not fresh and not _current_label(clone, strand).taint:
         outcome = send_to_self(clone)
         if outcome.status != "merged":
-            raise PortError(outcome.stderr or f"{verb}: landing {outcome.status}: {', '.join(outcome.files)}")
+            raise PortError(outcome.stderr or f"molt: landing {outcome.status}: {', '.join(outcome.files)}")
     stem = mint(5)
     fact_id = f"{strand}/{stem}"
     fields = {"kind": "reincarnate", "id": fact_id, "why": why}
@@ -1127,7 +1126,7 @@ def write_reincarnate(room: Path, why: str, *, fresh: bool = False,
         fields["cites"] = cites
     write_port(room, stem, _front(fields))
     write_send(room, to=f"thread:{thread}", sender=strand,
-               body="Fresh reincarnation: start from main." if fresh else why, reincarnate=fact_id)
+               body=FRESH_MOLT if fresh else why, reincarnate=fact_id)
     _set_state(room, reincarnated=True)
     return fact_id
 
@@ -1251,7 +1250,8 @@ def fact_from_port(fm: dict[str, str], strand: str, gen: int | None,
     if not fact_id:
         raise PortError("port file has no id")
     if kind in {"letter", "note", "reincarnate", "face", "left-asked"} and gen is None:
-        raise PortError(f"strand {strand} has no lease; refusing {kind} {fact_id}")
+        shown_kind = "molt" if kind == "reincarnate" else kind
+        raise PortError(f"strand {strand} has no lease; refusing {shown_kind} {fact_id}")
     if kind == "letter":
         data: dict = {
             "id": fact_id, "to": fm["to"], "body": fm.get("body", ""),
@@ -1282,6 +1282,8 @@ def fact_from_port(fm: dict[str, str], strand: str, gen: int | None,
             data["attach"] = fm["attach"]
         if fm.get("reincarnate"):
             data["reincarnate"] = fm["reincarnate"]
+            if data["body"] == LEGACY_FRESH_MOLT:
+                data["body"] = FRESH_MOLT
         if fm.get("budget"):
             try:
                 data["budget"] = int(fm["budget"])
@@ -1326,7 +1328,7 @@ def fact_from_port(fm: dict[str, str], strand: str, gen: int | None,
                           **({"letters": fm["letters"].split()} if fm.get("letters") else {})})
     if kind == "reincarnate":
         if not fm.get("why"):
-            raise PortError(f"reincarnate {fact_id} has no why")
+            raise PortError(f"molt {fact_id} has no why")
         return Fact(
             kind="reincarnate", by=f"strand:{strand}", id=fact_id,
             data={"strand": strand, "gen": gen, "why": fm["why"], **({"fresh": True} if fm.get("fresh") == "true" else {}),

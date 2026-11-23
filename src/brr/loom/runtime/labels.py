@@ -218,11 +218,12 @@ def strand_label(
 
 
 def _sender_label(letter, facts, self_root: Path | None, seen: frozenset[str]) -> Label:
-    # A fresh reincarnation carries only a fixed control message, never room prose.
+    # A fresh molt carries only a fixed control message, never room prose.
+    from .ledger import FRESH_MOLT, LEGACY_FRESH_MOLT
     d = letter.data or {}
     from .project import sender_threads
     own = sender_threads(facts).get(d.get("from"))
-    if own and d.get("to") == f"thread:{own}" and d.get("body") == "Fresh reincarnation: start from main.":
+    if own and d.get("to") == f"thread:{own}" and d.get("body") in (FRESH_MOLT, LEGACY_FRESH_MOLT):
         for fact in facts:
             if (fact.kind == "reincarnate" and fact.id == d.get("reincarnate")
                     and fact.data.get("fresh") is True

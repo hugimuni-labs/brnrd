@@ -107,7 +107,7 @@ the loom keeps its bytes as delivered and sends it where the channel takes
 files, and names its path elsewhere. What is left on a wish is the wish's
 own: `wish <w-id> --left "<step>" --left "<step>"` restates the whole list,
 and the latest one wins (`--left same` when nothing moved). The loom asks for
-it at a stop and refuses a reincarnation while a wish moved since its last left: a
+it at a stop and refuses a molt while a wish moved since its last left: a
 steer, a result, a fact this body wrote on it, or, on a thread with one open
 wish, this body's start. The stop shows everything it holds on in one block,
 each line with its command (owed letters, lefts, an end not yet said, a
@@ -207,7 +207,7 @@ Open a worker and declare its checkouts together with `send --to thread:<new> --
 
 A thread opened by another thread carries an allocation: `--budget <n>` on the opening letter (`500k`, `2m`), or the home's `thread_budget` (2M). The status line shows `spent <s>/<n>` in weighted tokens (input 1, output 5, cache read 0.1, cache write 1.25), read from the harness's own transcripts. Past it, every boundary says so: write to the opener what is done, what is left and how much more you ask. It warns; it never stops a body. The opener raises it with `send --to thread:<child> --budget <n> "…"`, which adds n; read what was spent against what came back before granting.
 
-`molt --carry <file>` ends the context and carries the file's text into the next wake. The file must contain text. The room and label are carried forward. End the turn after running the command. The legacy `reincarnate --why` and `reincarnate --fresh --why` commands still work. A fresh start uses main and keeps the old room and unlanded work for review.
+`molt --carry <file>` ends the context and carries the file's text into the next wake. The file must contain text. The room and label are carried forward. End the turn after running the command. Use `molt --why "<note>"` for a short note, or add `--fresh` to start on main. A fresh start uses main and keeps the old room and unlanded work for review.
 
 A molt is a decision made in context. At a resting stop after acts that left the README behind, the stop lists its size, edits and landings, and the cited wishes and PRs that have since closed. The first boundary after a cited closure points to the event and the README place where it is cited. Settle any owed wish updates and reply to held person letters before molting.
 

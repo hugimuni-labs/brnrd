@@ -285,7 +285,7 @@ from brr.loom.runtime.fakebody import Ctx
 from brr.loom.runtime.home import atomic_write
 ctx = Ctx(Path(sys.argv[1]))
 checkout = ctx.room / "widget"
-if "cut from parent" in ctx.wake() or "Fresh reincarnation: start from main." in ctx.wake():
+if "cut from parent" in ctx.wake() or "Fresh molt: start from main." in ctx.wake():
     sha = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=checkout, text=True).strip()
     atomic_write(Path({str(received)!r}), json.dumps({{
         "sha": sha,

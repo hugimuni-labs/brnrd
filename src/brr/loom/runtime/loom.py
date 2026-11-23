@@ -750,7 +750,7 @@ def _prepare(home: Home, strand: str, thread: str, gen: int,
     from .moltcost import wake_line
     cost = wake_line(facts, thread)
     # The handover letter wakes the room. Only actual mail needs the rich opening.
-    owed = any(not row.get("reincarnate") for row in rows)
+    owed = any(not row.get("molt") for row in rows)
     # A note deliberately written after the carry updates its instructions.
     amended = any(line.startswith("After the molt, ") for line in context_note.splitlines())
     core, occasion, later = _wake_opening(core, occasion, gone, carry, cost,
@@ -1845,7 +1845,9 @@ def _continue_targets(home, facts, thread, leased):
 CONTINUE = re.compile(r"continue on ([A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9_-])?)(?:\s+please)?[.!?]*", re.IGNORECASE)
 
 
-WAKE = re.compile(r"/?(?:wake|reincarnate)(?:\s+([A-Za-z0-9][A-Za-z0-9._-]*)(?:/(\S+))?)?", re.IGNORECASE)
+MOLT_COMMAND = r"(?:molt|reincarnate)"
+WAKE_VERB = rf"/?(?:wake|{MOLT_COMMAND})"
+WAKE = re.compile(WAKE_VERB + r"(?:\s+([A-Za-z0-9][A-Za-z0-9._-]*)(?:/(\S+))?)?", re.IGNORECASE)
 
 
 def _commands(home, facts, thread, default, *, parked=False, held=False, authorize=None):
@@ -1929,7 +1931,7 @@ def _wake_letter(home, facts, thread, leased, letter, channel, *, parked=True, h
     else:
         named = _wake_body(home, facts, thread, leased, said)
     disposition = {"id": ident, "outcome": "done"}
-    restart = not chosen and bool(re.match(r"/?reincarnate(?:\s|$)", text, re.IGNORECASE))
+    restart = not chosen and bool(re.match(rf"/?{MOLT_COMMAND}(?:\s|$)", text, re.IGNORECASE))
     if isinstance(named, str):
         notice(home, facts, "wake-refused", letter.id, f"{named} Nothing was started.",
                "\n".join(_wake_lines(home, facts, thread, leased, None, held=held)),
@@ -1957,7 +1959,7 @@ def _misworded_wake(home, leased, text):
     """A wake whose words name no body: one bad word, or a known shell and its core
     apart by a space (``wake codex sol``). Prose that starts with "wake" stays text."""
     words = text.split()
-    if not words or not re.fullmatch(r"/?(?:wake|reincarnate)", words[0], re.IGNORECASE):
+    if not words or not re.fullmatch(WAKE_VERB, words[0], re.IGNORECASE):
         return False
     if len(words) == 2:
         return True

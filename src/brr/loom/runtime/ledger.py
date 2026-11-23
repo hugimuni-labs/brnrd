@@ -79,12 +79,13 @@ def fact_filename(fact: Fact) -> str:
 
 
 #: A ledger row written before a rename, in today's words (10052: molt became reincarnate).
-_FRESH = ("Fresh molt: start from main.", "Fresh reincarnation: start from main.")
+FRESH_MOLT = "Fresh molt: start from main."
+LEGACY_FRESH_MOLT = "Fresh reincarnation: start from main."
 
 
 def renamed(row: dict) -> dict:
     """The one place an old name is read: kind ``molt``, a letter's ``molt`` marker, the
-    ``molted`` ending and the fresh control text come back as ``reincarnate``'s."""
+    ``molted`` ending map to the existing schema. Fresh control letters use molt wording."""
     kind, data = row.get("kind"), row.get("data")
     if kind == "molt":
         row = {**row, "kind": "reincarnate"}
@@ -93,8 +94,8 @@ def renamed(row: dict) -> dict:
             data = {("reincarnate" if key == "molt" else key): value for key, value in data.items()}
         if kind == "attempt.ended" and data.get("cause") == "molted":
             data = {**data, "cause": "reincarnated"}
-        if kind == "letter" and data.get("body") == _FRESH[0]:
-            data = {**data, "body": _FRESH[1]}
+        if kind == "letter" and data.get("reincarnate") and data.get("body") == LEGACY_FRESH_MOLT:
+            data = {**data, "body": FRESH_MOLT}
         if data is not row.get("data"):
             row = {**row, "data": data}
     return row
