@@ -224,6 +224,9 @@ def _molt(argv: list[str]) -> int:
         fact_id = write_reincarnate(room, why, fresh=fresh, carry=carry, cites=args.cites)
     except (PortError, SelfError, ValueError, OSError) as exc:
         return refuse("molt", exc)
+    if not fresh:
+        from .reincarnate import wake_preview
+        sys.stderr.write(wake_preview(room, why, carry, args.carry))
     sys.stdout.write(fact_id + "\n")
     return 0
 

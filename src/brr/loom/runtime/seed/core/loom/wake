@@ -427,14 +427,14 @@ def write_sizes(parts: dict[str, str], tree: str) -> None:
     Path(target).write_text(json.dumps(sizes), encoding="utf-8")
 
 
-def piece_sizes(text: str) -> list[tuple[str, int]]:
+def piece_sizes(text: str, *, headings_only: bool = False) -> list[tuple[str, int]]:
     """Name the uncullable sections by their headings, for the exit-3 line."""
     sizes: list[tuple[str, int]] = []
-    current = "preamble"
+    current = None if headings_only else "preamble"
     buf: list[str] = []
 
     def flush() -> None:
-        if buf:
+        if buf and current is not None:
             sizes.append((current, len("".join(buf).encode("utf-8"))))
 
     for line in text.splitlines(keepends=True):
@@ -500,6 +500,15 @@ def main() -> None:
     root = Path.cwd()
     parts = fixed_parts(root, thread, loom, owed)
     total = sum(len(text.encode("utf-8")) for text in parts.values())
+    if os.environ.get("LOOM_PREVIEW"):
+        if total > limit:
+            path = f"threads/{thread}/README.md"
+            print(f"Wake preview: {path} would be trimmed ({total - limit} bytes over budget).")
+            readme = read_exact(root / path, path)
+            sizes = piece_sizes(readme, headings_only=True)
+            for heading, size in sorted(sizes, key=lambda item: -item[1])[:3]:
+                print(f"  ## {heading} · {size} bytes")
+        return
     if total > limit:
         parts = fixed_parts(root, thread, loom, owed, total - limit, limit)
     head, tail = split(parts)

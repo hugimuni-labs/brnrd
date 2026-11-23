@@ -12,7 +12,7 @@ from brr.loom.runtime.loom import _boundary, _ingest, tick_once
 from brr.loom.runtime.port import PortError, write_reincarnate
 from brr.loom.runtime.selfrepo import run_wake
 from brr.loom.runtime.wishes import wishes
-from test_wishes import command, heard, ledger  # noqa: F401  (fixture)
+from test_wishes import cli, command, heard, ledger  # noqa: F401  (fixture)
 
 STRAND = "s-aaaa-test"
 
@@ -170,6 +170,41 @@ def test_molt_refuses_while_a_left_is_owed(body):
     readme = next(seat.glob("*/threads/work/README.md"))
     readme.write_text(readme.read_text() + "\n## Now\n- freeze hover\n")
     assert write_reincarnate(seat, "context is heavy").startswith(STRAND + "/")
+
+
+@pytest.mark.parametrize("oversized_readme, oversized_carry", [(True, False), (False, False), (False, True)])
+def test_molt_previews_wake_pressure(body, monkeypatch, oversized_readme, oversized_carry):
+    _, seat = body
+    monkeypatch.setenv("LOOM_BUDGET_BYTES", "24000")
+    if oversized_readme:
+        readme = seat / "self/threads/work/README.md"
+        sections = [
+            "## Small\nx\n",
+            "## Third\n" + "c" * 4000 + "\n",
+            "## Largest\n" + "é" * 4000 + "\n",
+            "## Second\n" + "b" * 6000 + "\n",
+        ]
+        readme.write_text(readme.read_text() + "\n\n" + "".join(sections), encoding="utf-8")
+        assert readme.stat().st_size < 24000
+    carry = seat / "carry.md"
+    carry.write_text("é" * 1201 if oversized_carry else "next step", encoding="utf-8")
+    result = cli(["molt", "--room", str(seat), "--carry", str(carry)])
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.startswith(STRAND + "/")
+    assert jack._state(seat)["reincarnated"]
+    if oversized_readme:
+        report, *ranked = result.stderr.splitlines()
+        assert report.startswith("Wake preview: threads/work/README.md would be trimmed")
+        assert "bytes over budget" in report
+        assert ranked == [
+            f"  ## {section.splitlines()[0][3:]} · {len(section.encode('utf-8'))} bytes"
+            for section in (sections[2], sections[3], sections[1])
+        ]
+    elif oversized_carry:
+        assert f"carry {carry} is 2 bytes over its 10% share (2402 of 2400 bytes)" in result.stderr
+        assert "README.md" not in result.stderr
+    else:
+        assert result.stderr == ""
 
 
 def test_a_pr_opened_on_a_one_wish_thread_is_its_result(body):
