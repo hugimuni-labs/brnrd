@@ -750,7 +750,7 @@ def _prepare(home: Home, strand: str, thread: str, gen: int,
     from .moltcost import wake_line
     cost = wake_line(facts, thread)
     # The handover letter wakes the room. Only actual mail needs the rich opening.
-    owed = any(not row.get("molt") for row in rows)
+    owed = any(not letter.data.get("reincarnate") for letter in letters)
     # A note deliberately written after the carry updates its instructions.
     amended = any(line.startswith("After the molt, ") for line in context_note.splitlines())
     core, occasion, later = _wake_opening(core, occasion, gone, carry, cost,
