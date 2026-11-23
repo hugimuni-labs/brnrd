@@ -207,6 +207,8 @@
 					<span class="name">{shell.shell}</span>
 					{#if shell.gauges?.length}
 						<FuelMarks gauges={shell.gauges} now={fuelNow} share={shell.initiative_share} />
+					{:else if shell.state === 'unmetered' && !shell.error}
+						<span class="dim">unmetered</span>
 					{:else if shell.error}
 						<span class="fail">{shell.error}</span>
 					{/if}

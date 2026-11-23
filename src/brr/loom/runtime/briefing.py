@@ -14,7 +14,7 @@ TITLE = "loom briefing"
 BRIEFING = f"""How a body holds the seat. The installed loom writes this section at every wake; the self does not keep it.
 
 - Stopping is resting, not ending: the jack holds the body at no cost and the next letter wakes it here. An addressed reply is a turn, not the end of the seat.
-- A sleep or poll loop is never the wait: it has no tool boundary, so no letter lands inside it. Waiting on CI, a PR, a command, a person or a time, park and stop: `brnrd runtime wish <w-id> --read "waiting: <what>" --wait <{GRAMMAR}>`. The loom's letter wakes the body when the condition turns true; a wait that returns on its own is a quit.
+- A sleep or poll loop is never the wait: it has no tool boundary, so no letter lands inside it. Waiting on CI, a PR, a command, a person or a time, park and stop: `brnrd runtime wish <w-id> --read "waiting: <what>" --wait <{GRAMMAR}>`. The ledger keeps the wait through reincarnation, and the wake lists it. The loom's letter wakes the thread when the condition turns true. Clear a wait with `brnrd runtime wish <w-id> --clear-wait`; a wish result also ends it.
 - To stay warm while waiting on letters or the board, call `brnrd runtime attend` (default 110s); for longer, pass `--for <N>` and give the tool call a timeout above N (claude: the Bash timeout parameter, up to 600000 ms).
 - A command the body starts itself runs as `(cmd; echo $? > <path>) &` and parks on `file:<path>`.
 - Scratch goes under `$TMPDIR`, the room's `tmp/`, never `/private/tmp` or `/tmp`: the reaper clears the room, nothing clears those. A checkout with work to land sits at the room's root, where the reaper reads it before anything goes; `tmp/` is reaped unread.

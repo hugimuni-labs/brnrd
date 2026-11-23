@@ -131,6 +131,43 @@ def test_a_different_error_ends_the_old_ask_and_files_a_fresh_one(home):
     assert grok.parent == new.parent and asks(home, "codex")[1].open
 
 
+def test_vibe_unmetered_shows_on_the_fuel_line_and_files_no_ask(home):
+    """The real script's reading is the fuel line's word, and the ask path ends the old failure."""
+    from pathlib import Path
+
+    from brr.loom.runtime import usage
+    from brr.loom.runtime.snapshot import _fuel
+
+    home, _seat = home
+    old = "vibe account quota unavailable; session journals contain token totals only"
+    for _ in range(2):
+        reads(home, "vibe", old)
+    ask, = asks(home, "vibe")
+    assert ask.open and "fails" in ask.line
+    script = Path(usage.__file__).resolve().parent / "bodies/vibe/usage"
+    assert 'state="unmetered"' in script.read_text()
+    usage._refresh(home.root / "loom/usage/vibe.json", script)
+    assert usage.shell_fuels(home)["vibe"] == "unmetered"
+    assert "vibe unmetered" in usage.fuels(home, "vibe")
+    result = usage.reading(home, "vibe")
+    assert result["windows"] == [] and result["state"] == "unmetered"
+    assert "quota API" in result["reason"] and "browser session" in result["reason"]
+    assert "error" not in result
+    for _ in range(2):
+        tick_once(home, {}, "fake", "haiku", router=Router(home))
+    found = asks(home, "vibe")
+    assert [a.id for a in found] == [ask.id]
+    assert found[0].state == "dropped"
+    assert found[0].verdict["ref"] == collectors.MOOT + "is unmetered"
+    row = next(r for r in _fuel(home, {}, 10) if r["shell"] == "vibe")
+    assert row["state"] == "unmetered" and row["gauges"] == [] and "error" not in row
+    # The same fault after the known state is new: the clean marker was written.
+    for _ in range(2):
+        reads(home, "vibe", old)
+    again = [a for a in asks(home, "vibe") if a.open]
+    assert len(again) == 1 and again[0].id != ask.id and again[0].line == ask.line
+
+
 def test_an_ask_the_person_dropped_is_not_filed_again_while_the_error_holds(home):
     home, _seat = home
     for _ in range(2):

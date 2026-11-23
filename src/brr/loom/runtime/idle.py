@@ -12,10 +12,9 @@ The person can lower the share of a week an engine may spend on that
 (``initiative_share``, default 100, or ``initiative_share_<shell>``). A letter
 is never gated by it.
 
-The inbox is the resident's boredom, not one thread's. Its candidates are
-drawn from every open thread, most owed first, and its block also names
-every engine whose week is ahead of pace. One unease line rides the same
-places, on every thread, whatever the pace. The loom writes ``port/in/idle.md``
+The inbox's idle block shows active goals and every engine whose week is
+ahead of pace. The scheduled pass still draws candidates across open threads.
+One unease line rides the same places, on every thread, whatever the pace. The loom writes ``port/in/idle.md``
 and ``port/in/unease.md``; the jack reads those and the gauge, never the ledger.
 A show is one quiet face, named by its fact, or one keepalive. Rendering the
 same face again does not count.
@@ -26,7 +25,7 @@ from __future__ import annotations
 import json
 import re
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 from .usage import _reset
@@ -40,6 +39,9 @@ EVERY = 300.0
 # Shown this many times with the same key, the unease line says nothing was done about it.
 SHOWN_ACT = 5
 HEAD = "idle? fuel ahead of pace"
+_NO_GOALS = "no active goal: write one under goals/"
+_GOAL_CLOSE = "nothing new arrived: move a goal, or write why none can move today"
+_GOAL_FIELDS = ("stands", "next", "now", "stake")
 _ASK = (': take one and log the pick in one line (`wish <id> --pick "<why>"`), '
         "or say in one line why not; nothing more. 'nothing new arrived' is no reason to stop")
 _KEEP = ("cache keepalive, fuel ahead of pace ({pace}): nothing new arrived, which is no reason"
@@ -294,6 +296,61 @@ def candidates(home, facts, thread: str, children=(), now: float | None = None) 
     return _one(shared, thread, children)
 
 
+def goal_lines(home, now: float | None = None) -> list[str]:
+    """Read landed goals. Age follows the last commit that touched each file."""
+    from .lifecycle import main_tip
+    from .selfrepo import ReadmeError, git, parse_frontmatter
+
+    repo = home.root / "self"
+    if not (repo / ".git").exists():
+        return []
+    now = time.time() if now is None else now
+    tip = main_tip(repo)
+    lines = []
+    entries = git(repo, "ls-tree", "-z", tip, "goals/").stdout
+    for entry in entries.split("\0"):
+        meta, _, path = entry.partition("\t")
+        if not path.endswith(".md") or not meta.startswith(("100644 blob ", "100755 blob ")):
+            continue
+        try:
+            goal, _ = parse_frontmatter(git(repo, "show", f"{tip}:{path}").stdout)
+        except ReadmeError:
+            continue
+        if goal.get("status") != "active":
+            continue
+        if not all(isinstance(goal.get(field), str) and goal[field] for field in _GOAL_FIELDS):
+            continue
+        name = Path(path).stem
+        line = (f"goal {name}: {goal['stands']} · next: {goal['next']}"
+                f" · now: {goal['now']} · stake: {goal['stake']}")
+        changed = git(repo, "log", "-1", "--format=%ct", tip, "--", f":(literal){path}").stdout.strip()
+        days = int((now - int(changed)) // 86400) if changed else 0
+        if days >= 3:
+            line += f" · unmoved {days}d"
+        lines.append(line)
+    return lines
+
+
+def inbox_block(home) -> str:
+    lines = goal_lines(home) or [_NO_GOALS]
+    if fuel := fuel_line(home):
+        lines.append(fuel)
+    return "\n".join(lines) + "\n"
+
+
+def is_goal_block(block: str) -> bool:
+    return block.startswith(("goal ", _NO_GOALS))
+
+
+def close_block(block: str, unease: str) -> str:
+    """Put unease before the inbox closing instruction."""
+    if unease:
+        block += unease + "\n"
+    if is_goal_block(block):
+        block += _GOAL_CLOSE + "\n"
+    return block
+
+
 def fuel_line(home, now: float | None = None) -> str:
     """``fuel to burn: codex week 65% left, 3.8d to reset; grok 71%, 1.5d``.
 
@@ -483,6 +540,7 @@ def _who(home, head: str) -> str:
 def _ask_unease(home, facts, now: float) -> tuple[str, str] | None:
     """The oldest ask to a person, older than seven days, with no answer. Inbox only."""
     from .lifecycle import main_snapshot
+    from .waits import wish_waiters
     from .wishes import told, waits_on
     found = told(facts)
     heads = waits_on(found, main_snapshot(home))
@@ -503,9 +561,13 @@ def _ask_unease(home, facts, now: float) -> tuple[str, str] | None:
     if oldest is None:
         return None
     wish, age, head = oldest
+    waiters = wish_waiters(home, facts, found, wish.id, datetime.fromtimestamp(now, timezone.utc))
+    advice = "follow it up once, or close it"
+    if waiters:
+        threads = ", ".join(f"thread:{thread}" for thread in sorted({thread for _, _, thread in waiters}))
+        advice = f"write to {threads} first · {len(waiters)} wait on it"
     return (f"ask:{wish.id}",
-            f"unease: ask {wish.id} to {_who(home, head)} unanswered {_age(age)}: "
-            "follow it up once, or close it")
+            f"unease: ask {wish.id} to {_who(home, head)} unanswered {_age(age)}: {advice}")
 
 
 def unease(home, facts, thread: str, room, now: float | None = None) -> tuple[str, str]:
