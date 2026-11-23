@@ -45,7 +45,7 @@ from .lifecycle import main_snapshot
 from .timers import observe_due
 from .collectors import observe_collectors
 from .conditions import observe_conditions
-from .waits import Watcher, forge_wants, observe_waits
+from .waits import Watcher, forge_wants, observe_waits, thread_lines as wait_lines
 from .selfrepo import (
     AUTHOR_EMAIL, AUTHOR_NAME, SelfError, _env_without_pin, git,
     ensure_room, forge_threads, repaired_line, run_wake, seed_root,
@@ -700,6 +700,7 @@ def _prepare(home: Home, strand: str, thread: str, gen: int,
            'steps and `"$BRNRD_JACK" --event stop` before ending; read each returned boundary\n'
            if jack == "hand" else "\n")
     ) + _loom_line(home, facts)
+    part += "".join(line + "\n" for line in wait_lines(home, facts, thread))
     atomic_write(part_path, part)
     if repos is None:
         from .adapters import repos as seat_repos, seat_text
@@ -2146,6 +2147,7 @@ def _render_boundary(home, facts, strand, gen, context):
         opened=opened, forge=_forge(home),
         park_reminder=park_reminders(facts, context.thread),
         next_wake=_next_wake(home, facts, state, context.thread),
+        waits=wait_lines(home, facts, context.thread),
         plan=_plan(home, context.thread, facts),
         replies={f.letter.id: f.reply_to for f in active_owners(facts, main)},
         attachments=letter_attachments(home.root, facts),
@@ -2168,7 +2170,7 @@ def _next_wake(home, facts, state, thread: str) -> str:
     from .conditions import next_pass
     from .home import HOME_THREAD
     from .timers import parse_instant
-    from .waits import live, parker
+    from .waits import parker, unresolved
     from .wishes import told
 
     now = datetime.now(timezone.utc)
@@ -2178,7 +2180,7 @@ def _next_wake(home, facts, state, thread: str) -> str:
                      and (at := parse_instant(fact.data.get("at"))) is not None and at > now),
                     default=None)
     parks = [str(read["wait"].get("on") or read["reading"].removeprefix("waiting:").strip()).partition("\n")[0]
-             for wish, read in live(told(facts)) if parker(home, facts, wish, read) == thread]
+             for wish, read in unresolved(told(facts), facts) if parker(home, facts, wish, read) == thread]
     wake = [f"the park on {', '.join(parks)}"] if parks else []
     if next_time:
         wake.append(f"the timed letter at {next_time:%Y-%m-%d %H:%MZ}")
@@ -2190,9 +2192,9 @@ def _next_wake(home, facts, state, thread: str) -> str:
 
 
 def park_reminders(facts, thread):
-    from .waits import live
+    from .waits import unresolved
     from .wishes import told
-    return "\n".join(read["wait"]["reminder"] for wish, read in live(told(facts))
+    return "\n".join(read["wait"]["reminder"] for wish, read in unresolved(told(facts), facts)
                      if wish.thread == thread and read.get("wait", {}).get("reminder"))
 
 
@@ -2254,11 +2256,12 @@ def _idle_acts(home, facts, strand, context, proposal, children) -> str:
                 fresh = time.time() - path.stat().st_mtime < idle.EVERY
             except OSError:
                 fresh = False
-            if fresh:
-                block = path.read_text()
-            else:
-                fuel = idle.fuel_line(home) if thread == HOME_THREAD else ""
-                block = idle.render(idle.candidates(home, facts, thread, children), fuel)
+            block = path.read_text() if fresh else ""
+            if not fresh or (thread == HOME_THREAD and not idle.is_goal_block(block)):
+                if thread == HOME_THREAD:
+                    block = idle.inbox_block(home)
+                else:
+                    block = idle.render(idle.candidates(home, facts, thread, children))
                 atomic_write(path, block)
         unease_path = room / "port" / "in" / "unease.md"
         try:
@@ -2279,11 +2282,7 @@ def _idle_acts(home, facts, strand, context, proposal, children) -> str:
         except Exception as exc:  # noqa: BLE001 - a count that fails leaves the acts as they were
             _log(home, f"unease: skipped ({type(exc).__name__}: {exc})")
             shown = ""
-        if shown:
-            if block and not block.endswith("\n"):
-                block += "\n"
-            block += shown + "\n"
-        return block
+        return idle.close_block(block, shown)
     except Exception as exc:  # noqa: BLE001 - information only; never costs a boundary
         _log(home, f"idle: skipped ({type(exc).__name__}: {exc})")
         return ""
@@ -2697,7 +2696,7 @@ def tick_once(home: Home, bodies: dict[str, Body], adapter: str, core: str,
             from .receipts import receipts
             from .waits import open_claims
             from .wishes import told
-            watcher.wants = forge_wants(told(facts))
+            watcher.wants = forge_wants(told(facts), facts)
             claimed = receipts(facts, home.install_id())
             watcher.prs = open_claims(claimed)
             watcher.owners = claims(claimed)

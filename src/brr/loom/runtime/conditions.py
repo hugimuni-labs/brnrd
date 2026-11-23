@@ -278,8 +278,8 @@ def firings(home, facts, found: dict, state, now: datetime, known: set[str] | No
 
 def parks(home, facts, found: dict) -> dict[str, str]:
     """Each condition name → the thread of the earliest live ``cond:`` park naming it."""
-    from .waits import live, parker
-    rows = sorted(live(found), key=lambda row: row[1]["at"])
+    from .waits import parker, unresolved
+    rows = sorted(unresolved(found, facts), key=lambda row: row[1]["at"])
     out: dict[str, str] = {}
     for wish, read in rows:
         on = str(read["wait"].get("on") or "")

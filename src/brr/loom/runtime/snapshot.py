@@ -103,10 +103,10 @@ def _fuel(home: Home, cores: dict[str, list[str]], floor: float) -> list[dict]:
     The status line pulls the seated shell forward; the board has no seat, so
     the order is the status line's with that pull left out. A collector error
     with no window is ``fails``, the same word the line uses, and the error
-    text stays in the file.
+    text stays in the file. ``unmetered`` is that word with no error key.
     """
     from .config import initiative_share
-    from .usage import FAILS, _SHELL_NAME, _past_reset, collector_failed, gauge_windows
+    from .usage import FAILS, UNMETERED, _SHELL_NAME, _past_reset, collector_failed, gauge_windows, known_unmetered
     found = []
     for path in sorted((home.root / "loom/usage").glob("*.json")):
         shell = path.name.removesuffix(".json")
@@ -116,9 +116,11 @@ def _fuel(home: Home, cores: dict[str, list[str]], floor: float) -> list[dict]:
             payload = json.loads(path.read_text())
             windows = gauge_windows(payload)
             if not windows:
+                extra = {"cores": cores[shell]} if cores.get(shell) else {}
                 if windows is not None and collector_failed(payload):
-                    found.append({"shell": shell, "state": "error", "error": FAILS, "gauges": [],
-                                  **({"cores": cores[shell]} if cores.get(shell) else {})})
+                    found.append({"shell": shell, "state": "error", "error": FAILS, "gauges": [], **extra})
+                elif windows is not None and known_unmetered(payload):
+                    found.append({"shell": shell, "state": UNMETERED, "gauges": [], **extra})
                 continue
             gauges = [{"window": w["name"], "left_pct": w["left_pct"],
                        **({"resets_at": _iso(w["resets_at"])} if w.get("resets_at") else {})}
