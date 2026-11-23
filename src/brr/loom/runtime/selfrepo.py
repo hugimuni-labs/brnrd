@@ -979,6 +979,53 @@ def wake_budget() -> int:
     return int(os.environ.get("LOOM_BUDGET_BYTES") or 24000)
 
 
+def minimal_wake(clone: Path, thread: str, owed: Path, loom_part: Path, repos: Path | None,
+                 why: str, home=None) -> tuple[str, str]:
+    """``(core, occasion)`` built by the loom alone, for a wake no recipe could build.
+
+    A start is never refused for the home's sake (his 11737, 2026-11-23): the
+    body that boots on this is who repairs the recipe. Core and letters whole,
+    the loom part, and one line naming what was cut and why. No recipe runs.
+    """
+    def read(rel: str) -> str:
+        try:
+            text = (clone / rel).read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError) as exc:
+            text = f"[{rel} could not be read: {exc}]"
+        return text if text.endswith("\n") or not text else text + "\n"
+
+    from .briefing import section as briefing_section
+    core = (f"## core/identity.md\n{read('core/identity.md')}"
+            f"## memory/stance.md\n{read('memory/stance.md')}" + briefing_section(home))
+    try:
+        letters = json.loads(Path(owed).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        letters = []
+    chunks = ["## Letters\n"]
+    for item in letters if isinstance(letters, list) else ():
+        if not isinstance(item, dict):
+            continue
+        body = str(item.get("body", ""))
+        chunks.append(f"### {item.get('id')} from {item.get('from')} · reply {item.get('reply_to', '-')}\n"
+                      + (body if body.endswith("\n") else body + "\n"))
+        chunks.extend(str(line) if str(line).endswith("\n") else f"{line}\n"
+                      for line in item.get("attachments", ()))
+        if item.get("reply_context"):
+            context = str(item["reply_context"])
+            chunks.append(context if context.endswith("\n") else context + "\n")
+    loom = ""
+    for path in (loom_part, repos):
+        if path is not None and Path(path).is_file():
+            text = Path(path).read_text(encoding="utf-8", errors="replace")
+            loom += text if text.endswith("\n") or not text else text + "\n"
+    reason = " ".join(why.split())[:400]
+    occasion = (f"[Minimal wake: the recipe could not build this one ({reason}). Cut: threads/{thread}/README.md, "
+                "held, wishes, topics, people and the tree, all whole on disk. Repair core/loom/wake "
+                "or what it reads and land it with send-self before other work.]\n"
+                + f"## Loom\n{loom}" + "".join(chunks))
+    return core, occasion
+
+
 def run_wake(room_dir: Path, thread: str, owed: Path | None = None, *,
              loom_part: Path | None = None, repos: Path | None = None,
              core: Path | None = None, stdout=None, stderr=None,

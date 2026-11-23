@@ -319,9 +319,9 @@ def _build_wake(home, strand, gen, clone, thread, rows, part, owed_path, part_pa
     The resident is who repairs its home, and it can only do that awake. So a
     broken recipe is replaced by the packaged one, and owed letters that do not
     fit are left for the first boundary, which shows unread letters whole. Only
-    a wake that cannot be built at all (no recipe fits even an empty occasion,
-    or one letter is larger than the budget) is refused. ``owed.json`` ends as
-    the letters the wake carried.
+    a wake no recipe can build boots on the loom's minimal wake (core, the loom
+    part and the letters). Only a letter larger than the budget is refused: the
+    letter is the fault. ``owed.json`` ends as the letters the wake carried.
     """
     def attempt(carried, text, recipe):
         atomic_write(owed_path, json.dumps(carried))
@@ -369,9 +369,25 @@ def _build_wake(home, strand, gen, clone, thread, rows, part, owed_path, part_pa
             return occasion
         attempt(rows, part, recipe)
     if code != 0:
-        raise WakeFailure(f"wake exited {code}: {why}",
-                          _oversized_letters(clone, thread, owed_path, part_path, repo_file,
-                                             recipe=recipe))
+        oversized = _oversized_letters(clone, thread, owed_path, part_path, repo_file, recipe=recipe)
+        if oversized:
+            # The letter is the fault, not the home: its author hears (input failure path).
+            raise WakeFailure(f"wake exited {code}: {why}", oversized)
+        # A start is never refused for the home's sake (his 11737): the body that
+        # boots on the minimal wake is who repairs the recipe.
+        from .selfrepo import minimal_wake
+        broken = f"wake exited {code}: {why}"
+        atomic_write(owed_path, json.dumps(rows))
+        atomic_write(part_path, part)
+        core, occasion = minimal_wake(clone, thread, owed_path, part_path, repo_file, broken, home)
+        atomic_write(core_path, core)
+        atomic_write(core_path.with_name("sizes.json"), json.dumps({
+            "total": len((core + occasion).encode("utf-8")),
+            "parts": {"core": len(core.encode("utf-8")), "minimal": len(occasion.encode("utf-8"))},
+            "folded": ["minimal"]}))
+        _log(home, f"start {strand}: no recipe built the wake ({broken[:400]}); "
+                   "waking on the minimal wake")
+        record(home, WAKE_FALLBACK, strand, gen, "minimal", {"want": "minimal", "error": broken[:400]})
     return occasion
 
 
