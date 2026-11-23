@@ -22,7 +22,7 @@ The loom has no central self in its architecture; it organises work across one g
 | cited line | at the edge | reincarnate.py:242 cited_line returns closures since gen began that README cites | citation condition met or thread moves on |
 | gone line | at the edge | jack.py:175 gone lines for keys no longer in said set | jack.py:174 slots logic prevents duplicate gone lines |
 | moved line | at the edge | update.py:510 moved_line returns non-empty when facts show moved strands | moved facts retire after acknowledgment |
-| notes/scars injection | below | seed/core/immune.d/* scripts run on loom start and at immune intervals | immune step completes; the change adding the test, hook or check that guards a failure deletes its scar |
+| notes/scars injection | at the edge | notes.py trigger match at the pre-tool hook (notes.py:load :121, _from_self :79, _trigger :63, call_text :146, shown_at :235) | immune step completes; the change adding the test, hook or check that guards a failure deletes its scar; format checked by immune.d/45-scars |
 | waits and parks | at the edge | waits.py:8 observe_waits checks conditions; jack.py:461 _note_tool handles parks | wait condition met (waits.py:207) or park cleared |
 | morning pass | below | config.py:129 pass_hour configures local hour; loom.py:2240 prints "morning pass in HOME_THREAD" on next wake line | pass ends with the turn |
 | wake recipe and its cuts | in focus | seed/core/loom/wake:471 main runs recipe; cuts applied when budget exceeded | wake builds successfully or fails; cuts recorded in wake.sizes fact |
@@ -45,5 +45,5 @@ None found. Every process has a defined rise rule.
 
 Processes that pile up (no mechanism removes them when they should retire):
 
-- **notes/scars injection**: immune scripts run but the change adding the test, hook or check that guards a failure deletes its scar; scars that never fire or that keep failing have no automatic cleanup (track 16 measures this)
+- **notes/scars injection**: scars rise at the pre-tool hook when trigger matches; scars that never fire or that keep failing have no automatic cleanup (track 16 measures this)
 - **ledger facts**: facts accumulate in ledger/facts/*.jsonl per strand file, unbounded; reap.py rotates only loom/loom.log and prunes package caches, nothing prunes facts
