@@ -132,6 +132,8 @@ def test_a_phrase_ending_in_a_colon_or_slash_is_a_prefix():
 
 
 def test_scar_report_counts_displays_and_only_their_own_failures(tmp_path, monkeypatch, capsys):
+    from brr.loom.runtime import scar_log
+
     failing = "memory/scars/git/a-merge-gated.md"
     working = "memory/scars/git/a-fetch.md"
     home, room = _body(tmp_path, monkeypatch, {
@@ -146,9 +148,9 @@ def test_scar_report_counts_displays_and_only_their_own_failures(tmp_path, monke
             event = "PostToolUseFailure" if error else "PostToolUse"
             execute("post", room, _call(command, session=session, ident=ident, event=event, error=error))
 
-        now -= notes.SCAR_WINDOW + 1
+        now -= scar_log.WINDOW + 1
         call("gh pr checks 12", "old", "old-body", "outside the window")
-        now += notes.SCAR_WINDOW + 1
+        now += scar_log.WINDOW + 1
         # The later failure in the same body does not show the scar again.
         call("gh pr checks 12", "first", "s1", "Exit code 1\nfirst failure")
         call("gh pr checks 13", "repeat", "s1", "no scar shown")
@@ -160,7 +162,7 @@ def test_scar_report_counts_displays_and_only_their_own_failures(tmp_path, monke
         call("echo ada", "page", "s3", "not a scar")
 
         record = home.root / "loom" / notes.HANDS
-        before = record.read_bytes()
+        assert not record.exists()
         assert runtime_main(["scars", "--home", str(home.root)]) == 0
         text = capsys.readouterr().out
         failures, noise = text.split("Most-fired scars (up to 20)")
@@ -171,6 +173,6 @@ def test_scar_report_counts_displays_and_only_their_own_failures(tmp_path, monke
         assert working not in failures
         assert f"{failing}: 3 fired" in noise
         assert f"{working}: 1 fired" in noise
-        assert record.read_bytes() == before
+        assert not record.exists()
     finally:
         _kill(read_facts(home))

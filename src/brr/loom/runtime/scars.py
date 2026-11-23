@@ -1,4 +1,4 @@
-"""Read the seven-day scar history from the loom's hand record."""
+"""Read the seven-day scar history from the loom's scar log."""
 
 from __future__ import annotations
 
@@ -7,7 +7,8 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from .home import home_for
-from .notes import HANDS, SCAR_WINDOW, _read_hands, _SCARS, _when
+from .notes import _when
+from .scar_log import LOG, WINDOW, history
 from .refusals import Parser
 
 
@@ -20,27 +21,28 @@ class Counts:
 
 
 def report(path: Path, now: float) -> str:
-    history = _read_hands(path).get(_SCARS, {})
-    cutoff = now - SCAR_WINDOW
+    since, rows = history(path, now)
+    cutoff = now - WINDOW
     lines = ["Scar displays over the last 7 days"]
-    since = history.get("since")
     if since is None:
         lines.append("No scar displays recorded yet.")
     elif since > cutoff:
         lines.append(f"Recording began {_when(since)}.")
 
     counts: dict[str, Counts] = {}
-    for call in history.get("calls", {}).values():
-        if not cutoff <= call["at"] <= now:
+    outcomes = {row["call"]: row for row in rows if "paths" not in row and row["at"] <= now}
+    for call in rows:
+        if "paths" not in call or not cutoff <= call["at"] <= now:
             continue
+        outcome = outcomes.get(call["call"], {})
         for scar in call["paths"]:
             count = counts.setdefault(scar, Counts())
             count.fired += 1
-            if "failure" in call and call["ended"] <= now:
+            if "failure" in outcome:
                 count.failed += 1
-                if call["ended"] >= count.last_at:
-                    count.last_at = call["ended"]
-                    count.last_line = call["failure"]
+                if outcome["at"] >= count.last_at:
+                    count.last_at = outcome["at"]
+                    count.last_line = outcome["failure"]
 
     lines.append("\nScars shown before a failed call")
     failing = sorted((scar for scar in counts if counts[scar].failed),
@@ -66,5 +68,5 @@ def main(argv: list[str]) -> int:
     parser.add_argument("--home", help="loom home to read")
     args = parser.parse_args(argv)
     home = home_for(args.home)
-    print(report(home.root / "loom" / HANDS, time.time()))
+    print(report(home.root / "loom" / LOG, time.time()))
     return 0

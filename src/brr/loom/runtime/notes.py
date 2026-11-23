@@ -28,8 +28,7 @@ time: a path one read away is the reflex that failed (the empty sends of
 A phrase that ends in ``:`` or ``/`` is a prefix: ``telegram:`` opens at
 ``telegram:155783668``.
 
-The same record keeps seven days of scar displays and their tool outcomes.
-Writers in different rooms share a lock; readers see an atomic snapshot.
+Scar displays and their outcomes go to the separate append-only scar log.
 """
 
 from __future__ import annotations
@@ -48,8 +47,6 @@ PRODUCT = Path(__file__).resolve().parent / "hand_notes"
 CACHE = "notes.json"
 HANDS = "hands.json"
 SCAR_PREFIX = "memory/scars/"
-SCAR_WINDOW = 7 * 86400
-_SCARS = "/scar-displays"  # Reserved key, outside the program and host namespaces.
 STALE = 30 * 86400
 # At most this many notes at one call: the rest open at a later call that names them.
 AT_ONCE = 5
@@ -206,28 +203,6 @@ def _edit_hands(path: Path):
         tmp.replace(path)
 
 
-def _call_id(room: Path, payload: dict) -> str | None:
-    if not payload.get("tool_use_id"):
-        return None
-    return json.dumps([room.name, payload.get("session_id"), payload["tool_use_id"]])
-
-
-def record_displays(room: Path, payload: dict, paths: list[str]) -> None:
-    scars = [path for path in paths if path.startswith(SCAR_PREFIX)]
-    if not scars:
-        return
-    ident = _call_id(room, payload)
-    if ident is None:
-        return
-    with _edit_hands(_hands_path(room)) as record:
-        now = time.time()
-        history = record.setdefault(_SCARS, {"since": now, "calls": {}})
-        calls = {key: call for key, call in history["calls"].items()
-                 if call["at"] >= now - SCAR_WINDOW}
-        calls.setdefault(ident, {"at": now, "paths": scars})
-        history["calls"] = calls
-
-
 def _hand_key(payload: dict) -> str | None:
     from . import mark
     if payload.get("tool_name") == "Bash":
@@ -243,27 +218,25 @@ def _hand_key(payload: dict) -> str | None:
 
 def saw(room: Path, payload: dict, failed: bool, why: str = "") -> str | None:
     """Record a marked hand's stamp and the outcome of any scars shown for this call."""
-    from brr.redact import redact_detail
+    from .scar_log import record_outcome
+
+    try:
+        record_outcome(room, payload, failed, why)
+    except OSError:
+        pass  # A missed scar outcome still leaves the hand stamp.
 
     key = _hand_key(payload)
-    ident = _call_id(room, payload)
-    path = _hands_path(room)
-    if not key and (ident is None or ident not in _read_hands(path).get(_SCARS, {}).get("calls", {})):
+    if not key:
         return None
     try:
-        with _edit_hands(path) as record:
+        with _edit_hands(_hands_path(room)) as record:
+            record.pop("/scar-displays", None)  # Discard history from the earlier writer.
+            entry = record.setdefault(key, {})
             now = time.time()
-            if key:
-                entry = record.setdefault(key, {})
-                if failed:
-                    entry.update(blocked=now, why=why[:200], by=room.name)
-                else:
-                    entry["worked"] = now
-            call = record.get(_SCARS, {}).get("calls", {}).get(ident)
-            if call is not None and "ended" not in call and call["at"] >= now - SCAR_WINDOW:
-                call["ended"] = now
-                if failed:
-                    call["failure"] = redact_detail(why)[:200]
+            if failed:
+                entry.update(blocked=now, why=why[:200], by=room.name)
+            else:
+                entry["worked"] = now
     except OSError:
         return None
     return key
