@@ -379,10 +379,8 @@ def test_the_first_act_after_a_molt_writes_one_reading_and_a_stop_does_not(
     assert data["repeated"] == []
     assert data["carry_bytes"] == len(b"hello carry\n")
     assert data["read_bytes"] == 1000
-    assert moltcost.line(data) == (
-        "last molt: tokens unknown · 1 park set again · 1 ask set again · 0 scars again · "
-        "carry 12 B against 1.0 KB read before the first act"
-    )
+    assert data["first_s"] >= 0
+    assert "1 park set again · 1 ask set again · tokens unknown · carried 12 B of 1.0 KB read" in moltcost.line(data)
     assert moltcost.wake_line(read_facts(home), "t-1") == moltcost.line(data)
 
     other = "s-ab12-stoppd"
@@ -418,6 +416,30 @@ def test_the_first_act_after_a_molt_writes_one_reading_and_a_stop_does_not(
     assert (
         json.loads((stopped / "port" / "jack-state.json").read_text())["molt_cost"]
         == "skip"
+    )
+
+
+def test_molt_line_folds_all_zero_counts():
+    assert moltcost.line({
+        "first_s": 180, "tokens": 134_000, "carry_bytes": 1300, "read_bytes": 4300,
+        "reset": {"parks": [], "asks": []}, "repeated": [],
+    }) == (
+        "last molt: back at work 3 min after waking · nothing redone · "
+        "134k tokens · carried 1.3 KB of 4.3 KB read"
+    )
+
+
+def test_molt_line_says_time_unknown_for_older_readings():
+    assert moltcost.line({"tokens": 10}) == (
+        "last molt: time unknown · nothing redone · 10 tokens · carried unknown of unknown read"
+    )
+
+
+def test_molt_clause_totals_seconds_and_says_how_many_are_unknown():
+    assert moltcost.clause(3, [90, 90], [134_000], 0, 0, 0, [1300], [4300]) == (
+        "back at work after 3 min total from waking (1 unknown) across 3 molts · "
+        "nothing redone · 134k tokens (2 unknown) · carried 1.3 KB (2 unknown) of "
+        "4.3 KB (2 unknown) read"
     )
 
 

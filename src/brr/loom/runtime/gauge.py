@@ -36,6 +36,8 @@ def gauge(facts, days=7, now=None, spent=None):
              if isinstance((f.data.get("evidence") or {}).get("reads"), dict)]
     sized = [r for r in reads if r.get("bytes") is not None]
     delivered = {f.data.get("wish") for f in _since(facts, "wish.result", cut) if f.data.get("delivered")}
+    from .moltcost import first_seconds
+
     costs = _since(facts, "molt.cost", cut)
     out = {"days": days, "boots": len(sizes) or len(ends), "sized_boots": len(sizes),
            "wake_total": sum(int(f.data.get("total") or 0) for f in sizes), "parts": parts,
@@ -44,6 +46,7 @@ def gauge(facts, days=7, now=None, spent=None):
            "read_bytes": sum(r["bytes"] or 0 for r in sized),
            "before_calls": sum(int(r.get("before") or 0) for r in reads),
            "molts": len(costs),
+           "molt_seconds": [seconds for f in costs if (seconds := first_seconds(f.data)) is not None],
            "molt_tokens": [int(f.data["tokens"]) for f in costs if isinstance(f.data.get("tokens"), int)],
            "molt_parks": sum(len((f.data.get("reset") or {}).get("parks") or []) for f in costs),
            "molt_asks": sum(len((f.data.get("reset") or {}).get("asks") or []) for f in costs),
@@ -84,7 +87,7 @@ def line(g):
     else:
         bits.append("reads before a first line unknown (no trace yet)")
     from .moltcost import clause
-    bits.append(clause(g["molts"], g["molt_tokens"], g["molt_parks"], g["molt_asks"], g["molt_scars"],
+    bits.append(clause(g["molts"], g["molt_seconds"], g["molt_tokens"], g["molt_parks"], g["molt_asks"], g["molt_scars"],
                        g["molt_carry"], g["molt_read"]))
     return " · ".join(bits)
 
