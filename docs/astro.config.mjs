@@ -51,6 +51,7 @@ export default defineConfig({
             { label: 'The resident', slug: 'concepts/resident' },
             { label: 'Runs & environments', slug: 'concepts/environments' },
             { label: 'Gates & authorization', slug: 'concepts/gates' },
+            { label: 'Layers', slug: 'concepts/layers' },
           ],
         },
         {
