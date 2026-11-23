@@ -209,7 +209,7 @@ def test_a_wish_wait_resolves_on_a_settled_state_or_a_citing_letter(ledger):
                                        "--wait", "wish:w-nope", ok=False)
     command(home, seat, "wish", target, "--read", "Reading it")
     assert told(home) == [], "a reading is not an outcome"
-    command(home, seat, "wish", target, "--drop", "not needed")
+    command(home, seat, "wish", target, "--drop", "not needed", "--force")
     [letter] = told(home)
     assert f"{target} is dropped" in letter.data["body"]
     # The second park on a fresh target resolves when a letter cites it.
@@ -228,6 +228,40 @@ def test_a_wish_wait_resolves_on_a_settled_state_or_a_citing_letter(ledger):
         "id": "s-aaaa-test/progress", "to": "thread:inbox", "from": "s-aaaa-test",
         "body": f"&{third} halfway there", "links": [third]}))
     assert told(home) == []
+
+
+@pytest.mark.parametrize("case", ["refused", "force", "no_waiter", "resolved"])
+def test_drop_checks_open_waits_on_the_target(ledger, case):
+    home, seat = ledger
+    waiter = heard(home, seat, "Waiter")
+    target = heard(home, seat, "Target")
+    park(home, seat, waiter, "--wait", f"wish:{target}")
+
+    # Establish the open dependency before exercising each allowed drop.
+    message = command(home, seat, "wish", target, "--drop", "stop", ok=False)
+    assert message.splitlines() == [
+        f'{waiter} · thread:work · "waiting: the merge"',
+        "Write to the waiting thread(s) first, or pass --force.",
+    ]
+    assert view(home, target).open
+
+    if case == "refused":
+        return
+    flags = ()
+    if case == "force":
+        flags = ("--force",)
+    elif case == "no_waiter":
+        target = heard(home, seat, "Unrelated wish")
+    else:
+        append(home, Fact(kind="letter", by="person:p-test", id="p-test/drop-answer", data={
+            "id": "p-test/drop-answer", "to": "thread:work", "from": "p-test",
+            "body": "Answered", "links": [target],
+        }))
+        [notice] = told(home)
+        assert f"{target} was answered by" in notice.data["body"]
+
+    command(home, seat, "wish", target, "--drop", "stop", *flags)
+    assert view(home, target).state == "dropped"
 
 
 def test_letter_and_at_waits(ledger):

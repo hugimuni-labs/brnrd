@@ -6,12 +6,13 @@ import json
 import os
 import re
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 
 from brr.daemon2.facts import Fact
 from .home import Home, home_of_room, mint, resolve_home, strand_of_room
 from .ledger import append, read_facts
-from .waits import GRAMMAR
+from .waits import GRAMMAR, wish_waiters
 from .wishes import Say, waits_on, waits_word, wishes, wish_line
 from .refusals import Parser, refuse
 
@@ -97,6 +98,7 @@ def _wish_arguments(parser):
     action.add_argument("--result")
     action.add_argument("--accept", choices=("word", "act", "implied"))
     action.add_argument("--drop")
+    parser.add_argument("--force", action="store_true", help="drop even while other wishes wait on it")
     parser.add_argument("--deliver", action="store_true")
     parser.add_argument("--ref")
     parser.add_argument("--wait", help="what the park waits on: " + GRAMMAR)
@@ -115,6 +117,8 @@ def cmd_wish(args):
     try:
         home, by, thread = _context(args)
         facts = read_facts(home)
+        if args.force and args.drop is None:
+            raise ValueError("--force requires --drop")
         if args.top is not None or args.pick is not None:
             append(home, _rank_fact(args, facts, by))
             print(args.id)
@@ -152,7 +156,8 @@ def cmd_wish(args):
             print(wish_line(current))
             return 0
         if actions:
-            if args.id == "new" or args.id not in wishes(facts):
+            found = wishes(facts)
+            if args.id == "new" or args.id not in found:
                 raise ValueError(f"no wish {args.id}; create it with wish new first")
             if args.say or args.sender or args.thread or args.parent or (args.line is not None and args.result is None):
                 raise ValueError("touch flags cannot accompany a reading, result or verdict")
@@ -178,6 +183,14 @@ def cmd_wish(args):
                     if held is not None:
                         left = _held_left(args, facts, by, held, left)
             else:
+                if args.drop is not None and not args.force:
+                    waiters = wish_waiters(home, facts, found, args.id, datetime.now(timezone.utc))
+                    if waiters:
+                        lines = [f"{wish.id} · thread:{thread} · {json.dumps(read['reading'], ensure_ascii=False)}"
+                                 for wish, read, thread in waiters]
+                        lines.append("Write to the waiting thread(s) first, or pass --force.")
+                        print("\n".join(lines), file=sys.stderr)
+                        return 1
                 kind = "wish.verdict"
                 data.update({"as": "accepted" if args.accept else "dropped",
                              "evidence": args.accept or "word",
