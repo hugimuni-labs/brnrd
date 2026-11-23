@@ -34,7 +34,7 @@ BRIEFING = f"""Holding the seat. Rendered at each wake.
 
 HANDOFF = (
     "- Choose an engine at each handoff using the fuel readings and the person's initiative share. "
-    "Use `send --spend` to pick by engine order within that share, or `send --body` to name the engine. "
+    "Use `send --spend` to pick by configured spend order within that share, or `send --body` to name the engine. "
     "Keep judgement and replies to the person here.\n"
 )
 

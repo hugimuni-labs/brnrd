@@ -118,9 +118,6 @@ def test_spend_picks_in_engine_order_using_the_initiative_share(tmp_path, monkey
     home = home_at(tmp_path)
     monkeypatch.setattr("shutil.which", _which({"grok", "codex", "claude"}))
     adapters.set_order(home, ["grok", "codex", "claude"])
-    preferences = tmp_path / "loom/preferences.toml"
-    with preferences.open("a") as handle:
-        handle.write('spend.burn = ["codex"]\nspend.keep = "grok"\n')
     # Collectors poll every ten minutes. A current window can be six minutes old.
     _gauge(tmp_path, "grok", 65, age=360)
     _gauge(tmp_path, "codex", 90)
@@ -132,6 +129,25 @@ def test_spend_picks_in_engine_order_using_the_initiative_share(tmp_path, monkey
     assert adapters.spend_choice(home) == "grok"
     set_value(home.root, "initiative_share_grok", 0)
     assert adapters.spend_choice(home) == "codex"
+
+
+def test_spend_respects_configured_candidates_and_reserved_engine(tmp_path, monkeypatch):
+    home = home_at(tmp_path)
+    monkeypatch.setattr("shutil.which", _which({"grok", "codex", "claude"}))
+    preferences = tmp_path / "loom/preferences.toml"
+    _gauge(tmp_path, "grok", 90)
+    _gauge(tmp_path, "codex", 90)
+    _gauge(tmp_path, "claude", 90)
+    preferences.write_text('bodies.order = ["grok", "codex", "claude"]\nspend.keep = "grok"\n')
+    assert adapters.spend_choice(home) == "codex"
+    with preferences.open("a") as handle:
+        handle.write('spend.burn = ["claude", "codex"]\n')
+    assert adapters.spend_choice(home) == "claude"
+    _gauge(tmp_path, "claude", 1)
+    assert adapters.spend_choice(home) == "codex"
+    preferences.write_text('spend.burn = []\n')
+    with pytest.raises(ValueError, match="no eligible engine"):
+        adapters.spend_choice(home)
 
 
 def test_spend_skips_unavailable_and_unusable_readings(tmp_path, monkeypatch):
@@ -211,8 +227,6 @@ def test_spend_pins_the_seat_before_open_and_a_refusal_opens_nothing(tmp_path, m
     _gauge(tmp_path, "grok", 1)
     _gauge(tmp_path, "codex", 40)
     _gauge(tmp_path, "claude", 90)
-    from brr.loom.runtime.config import set_value
-    set_value(home.root, "initiative_share_claude", 0)
     room = tmp_path / "rooms" / "s-aaaa-test"
     room.mkdir(parents=True)
     pinned = {}
@@ -232,14 +246,13 @@ def test_spend_pins_the_seat_before_open_and_a_refusal_opens_nothing(tmp_path, m
         write_send(room, to="thread:handoff", sender="s-aaaa-test", body="Work",
                    wish="new:Work", spend=True)
     assert not (tmp_path / "self/threads/handoff").exists()
-    # A single harness must still have room under its share.
+    # A single harness leaves default body selection in place, even when behind pace.
     monkeypatch.setattr("shutil.which", _which({"grok"}))
     pinned.clear()
-    _gauge(tmp_path, "grok", 90)
     with pytest.raises(PortError, match="stop before land"):
         write_send(room, to="thread:handoff", sender="s-aaaa-test", body="Work",
                    wish="new:Work", spend=True)
-    assert pinned["body"] == "grok"
+    assert pinned["body"] is None
     readme = tmp_path / "self/threads/work/README.md"
     readme.parent.mkdir(parents=True)
     readme.write_text("---\nid: work\nstatus: open\ntense: plan\n---\n# Work\n")

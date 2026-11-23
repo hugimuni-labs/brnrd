@@ -315,8 +315,8 @@ def installed_shells(home) -> list[str]:
     return [shell for shell in body_order(home) if shutil.which(shell)]
 
 
-def spend_choice(home) -> str:
-    """Pin the first enabled, installed engine with room under its initiative pace."""
+def spend_choice(home) -> str | None:
+    """Pin an eligible engine in spend order when there is a choice of engines."""
     import json
     import time
 
@@ -325,9 +325,16 @@ def spend_choice(home) -> str:
     from .usage import _past_reset, collector_failed, fuels, gauge_windows, week_pace
 
     installed = installed_shells(home)
+    if len(installed) < 2:
+        return None
+    preferences = _preferences(home)[1]
+    reserved = preferences.get("spend.keep")
+    candidates = preferences.get("spend.burn", installed)
     floor = load_config(home.root).hold_floor_pct
     now = time.time()
-    for shell in installed:
+    for shell in candidates:
+        if shell == reserved or shell not in installed:
+            continue
         path = home.root / "loom" / "usage" / f"{shell}.json"
         try:
             value = json.loads(path.read_text(encoding="utf-8"))
@@ -343,9 +350,9 @@ def spend_choice(home) -> str:
             {"windows": windows}, now, share=share_for(home, shell)
         ):
             return shell
-    line = fuels(home, installed[0] if installed else "")
+    line = fuels(home, installed[0])
     where = f" ({line})" if line else ""
-    raise ValueError(f"send: --spend found no installed engine above the fuel floor "
+    raise ValueError(f"send: --spend found no eligible engine above the fuel floor "
                      f"and ahead of its initiative pace{where}")
 
 
