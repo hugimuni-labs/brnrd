@@ -738,6 +738,10 @@ def _notes_at(room: Path, stdin_text: str) -> str:
         text, paths = notes.shown_at(room, payload, shown)
         if paths:
             seen_path.write_text(json.dumps({"body": body, "shown": sorted(shown | set(paths))}) + "\n")
+        try:
+            notes.record_displays(room, payload, paths)
+        except OSError:
+            pass  # The note still opens when its count cannot be written.
         return text
     except Exception:  # noqa: BLE001
         return ""

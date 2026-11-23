@@ -28,17 +28,18 @@ time: a path one read away is the reflex that failed (the empty sends of
 A phrase that ends in ``:`` or ``/`` is a prefix: ``telegram:`` opens at
 ``telegram:155783668``.
 
-``hands.json`` is read, changed and replaced by every room with no lock: two
-rooms ending a call in the same instant can lose one line, which costs a
-stamp, never a call.
+The same record keeps seven days of scar displays and their tool outcomes.
+Writers in different rooms share a lock; readers see an atomic snapshot.
 """
 
 from __future__ import annotations
 
+import fcntl
 import json
 import re
 import subprocess
 import time
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -46,6 +47,9 @@ ROOTS = ("memory/", "people/", "library/")
 PRODUCT = Path(__file__).resolve().parent / "hand_notes"
 CACHE = "notes.json"
 HANDS = "hands.json"
+SCAR_PREFIX = "memory/scars/"
+SCAR_WINDOW = 7 * 86400
+_SCARS = "/scar-displays"  # Reserved key, outside the program and host namespaces.
 STALE = 30 * 86400
 # At most this many notes at one call: the rest open at a later call that names them.
 AT_ONCE = 5
@@ -178,42 +182,88 @@ def _hands_path(room: Path) -> Path:
     return home_of_room(Path(room)).root / "loom" / HANDS
 
 
-def hands(room: Path) -> dict:
+def _read_hands(path: Path) -> dict:
     try:
-        value = json.loads(_hands_path(room).read_text())
+        value = json.loads(path.read_text())
         return value if isinstance(value, dict) else {}
     except (OSError, ValueError):
         return {}
 
 
-def saw(room: Path, payload: dict, failed: bool, why: str = "") -> str | None:
-    """At a marked call's end: when it worked or blocked, per program or host. Returns the key."""
+def hands(room: Path) -> dict:
+    return _read_hands(_hands_path(room))
+
+
+@contextmanager
+def _edit_hands(path: Path):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.with_suffix(".lock").open("a") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        record = _read_hands(path)
+        yield record
+        tmp = path.with_suffix(".tmp")
+        tmp.write_text(json.dumps(record, sort_keys=True) + "\n")
+        tmp.replace(path)
+
+
+def _call_id(room: Path, payload: dict) -> str | None:
+    if not payload.get("tool_use_id"):
+        return None
+    return json.dumps([room.name, payload.get("session_id"), payload["tool_use_id"]])
+
+
+def record_displays(room: Path, payload: dict, paths: list[str]) -> None:
+    scars = [path for path in paths if path.startswith(SCAR_PREFIX)]
+    if not scars:
+        return
+    ident = _call_id(room, payload)
+    if ident is None:
+        return
+    with _edit_hands(_hands_path(room)) as record:
+        now = time.time()
+        history = record.setdefault(_SCARS, {"since": now, "calls": {}})
+        calls = {key: call for key, call in history["calls"].items()
+                 if call["at"] >= now - SCAR_WINDOW}
+        calls.setdefault(ident, {"at": now, "paths": scars})
+        history["calls"] = calls
+
+
+def _hand_key(payload: dict) -> str | None:
     from . import mark
     if payload.get("tool_name") == "Bash":
         command = str((payload.get("tool_input") or {}).get("command") or "")
         if mark.shell_mark(command) is None:
             return None
         found = mark._ASSIGN.search(command.split("<<", 1)[0])
-        key = mark.program(command[found.end():] if found else command)
-    elif payload.get("tool_name") == "WebFetch":
-        key = mark.host(str((payload.get("tool_input") or {}).get("url") or ""))
-    else:
-        return None
-    if not key:
-        return None
+        return mark.program(command[found.end():] if found else command)
+    if payload.get("tool_name") == "WebFetch":
+        return mark.host(str((payload.get("tool_input") or {}).get("url") or ""))
+    return None
+
+
+def saw(room: Path, payload: dict, failed: bool, why: str = "") -> str | None:
+    """Record a marked hand's stamp and the outcome of any scars shown for this call."""
+    from brr.redact import redact_detail
+
+    key = _hand_key(payload)
+    ident = _call_id(room, payload)
     path = _hands_path(room)
-    record = hands(room)
-    entry = record.setdefault(key, {})
-    now = time.time()
-    if failed:
-        entry.update(blocked=now, why=why[:200], by=Path(room).name)
-    else:
-        entry["worked"] = now
+    if not key and (ident is None or ident not in _read_hands(path).get(_SCARS, {}).get("calls", {})):
+        return None
     try:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        tmp = path.with_name(path.name + ".tmp")
-        tmp.write_text(json.dumps(record, sort_keys=True) + "\n")
-        tmp.replace(path)
+        with _edit_hands(path) as record:
+            now = time.time()
+            if key:
+                entry = record.setdefault(key, {})
+                if failed:
+                    entry.update(blocked=now, why=why[:200], by=room.name)
+                else:
+                    entry["worked"] = now
+            call = record.get(_SCARS, {}).get("calls", {}).get(ident)
+            if call is not None and "ended" not in call and call["at"] >= now - SCAR_WINDOW:
+                call["ended"] = now
+                if failed:
+                    call["failure"] = redact_detail(why)[:200]
     except OSError:
         return None
     return key
@@ -253,7 +303,7 @@ def shown_at(room: Path, payload: dict, already: set[str]) -> tuple[str, list[st
         where = note.path if note.path.startswith("brnrd:") else f"self/{note.path}"
         said = stamp(note, record)
         lines.append(f"note ({phrase}): {where}: {note.head}" + (f" [{said}]" if said else ""))
-        if note.path.startswith("memory/scars/"):
+        if note.path.startswith(SCAR_PREFIX):
             lines.extend("  " + ln for ln in scar_text(room, note.path))
     return "\n".join(lines), [n.path for n, _ in found]
 
