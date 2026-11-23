@@ -602,6 +602,15 @@ def _row(row, on, at=None, number=None):
     return f"    {lead} {box} {style.dim(label) if why else label}" + (f" {style.dim('· ' + why)}" if why else '')
 
 
+_ANSI = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]")
+
+
+def screen_lines(text, width):
+    """How many terminal lines ``text`` takes in a window ``width`` wide."""
+    shown = len(_ANSI.sub('', text))
+    return max(1, -(-shown // max(1, width)))
+
+
 def checklist(rows, *, keys=None, start=None):
     """Every pickable row starts on, or those in ``start``: Enter confirms, arrows move, space switches one.
 
@@ -625,12 +634,21 @@ def checklist(rows, *, keys=None, start=None):
         return {row[0] for row, picked in zip(rows, on) if picked}
     print(f"  {style.dim('Enter confirms · ↑ ↓ move · space switches one off or on')}")
     at = 0
+    drawn = 0
 
     def draw(again):
-        if again:
-            sys.stdout.write(f"\x1b[{len(rows)}A")
+        # A row wider than the window wraps onto more than one line; going up
+        # one line per row then lands inside the list and every redraw leaves
+        # copies (letter 11752). Go up the lines last drawn, clear down, draw.
+        nonlocal drawn
+        if again and drawn:
+            sys.stdout.write(f"\x1b[{drawn}A\r\x1b[J")
+        width = shutil.get_terminal_size().columns
+        drawn = 0
         for i, row in enumerate(rows):
-            sys.stdout.write("\x1b[2K" + _row(row, on[i], at=i == at) + "\n")
+            text = _row(row, on[i], at=i == at)
+            sys.stdout.write(text + "\n")
+            drawn += screen_lines(text, width)
         sys.stdout.flush()
 
     draw(False)

@@ -48,7 +48,6 @@ GATE_BY_PLATFORM: dict[str, tuple[str, str]] = {
 RETIRED_COMMANDS = {
     "auth": "brnrd gate auth <gate>",
     "bind": "brnrd gate bind <repo> <gate>",
-    "add": "brnrd account add <repo>",
     "connect": "brnrd account connect [url]",
 }
 
@@ -107,6 +106,7 @@ HIDDEN_COMMANDS = (
     "relic", "gate-run", "close-check", "promise", "act", "mood", "do", "notes",
     "await", "cut", "legend", "item", "asks", "goal", "queue", "envoy",
     "dominion", "hud", "states", "threads", "publish", "setup", "wish", "wishes", "graph",
+    "add",
 )
 
 #: What ``brnrd promise`` accepts, spelled here so building the parser costs
@@ -325,6 +325,13 @@ def build_parser() -> argparse.ArgumentParser:
 
     gate_p = sub.add_parser("gate", help="configure the gates brnrd speaks through")
     gate_sub = gate_p.add_subparsers(dest="gate_command", required=True)
+
+    p = sub.add_parser("add", help="add the project in this folder to the brnrd setup made")
+    p.add_argument("folder", nargs="?", default=".")
+    p.add_argument("--home")
+    p.set_defaults(func=lambda args: __import__(
+        "brr.loom.runtime.addproject", fromlist=["main"]).main(
+            [args.folder] + (["--home", args.home] if args.home else [])))
 
     p = gate_sub.add_parser("setup", help="configure a gate in one step (auth + bind)")
     p.add_argument("gate", help=gate_help)
@@ -1571,6 +1578,11 @@ def main(argv: list[str] | None = None) -> None:
             from .loom.runtime.setup_channel import main as guided_setup
 
             return guided_setup([])
+        if raw[:1] == ["add"]:
+            # `brnrd add [folder]` adds a project to the resident setup made,
+            # through the same loom home: no pairing, no account home.
+            from .loom.runtime.addproject import main as add_project
+            return add_project(raw[1:])
         if raw[:1] == ["runtime"]:
             # The console script lands here, not in __main__: the `brnrd`
             # an install puts on PATH must answer the verbs its help names.
