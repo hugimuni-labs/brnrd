@@ -64,7 +64,9 @@ def test_core_is_split_out_and_the_wake_stays_whole(home):
     occasion = (room / "port/occasion.md").read_text()
     assert identity in core and stance in core
     assert identity not in occasion and stance not in occasion
-    assert "## threads/brnrd/README.md" in occasion and "## Loom" in occasion
+    assert "## threads/brnrd/README.md" in occasion and "## Occasion" in occasion
+    assert "## Loom" not in occasion
+    assert "## Loom" in (room / "port/later.md").read_text()
     # A body that reads only BRNRD_WAKE still gets the core, at the head.
     assert (room / "port/wake.md").read_text() == core + occasion
 

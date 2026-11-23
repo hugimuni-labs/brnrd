@@ -705,3 +705,39 @@ class Watcher:
         self.states = {on: state for on, state in states.items() if on in wants} if wants else self.states
         self.errors = errors
         self.failing = (missed, missed.__traceback__) if missed is not None and not read else None
+
+
+def rest_parks(parks):
+    """Name the nearest known deadlines first, then undated parks in ledger order."""
+    def deadline(row):
+        wait = row[1]["wait"]
+        on = wait.get("on", "")
+        times = [_instant(value) for value in (on[3:] if on.startswith("at:") else "", wait.get("until"))]
+        return min((at for at in times if at is not None), default=datetime.max.replace(tzinfo=timezone.utc))
+
+    def label(row):
+        wish, read = row
+        kind, _, target = read["wait"].get("on", "").partition(":")
+        if kind == "at" and (at := _instant(target)) is not None:
+            return f"{at:%Y-%m-%d %H:%MZ}"
+        if kind == "pr":
+            return f"pull request {target}"
+        if kind == "ci":
+            repo, _, sha = target.partition("@")
+            return f"checks for {repo} {sha[:8]}"
+        if kind == "file":
+            return f"the result in {os.path.basename(target)}"
+        if kind == "letter":
+            return f"a reply to {target}"
+        if kind == "wish":
+            return f"an answer on {target}"
+        if kind == "cond":
+            return "a change in " + target.replace(",", ", ").replace("-", " ").replace("_", " ")
+        reading = read["reading"].removeprefix("waiting:").strip().partition("\n")[0]
+        return reading[:100] or wish.line[:100]
+
+    shown = [label(row) for row in sorted(parks, key=deadline)[:2]]
+    if len(parks) > len(shown):
+        more = len(parks) - len(shown)
+        shown[-1] += f" ({more} more {'park' if more == 1 else 'parks'})"
+    return shown

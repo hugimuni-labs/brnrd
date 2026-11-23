@@ -855,6 +855,49 @@ def _wake_topics(clone: Path, thread: str, owed: Path | None) -> str:
         return ""
 
 
+_HELD = {"Tree", "Topics", "Topics close to this wake", "Status"}
+_LOOM_FACT = ("you are strand ", "loom: ", "status:", "repo ", "to send a repo's branch out:")
+
+
+def hold_back(text: str) -> tuple[str, str]:
+    """(kept, later). Status, topics, the tree and loom facts leave the wake.
+
+    A ``## Loom`` section keeps every other line, so a molt's notes stay.
+    The caller keeps the pair together when something is owed.
+    """
+    lines = text.splitlines(keepends=True)
+    kept: list[str] = []
+    later: list[str] = []
+    i = 0
+    while i < len(lines):
+        title = lines[i][3:].strip() if lines[i].startswith("## ") else None
+        if title in _HELD:
+            later.append(lines[i])
+            i += 1
+            while i < len(lines) and not lines[i].startswith("## "):
+                later.append(lines[i])
+                i += 1
+            continue
+        if title == "Loom":
+            body: list[str] = []
+            i += 1
+            while i < len(lines) and not lines[i].startswith("## "):
+                body.append(lines[i])
+                i += 1
+            facts = [line for line in body if line.startswith(_LOOM_FACT)]
+            rest = [line for line in body if line.strip() and not line.startswith(_LOOM_FACT)]
+            if facts:
+                later.append("## Loom\n")
+                later.extend(facts)
+            if rest:
+                kept.append("## Loom\n")
+                kept.extend(rest)
+            continue
+        kept.append(lines[i])
+        i += 1
+    return "".join(kept), "".join(later)
+
+
 def insert_topics(prompt: str, section: str) -> str:
     """Before the tree: a head carries a decision, a tree line only names a file."""
     for mark in ("## Tree\n", "## Loom\n", "## Occasion\n"):
@@ -954,10 +997,17 @@ def run_wake(room_dir: Path, thread: str, owed: Path | None = None, *,
     from .briefing import section as briefing_section
     briefing = briefing_section(home)
     topics = _wake_topics(clone, thread, owed)
+    cost = ""
+    if home is not None:
+        # Already written, at the previous wake's first act. Reserved here so the recipe
+        # leaves room for the line the body actually receives.
+        from .moltcost import wake_line
+        cost = wake_line(facts, thread)
     # Reserve what the loom adds before the recipe fits its tree/README to the budget:
     # the tree is what gives way to the topic heads.
     limit = int(env.get("LOOM_BUDGET_BYTES") or 24000)
-    env["LOOM_BUDGET_BYTES"] = str(max(0, limit - len((section + briefing + topics).encode("utf-8"))))
+    env["LOOM_BUDGET_BYTES"] = str(max(0, limit - len(
+        (section + briefing + topics + ((cost + "\n") if cost else "")).encode("utf-8"))))
     if core is not None:
         # Absent after the run means the recipe kept the core in stdout.
         Path(core).unlink(missing_ok=True)
@@ -994,10 +1044,13 @@ def run_wake(room_dir: Path, thread: str, owed: Path | None = None, *,
             output = insert_wishes(output, section)
         if proc.returncode == 0 and topics:
             output = insert_topics(output, topics)
+        if proc.returncode == 0 and cost:
+            output = cost + "\n" + output
         if proc.returncode == 0 and sizes is not None:
             kept = Path(core).read_text(encoding="utf-8") if core is not None and Path(core).is_file() else ""
+            generated = section + topics + ((cost + "\n") if cost else "")
             Path(sizes).write_text(json.dumps(wake_sizes(
-                Path(sizes), kept + output, briefing=briefing, generated=section + topics)), encoding="utf-8")
+                Path(sizes), kept + output, briefing=briefing, generated=generated)), encoding="utf-8")
         (stdout or sys.stdout).write(output)
         return proc.returncode
     finally:

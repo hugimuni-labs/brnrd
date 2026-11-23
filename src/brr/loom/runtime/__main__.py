@@ -71,7 +71,7 @@ SUMMARY = {
     "drop": "give up on a paused tool child",
     "init": "create a home and its self",
     "wake": "print the wake a room's body would get",
-    "gauge": "the wake gauge: boots, spend, wake size, reads before a first line (--days 7)",
+    "gauge": "the wake gauge: boots, spend, wake size, reads before a first line, molt cost (--days 7)",
     "trust": "the two trust numbers: irreversible acts without a grant, took-rec per ask kind (--days 14)",
     "forge-token": "print the forge token bodies use",
     "mark": 'a one-shot mark for the next MCP call: mark "change · what · for · back"',
