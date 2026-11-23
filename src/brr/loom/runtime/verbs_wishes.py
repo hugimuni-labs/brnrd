@@ -606,8 +606,7 @@ def cmd_ask(args):
             # The rec rides on the ask itself: a wish.read would read as the person's answer.
             fact = wish_fact(facts, by=by, ident="new", line=args.what, thread=thread,
                              sender="resident", parent=args.wish, rec=args.rec, kind=args.kind)
-            shape = answer_shape(args.answered_by, datetime.fromisoformat(fact.at))
-            fact.data["answered_by"] = shape
+            fact.data["answered_by"] = answer_shape(args.answered_by, datetime.fromisoformat(fact.at))
             from .lifecycle import reopen_for
             from .verbs_loom import _room
             # A body that settled its own thread and asks again holds open work there.
@@ -619,11 +618,11 @@ def cmd_ask(args):
             append(home, fact)
             ident = fact.data["wish"]
         else:
-            ident, shape = same.id, same.answered_by
+            ident = same.id
             if args.answered_by is not None:
                 proposed = answer_shape(args.answered_by, datetime.fromisoformat(same.born.replace("Z", "+00:00")))
-                if proposed != shape:
-                    raise ValueError(f"ask: {ident} already waits for {shape}")
+                if proposed != same.answered_by:
+                    raise ValueError(f"ask: {ident} already waits for {same.answered_by}")
             print(f"ask: reused {ident}, the open ask with this line for {args.wish}", file=sys.stderr)
         if same is not None and ((args.rec is not None and same.rec != args.rec)
                                  or (args.kind is not None and same.kind != args.kind)):
@@ -633,7 +632,7 @@ def cmd_ask(args):
         from .port import write_send
         from .verbs_loom import _room
         facts = read_facts(home)
-        head = waits_on(wishes(facts), main_snapshot(home)).get(ident, "") if shape == "reply" else ""
+        head = waits_on(wishes(facts), main_snapshot(home)).get(ident, "")
         room = _room(args.room)
         marker = f"ask {ident} from thread:{thread}: "
         if head.startswith("thread:") and not _mailed(facts, room, head, marker):

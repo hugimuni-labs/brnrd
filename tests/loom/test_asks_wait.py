@@ -107,6 +107,16 @@ def test_an_ask_waits_on_the_opener_until_it_asks_onward(ledger):
     assert "work" not in {t for t, (turn, _w) in turns(home).items() if turn == "yours"}
 
 
+@pytest.mark.parametrize("shape", ["merge:hugimuni-labs/brnrd#12", "press", "file:receipt.md", "date:+1h"])
+def test_a_shaped_ask_mails_the_opener(ledger, shape):
+    home, seat = ledger
+    wish, mid = child(home, seat, "mid", "s-aaaa-mid")
+    ask = command(home, mid, "ask", "Ready to proceed?", "--for", wish, "--answered-by", shape)
+    [letter] = mail(mid, ask)
+    assert "to: thread:work" in letter
+    assert f"ask {ask} from thread:mid: Ready to proceed?" in letter
+
+
 def test_an_ask_under_a_settled_opener_waits_on_the_operator_and_mails_nobody(ledger):
     home, seat = ledger
     _wish, mid = child(home, seat, "mid", "s-aaaa-mid")
@@ -277,9 +287,13 @@ def test_merge_answer_uses_the_forge_watch_and_closes_exactly_once(ledger):
                   "--answered-by", f"merge:{repo}#12")
     pending = command(home, seat, "ask", "Second change landed?", "--for", parent,
                       "--answered-by", f"merge:{repo}#13")
+    assert turns(home)["work"] == ("yours", ["operator"])
     reply = command(home, seat, "ask", "Which change first?", "--for", parent, "--answered-by", "reply")
     assert "to: channel:mine/42" in mail(seat, reply)[0]
-    assert mail(seat, ask) == mail(seat, pending) == []
+    assert "to: channel:mine/42" in mail(seat, ask)[0]
+    assert "to: channel:mine/42" in mail(seat, pending)[0]
+    heads = waits_on(wishes(read_facts(home)), main_snapshot(home))
+    assert heads[ask] == heads[reply] == "operator"
     assert view(home, ask).answered_by == f"merge:{repo}#12"
     inject_letter(home.root, to="thread:work", body="Start with the first", re=reply)
     inject_letter(home.root, to="thread:work", body="Looks landed", re=ask)
@@ -350,7 +364,7 @@ def test_press_answer_uses_the_board_verdict_letter(ledger):
     (home.root / "self/people/ada/channels.toml").write_text('channels = ["mine:42"]\n')
     parent = heard(home, seat, "Get a board decision")
     ask = command(home, seat, "ask", "Ready?", "--for", parent, "--answered-by", "press")
-    assert mail(seat, ask) == []
+    assert "to: channel:mine/42" in mail(seat, ask)[0]
     inject_letter(home.root, to="thread:work", body="Yes", re=ask)
     waits.observe_waits(home, read_facts(home), True)
     assert view(home, ask).open

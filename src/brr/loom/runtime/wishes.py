@@ -297,8 +297,7 @@ def waits_on(found: dict[str, Wish], main: dict) -> dict[str, str]:
     nobody else will wake for it.
     """
     from .lifecycle import CLOSED
-    asks = {w.id: w for w in found.values() if w.open and w.sender == "resident"
-            and w.answered_by in ("reply", "press")}
+    asks = {w.id: w for w in found.values() if w.open and w.sender == "resident"}
     onward: dict[tuple[str, str], Wish] = {}
     for w in asks.values():
         onward.setdefault((w.thread, w.parent), w)
@@ -307,9 +306,6 @@ def waits_on(found: dict[str, Wish], main: dict) -> dict[str, str]:
         seen, current = set(), ask
         while True:
             seen.add(current.id)
-            if current.answered_by == "press":
-                head = "operator"
-                break
             head = str(main.get(current.thread, {}).get("opened-by") or "operator")
             if head == LOOM_OPENER:
                 head = "operator"
