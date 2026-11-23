@@ -47,7 +47,7 @@ hashes below remain authoritative for the snapshot if a deployed page changes.
 | Sub-processor list | [`src/frontend/src/routes/sub-processors/+page.svelte`](../../../src/frontend/src/routes/sub-processors/+page.svelte) | `4e0f5df17271fcc32fb4ab677b4ff499a6493a0cab0a68a49fcdfd702230fb75` |
 | Data Processing Agreement | [`docs/legal/dpa.md`](../dpa.md) | `ee366853701826282da0326092fc4ff504aab99f726e6dfcf234f4d9854f43fd` |
 | Article 30 record of processing | [`docs/legal/art-30-record.md`](../art-30-record.md) | `84d3186f7cf3263cf67d5377aca4d6a94fc56facf0416710cfc0390abb4c446f` |
-| Driven data-flow and trust inventory | [`SECURITY.md`](../../../SECURITY.md) | `d7140dd0a2d76561f622cdf7dc8ae4fa689006704952900d0e28d104b363a17f` |
+| Driven data-flow and trust inventory | [`SECURITY.md`](../../../SECURITY.md) | `bbf16df63b52bdf49b8793223047a5fa6177fe7720bc092bcc56489892d32a99` |
 | Pricing and offer page | [`src/frontend/src/routes/pricing/+page.svelte`](../../../src/frontend/src/routes/pricing/+page.svelte) | `10a539ce8369818ab026f69c4f72fdfac477a401675bee9e17e064a72f09e278` |
 | MIT license | [`LICENSE`](../../../LICENSE) | `3101d42b24f94e634de450ea11eca86b144900590896948376f67936acf02d92` |
 | License boundary overview | [`LICENSE-OVERVIEW.md`](../../../LICENSE-OVERVIEW.md) | `37ed3bb589c5b2a46bcb4a674548d49d433efdda573c003332f7c13405ada0d8` |
