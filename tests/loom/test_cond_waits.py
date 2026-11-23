@@ -324,7 +324,8 @@ def test_a_quiet_stop_names_the_morning_pass_that_will_wake_the_resident(ledger,
     (room / "port/wait").write_text("0\n")
     monkeypatch.setenv("BRNRD_BODY_JACK", "hand")
     assert f"Resting until {wake:%H:%MZ} (morning pass in inbox, {wake:%Y-%m-%d}), or the next letter." in (
-        jack.execute("stop", room, "{}"))
+        (room / "port/in/boundary.md").read_text())
+    assert jack.execute("stop", room, "{}") == ""
     assert told(home, wake - timedelta(seconds=1)) == []
     [letter] = told(home, wake)
     assert letter.data["to"] == "thread:inbox"

@@ -983,13 +983,6 @@ def execute(event: str, room: Path, stdin_text: str) -> str:
     out = _stop_block(room, text, plan) or _poll(room, stdin_text)
     if out:
         _opened(room)
-    elif _hand():
-        latest = _boundary_text(room)
-        boundary = parse_boundary(latest)
-        if (boundary.settled is None and not (set(boundary.ids) - answered(room))
-                and not _state(room).get("reincarnated") and _order(room) != "end"
-                and any(line.startswith("next wake: ") for line in latest.splitlines())):
-            return _clocked(_rest(latest) + "\n")
     return out
 
 
