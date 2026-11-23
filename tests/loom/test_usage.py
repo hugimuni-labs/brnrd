@@ -339,8 +339,8 @@ def _write_reading(root, shell, windows, *, error=None):
     path.write_text(json.dumps(payload))
 
 
-def test_one_installed_harness_keeps_todays_fuel_line_and_briefing(tmp_path, monkeypatch):
-    """A burn list copied onto a one-harness machine changes neither line."""
+def test_fuel_line_has_no_role_labels_regardless_of_installed_harnesses(tmp_path, monkeypatch):
+    """Legacy preferences and installed harness count do not change the readings."""
     import time
     from datetime import datetime, timezone
 
@@ -368,16 +368,8 @@ def test_one_installed_harness_keeps_todays_fuel_line_and_briefing(tmp_path, mon
     assert usage.fuel(home, "grok") == "fuel grok week 45%"
     brief = f"## {TITLE}\n{BRIEFING}"
     assert section(home) == brief and section() == brief
-    # Two harnesses is the control: the same files gain the role words, in burn order.
     monkeypatch.setattr("shutil.which", lambda name: f"/bin/{name}" if name in {"grok", "codex", "claude"} else None)
-    marked = usage.fuels(home, "grok")
-    assert marked != today
-    assert marked == (
-        "fuel grok week 45% left · 7.0d to reset · pace 100% · 3.8d behind burn · codex session 92% week 98% left · 7.0d to reset · pace 100% · 0.1d behind burn · "
-        "claude session 72% week 11% left · 7.0d to reset · pace 100% · 6.2d behind keep · vibe fails"
-    )
-    assert " burn" not in usage.fuel(home, "grok")
-    assert "burn" not in " ".join(usage.shell_fuels(home).values())
+    assert usage.fuels(home, "grok") == today
 
 
 def test_vibe_collector_reports_unmetered_without_inventing_fuel(tmp_path):

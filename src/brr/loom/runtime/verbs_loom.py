@@ -146,7 +146,7 @@ def _send(argv: list[str]) -> int:
     parser.add_argument("--at", help="YYYY-MM-DDTHH:MM:SSZ, +<n>m, +<n>h, or +<n>d")
     parser.add_argument("--body", dest="body_choice", metavar="SHELL[/CORE]")
     parser.add_argument("--spend", action="store_true",
-                        help="open the thread on the first spend.burn shell above the floor")
+                        help="when there is a choice, open on the first eligible engine in spend order")
     parser.add_argument("--repo", action="append", default=[])
     parser.add_argument("--budget", metavar="TOKENS",
                         help="weighted tokens, e.g. 2m: a new thread's allocation, or the opener's raise")
