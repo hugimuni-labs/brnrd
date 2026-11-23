@@ -3,7 +3,7 @@
 The design is the self's threads/boot-review/design.md (v2, on the person's
 5557 and 5565) and threads/reincarnate (10048). Nothing here says one is due. The value of what sits in a
 context can't be measured from outside it, so the jack only states facts: what
-the README gained and lost since this gen booted, the ids it cites that have
+the README gained and lost since waking, the ids it cites that have
 since closed, and, where a judgement is due (the reincarnation verb, a long park), the
 stakes and the context's size as plain cost.
 """
@@ -179,7 +179,7 @@ def readme_facts(room: Path, thread: str, facts, since: str = "") -> str:
         count = subprocess.run(["git", "-C", str(clone), "rev-list", "--count", f"{since}..HEAD", "--", rel],
                                capture_output=True, text=True).stdout.strip() or "0"
         if len(stat) >= 2 and stat[0].isdigit():
-            parts.append(f"+{stat[0]} −{stat[1]} lines in {count} landing{'s' * (count != '1')} since this gen booted")
+            parts.append(f"+{stat[0]} −{stat[1]} lines in {count} landing{'s' * (count != '1')} since waking")
     shut, prs = closed(facts)
     gone = [f"{ident} {shut[ident]}" for ident in dict.fromkeys(_WISH.findall(text)) if ident in shut]
     gone += [f"#{n} {prs[n]}" for n in dict.fromkeys(_PR.findall(text)) if n in prs]
@@ -351,9 +351,9 @@ def census(room: Path, thread: str, state: dict, facts, now: float | None = None
     landed = landed_at(room, thread, base) if thread else None
     lines = []
     readme = readme_facts(room, thread, facts, base) if thread else ""
-    head = f"since this gen booted{f' ({_ago(now - booted)} ago)' if booted else ''}"
+    head = f"since waking{f' ({_ago(now - booted)} ago)' if booted else ''}"
     if landed is not None:
-        lines.append(f"{head}, landed in the README (available to the next context): {readme}")
+        lines.append(f"{head}, landed in the README: {readme}")
     else:
         lines.append(f"{head}: nothing landed in the README" + (f" ({readme})" if readme else ""))
     mine = _mine(room, landed if landed is not None else booted)

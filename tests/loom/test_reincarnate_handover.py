@@ -206,7 +206,7 @@ from brr.loom.runtime.fakebody import Ctx
 from brr.loom.runtime.home import atomic_write
 ctx = Ctx(Path(sys.argv[1]))
 letters = ctx.owed()
-if "already read in an earlier context" in ctx.wake():
+if "already read before the molt" in ctx.wake():
     atomic_write(Path({str(received)!r}), json.dumps({{"wake": ctx.wake()}}))
     for letter in letters:
         ctx.send("thread:work", note="settled", re=letter.id)
@@ -219,8 +219,8 @@ else:
     try:
         wait_until(received.exists, 30, loom.dump)
         wake = json.loads(received.read_text())["wake"]
-        assert f"already read in an earlier context: {ask}" in wake
-        assert wake.count("already read in an earlier context") == 1
+        assert f"already read before the molt: {ask}" in wake
+        assert wake.count("already read before the molt") == 1
     finally:
         loom.halt()
     assert not loom.errors

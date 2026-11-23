@@ -132,14 +132,14 @@ def test_loom_part_points_at_wishes(home, jack):
     # How to reply, leave and end rides in the core's briefing, once, not in the loom part.
     from brr.loom.runtime.waits import GRAMMAR
     core = (room / "port/core.md").read_text()
-    assert "What is left on a wish lives on it: `wish <w-id> --left" in core
-    assert "Stamp what someone wants with `send --wish`" in core
+    assert "Record all remaining steps with `wish <w-id> --left" in core
+    assert "Record a wish with `send --wish`" in core
     assert "--result pr:<url> --line" in core and "--deliver" in core
-    assert "Stamp what someone wants" not in part and "--left" not in part
+    assert "send --wish" not in part and "--left" not in part
     assert f'--read "waiting: <what>" --wait <{GRAMMAR}>`' in core
-    assert core.count("Stopping is resting, not ending") == 1 and "A sleep or poll loop is never the wait" in core
+    assert core.count("Resting between turns at no cost") == 1 and "A sleep or poll loop is never the wait" in core
     assert core.index("## memory/stance.md") < core.index("## loom briefing")
-    assert "Stopping is resting" not in part and "poll loop" not in part
+    assert "Resting between turns" not in part and "poll loop" not in part
 
 
 @pytest.mark.parametrize("doors", [False, True])

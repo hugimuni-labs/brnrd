@@ -22,7 +22,7 @@ from .update import moved_text
 CAP = 1500
 SILENT = 600
 ROOM_KINDS = ("room.repaired", "room.unseeded", "room.seeded", "room.fallback", "wake.fallback")
-HEADER = "since the last context's boundary:"
+HEADER = "since the last boundary:"
 
 
 def _brief(value, size: int = 160) -> str:
@@ -109,11 +109,11 @@ def since_gone(facts, strand: str, gen: int, thread: str, threads: dict[str, str
     if starts:
         i, first = starts[0]
         commits = list(dict.fromkeys(str(f.data.get("commit") or "?")[:8] for _, f in starts))
-        text = f"the loom started {len(starts)} time{'s' * (len(starts) > 1)} (at {', '.join(commits)})"
+        text = f"loom starts: {len(starts)} time{'s' * (len(starts) > 1)} (at {', '.join(commits)})"
         last = next((r for r in reversed(rows[:i]) if _wrote(r, install)), None)
         gap = _seconds(first.at) - _seconds(last.at) if last is not None else 0
         if gap > SILENT:
-            text += f"; the ledger was silent {_span(gap)} before the first (a power-off or a stopped loop)"
+            text += f" · {_span(gap)} of ledger silence before the first (a power-off or a stopped loop)"
         lines.append((i, f"{text} ({first.id})"))
     letters = {str(f.data.get("id") or f.id): f for f in rows if f.kind == "letter"}
     recovered = {f.id.replace("loom.recovered:", "loom.degraded:", 1): f
@@ -134,7 +134,7 @@ def since_gone(facts, strand: str, gen: int, thread: str, threads: dict[str, str
                 letter = letters.get(str(d.get("id")))
                 if ("bounced" in (d.get("outcome"), d.get("reason")) and letter is not None
                         and threads.get(str(letter.data.get("from"))) == thread):
-                    lines.append((i, f"bounced: your letter {d.get('id')} ({f.id})"))
+                    lines.append((i, f"bounced: letter {d.get('id')}"))
         elif f.kind == "loom.moved" and data.get("install") == install:
             lines.append((i, f"{moved_text(f)} ({f.id})"))
         elif f.kind == "loom.degraded" and f.id in recovered:

@@ -40,7 +40,7 @@ EVERY = 300.0
 SHOWN_ACT = 5
 HEAD = "idle? fuel ahead of pace"
 _NO_GOALS = "no active goal: write one under goals/"
-_GOAL_CLOSE = "nothing new arrived: move a goal, or write why none can move today"
+_GOAL_CLOSE = "No new letters. Move a goal, or record why none can move today."
 _GOAL_FIELDS = ("stands", "next", "now", "stake")
 _ASK = (': take one and log the pick in one line (`wish <id> --pick "<why>"`), '
         "or say in one line why not; nothing more")
@@ -49,7 +49,7 @@ _KEEP = ("cache keepalive, fuel ahead of pace ({pace}): take one of these"
          " and work it, or end with one line saying why not; nothing more\n")
 # Words that put a wish's next step in a person's hands; their names are added from the ledger.
 WAITS_ON = r"his|her|hers|him|he|she|the person"
-_WAKE_NOTE = re.compile(r"\[the wake (?:folded|cut) [^\]\n]*\]\n")
+_WAKE_NOTE = re.compile(r"\[(?:Folded|Cut|the wake (?:folded|cut)) [^\]\n]*\]\n")
 # Fixed parts of a wake, and the loom's own reservation around them, recomputed at this pace
 # while the README is unchanged. A README edit busts both at once.
 _FIXED: dict[tuple, tuple[float, int]] = {}
@@ -516,7 +516,7 @@ def _readme_unease(home, facts, thread: str) -> tuple[str, str] | None:
     if cut <= 0:
         return None
     return (f"readme:{thread}",
-            f"unease: this README is cut at wake ({cut} of its {size} bytes cut): trim it")
+            f"unease: cut {cut} of {size} README bytes at wake. Whole on disk.")
 
 
 def _who(home, head: str) -> str:

@@ -705,7 +705,7 @@ def _kept_miss(room: Path) -> str:
     except Exception:
         return ""
     return ((
-        "uncommitted changes in a kept folder since this body began. Commit what you wrote, "
+        "uncommitted changes in a kept folder since waking. Commit what you wrote, "
         "only those paths: `python -m brr.loom.runtime lib commit <name> -m \"<what and why>\" <path>...`. "
         "Leave what is the person's; the loom reports it after an hour:\n") + "\n".join(lines)) if lines else ""
 
@@ -1057,7 +1057,7 @@ def _letter_miss(room: Path, parsed: Boundary, done: set[str]) -> str:
     return "owed letters, each with its reply (a reply or --note already sent counts, drained or not):\n" + "\n".join(rows) if rows else ""
 
 
-STOP = "the stop holds on {n}; do each, then stop. This list comes back whole at every stop until it is empty."
+STOP = "Rest held on {n}. Clear each, then stop. Full list repeated at each stop until cleared."
 
 
 def _stop_block(room: Path, text: str, plan: str) -> str:
@@ -1115,14 +1115,14 @@ def _stop_block(room: Path, text: str, plan: str) -> str:
         [head, *sections, *([news] if news else []), *([people] if people else [])])})
 
 
-END = """work is left on this thread (plan {plan}) and this body has not said how it ends. Do one:
+END = """Work left on this thread (plan {plan}), with no disposition recorded. Choose one:
 - a result: brnrd runtime wish <w-id> --result <kind>:<ref> --line "<what it is>" [--deliver]
 - the steps still left: brnrd runtime wish <w-id> --left "<step>" --left "<step>"
 - an ask to a person: brnrd runtime ask "<question>" --for <w-id> --rec "<your call>"
 - a park with its reason: brnrd runtime wish <w-id> --read "waiting: <on what>" --wait <condition>
 - done: brnrd runtime settle {thread} --why "<what it became>"
 `brnrd runtime wishes` lists the w-ids, and `--wait` takes {grammar}.
-The jack then holds you, and the loom's letter wakes you when the wait comes true; never a sleep loop."""
+Resting until the wait is met, then waking by letter. Park without a sleep loop."""
 
 
 LEFT = """what is left on a wish moved since it was last said: {named}
@@ -1130,10 +1130,10 @@ Restate each one's whole list:
 - brnrd runtime wish <w-id> --left "<step>" --left "<step>"   (--left same when nothing moved)
 - or a park: wish <w-id> --read "waiting: <on what>"; a delivery: --result <kind>:<ref> --line "<what>" --deliver"""
 
-README = """before resting: since threads/{thread}/README.md last changed this body did {did}. Any end can
-come while it rests, and the next context starts from the README. Rewrite it to the current state
+README = """Before resting: {did} since the last change to threads/{thread}/README.md.
+For the next wake, record the current state
 (a decision with its why, `## Now`, a done row cut to its receipt; never a log line) and land it with
-`brnrd runtime send-self --room .`; or stop again: it still is.{facts}"""
+`brnrd runtime send-self --room .`. Or stop again to rest.{facts}"""
 
 
 def _readme_miss(room: Path, state: dict) -> str:
@@ -1152,7 +1152,7 @@ MARK = """context {k}k, past the {mark}k mark, before resting: what would be los
 The burden is on holding: name what would die, or go. A conversation with a person that is mid-way counts as live.
 - go: brnrd runtime molt --carry <file>
 - hold: brnrd runtime hold --why "<what would die, by name>"
-Asked once; it comes back when the context grows {rearm}k past this."""
+Asked once, then again after another {rearm}k of context."""
 
 
 def _mark_miss(room: Path, state: dict) -> str:

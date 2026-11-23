@@ -502,7 +502,7 @@ def test_an_unowed_wake_holds_the_map_and_keeps_the_carry() -> None:
         "topics/wake.md · 2026-11-02 · title\n"
         "## Loom\n"
         "Molted notes stay\n"
-        "you are strand s-ab12-newnew on thread t\n"
+        "strand s-ab12-newnew · thread t\n"
         "loom: runs abc\n"
         "repo brnrd: somewhere\n"
         "to send a repo's branch out: publish\n"
@@ -513,8 +513,8 @@ def test_an_unowed_wake_holds_the_map_and_keeps_the_carry() -> None:
     assert kept.startswith("last molt:")
     assert "keep this" in kept and "spec" in kept and "Molted notes stay" in kept
     assert "the letter" in kept
-    assert "## Tree" not in kept and "you are strand" not in kept and "loom: runs abc" not in kept
-    assert "## Tree" in later and "topics/wake.md" in later and "you are strand" in later
+    assert "## Tree" not in kept and "strand s-ab12-newnew" not in kept and "loom: runs abc" not in kept
+    assert "## Tree" in later and "topics/wake.md" in later and "strand s-ab12-newnew" in later
     assert "Molted notes stay" not in later and "keep this" not in later
 
 

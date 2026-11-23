@@ -142,7 +142,7 @@ def test_a_resting_stop_asks_once_for_the_readme_acts_left_behind(room, tmp_path
     _fact(room, "wish.result", wish="w-aaaaaaaaaaaa", ref="u", line="PR", delivered=True)
     asked = json.loads(execute("stop", room, stdin))
     assert asked["decision"] == "block"
-    assert "since threads/work/README.md last changed this body did a result." in asked["reason"]
+    assert "a result since the last change to threads/work/README.md." in asked["reason"]
     assert "never a log line" in asked["reason"]
     # Asked once: stopping again rests.
     assert execute("stop", room, stdin) == ""
@@ -161,7 +161,7 @@ def test_a_resting_stop_asks_once_for_the_readme_acts_left_behind(room, tmp_path
     time.sleep(0.01)
     _fact(room, "wish.read", wish="w-aaaaaaaaaaaa", reading="waiting: CI", wait={"on": "ci:o/r@abc"})
     asked = json.loads(execute("stop", room, stdin))
-    assert "this body did a park." in asked["reason"]
+    assert "a park since the last change" in asked["reason"]
 
 
 # threads/reincarnate (10048): past the mark a park carries a census and asks what would die.
@@ -219,7 +219,7 @@ def test_the_census_splits_what_landed_from_what_only_this_context_holds(room, t
     _fact(room, "shown", strand=STRAND, gen=1, ids=["a/1", "a/2", "a/3"])
     said, kept = reincarnate.census(room, "work", {"booted_at": booted, "transcript": str(path), "stops": 4}, [])
     first, after, counts = said.splitlines()
-    assert first.startswith("since this gen booted (2m ago): nothing landed in the README")
+    assert first.startswith("since waking (2m ago): nothing landed in the README")
     # Counted, not the stop's distinct kinds; a left that did not move is no act.
     assert after == "unlanded, not yet in the README: 2 letter, 1 wish.left"
     assert counts == ("scroll: tool output 60% · letters and boundaries 30% · own turns 10% · "
@@ -266,7 +266,7 @@ def test_a_park_before_the_first_stop_reads_the_scroll_itself(room, tmp_path, ca
     verbs_wishes._rest_line(SimpleNamespace(room=str(room)), {"wait": {"on": "letter:a/b"}})
     said = capsys.readouterr().err
     assert "resting until letter:a/b. Context 170k." in said and reincarnate.DIE in said
-    assert said.startswith("since this gen booted") and "scroll: tool output 60%" in said
+    assert said.startswith("since waking") and "scroll: tool output 60%" in said
 
 
 def test_a_ledger_written_before_the_rename_reads_in_todays_words(tmp_path):

@@ -673,7 +673,7 @@ def kept_line(home, thread: str, threads: dict[str, str]) -> str:
     mine = sorted((s, why) for s, why in kept.items() if threads.get(s) == thread)
     if not mine:
         return ""
-    return ("rooms of this thread kept for work a body left in them; land it, move it into the self, or"
+    return ("Rooms kept for unlanded work on this thread. Land the work, move it into the self, or"
             " discard it, then `python -m brr.loom.runtime reap <strand> --force --why \"…\"`:\n"
             + "".join(f"- {strand}: {why}\n" for strand, why in mine))
 

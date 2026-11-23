@@ -202,17 +202,17 @@ def test_one_stop_shows_every_miss_at_once_until_each_is_cleared(body):
     first = json.loads(stop(seat))["reason"]
     # The left and the ending in one block, each with its command: no maze of stops.
     assert f"{wish} (no left yet)" in first and 'wish <w-id> --left "<step>"' in first
-    assert "has not said how it ends" in first and "settle work --why" in first
+    assert "with no disposition recorded" in first and "settle work --why" in first
     jack.execute("post", seat, "{}")
     again = json.loads(stop(seat))["reason"]
-    assert f"{wish} (no left yet)" in again and "has not said how it ends" in again
+    assert f"{wish} (no left yet)" in again and "with no disposition recorded" in again
     command(home, seat, "wish", wish, "--left", "freeze hover")
     jack.execute("post", seat, "{}")
     render(home)
     third = json.loads(stop(seat))["reason"]
     # A left answers both (it says how the body ends); the letter still owed stays on the list.
-    assert "what is left" not in third and "has not said how it ends" not in third
-    assert third.partition(chr(10))[2].startswith("the stop holds on 1 thing") and "--note" in third
+    assert "what is left" not in third and "with no disposition recorded" not in third
+    assert third.partition(chr(10))[2].startswith("Rest held on 1 thing") and "--note" in third
     assert not list((seat / "port/out").glob("asked-*.md"))
 
 

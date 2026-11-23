@@ -310,6 +310,25 @@ def test_the_self_decides(tmp_path: Path) -> None:
     assert seed_line not in via_cli.stdout
 
 
+def test_installed_wake_rewords_existing_recipe_receipts_without_changing_letters(tmp_path):
+    home = tmp_path / "home"
+    assert cli(["init", "--home", str(home)]).returncode == 0
+    self_dir = home / "self"
+    write_thread(self_dir, "w-1", "Headline")
+    recipe = self_dir / "core" / "loom" / "wake"
+    old = ("[the wake cut 1148 of this README's 2220 bytes from its end to fit the "
+           "20033-byte budget; the file is whole on disk: trim it]")
+    recipe.write_text(f"#!/bin/sh\ncat <<'EOF'\n## threads/w-1/README.md\n{old}\n"
+                      f"\n## Occasion\n{old}\nEOF\n", encoding="utf-8")
+    commit(self_dir, "use legacy receipt")
+    clone = selfrepo.room(home, "legacy")
+    result = cli(["wake", "--room", str(clone), "--thread", "w-1"])
+    assert result.returncode == 0, result.stderr
+    before, letters = result.stdout.split("## Occasion\n", 1)
+    assert "[Cut 1148 of 2220 README bytes (20033-byte budget). Whole on disk.]" in before
+    assert old not in before and letters.strip() == old
+
+
 def test_budget_cuts_the_tree_and_refuses_a_fat_identity(tmp_path: Path) -> None:
     home = tmp_path / "home"
     assert cli(["init", "--home", str(home)]).returncode == 0
@@ -380,7 +399,7 @@ def test_a_fat_thread_readme_is_cut_and_the_letter_still_wakes(tmp_path: Path) -
     assert cut.returncode == 0, cut.stderr
     assert len(cut.stdout.encode("utf-8")) <= limit
     # The Plan is a whole section: it folds to its title before anything is cut from the end.
-    assert "## Plan\n[the wake folded this section's" in cut.stdout and "row 0 " not in cut.stdout
+    assert "## Plan\n[Folded " in cut.stdout and "row 0 " not in cut.stdout
     assert "# Headline" in cut.stdout and cut.stdout.rstrip().endswith("the ask")
 
 
@@ -401,11 +420,11 @@ def test_the_wake_folds_sections_last_first_and_never_now(tmp_path: Path) -> Non
     one = wake(clone, "w-1", owed, LOOM_BUDGET_BYTES=str(len(full.stdout.encode("utf-8")) - 1000))
     assert one.returncode == 0, one.stderr
     assert "now 29 " in one.stdout and "plan 29 " in one.stdout and "decision 0 " not in one.stdout
-    assert "## Decisions\n[the wake folded this section's" in one.stdout
+    assert "## Decisions\n[Folded " in one.stdout
     both = wake(clone, "w-1", owed, LOOM_BUDGET_BYTES=str(len(full.stdout.encode("utf-8")) - 3000))
     assert both.returncode == 0, both.stderr
     assert "now 29 " in both.stdout and "plan 0 " not in both.stdout and "decision 0 " not in both.stdout
-    assert "the wake cut" not in both.stdout and both.stdout.rstrip().endswith("the ask")
+    assert "[Cut " not in both.stdout and both.stdout.rstrip().endswith("the ask")
 
 
 def test_room_is_a_clone_and_reused(tmp_path: Path) -> None:
@@ -623,7 +642,7 @@ def test_a_fat_page_is_capped_with_a_receipt_and_the_letter_still_wakes(tmp_path
     assert result.returncode == 0, result.stderr
     people = result.stdout.split("## People\n", 1)[1].split("## Loom\n", 1)[0]
     assert len(people.encode("utf-8")) <= 2400
-    assert people.endswith("people/arseni/page.md is whole on disk]\n")
+    assert people.endswith("Whole on disk: people/arseni/page.md.]\n")
     assert "letter-body-42" in result.stdout
 
 
@@ -694,7 +713,7 @@ def test_fat_topics_are_capped_with_a_receipt(tmp_path: Path) -> None:
     topics = _topics(_topics_wake(tmp_path, pages))
     assert len(topics.encode("utf-8")) <= 1200
     assert topics.startswith("topics/a-long-topic-page-name-09.md · 2026-10-10 · entry-09-")
-    assert topics.endswith("bytes; topics/ is whole on disk]\n")
+    assert topics.endswith("bytes. Whole on disk: topics/.]\n")
 
 
 def test_no_dated_topic_no_topics_section(tmp_path: Path) -> None:
