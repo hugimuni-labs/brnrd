@@ -263,3 +263,50 @@ def test_a_delivered_wish_takes_one_line_in_the_wake(body):
     assert f"{done} · delivered · Ship the switch · https://example.com/9" in shown
     assert "wait for CI" not in shown and "pick a palette" in shown
     assert sum(done in line for line in shown.splitlines()) == 1
+
+
+FIT_RECIPE = """\
+import os, sys
+budget = int(os.environ["LOOM_BUDGET_BYTES"])
+with open(os.environ["FIT_LOG"], "a") as log:
+    log.write(f"{budget}\\n")
+if budget < int(os.environ["FIT_NEED"]):
+    print(f"over budget: the wake is {os.environ['FIT_NEED']}B over its {budget}B budget", file=sys.stderr)
+    sys.exit(3)
+print("## threads/work/README.md\\nWish work\\n## Letters\\n")
+"""
+
+
+def test_an_over_budget_wake_folds_the_looms_own_parts_before_refusing(ledger, tmp_path, monkeypatch):
+    # Inbox 2026-11-23 17:41Z: the recipe's fixed parts fit only once the loom's
+    # own reserve (held rows, the thread's wishes) gave way.
+    home, seat = ledger
+    for index in range(6):
+        heard(home, seat, f"Wish number {index} with a line long enough to weigh")
+    recipe = tmp_path / "recipe.py"
+    recipe.write_text(FIT_RECIPE)
+    log = tmp_path / "budgets"
+    monkeypatch.setenv("FIT_LOG", str(log))
+    monkeypatch.setenv("FIT_NEED", "0")
+    out, err, sizes = StringIO(), StringIO(), tmp_path / "sizes.json"
+    assert run_wake(seat, "work", recipe=recipe, stdout=out, stderr=err, sizes=sizes) == 0
+    first = int(log.read_text().split()[0])
+    assert "Wish number 5" in out.getvalue() and "folded" not in json.loads(sizes.read_text())
+
+    log.unlink()
+    monkeypatch.setenv("FIT_NEED", str(first + 1))
+    out, err = StringIO(), StringIO()
+    assert run_wake(seat, "work", recipe=recipe, stdout=out, stderr=err, sizes=sizes) == 0, err.getvalue()
+    budgets = [int(b) for b in log.read_text().split()]
+    assert budgets[0] == first and budgets[1] > first and len(budgets) == 2
+    wake = out.getvalue()
+    assert "Wish number" not in wake
+    assert "Whole in brnrd runtime wishes --thread work.]" in wake
+    assert err.getvalue() == ""  # the first refusal is not the wake's word
+    assert json.loads(sizes.read_text())["folded"] == ["held", "wishes"]
+
+    # Past the fold, the wake is still refused, with the second run's reason once.
+    monkeypatch.setenv("FIT_NEED", "10000000")
+    err = StringIO()
+    assert run_wake(seat, "work", recipe=recipe, stdout=StringIO(), stderr=err, sizes=sizes) == 3
+    assert err.getvalue().count("over budget") == 1

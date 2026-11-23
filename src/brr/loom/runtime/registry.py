@@ -92,7 +92,7 @@ REGISTRY = (
     _kind("guard.granted",     "letter",  "strand gen thread class target letter wish",       "strand",      "global"),
     _kind("guard.refused",     "letter",  "strand gen thread class target",                   "strand",      "global"),
     _kind("attempt.ended",     "attempt", "thread strand gen ids cause code dispositions evidence", "loom",  "global",  once=True),
-    _kind("wake.sizes",        "wake",    "thread strand gen budget total parts",             "loom",        "global",  once=True),
+    _kind("wake.sizes",        "wake",    "thread strand gen budget total parts folded?",     "loom",        "global",  once=True),
     # Measured on the wake a molt opened, at its first act that moved something.
     _kind("molt.cost",         "molt",    "thread strand gen opened first_s? tokens reset repeated carry_bytes read_bytes", "loom", "global", once=True),
     _kind("port.drained",      "port",    "thread strand gen",                                "loom",        "global",  once=True),

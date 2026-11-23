@@ -19,7 +19,7 @@ import tempfile
 import time
 import traceback
 from dataclasses import dataclass, field, replace
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from brr.daemon2.facts import Fact
@@ -387,10 +387,12 @@ def _record_sizes(home, room, strand, gen, thread, wake, *, deferred=False):
                     else "recipe")
             parts = {key: size for key, size in parts.items() if key in {"core", "held"}}
             parts[name] = total - sum(parts.values())
-        _record(home, "wake.sizes", {
-            "thread": thread, "strand": strand, "gen": gen,
-            "budget": int(os.environ.get("LOOM_BUDGET_BYTES") or 24000),
-            "total": total, "parts": parts}, f"wake.sizes:{strand}:{gen}")
+        data = {"thread": thread, "strand": strand, "gen": gen,
+                "budget": int(os.environ.get("LOOM_BUDGET_BYTES") or 24000),
+                "total": total, "parts": parts}
+        if sizes.get("folded"):
+            data["folded"] = list(sizes["folded"])
+        _record(home, "wake.sizes", data, f"wake.sizes:{strand}:{gen}")
     except Exception as exc:  # noqa: BLE001
         _log(home, f"start {strand}: wake sizes not recorded ({exc})")
 
@@ -1386,6 +1388,21 @@ def _room_kept(home: Home, strand: str) -> list[str]:
     return lines
 
 
+def _start_failed_notice(home, facts, thread: str, gen: int, letter, channel: str) -> None:
+    """Tell the person once per streak of home-caused failures that their letter waits.
+
+    The router retries a refused home when self moves, or ten minutes after the
+    attempt (``Router._home_retry_waiting``); silence for those ten minutes reads as
+    a lost letter (inbox, 2026-11-23 17:41Z).
+    """
+    retry = datetime.now(timezone.utc) + timedelta(seconds=600)
+    notice(home, facts, "start-failed", f"{channel} {thread}:streak:{_home_streak(facts, thread, gen)}",
+           "I couldn't start just now, so your message is waiting. "
+           f"I'll try again by about {retry.astimezone():%H:%M}, sooner if the fault is fixed first.",
+           "Nothing to do; I'll answer once I start.",
+           about=letter, channel=channel, passive=True)
+
+
 def _home_streak(facts, thread: str, gen: int) -> int:
     """The first generation of the home-caused failures that end at ``gen``."""
     ends = sorted(((int(f.data["gen"]), f) for f in kind_facts(facts, "attempt.ended")
@@ -1498,6 +1515,9 @@ def _end_attempt(home, facts, strand, thread, gen, code, letters, cause, failure
         ident, author = letter.id, str(letter.data.get("from", ""))
         if cause == "failed" and failure_origin == "home" and ident not in failure_letters:
             dispositions.append({"id": ident, "outcome": "retry", "reason": "home-caused failure"})
+            channel = channels.get(ident)
+            if author.startswith(("p-", "person:")) and channel:
+                _start_failed_notice(home, facts, thread, gen, letter, channel)
             continue
         if limit:
             dispositions.append({"id": ident, "outcome": "retry", "reason": "core limit; wait or permitted move"})

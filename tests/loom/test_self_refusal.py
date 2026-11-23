@@ -249,3 +249,47 @@ def test_home_retry_fallback_survives_router_restart(tmp_path):
                                           'reason': 'home-caused failure'}]})
     assert Router(home)._home_retry_waiting([attempt(599)], 'work')
     assert not Router(home)._home_retry_waiting([attempt(601)], 'work')
+
+
+def test_a_person_whose_letter_waits_on_a_broken_home_hears_once_per_streak(tmp_path, monkeypatch):
+    """Inbox 2026-11-23 17:41Z: the letter waited ten minutes in silence. The chat is faked."""
+    from brr.loom.runtime import loom as loom_module
+    root = tmp_path / "home"
+    write_thread(root, "work", "The ask", "answer-fast", wait="0")
+    clone = root / "self"
+    identity = clone / "core/identity.md"
+    identity.write_text("x" * 30000)
+    git(clone, "add", "-A")
+    git(clone, "commit", "-m", "Home state that cannot wake")
+    asks = []
+    monkeypatch.setattr(loom_module, "reply_channels",
+                        lambda facts, home=None: {ident: "fake" for ident in asks})
+    asks.append(inject_letter(root, to="thread:work", body="Please answer"))
+    loom = Loom(root)
+    loom.start()
+    ends = lambda: [f for f in loom.facts() if f.kind == "attempt.ended" and f.data["thread"] == "work"]
+    words = lambda: [f for f in loom.facts() if f.kind == "letter" and f.id.startswith("loom/start-failed-")]
+    try:
+        wait_until(lambda: len(ends()) >= 1, 15, loom.dump)
+        wait_until(lambda: len(words()) == 1, 5, loom.dump)
+        [word] = words()
+        assert word.data["to"] == "fake" and word.data["notice"] and word.data["about"] == asks[0]
+        assert word.data["body"].startswith("I couldn't start just now, so your message is waiting. "
+                                            "I'll try again by about ")
+        # Self moves without the repair: the router retries, the home fails again, same streak.
+        (clone / "threads/work/note.md").write_text("still broken\n")
+        git(clone, "add", "-A")
+        git(clone, "commit", "-m", "Not the repair")
+        wait_until(lambda: len(ends()) >= 2, 15, loom.dump)
+        assert all(f.data["evidence"].get("home_failure") for f in ends())
+        assert len(words()) == 1
+        identity.write_text("The resident.\n")
+        git(clone, "add", "-A")
+        git(clone, "commit", "-m", "Repair the home")
+        wait_until(lambda: letter_owners(loom.facts(), main_snapshot(loom.home))[asks[0]].done,
+                   15, loom.dump)
+        assert len(words()) == 1
+    finally:
+        loom.halt()
+        kill_bodies(loom)
+    assert not loom.errors
