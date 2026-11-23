@@ -954,10 +954,17 @@ def run_wake(room_dir: Path, thread: str, owed: Path | None = None, *,
     from .briefing import section as briefing_section
     briefing = briefing_section(home)
     topics = _wake_topics(clone, thread, owed)
+    cost = ""
+    if home is not None:
+        # Already written, at the previous wake's first act. Reserved here so the recipe
+        # leaves room for the line the body actually receives.
+        from .moltcost import wake_line
+        cost = wake_line(facts, thread)
     # Reserve what the loom adds before the recipe fits its tree/README to the budget:
     # the tree is what gives way to the topic heads.
     limit = int(env.get("LOOM_BUDGET_BYTES") or 24000)
-    env["LOOM_BUDGET_BYTES"] = str(max(0, limit - len((section + briefing + topics).encode("utf-8"))))
+    env["LOOM_BUDGET_BYTES"] = str(max(0, limit - len(
+        (section + briefing + topics + ((cost + "\n") if cost else "")).encode("utf-8"))))
     if core is not None:
         # Absent after the run means the recipe kept the core in stdout.
         Path(core).unlink(missing_ok=True)
@@ -994,10 +1001,13 @@ def run_wake(room_dir: Path, thread: str, owed: Path | None = None, *,
             output = insert_wishes(output, section)
         if proc.returncode == 0 and topics:
             output = insert_topics(output, topics)
+        if proc.returncode == 0 and cost:
+            output = cost + "\n" + output
         if proc.returncode == 0 and sizes is not None:
             kept = Path(core).read_text(encoding="utf-8") if core is not None and Path(core).is_file() else ""
+            generated = section + topics + ((cost + "\n") if cost else "")
             Path(sizes).write_text(json.dumps(wake_sizes(
-                Path(sizes), kept + output, briefing=briefing, generated=section + topics)), encoding="utf-8")
+                Path(sizes), kept + output, briefing=briefing, generated=generated)), encoding="utf-8")
         (stdout or sys.stdout).write(output)
         return proc.returncode
     finally:

@@ -877,6 +877,8 @@ def execute(event: str, room: Path, stdin_text: str) -> str:
         guarded = "\n".join(filter(None, (_first_word(room)[0], guarded)))
     if event == "post":
         tooltrace.note(room, stdin_text, "post")
+        from .moltcost import observe as molt_observe
+        molt_observe(room, stdin_text)
         from .audit import note as audit_note
         audit_note(room, stdin_text, "post")
         _keep_transcript(room, stdin_text)
