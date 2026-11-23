@@ -163,3 +163,31 @@ def test_taken_board_port_reaches_the_boundary_without_stopping_the_loop(tmp_pat
     assert ticks == [True]
     assert 'board since' in line and f'board port {port}:' in line
     assert 'Address already in use' in line
+
+
+def test_started_board_logs_its_url_and_status_shows_it(tmp_path, monkeypatch):
+    import socket
+    from brr.loom.runtime import service
+    from brr.loom.runtime.board import Parts
+
+    write_thread(tmp_path, 'brnrd', 'Brnrd', 'quit-now')
+    stop = threading.Event()
+    seen = []
+    monkeypatch.setattr(usage, 'shells', lambda home: ())
+    monkeypatch.setattr(Parts, 'run', lambda self: None)
+    monkeypatch.setenv('BRNRD_FRONTEND_DIR', str(tmp_path / 'no-build'))
+
+    def step(*args):
+        seen.append(service._board_line(tmp_path))
+        stop.set()
+
+    monkeypatch.setattr(loom, 'tick_once', step)
+    with socket.socket() as probe:
+        probe.bind(('127.0.0.1', 0))
+        port = probe.getsockname()[1]
+    path = tmp_path / 'loom/config.toml'
+    path.write_text(path.read_text() + f'\nboard_port = "{port}"\n')
+    loom.run(tmp_path, stop=stop, tick=.001)
+    url = f'http://127.0.0.1:{port}'
+    assert seen == [f'board: {url}']
+    assert f'board: serving {url}' in (tmp_path / 'loom/loom.log').read_text()

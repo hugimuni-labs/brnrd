@@ -534,11 +534,33 @@ def _body_line(home: Path | None) -> str:
     return f"body: {choice}" if choice else "body: unset"
 
 
+def _board_line(home: Path | None) -> str:
+    """The local board's URL, or how to turn it on; a configured port that does not answer says so."""
+    if home is None:
+        return "board: -"
+    from .config import ConfigError
+    from .connectors.web.common import link
+    try:
+        port = load_config(home).board_port
+    except ConfigError:
+        return "board: unavailable (invalid config)"
+    if not port or not str(port).isdigit():
+        return f"board: off (turn on: {WEB_SETUP})"
+    import socket
+    url = link(int(port))
+    try:
+        socket.create_connection(("127.0.0.1", int(port)), timeout=0.5).close()
+    except OSError:
+        return f"board: {url} (not answering)"
+    return f"board: {url}"
+
+
 def _print_status(*, state: str, pid: int | None, home: Path | None) -> None:
     print(f"state: {state}")
     print(f"pid: {pid if pid else '-'}")
     print(f"home: {home if home else '-'}")
     print(_body_line(home))
+    print(_board_line(home))
     from .memory import held
     hold = held(home)
     if hold:
@@ -928,10 +950,12 @@ def _uninstall(*, run, agents_home, system) -> int:
     return 0
 
 
+WEB_SETUP = "brnrd setup channel --kind web --wait 0"
+
 LOOM_USAGE = (
     "usage: brnrd loom install [--home PATH] [--no-start] [--dry-run] [--dev] | uninstall | start | stop | restart | status | logs | where | config [edit | set KEY VALUE] | check\n"
     "\n"
-    "Local board: brnrd setup channel --kind web --wait 0\n"
+    f"Local board: {WEB_SETUP}\n"
     "Enables the loopback page, prints its URL and starts the loom.\n\n"
     "The loom is the service brnrd's resident runs on. A body's own verbs\n"
     "(send, wish, ask, settle, send-self, ...) are `brnrd runtime --help`."
