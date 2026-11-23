@@ -485,10 +485,10 @@ def test_a_dead_workers_bounce_names_its_commits_and_the_opener_lands_them(tmp_p
     landed = root / "landed.json"
     bodies(root, f'''import json, subprocess, sys, time
 from pathlib import Path
-from brr.loom.runtime.fakebody import Ctx, _own_thread
+from brr.loom.runtime.fakebody import Ctx
 room = Path(sys.argv[1])
 ctx = Ctx(room)
-own = _own_thread(ctx.wake())
+own = ctx.thread
 def verb(*args):
     return subprocess.run([sys.executable, "-m", "brr.loom.runtime", "publish", *args,
                            "--room", str(room)], capture_output=True, text=True, env=ctx.env)

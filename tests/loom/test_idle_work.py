@@ -411,10 +411,10 @@ def test_a_readme_cut_at_wake_names_the_recipes_own_numbers(ledger, monkeypatch)
     recipe_limit = total - excess
     rendered = wake.clip(folded, excess - saved, recipe_limit) if excess - saved > 0 else folded
     cut = idle._bytes_removed(text, rendered)
-    note = re.search(r"cut (\d+) of this README's (\d+) bytes", rendered)
+    note = re.search(r"Cut (\d+) of (\d+) README bytes", rendered)
     assert note and int(note.group(1)) == cut and int(note.group(2)) == size
     assert (key_line, line) == ("readme:work",
-                                f"unease: this README is cut at wake ({cut} of its {size} bytes cut): trim it")
+                                f"unease: cut {cut} of {size} README bytes at wake. Whole on disk.")
 
 
 def test_the_oldest_unanswered_ask_is_the_inbox_unease(ledger, monkeypatch):
@@ -479,7 +479,7 @@ def test_twenty_renders_of_one_quiet_face_count_once(ledger, monkeypatch):
     home, seat = ledger
     _, context = _seat(home, seat, monkeypatch, AHEAD)
     room = home.room("s-aaaa-test")
-    line = "unease: this README is cut at wake (10 of its 20 bytes cut): trim it"
+    line = "unease: cut 10 of 20 README bytes at wake. Whole on disk."
     idle.publish_unease(room, "readme:work", line)
     fact = "quiet:s-aaaa-test:1:2026-11-22T05:33:00+00:00"
     quiet = {"face": PROPOSED["quiet"], "token": "quiet since 05:33", "fact": fact}
@@ -499,7 +499,7 @@ def test_twenty_renders_of_one_quiet_face_count_once(ledger, monkeypatch):
 
 def test_the_jack_counts_each_unmarked_show(tmp_path):
     room = tmp_path / "room"
-    line = "unease: this README is cut at wake (10 of its 20 bytes cut): trim it"
+    line = "unease: cut 10 of 20 README bytes at wake. Whole on disk."
     idle.publish_unease(room, "readme:work", line)
     for n in range(1, 4):
         assert jack._unease(room) == line
@@ -519,7 +519,7 @@ def test_the_jack_counts_each_unmarked_show(tmp_path):
 def test_a_new_unease_key_resets_the_shown_count(tmp_path):
     room = tmp_path / "room"
     now = datetime(2026, 11, 22, 5, 33, tzinfo=timezone.utc).timestamp()
-    first = "unease: this README is cut at wake (10 of its 20 bytes cut): trim it"
+    first = "unease: cut 10 of 20 README bytes at wake. Whole on disk."
     idle.publish_unease(room, "readme:work", first)
     for _ in range(6):
         idle.present_unease(room, now)
@@ -559,16 +559,16 @@ def test_the_stop_shows_unease_behind_pace(worker, monkeypatch):
     monkeypatch.setattr(usage, "reading", lambda *args, **kwargs: BEHIND)
     (room / "port/in/idle.md").write_text(BLOCK)
     idle.publish_unease(room, "readme:work",
-                        "unease: this README is cut at wake (10 of its 20 bytes cut): trim it")
+                        "unease: cut 10 of 20 README bytes at wake. Whole on disk.")
     result = json.loads(jack.execute("stop", room, "{}"))
     assert "Resting until the next letter." in result["reason"]
-    assert "unease: this README is cut at wake" in result["reason"]
+    assert "unease: cut " in result["reason"]
     assert json.loads((room / "port" / "unease.json").read_text())["readme:work"]["n"] == 1
 
 
 _GOAL_LINE = ("goal growth: 1 of 4 accounts pays · next: 3 paying · now: find why 3 of 4 do not pay"
               " · stake: brnrd has no future without paying users")
-_GOAL_CLOSE = "nothing new arrived: move a goal, or write why none can move today"
+_GOAL_CLOSE = "No new letters. Move a goal, or record why none can move today."
 
 
 def _write_goal(home, name, status="active", date=None):

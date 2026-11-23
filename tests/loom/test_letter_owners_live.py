@@ -39,9 +39,9 @@ def test_unhandled_bounces_walk_to_top_then_operator(tmp_path, capsys):
                      f'opened-by: thread:{opener}\n---\n# {name}\n', 'custom', wait='0')
     bodies(root, r'''import sys, time
 from pathlib import Path
-from brr.loom.runtime.fakebody import Ctx, _own_thread
+from brr.loom.runtime.fakebody import Ctx
 ctx = Ctx(Path(sys.argv[1]))
-own = _own_thread(ctx.wake())
+own = ctx.thread
 letters = ctx.owed()
 if any('begin' == l.body for l in letters):
     for l in letters:
@@ -159,9 +159,9 @@ def test_climb_waits_for_ended_and_drained_then_opener_reads_it(tmp_path, monkey
     ready = root / 'worker-ready'
     bodies(root, f'''import sys, subprocess, time
 from pathlib import Path
-from brr.loom.runtime.fakebody import Ctx, _own_thread
+from brr.loom.runtime.fakebody import Ctx
 ctx = Ctx(Path(sys.argv[1]))
-if _own_thread(ctx.wake()) == 'top':
+if ctx.thread == 'top':
     for l in ctx.owed():
         if 'climbed here' in l.body:
             ctx.send('thread:top', note='read climbed ask', re=l.id)
@@ -249,10 +249,10 @@ def test_settling_worker_disposes_its_reply_without_an_extra_note(tmp_path):
     accepted = root / 'accepted'
     bodies(root, f'''import sys, subprocess, time
 from pathlib import Path
-from brr.loom.runtime.fakebody import Ctx, _own_thread
+from brr.loom.runtime.fakebody import Ctx
 from brr.loom.runtime.port import parse_boundary
 ctx = Ctx(Path(sys.argv[1]))
-if _own_thread(ctx.wake()) == 'worker':
+if ctx.thread == 'worker':
     for l in ctx.owed():
         ctx.send(l.reply, 'WORKED', re=l.id)
         ctx.send(l.reply, 'New proposal', cite=l.id)

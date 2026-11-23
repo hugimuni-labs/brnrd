@@ -530,12 +530,12 @@ def test_the_stop_repeats_its_whole_list_after_work_and_lets_an_idle_repeat_thro
     room = _room(tmp_path)
     _write(room, [_letter()])
     first = json.loads(execute("stop", room, "{}"))["reason"]
-    assert first.split("\n", 1)[1].startswith("the stop holds on 1 thing")
+    assert first.split("\n", 1)[1].startswith("Rest held on 1 thing")
     execute("post", room, "{}")
     again = json.loads(execute("stop", room, "{}"))["reason"]
     assert "send --re p-test/abcde --to thread:tb" in again
     # Nothing done since the same list: the body read it, and is not trapped.
-    assert "the stop holds" not in execute("stop", room, "{}")
+    assert "Rest held" not in execute("stop", room, "{}")
 
 
 def test_a_patched_jack_clock_stays_out_of_the_shared_time_module(monkeypatch):

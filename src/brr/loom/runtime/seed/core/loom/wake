@@ -226,7 +226,7 @@ def fold(readme: str, excess: int) -> str:
             break
         body = "".join(lines[start + 1:end])
         size = len(body.encode("utf-8"))
-        note = f"[the wake folded this section's {size} bytes to its title; it is whole on disk]\n"
+        note = f"[Folded {size} bytes to the section title. Whole on disk.]\n"
         if size <= len(note.encode("utf-8")):
             continue
         folded[start] = note
@@ -246,8 +246,7 @@ def fold(readme: str, excess: int) -> str:
 def clip(readme: str, excess: int, limit: int) -> str:
     """The README less ``excess`` bytes from its end, cut at a line, with a receipt."""
     data = readme.encode("utf-8")
-    note = (f"[the wake cut {{}} of this README's {len(data)} bytes from its end to fit the "
-            f"{limit}-byte budget; the file is whole on disk: trim it]\n")
+    note = f"[Cut {{}} of {len(data)} README bytes ({limit}-byte budget). Whole on disk.]\n"
     keep = len(data) - excess - len(note.format(len(data)).encode("utf-8"))
     kept = data[:max(0, keep)].decode("utf-8", "ignore")
     kept = kept[: kept.rfind("\n") + 1] if "\n" in kept else ""
@@ -319,7 +318,7 @@ def people_block(root: Path, owed: Path) -> str:
             block = "".join(ensure_nl(line) for line in lines)
             size = len(block.encode("utf-8"))
             if size > PAGE_CAP:
-                note = f"[the wake cut this page's render at {PAGE_CAP} of {size} bytes; {rel} is whole on disk]\n"
+                note = f"[Clipped at {PAGE_CAP} of {size} bytes. Whole on disk: {rel}.]\n"
                 kept = block.encode("utf-8")[: PAGE_CAP - len(note.encode("utf-8"))].decode("utf-8", "ignore")
                 block = kept[: kept.rfind("\n") + 1] + note
             chunks.append(block)
@@ -377,7 +376,7 @@ def topics_block(root: Path) -> str:
         return ""
     size = len(block.encode("utf-8"))
     if size > TOPICS_CAP:
-        note = f"[the wake cut this section's render at {TOPICS_CAP} of {size} bytes; topics/ is whole on disk]\n"
+        note = f"[Clipped at {TOPICS_CAP} of {size} bytes. Whole on disk: topics/.]\n"
         kept = block.encode("utf-8")[: TOPICS_CAP - len(note.encode("utf-8"))].decode("utf-8", "ignore")
         block = kept[: kept.rfind("\n") + 1] + note
     return section("Topics", block)

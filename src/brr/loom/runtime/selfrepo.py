@@ -830,9 +830,9 @@ def default_loom_part(clone: Path, thread: str) -> str:
         lines.append(f"strand: {clone.parent.name}")
     lines.append(f"thread: {thread}")
     lines.append(
-        "letters arrive at your tool boundaries. "
-        "answer with `brnrd runtime send`. "
-        "when you are done, stop; the jack holds you while letters may come."
+        "Letters received at tool boundaries. "
+        "Reply with `brnrd runtime send`. "
+        "Stop when done. Resting until the next letter."
     )
     return "\n".join(lines) + "\n"
 
@@ -856,7 +856,7 @@ def _wake_topics(clone: Path, thread: str, owed: Path | None) -> str:
 
 
 _HELD = {"Tree", "Topics", "Topics close to this wake", "Status"}
-_LOOM_FACT = ("you are strand ", "loom: ", "status:", "repo ", "to send a repo's branch out:")
+_LOOM_FACT = ("strand ", "you are strand ", "loom: ", "status:", "repo ", "to send a repo's branch out:")
 
 
 def hold_back(text: str) -> tuple[str, str]:
@@ -930,6 +930,27 @@ def wake_sizes(recipe_sizes: Path, wake: str, *, briefing: str, generated: str) 
     else:
         parts["recipe"] = rest
     return {"total": total, "parts": parts}
+
+
+# Existing selves own their executable recipes. Keep their original budget
+# calculation and render the older generated receipts in the current wording.
+_LEGACY_WAKE_RECEIPTS = (
+    (
+        re.compile(r"^\[the wake cut (\d+) of this README's (\d+) bytes from its end to fit the "
+                   r"(\d+)-byte budget; the file is whole on disk: trim it\]$", re.MULTILINE),
+        r"[Cut \1 of \2 README bytes (\3-byte budget). Whole on disk.]",
+    ),
+    (
+        re.compile(r"^\[the wake folded this section's (\d+) bytes to its title; it is whole on disk\]$",
+                   re.MULTILINE),
+        r"[Folded \1 bytes to the section title. Whole on disk.]",
+    ),
+    (
+        re.compile(r"^\[the wake cut this (?:page|section)'s render at (\d+) of (\d+) bytes; "
+                   r"([^\]\n]+) is whole on disk\]$", re.MULTILINE),
+        r"[Clipped at \1 of \2 bytes. Whole on disk: \3.]",
+    ),
+)
 
 
 def run_wake(room_dir: Path, thread: str, owed: Path | None = None, *,
@@ -1035,6 +1056,10 @@ def run_wake(room_dir: Path, thread: str, owed: Path | None = None, *,
                               stdout=subprocess.PIPE, stderr=stderr, timeout=60)
         output = proc.stdout.decode("utf-8")
         if proc.returncode == 0:
+            above, occasion, letters = output.partition("\n## Occasion\n")
+            for pattern, wording in _LEGACY_WAKE_RECEIPTS:
+                above = pattern.sub(wording, above)
+            output = above + occasion + letters
             if core is not None and Path(core).is_file():
                 with open(core, "a", encoding="utf-8") as handle:
                     handle.write(briefing)

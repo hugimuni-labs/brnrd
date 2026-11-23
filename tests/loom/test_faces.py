@@ -52,7 +52,7 @@ def until(test):
 def proposed(text):
     return [line for line in text.splitlines() if line.startswith("face? ")]
 me = Fact(kind="letter", by="strand:" + strand_of_room(ctx.room))
-if "on thread other" in ctx.wake():
+if ctx.thread == "other":
     for letter in ctx.owed():
         ctx.send("thread:other", note="read", re=letter.id)
     ctx.jack("stop")

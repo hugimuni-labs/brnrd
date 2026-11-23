@@ -649,7 +649,7 @@ def _read_by_predecessors(facts: list[Fact], thread: str, strand: str,
     if not ids:
         return ""
     return (
-        f"already read in an earlier context: {', '.join(ids)}. "
+        f"already read before the molt: {', '.join(ids)}. "
         "Read what was carried across and the README before repeating work or a molt. "
         "Settle any already fulfilled letter with a note. "
     )
@@ -701,7 +701,7 @@ def _prepare(home: Home, strand: str, thread: str, gen: int,
     gone += kept_line(home, thread, threads)
     forge = forge_threads(home.root / "self")
     part = gone + inherited + (
-        f"you are strand {strand} on thread {thread}"
+        f"strand {strand} · thread {thread}"
         + (f" ({forge}/{thread})" if forge else "")
         # How to reply, settle, leave and end is the loom briefing's, in the core (briefing.py).
         + ('; call `"$BRNRD_JACK" --event start` now, `"$BRNRD_JACK" --event post` between '
