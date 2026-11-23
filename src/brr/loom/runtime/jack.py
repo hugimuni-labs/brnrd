@@ -18,7 +18,7 @@ from .pausing import describe
 from .waits import GRAMMAR
 from .port import CLOCK, Boundary, PortError, answered, clock, parse_boundary
 
-_HEADER_LINE = re.compile(rf"<!-- port (\S+) gen (\d+)(?: · {CLOCK})? · owed[^>]*-->")
+_HEADER_LINE = re.compile(rf"<!-- port (\S+) gen (\d+)(?: · {CLOCK})? · owed([^>]*)-->")
 _ITEM_LINE = re.compile(r"^- (\S+) · from \S+ · reply \S+")
 from . import tooltrace
 
@@ -196,7 +196,7 @@ def attend_letters(room: Path) -> str:
     news, _, _ = _news(text, {"told": known}, False, letters_only=True)
     if news:
         shown = parse_boundary(news)
-        _shown(room, shown)
+        _shown(room, shown, _boundary_reading(room, "attend"), shown.ids)
         _set_state(room, told=sorted(set(state.get("told", [])) | set(shown.ids)))
     return news
 
@@ -224,11 +224,26 @@ def _stop_news(room: Path, text: str, parsed: Boundary) -> str:
     return news
 
 
-def _shown(room: Path, parsed: Boundary) -> None:
+def _displayed_ids(text: str) -> list[str]:
+    header = _HEADER_LINE.search(text)
+    return header.group(3).split() if header else []
+
+
+def _boundary_reading(room: Path, event: str, **updates) -> dict:
+    now = time.time()
+    tick = time.monotonic()
+    previous = None if event == "wake" else _state(room).get("reading_tick")
+    _set_state(room, reading_tick=tick, **updates)
+    return {"event": event, "at": now,
+            "previous_gap": tick - previous if previous is not None and previous <= tick else None}
+
+
+def _shown(room: Path, parsed: Boundary, boundary: dict, displayed: list[str]) -> None:
     if not parsed.strand:
         raise ValueError("boundary names owed letters and no strand")
     stem = mint(5)
     ids = " ".join(parsed.ids)
+    timing = f"boundary: {json.dumps(dict(boundary, displayed=displayed))}\n" if displayed else ""
     text = (
         "---\n"
         "kind: shown\n"
@@ -236,6 +251,7 @@ def _shown(room: Path, parsed: Boundary) -> None:
         f"strand: {parsed.strand}\n"
         f"gen: {parsed.gen}\n"
         f"ids: {ids}\n"
+        f"{timing}"
         "---\n"
     )
     atomic_write(room / "port" / "out" / f"{stem}.md", text)
@@ -295,8 +311,9 @@ def _block(room: Path, text: str, parsed: Boundary) -> str:
     count = int(_state(room).get("stop_blocks") or 0)
     if _hand() and count >= 3:
         return ""
+    boundary = _boundary_reading(room, "stop")
     if parsed.ids:
-        _shown(room, parsed)
+        _shown(room, parsed, boundary, _displayed_ids(text))
     _working(room, stop_blocks=count + 1)
     return _json({"decision": "block", "reason": text})
 
@@ -388,6 +405,7 @@ def _poll(room: Path, stdin_text: str = '') -> str:
             extra = _unease(room)
             reason = idle(rest + news, extra) if idle else (
                 rest + news + (extra + "\n" if extra else ""))
+            _boundary_reading(room, "stop")
             return _json({"decision": "block", "reason": reason})
         time.sleep(min(0.2, remaining))
 
@@ -965,10 +983,11 @@ def execute(event: str, room: Path, stdin_text: str) -> str:
             text = first + "\n" + text
         if later:
             text = later + text
+        boundary = _boundary_reading(room, "wake")
         if not parsed.ids and not opened and not plan and not broken and not left and not later:
             return ""
         if parsed.ids:
-            _shown(room, parsed)
+            _shown(room, parsed, boundary, parsed.ids)
         _over(room, next((line for line in text.splitlines() if line.startswith("budget: ")), ""))
         _set_state(room, plan=plan,
                    **dict(zip(("said", "told"), _news(text, {}, True)[1:])))
@@ -989,11 +1008,11 @@ def execute(event: str, room: Path, stdin_text: str) -> str:
             _set_state(room, left_said=left)
         # Every line is news the first time it appears; only the status line waits on the plan.
         news, said, told = _news(text, state, plan_changed)
-        _set_state(room, said=said, told=told)
         later = _take_later(room)
+        boundary = _boundary_reading(room, "post", said=said, told=told)
         if not news:
             if parsed.ids:
-                _shown(room, parsed)
+                _shown(room, parsed, boundary, [])
             _set_state(room, plan=plan)
             if parsed.settled is not None:
                 _set_state(room, settled=parsed.settled)
@@ -1015,7 +1034,7 @@ def execute(event: str, room: Path, stdin_text: str) -> str:
         if settled_changed:
             _set_state(room, settled=parsed.settled)
         if parsed.ids:
-            _shown(room, parsed)
+            _shown(room, parsed, boundary, _displayed_ids(news))
         _set_state(room, plan=plan)
         return _json({"hookSpecificOutput": {
             "hookEventName": hook, "additionalContext": text}})
@@ -1110,11 +1129,12 @@ def _stop_block(room: Path, text: str, plan: str) -> str:
     if not sections and not known:
         return ""
     sections = [*sections, known] if known else sections
+    news = _stop_news(room, text, parsed) if parsed.ids else ""
+    boundary = _boundary_reading(room, "stop")
     if parsed.ids:
-        _shown(room, parsed)
+        _shown(room, parsed, boundary, _displayed_ids(news))
     _working(room, stop_blocks=count + 1, stop_said=seen)
     head = STOP.format(n=f"{len(sections)} thing{'s' * (len(sections) > 1)}")
-    news = _stop_news(room, text, parsed) if parsed.ids else ""
     people = _soft(room, _people, room, parsed, "stop", default="")
     return _json({"decision": "block", "reason": "\n\n".join(
         [head, *sections, *([news] if news else []), *([people] if people else [])])})

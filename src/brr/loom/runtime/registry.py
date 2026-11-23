@@ -85,7 +85,7 @@ REGISTRY = (
     # Read by the body's table, owned elsewhere, not enforced here.
     _kind("lease",             "thread",  "thread strand gen install router_gen shell core repos parent? pin? body_source?", "loom", "global", once=True),
     _kind("released",          "thread",  "thread strand gen why install router_gen?",        "loom",        "global",  once=True),
-    _kind("shown",             "letter",  "strand gen ids",                                   "loom strand", "global"),
+    _kind("shown",             "letter",  "strand gen ids wait?",                                   "loom strand", "global"),
     _kind("reincarnate",              "letter",  "strand gen why fresh? cites? carry?",              "strand",      "global"),
     _kind("hold",              "letter",  "strand gen why context",                           "strand",      "global"),
     _kind("guard.granted",     "letter",  "strand gen thread class target letter wish",       "strand",      "global"),

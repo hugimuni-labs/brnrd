@@ -1144,10 +1144,11 @@ def _ingest(home: Home, facts: list[Fact] | None = None, ttl: float | None = Non
         for path in paths:
             try:
                 if path.suffix == ".md":
-                    fact = fact_from_port(
-                        parse_frontmatter(path.read_text()), strand,
-                        gen, room=room,
-                    )
+                    fields = parse_frontmatter(path.read_text())
+                    fact = fact_from_port(fields, strand, gen, room=room)
+                    if fact.kind == "shown" and fields.get("boundary"):
+                        from .letter_wait import add_port_reading
+                        add_port_reading(fact, fields["boundary"], facts)
                     _stamp_router(fact, facts)
                     facts.append(append(home, fact))
                 elif path.name.startswith("taint-") and path.suffix == ".json":
@@ -2461,8 +2462,12 @@ def _hand_prepare(x, command, step):
 
 
 def _hand_show(x, command, step):
-    x.facts.append(_record(x.home, step.records, {"strand": x.o.strand, "gen": x.o.gen, "ids": [f.id for f in x.letters]},
-                           f"shown:wake:{x.o.strand}:{x.o.gen}"))
+    from .letter_presence import timestamp
+    from .letter_wait import add_reading
+    fact = Fact(kind=step.records, by=_by(x.home), id=f"shown:wake:{x.o.strand}:{x.o.gen}",
+                data={"strand": x.o.strand, "gen": x.o.gen, "ids": [f.id for f in x.letters]})
+    add_reading(fact, x.c.thread, "wake", timestamp(fact), None, x.letters)
+    x.facts.append(append(x.home, fact))
 
 
 def _hand_spawn(x, command, step):
