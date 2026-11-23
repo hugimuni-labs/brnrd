@@ -406,13 +406,13 @@ def prefer(home, role: str, body: str | None) -> None:
 def resolve_body(home, facts, thread: str, default=("fake", "haiku"), text=None):
     """One precedence rule, with a readable receipt of the winning setting."""
     from .config import load_config
-    from .loom import _wake_choice
-    woken = _wake_choice(facts, thread)
+    from .loom import _continuation_choice, _wake_selection
+    woken = _wake_selection(facts, thread)
     if woken:
-        last = max((i for i, f in enumerate(facts) if f.kind == "lease" and f.data.get("thread") == thread), default=-1)
-        manual = any(f.kind == "letter.disposed" and any(d.get("thread") == thread and d.get("body")
-                     for d in f.data.get("dispositions", ())) for f in facts[last + 1:])
-        return *woken, "wake word" if manual else "quota recovery"
+        return woken
+    continued = _continuation_choice(facts, thread)
+    if continued:
+        return *continued, "continue command"
     if text is None:
         text = seat_text(home, thread)
     pinned = next((value for key, value in reversed(list(_entries(text))) if key == "body"), None)

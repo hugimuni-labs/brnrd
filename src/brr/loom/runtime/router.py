@@ -499,7 +499,7 @@ class Router:
                 from .adapters import resolve_body
                 shell, core, source = resolve_body(home, facts, thread, default, text)
                 choice = (shell, core)
-                if source not in {"wake word", "quota recovery", "this thread's seat pin"}:
+                if source not in {"wake word", "continue command", "quota recovery", "this thread's seat pin"}:
                     fallen = fall_down(home, choice, lambda shell: _can_run(home, shell))
                     if fallen != choice:
                         source = f"body order after {source}"

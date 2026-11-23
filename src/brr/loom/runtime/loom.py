@@ -1937,9 +1937,12 @@ def _wake_letter(home, facts, thread, leased, letter, channel, *, parked=True, h
         named = f"Invalid body argument; use wake <shell>[/<core>]. {_wake_catalog(home, facts, thread, leased)}"
     elif continuation:
         shell = continuation[1].lower()
-        named = next((target for target in _continue_targets(home, facts, thread, leased)
-                      if target[0] == shell),
-                     f"{_subscription_name(shell)} isn't available with a healthy limit right now.")
+        if shell == leased[0]:
+            named = leased
+        else:
+            named = next((target for target in _continue_targets(home, facts, thread, leased)
+                          if target[0] == shell),
+                         f"{_subscription_name(shell)} isn't available with a healthy limit right now.")
     else:
         named = _wake_body(home, facts, thread, leased, said)
     disposition = {"id": ident, "outcome": "done"}
@@ -1959,6 +1962,10 @@ def _wake_letter(home, facts, thread, leased, letter, channel, *, parked=True, h
         disposition.update(reason=f"wake: on {body_label(*named)}", thread=thread, body=body_label(*named))
         if restart:
             disposition["restart"] = True
+    if not isinstance(named, str) and (continuation or said[1]):
+        # A named wake clears the preference but still selects only one lease.
+        # Keep this separate from "body", which requests an immediate wake.
+        disposition.update(thread=thread, continuation=body_label(*named) if continuation else None)
     try:
         facts.append(_record(home, "letter.disposed", {"dispositions": [disposition]},
                              f"letter.disposed:{ident}"))
@@ -2065,7 +2072,12 @@ def _wake_lines(home, facts, thread, leased, park, *, held=False):
 
 
 def _wake_choice(facts, thread):
-    """The body a person woke ``thread`` on since its last lease, or None.
+    selection = _wake_selection(facts, thread)
+    return selection[:2] if selection else None
+
+
+def _wake_selection(facts, thread):
+    """The body and source selected for ``thread`` since its last lease, or None.
 
     Read from the ledger, so a crash between the wake and the next lease
     still converges: the parked gen ends, and the router leases this body.
@@ -2083,20 +2095,38 @@ def _wake_choice(facts, thread):
 
 
 def _uncached_wake_choice(facts, thread):
-    last = max((i for i, f in enumerate(facts) if f.kind == "lease" and f.data.get("thread") == thread),
-               default=-1)
-    # A person's manual wake always wins over an automatic decision.
-    for f in reversed(facts[last + 1:]):
+    from .adapters import parse_body
+
+    move = None
+    for f in reversed(facts):
+        if f.data.get("thread") == thread:
+            if f.kind == "lease":
+                break
+            if f.kind == "body.moved" and move is None:
+                move = (f.data["to_shell"], f.data["to_core"], "quota recovery")
         if f.kind == "letter.disposed" and f.by.startswith("loom:"):
-            for d in f.data.get("dispositions", ()):
+            for d in reversed(f.data.get("dispositions", ())):
                 if d.get("thread") == thread and d.get("body"):
-                    from .adapters import parse_body
                     try:
-                        return parse_body(d["body"])
+                        body = parse_body(d["body"])
                     except ValueError:
                         continue
-    return next(((f.data["to_shell"], f.data["to_core"]) for f in reversed(facts[last + 1:])
-                 if f.kind == "body.moved" and f.data.get("thread") == thread), None)
+                    # A person's manual wake always wins over an automatic decision.
+                    return *body, "continue command" if d.get("continuation") else "wake word"
+    return move
+
+
+def _continuation_choice(facts, thread):
+    """Read the standing preference without treating it as work to wake for."""
+    from .adapters import parse_body
+
+    for f in reversed(kind_facts(facts, "letter.disposed")):
+        if not f.by.startswith("loom:"):
+            continue
+        for d in reversed(f.data.get("dispositions", ())):
+            if d.get("thread") == thread and "continuation" in d:
+                return parse_body(d["continuation"]) if d["continuation"] else None
+    return None
 
 
 def _person_dms(home, facts, thread):

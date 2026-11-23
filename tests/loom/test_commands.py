@@ -292,3 +292,84 @@ def test_router_retries_command_after_authority_refusal_without_new_input(tmp_pa
     router.route(facts, {}, ("spare", "y"))
     disposition = next(f for f in facts if f.id == f"letter.disposed:{ident}")
     assert disposition.data["dispositions"][0]["body"] == "claude/opus"
+
+
+@pytest.mark.parametrize("already_running", [False, True])
+def test_continue_survives_restart_and_named_wake_is_one_off(tmp_path, monkeypatch, already_running):
+    import sys
+    from pathlib import Path
+
+    from brr.loom.runtime import usage
+    from brr.loom.runtime.project import fold
+
+    monkeypatch.setattr(adapters, "installed_shells", lambda home: ["codex"])
+    home = _home(tmp_path, monkeypatch)
+    self_repo = home.root / "self"
+    (self_repo / "threads/second/seat").write_text("body: claude/echo\n")
+    git(self_repo, "add", "threads/second/seat")
+    git(self_repo, "commit", "-m", "Keep the conflicting Claude seat pin.")
+    bodies = home.root / "loom/bodies"
+    fake = Path(usage.__file__).parent / "bodies/fake/run"
+    gate = tmp_path / "release-codex"
+    starts = tmp_path / "codex-starts"
+    codex = bodies / "codex/run"
+    codex.write_text(
+        f"#!{sys.executable}\nimport os, sys, time\nfrom pathlib import Path\n"
+        f"with Path({str(starts)!r}).open('a') as out: out.write('start\\n')\n"
+        f"while not Path({str(gate)!r}).exists(): time.sleep(0.02)\n"
+        f"os.execv({str(fake)!r}, [{str(fake)!r}, *sys.argv[1:]])\n"
+    )
+    (bodies / "codex/usage").write_text(
+        f"#!{sys.executable}\nprint('{{\"windows\":[{{\"name\":\"session\",\"left_pct\":70}}]}}')\n"
+    )
+    (bodies / "codex/usage").chmod(0o755)
+    if not already_running:
+        gate.touch()
+
+    def leases(loom):
+        return [f.data for f in loom.facts() if f.kind == "lease" and f.data["thread"] == "second"]
+
+    def released(loom):
+        return "second" not in fold(loom.facts()).holder
+
+    loom = Loom(home.root)
+    composer = _Composer(loom.home)
+    loom.start()
+    try:
+        if already_running:
+            composer.says("initial", "second", "a letter for Codex", body="codex")
+            wait_until(starts.is_file, 10, loom.dump)
+        else:
+            wait_until(lambda: usage.reading(loom.home, "codex", cached_only=True), 10, loom.dump)
+        command = composer.says("continue", "second", "Continue on Codex.")
+        wait_until(lambda: any(f.id == f"letter.disposed:{command}" for f in loom.facts()), 10, loom.dump)
+        if already_running:
+            assert len(leases(loom)) == 1
+            gate.touch()
+        wait_until(lambda: leases(loom) and released(loom), 10, loom.dump)
+        assert len(leases(loom)) == 1
+    finally:
+        loom.halt()
+        kill_bodies(loom)
+    assert not loom.errors
+
+    loom = Loom(home.root)
+    loom.start()
+    try:
+        composer.says("next", "second", "another question")
+        wait_until(lambda: len(leases(loom)) == 2 and released(loom), 10, loom.dump)
+        assert (leases(loom)[1]["shell"], leases(loom)[1]["body_source"]) == ("codex", "continue command")
+        assert starts.read_text().splitlines() == ["start", "start"]
+        assert leases(loom)[0]["body_source"] == ("wake word" if already_running else "continue command")
+        assert next(f.data["dispositions"][0]["continuation"]
+                    for f in loom.facts() if f.id == f"letter.disposed:{command}") == "codex"
+        composer.says("override", "second", "wake spare/y")
+        wait_until(lambda: len(leases(loom)) == 3, 10, loom.dump)
+        assert (leases(loom)[2]["shell"], leases(loom)[2]["body_source"]) == ("spare", "wake word")
+        assert adapters.resolve_body(loom.home, loom.facts(), "second") == (
+            "claude", "echo", "this thread's seat pin"
+        )
+    finally:
+        loom.halt()
+        kill_bodies(loom)
+    assert not loom.errors

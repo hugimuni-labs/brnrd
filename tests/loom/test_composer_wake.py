@@ -61,7 +61,7 @@ def test_composer_body_moves_a_parked_thread_and_its_text_stays_owed(tmp_path, m
         wait_until(lambda: home.starts.is_file(), 10, loom.dump)
         assert _leases(loom, "inbox") == [("claude", "echo"), ("spare", "x")]
         assert _woken(loom) == [{"id": letter + "#wake", "outcome": "done", "reason": "wake: on spare/x",
-                                 "thread": "inbox", "body": "spare/x"}]
+                                 "thread": "inbox", "body": "spare/x", "continuation": None}]
         assert letter in {str(l.data["id"]) for l in mail(home.root, loom.facts(), "inbox")}
     finally:
         loom.halt()
