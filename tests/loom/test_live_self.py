@@ -30,11 +30,11 @@ def test_the_self_decides_the_live_bodys_wake(tmp_path, monkeypatch):
     loom.start()
     try:
         wait_until(lambda: sent, 8, loom.dump)
-        # The self decides its wake; the loom's briefing is the one part it adds.
+        # The self decides its recipe. The loom adds its briefing and the held work.
         from brr.loom.runtime.briefing import section as briefing
         # Its home decides the handoff sentence: a host with two harnesses gains one.
         from brr.loom.runtime.home import Home
-        assert sent == [briefing(Home(root)) + "custom"]
+        assert sent == [briefing(Home(root)) + "## Held\nNo goals or queue rows recorded.\ncustom"]
         assert not mail(root, loom.facts(), "custom")
     finally:
         loom.halt()

@@ -54,7 +54,7 @@ def test_a_wake_reports_each_part_and_the_parts_sum_to_what_was_delivered(tmp_pa
     assert got["total"] == len(delivered)
     assert sum(got["parts"].values()) == got["total"]
     # The headings inside the README and the letter do not move bytes between parts.
-    assert {"core", "briefing", "readme", "tree", "people", "occasion"} <= set(got["parts"])
+    assert {"core", "briefing", "held", "readme", "tree", "people", "occasion"} <= set(got["parts"])
     assert "recipe" not in got["parts"]
     assert got["parts"]["occasion"] > len("a letter with a heading")
 

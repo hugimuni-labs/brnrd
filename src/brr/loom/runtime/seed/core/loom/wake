@@ -393,7 +393,7 @@ def fixed_text(root: Path, thread: str, loom: str, owed: Path, excess: int = 0, 
 def split(parts: dict[str, str]) -> tuple[str, str]:
     """(before the tree, after the tree)."""
     head = parts["core"] + parts["readme"] + parts["notes"]
-    return head, parts["people"] + parts["topics"] + parts["loom"] + parts["letters"]
+    return head, parts["people"] + parts["topics"] + parts["loom"] + parts["occasion"]
 
 
 def fixed_parts(root: Path, thread: str, loom: str, owed: Path, excess: int = 0, limit: int = 0) -> dict[str, str]:
@@ -413,7 +413,7 @@ def fixed_parts(root: Path, thread: str, loom: str, owed: Path, excess: int = 0,
         "people": people_block(root, owed),
         "topics": topics_block(root),
         "loom": section("Loom", loom),
-        "letters": occasion(owed),
+        "occasion": occasion(owed),
     }
 
 

@@ -946,7 +946,7 @@ def wake_sizes(recipe_sizes: Path, wake: str, *, briefing: str, generated: str,
     if isinstance(named, dict) and all(isinstance(v, int) and v >= 0 for v in named.values()) \
             and not any(key in parts for key in named):
         if legacy_letters and "occasion" in named:
-            named["letters"] = named.pop("occasion") - len("Occasion") + len("Letters")
+            named["occasion"] -= len("Occasion") - len("Letters")
         if all(value >= 0 for value in named.values()) and sum(named.values()) == rest:
             parts.update(named)
             return {"total": total, "parts": parts}
