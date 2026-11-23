@@ -285,9 +285,9 @@ def test_merge_answer_uses_the_forge_watch_and_closes_exactly_once(ledger):
     repo = "hugimuni-labs/brnrd"
     ask = command(home, seat, "ask", "First change landed?", "--for", parent,
                   "--answered-by", f"merge:{repo}#12")
+    assert turns(home)["work"] == ("yours", ["operator"])
     pending = command(home, seat, "ask", "Second change landed?", "--for", parent,
                       "--answered-by", f"merge:{repo}#13")
-    assert turns(home)["work"] == ("yours", ["operator"])
     reply = command(home, seat, "ask", "Which change first?", "--for", parent, "--answered-by", "reply")
     assert "to: channel:mine/42" in mail(seat, reply)[0]
     assert "to: channel:mine/42" in mail(seat, ask)[0]
