@@ -86,6 +86,7 @@ class Wish:
     # An ask's answer: the first letter of whoever it waits on that replies to it,
     # cites it, replies to a letter that raised it, or is stamped on it.
     answer: str = ""
+    answered_by: str = "reply"
     # The last time a person's letter named the wish (a stamp, or a verdict letter):
     # one after the delivery means they looked, so it stays delivered and never expires.
     heard_at: str = ""
@@ -173,6 +174,7 @@ def wishes(facts: Iterable[Fact]) -> dict[str, Wish]:
             wish.parent = d.get("parent") or wish.parent
             wish.rec = d.get("rec") or wish.rec
             wish.kind = d.get("kind") or wish.kind
+            wish.answered_by = d.get("answered_by") or wish.answered_by
             wish.verdict = None
         else:
             if ident not in found:
@@ -246,7 +248,13 @@ def _answer(asked: list[Wish], letters: dict, ordered: list[Fact]) -> None:
     for ident, letter in letters.items():
         for link in letter.data.get("links") or ():
             raised.setdefault(ident, set()).add(str(link))
+    closed = {letter.data["closes_ask"]: ident for ident, letter in letters.items()
+              if letter.by.startswith("loom:") and letter.data.get("closes_ask")}
     for ask in asked:
+        if ask.answered_by != "reply":
+            ask.answer = closed.get(ask.id, "")
+            continue
+
         def answers(letter) -> bool:
             if letter.at < ask.born:
                 return False
@@ -289,7 +297,8 @@ def waits_on(found: dict[str, Wish], main: dict) -> dict[str, str]:
     nobody else will wake for it.
     """
     from .lifecycle import CLOSED
-    asks = {w.id: w for w in found.values() if w.open and w.sender == "resident"}
+    asks = {w.id: w for w in found.values() if w.open and w.sender == "resident"
+            and w.answered_by in ("reply", "press")}
     onward: dict[tuple[str, str], Wish] = {}
     for w in asks.values():
         onward.setdefault((w.thread, w.parent), w)
@@ -298,6 +307,9 @@ def waits_on(found: dict[str, Wish], main: dict) -> dict[str, str]:
         seen, current = set(), ask
         while True:
             seen.add(current.id)
+            if current.answered_by == "press":
+                head = "operator"
+                break
             head = str(main.get(current.thread, {}).get("opened-by") or "operator")
             if head == LOOM_OPENER:
                 head = "operator"
