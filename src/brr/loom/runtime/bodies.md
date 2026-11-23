@@ -5,8 +5,8 @@
 | wanted, parked | pinned away | ended | end_moved, drain, drained, release |
 | wanted | fenced | wanted | none |
 | parked | fenced | parked | none |
-| parked | quota move | ended | move, end_reincarnated, drain, drained, release |
-| wanted, parked | woken on another body | ended | end_reincarnated, drain, drained, release |
+| parked | quota move | ended | move, end_molted, drain, drained, release |
+| wanted, parked | woken on another body | ended | end_molted, drain, drained, release |
 | wanted | memory pressed | wanted | pending |
 | parked | memory pressed | parked | none |
 | parked | gauge unknown, before until | parked | none |

@@ -229,7 +229,7 @@ def cmd_wish(args):
             return 1
         if actions and kind == "wish.result" and by.startswith("strand:"):
             if args.deliver:
-                _tell_delivered(home, args, wishes(facts)[args.id], data)
+                _tell_delivered(home, args, wishes(facts)[args.id], data, thread)
             _declare(args, "result")
         elif actions and kind == "wish.read" and by.startswith("strand:") and "wait" in data:
             _declare(args, "park")
@@ -355,18 +355,36 @@ def _gen(facts, strand: str) -> int:
                default=0)
 
 
-def _tell_delivered(home, args, wish, result) -> None:
-    """A delivered person wish is a letter to that person on the chat they said it in:
-    the receipt, and how to give the verdict. Their reply ``ok`` to it accepts it."""
+def _tell_delivered(home, args, wish, result, thread) -> None:
+    """Send the receipt for a person's wish to the opener or to the original chat."""
+    from .home import is_channel
+    from .ledger import kind_facts
+    from .lifecycle import read_thread
+    from .port import write_send
+    from .project import reply_channels, sender_threads
+    from .spend import door
+    from .verbs_loom import _room
+
     if wish.sender != "person":
         return
-    from .port import write_send
-    from .project import reply_channels
-    from .verbs_loom import _room
-    chats = reply_channels(read_facts(home), home)
-    chat = next((chats[s.letter] for s in reversed(wish.says) if s.letter in chats), None)
-    if chat is None:
-        return
+    facts = read_facts(home)
+    target = None
+    if thread != home.main_thread():
+        opener = read_thread(home, thread).get("opened-by") or ""
+        writers = sender_threads(facts)
+        granted = opener.startswith("person:") or any(
+            grant.data["thread"] == thread and wish.id in grant.data["wishes"]
+            and f"thread:{writers.get(grant.by.removeprefix('strand:'))}" == opener
+            for grant in kind_facts(facts, "wish.delivery.grant")
+        )
+        if not granted:
+            target = f"thread:{door(home, opener)}"
+    if target is None:
+        chats = reply_channels(facts, home)
+        target = next((chats[s.letter] for s in reversed(wish.says) if s.letter in chats), None)
+        if target is None:
+            return
+    channel = is_channel(target)
     room = _room(args.room)
     body = f"delivered &{wish.id}: {wish.line}\n{result['line']}: {result['ref']}\n"
     for said in (result.get("verified"), result.get("word"), result.get("weakened")):
@@ -376,9 +394,13 @@ def _tell_delivered(home, args, wish, result) -> None:
     if result.get("kind") == "host":
         body += f"file: {result['name']} · {_size(result['size'])} · sha256 {result['sha256']}\n"
         attach = f"{result['sha256']} {result['name']}"
-    body += "Reply ok to accept, or say what is off.\n"
-    write_send(room, to=chat, sender=strand_of_room(room), body=body, receipt=True,
-               **({"attach": attach} if attach else {}))
+    if channel:
+        body += "Reply ok to accept, or say what is off.\n"
+    write_send(room, to=target, sender=strand_of_room(room), body=body, receipt=True,
+               **({"attach": attach} if channel and attach else {}))
+    if not channel:
+        print(f"delivered to {target.removeprefix('thread:')}, not to the person: "
+              "the opener did not grant delivery", file=sys.stderr)
 
 
 def _rest_line(args, data) -> None:
@@ -687,7 +709,7 @@ def _ask_arguments(parser):
     parser.add_argument("--default-at", dest="default_at",
                         help="if nobody answers by then, you are woken to carry out your rec")
     from .trust import ASK_KINDS
-    parser.add_argument("--kind", choices=ASK_KINDS,
+    parser.add_argument("--kind", type=lambda kind: "molt" if kind == "reincarnate" else kind, choices=ASK_KINDS,
                         help="the act the ask is for: the row its answer counts in (asks --calibrate)")
 
 
