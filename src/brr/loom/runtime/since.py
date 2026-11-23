@@ -134,7 +134,7 @@ def since_gone(facts, strand: str, gen: int, thread: str, threads: dict[str, str
                 letter = letters.get(str(d.get("id")))
                 if ("bounced" in (d.get("outcome"), d.get("reason")) and letter is not None
                         and threads.get(str(letter.data.get("from"))) == thread):
-                    lines.append((i, f"bounced: letter {d.get('id')}"))
+                    lines.append((i, f"bounced: letter {d.get('id')} ({f.id})"))
         elif f.kind == "loom.moved" and data.get("install") == install:
             lines.append((i, f"{moved_text(f)} ({f.id})"))
         elif f.kind == "loom.degraded" and f.id in recovered:

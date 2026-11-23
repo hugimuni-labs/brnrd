@@ -17,7 +17,7 @@ BRIEFING = f"""Holding the seat. Rendered at each wake.
 - A sleep or poll loop is never the wait. No tool boundary inside it, no incoming letters. For CI, a PR, a command, a person or a time, park and stop: `brnrd runtime wish <w-id> --read "waiting: <what>" --wait <{GRAMMAR}>`. Waits kept in the ledger across a molt and listed at wake. Waking by letter when the condition is met. Clear with `brnrd runtime wish <w-id> --clear-wait` or record a wish result.
 - To stay warm while waiting on letters or the board, call `brnrd runtime attend` (default 110s). For longer, pass `--for <N>` with a tool timeout above N (claude: Bash timeout, up to 600000 ms).
 - For a command started here, run `(cmd; echo $? > <path>) &` and park on `file:<path>`.
-- Put scratch in the room's `$TMPDIR` (`tmp/`). Keep checkouts with work to land at the room root for inspection before reaping. Reaped unread under `tmp/`; left on disk under `/private/tmp` or `/tmp`.
+- Put scratch in the room's `$TMPDIR` (`tmp/`). Keep checkouts with work to land at the room root for inspection before reaping. Scratch under `tmp/` is reaped unread. Never use `/private/tmp` or `/tmp` for scratch, since nothing clears them.
 - Reply to the listed address with `brnrd runtime send --re <id> --to <address> "…"`. For address `-`, settle with `send --re <id> --to thread:<this thread> --note "<what you did>"`. For a loom notice, follow its last lines. Record a wish with `send --wish`. Open a thread for a wish with `send --to thread:<new> --wish <w-id>` or `--wish new:"<line>"`.
 - Record all remaining steps with `wish <w-id> --left "<step>" …`. Use `--left same` if unchanged. Record a result with `wish <w-id> --result pr:<url> --line "<what it is>" --deliver`. Delivered for acceptance after verification (merged `pr:`, green `ci:`, or `file:` on self main). For an open PR, park and deliver after merge.
 - Before resting with open wishes, record a result (`--result … --deliver`), `--left`, an `ask`, a park or `settle <thread> --why "<what it became>"`.
@@ -50,8 +50,9 @@ DOORS = (
     "To reach outside, mark the call with `BRNRD_SAY=\"reach · what · for · back\" <command>`. "
     "For a look, write only `look`. For a change, name the thing and its way back. "
     "For a final act, name the thing and the letter served. Mark recorded and wall lifted for that call. "
-    "Mark sends to people, `publish`, and `gh` acts with change or final. "
-    "For reads and loom verbs, no mark required. For memory, use the self.\n"
+    "Without a mark, refusal for sends to people, `publish`, and all `gh` acts, including looks. "
+    "For plain reads and the loom's own verbs, no mark required. "
+    "The engine's own memory folder is outside the room. Use the self for memory.\n"
 )
 
 
