@@ -758,11 +758,9 @@ def write_send(room: Path, *, to: str, sender: str, body: str = "",
     if opening is not None and spend:
         from .adapters import spend_choice
         try:
-            chosen = spend_choice(home)
+            body_choice = spend_choice(home)
         except ValueError as exc:
             raise PortError(str(exc)) from exc
-        if chosen:
-            body_choice = chosen
     if note is None and reincarnate is None and not is_channel(to):
         _refuse_other_loom(home, thread_of(to))
     if note is None and reincarnate is None and at is None and not is_channel(to):

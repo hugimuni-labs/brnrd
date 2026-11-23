@@ -352,7 +352,7 @@ def close_block(block: str, unease: str) -> str:
 
 
 def fuel_line(home, now: float | None = None) -> str:
-    """``fuel to burn: codex week 65% left, 3.8d to reset; grok 71%, 1.5d``.
+    """``fuel readings: codex week 65% left, 3.8d to reset; grok 71%, 1.5d``.
 
     Every configured engine whose week is ahead of its own initiative share,
     in ``shells`` order. An engine below its share, or with no reading, is
@@ -372,7 +372,7 @@ def fuel_line(home, now: float | None = None) -> str:
             parts.append(f"{name} week {pct:g}% left, {days:.1f}d to reset")
         else:
             parts.append(f"{name} {pct:g}% left, {days:.1f}d")
-    return ("fuel to burn: " + "; ".join(parts)) if parts else ""
+    return ("fuel readings: " + "; ".join(parts)) if parts else ""
 
 
 def wants_block(home, shell, thread: str) -> bool:
@@ -403,7 +403,7 @@ def keepalive(lines: str, value, stop_news: str, *, pace_text: str | None = None
                share: float = 100.0) -> str:
     """The keepalive's reason when fuel is ahead of the shell's share and the thread has acts to move."""
     said = pace(value, share=share) if pace_text is None else pace_text
-    kept = [line for line in lines.splitlines() if line.startswith("  - ") or line.startswith("fuel to burn:")]
+    kept = [line for line in lines.splitlines() if line.startswith("  - ") or line.startswith("fuel readings:")]
     return _KEEP.replace("{pace}", said) + "".join(line + "\n" for line in kept) + stop_news
 
 

@@ -6,6 +6,8 @@ import time
 from datetime import datetime, timezone
 from types import SimpleNamespace
 
+import pytest
+
 from brr.loom.runtime import idle, jack, loom, usage
 from brr.loom.runtime.faces import PROPOSED
 from brr.loom.runtime.ledger import Fact, append, inject_letter, read_facts
@@ -41,7 +43,7 @@ def test_ahead_of_pace_the_keepalive_carries_the_acts_and_never_says_stop(worker
     # long suite crosses the 79% into 78% edge. Compare against pace() now.
     assert reason.partition(chr(10))[2].startswith(
         f"cache keepalive, fuel ahead of pace ({idle.pace(AHEAD)})")
-    assert ": stop" not in reason
+    assert "fuel to burn" not in reason and ": stop" not in reason
     assert "  - w-aaaa is heard, never read" in reason
     assert "or end with one line saying why not" in reason
 
@@ -301,7 +303,7 @@ def test_fuel_line_drops_an_engine_below_its_share_and_a_per_shell_override_wins
     monkeypatch.setattr(usage, "shells", lambda home: ["codex", "grok", "claude", "none"])
     monkeypatch.setattr(usage, "reading", lambda home, shell, *args, **kwargs: gauges.get(shell))
     set_value(home.root, "initiative_share", 50)
-    assert idle.fuel_line(home, now) == "fuel to burn: grok week 71% left, 1.5d to reset"
+    assert idle.fuel_line(home, now) == "fuel readings: grok week 71% left, 1.5d to reset"
     assert not idle.wants_block(home, "claude", "work")
     # The room's lease shell is fake. Its override, not the default, decides the turn.
     set_value(home.root, "initiative_share", 100)
@@ -310,7 +312,7 @@ def test_fuel_line_drops_an_engine_below_its_share_and_a_per_shell_override_wins
     assert idle.share_for(home, "grok") == 100
     assert idle.ahead(gauges["fake"], now, share=100)
     assert idle.fuel_line(home, now) == (
-        "fuel to burn: codex week 65% left, 3.8d to reset; grok 71% left, 1.5d")
+        "fuel readings: codex week 65% left, 3.8d to reset; grok 71% left, 1.5d")
     said = loom._turn_pace(home, read_facts(home), load_config(home.root))("work")
     assert said == ""
     set_value(home.root, "body", "claude")
@@ -346,32 +348,33 @@ def test_the_fuel_line_names_every_engine_ahead_of_pace(ledger, monkeypatch):
     gauges = {"codex": gauge(65, 3.8), "grok": gauge(71, 1.5), "claude": gauge(20, 5.5)}
     monkeypatch.setattr(usage, "shells", lambda home: ["codex", "grok", "claude", "none"])
     monkeypatch.setattr(usage, "reading", lambda home, shell, *args, **kwargs: gauges.get(shell))
-    assert idle.fuel_line(home, now) == "fuel to burn: codex week 65% left, 3.8d to reset; grok 71% left, 1.5d"
+    assert idle.fuel_line(home, now) == "fuel readings: codex week 65% left, 3.8d to reset; grok 71% left, 1.5d"
     text = idle.render(["do the thing"], idle.fuel_line(home, now))
     assert text.startswith(idle.HEAD) and 'wish <id> --pick "<why>"' in text and "nothing more" in text
-    assert "\nfuel to burn: codex week 65% left, 3.8d to reset; grok 71% left, 1.5d\n  - do the thing\n" in text
+    assert "\nfuel readings: codex week 65% left, 3.8d to reset; grok 71% left, 1.5d\n  - do the thing\n" in text
     out = idle.keepalive(text, AHEAD, "NEWS")
     assert out.startswith("cache keepalive, fuel ahead of pace (week 92% left")
-    assert "fuel to burn: codex" in out and "  - do the thing" in out and ": stop" not in out
+    assert "fuel readings: codex" in out and "  - do the thing" in out and ": stop" not in out
     assert "or end with one line saying why not" in out
     # The inbox block shows when another engine is ahead, even if this shell is behind.
     (home.room("s-aaaa-test") / "port/in").mkdir(parents=True, exist_ok=True)
     context = SimpleNamespace(thread="inbox", shell="claude")
     quiet = {"face": PROPOSED["quiet"], "token": "quiet since 20:00", "fact": "quiet:x"}
     block = loom._idle_acts(home, read_facts(home), "s-aaaa-test", context, quiet, ())
-    assert "fuel to burn: codex week 65% left, 3.8d to reset; grok 71% left, 1.5d" in block
-    assert (home.room("s-aaaa-test") / "port/in/idle.md").read_text().count("fuel to burn:") == 1
+    assert "fuel readings: codex week 65% left, 3.8d to reset; grok 71% left, 1.5d" in block
+    assert (home.room("s-aaaa-test") / "port/in/idle.md").read_text().count("fuel readings:") == 1
     work = SimpleNamespace(thread="work", shell="claude")
     got = loom._idle_acts(home, read_facts(home), "s-aaaa-test", work, quiet, ())
-    assert "fuel to burn" not in got and idle.HEAD not in got
+    assert "fuel readings" not in got and idle.HEAD not in got
     assert not (home.room("s-aaaa-test") / "port/in/idle.md").exists()
 
 
-def test_keepalive_follows_the_fuel_line_when_the_room_shell_is_behind(worker, monkeypatch):
+@pytest.mark.parametrize("prefix", ["fuel readings", "fuel to burn"])
+def test_keepalive_follows_the_fuel_line_when_the_room_shell_is_behind(worker, monkeypatch, prefix):
     room, _ = worker
     monkeypatch.setattr(usage, "dry_until", lambda *args: None)
     monkeypatch.setattr(usage, "reading", lambda *args, **kwargs: BEHIND)
-    text = idle.render(["w-aaaa is heard, never read"], "fuel to burn: codex week 65% left, 3.8d to reset")
+    text = idle.render(["w-aaaa is heard, never read"], f"{prefix}: codex week 65% left, 3.8d to reset")
     (room / "port/in/idle.md").write_text(text)
     result = json.loads(jack.execute("stop", room, "{}"))
     assert result["decision"] == "block"
@@ -594,7 +597,7 @@ def test_inbox_idle_shows_goals_and_stakes_without_a_pick_menu(ledger, monkeypat
     wish, context = _seat(home, seat, monkeypatch, AHEAD)
     _write_goal(home, "growth")
     _write_goal(home, "retention")
-    monkeypatch.setattr(idle, "fuel_line", lambda home: "fuel to burn: codex week 65% left, 3.8d to reset")
+    monkeypatch.setattr(idle, "fuel_line", lambda home: "fuel readings: codex week 65% left, 3.8d to reset")
     monkeypatch.setattr(idle, "unease", lambda *args: ("goal:test", "unease: check growth"))
     quiet = {"face": PROPOSED["quiet"], "fact": "quiet:x"}
     old_menu = loom._idle_acts(home, read_facts(home), STRAND, context, quiet, ())
@@ -604,7 +607,7 @@ def test_inbox_idle_shows_goals_and_stakes_without_a_pick_menu(ledger, monkeypat
     assert block.splitlines() == [
         _GOAL_LINE,
         _GOAL_LINE.replace("growth:", "retention:", 1),
-        "fuel to burn: codex week 65% left, 3.8d to reset",
+        "fuel readings: codex week 65% left, 3.8d to reset",
         "unease: check growth",
         _GOAL_CLOSE,
     ]
@@ -644,7 +647,7 @@ def test_inbox_keepalive_shows_goals_before_unease_and_the_closing_line(worker, 
     room, _ = worker
     monkeypatch.setattr(usage, "dry_until", lambda *args: None)
     monkeypatch.setattr(usage, "reading", lambda *args, **kwargs: BEHIND)
-    fuel = "fuel to burn: codex week 65% left, 3.8d to reset"
+    fuel = "fuel readings: codex week 65% left, 3.8d to reset"
     (room / "port/in/idle.md").write_text(f"{_GOAL_LINE}\n{fuel}\n", encoding="utf-8")
     idle.publish_unease(room, "goal:test", "unease: check growth")
     reason = json.loads(jack.execute("stop", room, "{}"))["reason"]

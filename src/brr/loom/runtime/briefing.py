@@ -32,15 +32,10 @@ BRIEFING = f"""Holding the seat. Rendered at each wake.
 """
 
 
-# One sentence, and only when this machine has two or more harnesses.
-# An empty burn list and a single harness append nothing: the block stays BRIEFING.
-HEADROOM = (
-    "- Delegate bounded work to the shell with the most fuel left using `send --body`. "
+HANDOFF = (
+    "- Choose an engine at each handoff using the fuel readings and the person's initiative share. "
+    "Use `send --spend` to pick by engine order within that share, or `send --body` to name the engine. "
     "Keep judgement and replies to the person here.\n"
-)
-BURN = (
-    "- Delegate bounded work to the engine marked burn using `send --spend`. "
-    "Keep judgement and replies to the person here. Reserve the shell marked keep.\n"
 )
 
 
@@ -70,8 +65,8 @@ def section(home=None) -> str:
     and one while the door sensors are on."""
     text = BRIEFING
     if home is not None:
-        from .adapters import spend_mode
-        extra = {"burn": BURN, "headroom": HEADROOM}.get(spend_mode(home), "")
+        from .adapters import installed_shells
+        extra = HANDOFF if len(installed_shells(home)) >= 2 else ""
         if _doors_on(home):
             extra += DOORS
         if extra:

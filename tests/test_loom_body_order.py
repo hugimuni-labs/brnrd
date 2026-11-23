@@ -1,5 +1,7 @@
 """The harness priority list: one file ranks every bundled body, the person reorders it, the loom falls down it."""
 import io
+import time
+from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
@@ -78,7 +80,11 @@ def _gauge(root, shell, left, *, error=None, windows=True):
     import json
     path = root / "loom" / "usage" / f"{shell}.json"
     path.parent.mkdir(parents=True, exist_ok=True)
-    payload = {"at": 1_700_000_000, "windows": [{"name": "week", "left_pct": left}] if windows else []}
+    now = time.time()
+    reset = datetime.fromtimestamp(now + 86400, timezone.utc).isoformat()
+    payload = {"at": now, "windows": [
+        {"name": "week", "left_pct": left, "resets_at": reset},
+    ] if windows else []}
     if error is not None:
         payload["error"] = error
     path.write_text(json.dumps(payload))
@@ -92,22 +98,9 @@ def test_spend_keys_are_read_and_a_keep_inside_the_burn_list_is_refused(tmp_path
         'model.default = "claude/opus"\nspend.burn = ["grok", "codex"]\nspend.keep = "claude"\n'
     )
     assert adapters.default_body(home) == "claude/opus"
-    assert adapters.burn_marks(home) == (["grok", "codex"], "claude")
-    assert adapters.spend_mode(home) == "burn"
-    # The judgement shell is the keep mark when the file leaves it out of the burn list.
-    (tmp_path / "loom/preferences.toml").write_text(
-        'model.default = "claude/opus"\nspend.burn = ["grok", "codex"]\n'
-    )
-    assert adapters.keep_shell(home) == "claude"
-    assert adapters.burn_marks(home) == (["grok", "codex"], "claude")
-    # Named in the burn list, it is not kept: the person put it there to spend.
-    (tmp_path / "loom/preferences.toml").write_text(
-        'model.default = "claude/opus"\nspend.burn = ["claude", "grok"]\n'
-    )
-    assert adapters.keep_shell(home) is None
     (tmp_path / "loom/preferences.toml").write_text('spend.burn = ["grok", "claude"]\nspend.keep = "claude"\n')
     with pytest.raises(ConfigError, match="is also in spend.burn"):
-        adapters.burn_marks(home)
+        adapters.body_order(home)
     (tmp_path / "loom/preferences.toml").write_text('spend.burn = "grok"\n')
     with pytest.raises(ConfigError, match="spend.burn is a list"):
         adapters.body_order(home)
@@ -119,15 +112,30 @@ def test_spend_keys_are_read_and_a_keep_inside_the_burn_list_is_refused(tmp_path
         adapters.body_order(home)
 
 
-def test_spend_picks_the_first_shell_above_the_floor(tmp_path, monkeypatch):
+def test_spend_picks_in_engine_order_using_the_initiative_share(tmp_path, monkeypatch):
+    from brr.loom.runtime.config import set_value
+
     home = home_at(tmp_path)
-    monkeypatch.setattr("shutil.which", _which({"grok", "codex", "claude", "vibe"}))
-    (tmp_path / "loom/preferences.toml").write_text(
-        'spend.burn = ["grok", "codex", "vibe"]\nspend.keep = "claude"\n'
-    )
-    # grok is dry, claude is keep and fuller, codex is the first burn shell the predicate allows.
-    assert adapters.spend_choice(home, usable=lambda shell: shell in {"codex", "claude"}) == "codex"
-    # grok would win on fuel, and it is not installed, so the next burn shell is the pin.
+    monkeypatch.setattr("shutil.which", _which({"grok", "codex", "claude"}))
+    adapters.set_order(home, ["grok", "codex", "claude"])
+    preferences = tmp_path / "loom/preferences.toml"
+    with preferences.open("a") as handle:
+        handle.write('spend.burn = ["codex"]\nspend.keep = "grok"\n')
+    _gauge(tmp_path, "grok", 65)
+    _gauge(tmp_path, "codex", 90)
+
+    assert adapters.spend_choice(home) == "grok"
+    set_value(home.root, "initiative_share", 25)
+    assert adapters.spend_choice(home) == "codex"
+    set_value(home.root, "initiative_share_grok", 100)
+    assert adapters.spend_choice(home) == "grok"
+    set_value(home.root, "initiative_share_grok", 0)
+    assert adapters.spend_choice(home) == "codex"
+
+
+def test_spend_skips_unavailable_and_unusable_readings(tmp_path, monkeypatch):
+    home = home_at(tmp_path)
+    adapters.set_order(home, ["grok", "codex", "claude"])
     monkeypatch.setattr("shutil.which", _which({"codex", "claude"}))
     _gauge(tmp_path, "grok", 90)
     _gauge(tmp_path, "codex", 40)
@@ -139,45 +147,27 @@ def test_spend_picks_the_first_shell_above_the_floor(tmp_path, monkeypatch):
     assert adapters.spend_choice(home) == "codex"
     _gauge(tmp_path, "grok", 1)
     assert adapters.spend_choice(home) == "codex"
-    _gauge(tmp_path, "grok", 3.0)
-    assert adapters.spend_choice(home) == "codex"
     _gauge(tmp_path, "grok", 90, error="expired")
     assert adapters.spend_choice(home) == "codex"
     _gauge(tmp_path, "codex", 1)
-    with pytest.raises(ValueError, match="no burn shell") as raised:
+    with pytest.raises(ValueError, match="ahead of its initiative pace") as raised:
         adapters.spend_choice(home)
     assert "fuel " in str(raised.value)
-    # One installed harness: the flag is a no-op, even when the file names more shells.
-    monkeypatch.setattr("shutil.which", _which({"grok"}))
-    assert adapters.spend_choice(home) is None
-    monkeypatch.setattr("shutil.which", _which({"grok", "codex"}))
-    (tmp_path / "loom/preferences.toml").write_text('spend.burn = []\n')
-    with pytest.raises(ValueError, match="spend.burn is empty"):
-        adapters.spend_choice(home)
-    (tmp_path / "loom/preferences.toml").write_text('spend.keep = "claude"\n')
-    with pytest.raises(ValueError, match="needs spend.burn"):
-        adapters.spend_choice(home)
 
 
-def test_one_harness_briefing_is_today_and_two_harnesses_gain_one_sentence(tmp_path, monkeypatch):
-    from brr.loom.runtime.briefing import BRIEFING, BURN, HEADROOM, TITLE, section
+def test_handoff_briefing_uses_readings_and_share_when_engines_are_available(tmp_path, monkeypatch):
+    from brr.loom.runtime.briefing import BRIEFING, HANDOFF, TITLE, section
+
     home = home_at(tmp_path)
     today = f"## {TITLE}\n{BRIEFING}"
     monkeypatch.setattr("shutil.which", _which({"grok"}))
-    (tmp_path / "loom/preferences.toml").write_text(
-        'spend.burn = ["grok", "codex"]\nspend.keep = "claude"\n'
-    )
     assert section(home) == today
     assert section() == today
     monkeypatch.setattr("shutil.which", _which({"grok", "codex", "claude"}))
-    assert section() == today
-    assert section(home) == f"## {TITLE}\n{BRIEFING.rstrip(chr(10))}\n{BURN}"
-    assert "send --spend" not in section()
     (tmp_path / "loom/preferences.toml").write_text('spend.burn = []\n')
-    assert section(home) == today
-    (tmp_path / "loom/preferences.toml").unlink()
-    assert section(home) == f"## {TITLE}\n{BRIEFING.rstrip(chr(10))}\n{HEADROOM}"
-    assert "send --body" not in today
+    assert section(home) == f"## {TITLE}\n{BRIEFING.rstrip(chr(10))}\n{HANDOFF}"
+    assert "fuel readings and the person's initiative share" in section(home)
+    assert "marked" not in HANDOFF
 
 
 def test_send_spend_reaches_write_send_and_is_exclusive_with_body(tmp_path, monkeypatch, capsys):
@@ -218,6 +208,8 @@ def test_spend_pins_the_seat_before_open_and_a_refusal_opens_nothing(tmp_path, m
     _gauge(tmp_path, "grok", 1)
     _gauge(tmp_path, "codex", 40)
     _gauge(tmp_path, "claude", 90)
+    from brr.loom.runtime.config import set_value
+    set_value(home.root, "initiative_share_claude", 0)
     room = tmp_path / "rooms" / "s-aaaa-test"
     room.mkdir(parents=True)
     pinned = {}
@@ -233,17 +225,18 @@ def test_spend_pins_the_seat_before_open_and_a_refusal_opens_nothing(tmp_path, m
     assert pinned["body"] == "codex"
     assert not (room / "port/out").exists()
     _gauge(tmp_path, "codex", 1)
-    with pytest.raises(PortError, match="no burn shell"):
+    with pytest.raises(PortError, match="ahead of its initiative pace"):
         write_send(room, to="thread:handoff", sender="s-aaaa-test", body="Work",
                    wish="new:Work", spend=True)
     assert not (tmp_path / "self/threads/handoff").exists()
-    # One harness: --spend does not pin a body.
+    # A single harness must still have room under its share.
     monkeypatch.setattr("shutil.which", _which({"grok"}))
     pinned.clear()
+    _gauge(tmp_path, "grok", 90)
     with pytest.raises(PortError, match="stop before land"):
         write_send(room, to="thread:handoff", sender="s-aaaa-test", body="Work",
                    wish="new:Work", spend=True)
-    assert pinned["body"] is None
+    assert pinned["body"] == "grok"
     readme = tmp_path / "self/threads/work/README.md"
     readme.parent.mkdir(parents=True)
     readme.write_text("---\nid: work\nstatus: open\ntense: plan\n---\n# Work\n")

@@ -413,7 +413,7 @@ def _idle(room: Path, home, shell: str | None):
     """The keepalive's idle block, when the loom wrote one and an engine is inside its share.
 
     The room's own gauge is the first word, read against this shell's initiative
-    share. A ``fuel to burn:`` line is the loom's word that some other engine is
+    share. A ``fuel readings:`` line shows that another engine is
     inside its own share, so the inbox still moves when this shell is behind.
     A failed read says nothing: the keepalive then says what it said before.
     """
@@ -423,10 +423,15 @@ def _idle(room: Path, home, shell: str | None):
     from . import idle
     from .usage import reading
     try:
-        lines, value = path.read_text(), reading(home, shell)
+        lines = "\n".join(
+            "fuel readings:" + line.removeprefix("fuel to burn:")
+            if line.startswith("fuel to burn:") else line
+            for line in path.read_text().split("\n")
+        )
+        value = reading(home, shell)
         share = idle.share_for(home, shell)
-        fuel = next((line.removeprefix("fuel to burn: ").strip()
-                     for line in lines.splitlines() if line.startswith("fuel to burn:")), "")
+        fuel = next((line.removeprefix("fuel readings:").strip()
+                     for line in lines.splitlines() if line.startswith("fuel readings:")), "")
         ahead = idle.ahead(value, share=share)
         if not lines.strip() or not (ahead or fuel):
             return None
