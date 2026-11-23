@@ -348,7 +348,9 @@ def _stop_footer(text: str, *, resting: bool) -> str:
     if not move:
         return ""
     price = _boundary_line(text, "<!-- rest price: ").removesuffix(" -->")
-    keep = f"keep going: {move}"
+    if move.startswith("rest costs "):
+        return f"{move} · before resting, name what you and the person need most now and what its route waits on"
+    keep = f"keep going on what you and the person need most now, not on what is next · top held: {move}"
     if resting and price and move != f"rest costs {price}":
         return f"rest price: {price}\n{keep}"
     return keep

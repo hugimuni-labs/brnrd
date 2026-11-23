@@ -324,6 +324,10 @@ def render_boundary(strand: str, gen: int, thread: str, letters: list[Fact],
     ``budget`` sits before the plan: the jack compares what follows `` · plan ``,
     and spend that moves on every call is not news.
     """
+    from .dispositions import is_person
+
+    # The port header and letter blocks must use the same person-first order.
+    letters = sorted(letters, key=lambda letter: not is_person(letter))
     lines = [
         f"<!-- port {strand} gen {gen} · {clock()} · owed "
         + " ".join(str(letter.data['id']) for letter in letters) + " -->",
@@ -335,7 +339,6 @@ def render_boundary(strand: str, gen: int, thread: str, letters: list[Fact],
     lines[2:2] = waits
     if park_reminder:
         lines.insert(2, park_reminder)
-    from .dispositions import is_person
     lines[2:2] = [f"first-word: {letter.data.get('id', letter.id)} {letter.at}"
                   for letter in letters if is_person(letter)]
     if left:

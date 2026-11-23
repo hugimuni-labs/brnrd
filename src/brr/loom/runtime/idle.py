@@ -5,8 +5,10 @@ word over stance's "fuel left and a queue ahead: take its top". When the
 week's fuel is ahead of pace, the keepalive and a quiet-face boundary carry
 the top candidate acts instead, each drawn from what is already derived:
 the person's order, a red or stale own pull request, the stalest wait, a
-wish never read, a child thread quiet for days with nothing in hand. The
-body takes one and logs the pick in one line, or says in one line why not.
+wish never read, a child thread quiet for days with nothing in hand. They are
+inputs: the body first names what the person and it need most now and the
+route there, takes the act on that route and logs the pick, or says what the
+route waits on.
 Behind pace a thread's own block carries nothing: resting is then the right call.
 The person can lower the share of a week an engine may spend on that
 (``initiative_share``, default 100, or ``initiative_share_<shell>``). A letter
@@ -38,15 +40,18 @@ QUIET_THREAD = 3 * 86400.0
 EVERY = 300.0
 # Shown this many times with the same key, the unease line says nothing was done about it.
 SHOWN_ACT = 5
-HEAD = "idle? fuel ahead of pace"
+HEAD = "no letter owed, fuel ahead of pace"
 _NO_GOALS = "no active goal: write one under goals/"
-_GOAL_CLOSE = "No new letters. Move a goal, or record why none can move today."
+_GOAL_CLOSE = ("No letter owed. Which of these goals matters most now, and what is its next move? "
+               "Make that move, or record what it waits on.")
 _GOAL_FIELDS = ("stands", "next", "now", "stake")
-_ASK = (': take one and log the pick in one line (`wish <id> --pick "<why>"`), '
-        "or say in one line why not; nothing more")
-_KEEP = ("cache keepalive, fuel ahead of pace ({pace}): take one of these"
-         ', log the pick in one line (`wish <id> --pick "<why>"`),'
-         " and work it, or end with one line saying why not; nothing more\n")
+_ASK = (": first name in one line what the person and you need most now, and the route there. "
+        'These are inputs, not a menu: take one only if it is on that route (`wish <id> --pick "<why>"`), '
+        "or say in one line what the route waits on")
+_KEEP = ("cache keepalive, fuel ahead of pace ({pace}): first name in one line what the person and you"
+         " need most now, and the shortest route there. These rows are inputs, not a menu."
+         ' Make the move on that route, log it (`wish <id> --pick "<why>"`) and work it,'
+         " or end with one line saying why not, naming what the route waits on\n")
 # Words that put a wish's next step in a person's hands; their names are added from the ledger.
 WAITS_ON = r"his|her|hers|him|he|she|the person"
 _WAKE_NOTE = re.compile(r"\[(?:Folded|Cut|the wake (?:folded|cut)) [^\]\n]*\]\n")

@@ -690,10 +690,11 @@ def _prepare(home: Home, strand: str, thread: str, gen: int,
     owed_path = room / "port" / "owed.json"
     attachments = letter_attachments(home.root, facts)
     reply_context = _reply_context(facts, thread, letters, room)
+    from .dispositions import is_person
     rows = [dict(letter.data, attachments=attachments.get(letter.id, []),
                  reply_context=reply_context.get(letter.id, ""),
                  reply_to=letter_owners(facts, main_snapshot(home))[letter.id].reply_to)
-            for letter in letters]
+            for letter in sorted(letters, key=lambda letter: not is_person(letter))]
     atomic_write(owed_path, json.dumps(rows))
     part_path = room / "port" / "loom.md"
     inherited = _read_by_predecessors(facts, thread, strand, letters, threads)

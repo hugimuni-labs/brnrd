@@ -13,7 +13,7 @@ import os
 import subprocess
 
 from brr.daemon2.facts import Fact
-from brr.loom.runtime import ledger, loom
+from brr.loom.runtime import ledger, loom, port
 from brr.loom.runtime.home import Home
 from brr.loom.runtime.loom import tick_once
 from brr.loom.runtime.router import Router
@@ -26,6 +26,9 @@ CHILD = "---\nid: c-1\nstatus: open\ntense: plan\nopened-by: thread:w-1\n---\n# 
 
 
 def test_kept_boundary_equals_a_fresh_render_and_every_input_re_renders(tmp_path, monkeypatch):
+    # The header clock is sampled on render and is independent of cache inputs.
+    stamp = port.clock()
+    monkeypatch.setattr(port, "clock", lambda: stamp)
     root = tmp_path / "home"
     write_thread(root, "w-1", "# parent\n", "quit-now", wait="0")
     write_thread(root, "c-1", CHILD, "quit-now", wait="0")
