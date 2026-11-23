@@ -74,7 +74,7 @@ def test_a_quiet_heavy_stop_asks_once_and_never_says_a_reincarnation_is_due(room
     stdin = _transcript(tmp_path, 40_000, 700_000)
     execute("start", room, "")
     reason = json.loads(_turn(room, stdin))["reason"]
-    assert "would die" in reason and "due" not in reason and "reincarnate?" not in reason
+    assert "would be lost in a molt" in reason and "due" not in reason and "reincarnate?" not in reason
     for _ in range(3):
         assert _turn(room, stdin) == ""
     assert "shed_due_at" not in _state(room)
@@ -112,7 +112,8 @@ def test_a_long_park_states_the_stakes_and_a_short_one_says_nothing():
     assert not reincarnate.long_wait("at:2026-11-01T01:20:00+00:00", now)
     assert not reincarnate.long_wait("ci:o/r@abc", now) and not reincarnate.long_wait("file:/x", now)
     line = reincarnate.rest_line("letter:a/b", 134_000)
-    assert line.startswith("resting until letter:a/b. Context 134k. What isn't in the README is lost on any end")
+    assert line.startswith("resting until letter:a/b. Context 134k. Carried across a molt: only what is written. "
+                           "Kept in the ledger: everything else.")
     assert line.endswith("What does the next hour need that isn't written yet?") and "due" not in line
 
 def test_a_broken_tally_never_ends_the_stop(room, tmp_path, monkeypatch):
@@ -203,7 +204,7 @@ def test_the_park_line_asks_what_would_die_only_past_the_mark():
     assert below.endswith("What does the next hour need that isn't written yet?") and "census" not in below
     above = reincarnate.rest_line("letter:a/b", reincarnate.MARK, "census here")
     assert above.startswith("census here\nresting until letter:a/b. Context 150k.")
-    assert reincarnate.DIE in above and "reincarnate --why" in above and "hold --why" in above
+    assert reincarnate.DIE in above and "molt --carry" in above and "hold --why" in above
     # A number and a question, never a verdict.
     assert "reincarnate?" not in above and "due" not in above
 
@@ -235,7 +236,7 @@ def test_a_resting_stop_past_the_mark_asks_once_and_a_hold_quiets_it(room, tmp_p
     asked = json.loads(_turn(room, big))
     assert asked["decision"] == "block"
     reason = asked["reason"]
-    assert "context 160k, past the 150k mark" in reason and "would die if you reincarnated now" in reason
+    assert "context 160k, past the 150k mark" in reason and "would be lost in a molt now" in reason
     assert "burden is on holding" in reason and "mid-way counts as live" in reason
     assert "scroll: tool output 60%" in reason and "stops 2" in reason
     # Asked once: the idle repeat, and the next call's stop, pass.

@@ -316,7 +316,8 @@ def render_boundary(strand: str, gen: int, thread: str, letters: list[Fact],
                     degraded: str = "", face: str = "", left: str = "", moved: str = "",
                     library: str = "", forge: str = "", band: str = "",
                     done: str = "", room: str = "", cited: str = "", idle: str = "",
-                    park_reminder: str = "", waits: tuple[str, ...] | list[str] = ()) -> str:
+                    park_reminder: str = "", next_wake: str = "",
+                    waits: tuple[str, ...] | list[str] = ()) -> str:
     """Shown letters keep their first line, reply context and attachments when compacted.
 
     ``budget`` sits before the plan: the jack compares what follows `` · plan ``,
@@ -325,12 +326,14 @@ def render_boundary(strand: str, gen: int, thread: str, letters: list[Fact],
     lines = [
         f"<!-- port {strand} gen {gen} · {clock()} · owed "
         + " ".join(str(letter.data['id']) for letter in letters) + " -->",
-        f"status: strand {strand} · gen {gen} · thread {thread}"
+        f"status: thread {thread}"
         + (f" · {fuel}" if fuel else "") + (f" · {budget}" if budget else "")
         + (f" · {plan}" if plan else ""),
         "owed:",
     ]
     lines[2:2] = waits
+    if next_wake:
+        lines.insert(2, f"next wake: {next_wake}")
     if park_reminder:
         lines.insert(2, park_reminder)
     from .dispositions import is_person
@@ -430,7 +433,7 @@ def _quote(value) -> str:
     quote, is written as a JSON string. A raw newline would end the field and
     make its next line a field of its own, or close the frontmatter early."""
     value = str(value)
-    return json.dumps(value) if "\n" in value or value.startswith('"') else value
+    return json.dumps(value) if "\n" in value or "\r" in value or value != value.strip() or value.startswith('"') else value
 
 
 def _unquote(value: str) -> str:
@@ -1068,8 +1071,10 @@ def _carried(home, facts, stamped, re, target, sender) -> list:
     return out
 
 
-def write_reincarnate(room: Path, why: str, *, fresh: bool = False, cites: str | None = None) -> str:
-    """``reincarnate``: hand the seat to a successor."""
+def write_reincarnate(room: Path, why: str, *, fresh: bool = False,
+                      cites: str | None = None, carry: str | None = None) -> str:
+    """Record a molt using the existing reincarnate wire and ledger kind."""
+    verb = "molt" if carry is not None else "reincarnate"
     if not why:
         raise PortError("reincarnate: --why is empty")
     from .ledger import read_facts
@@ -1083,7 +1088,7 @@ def write_reincarnate(room: Path, why: str, *, fresh: bool = False, cites: str |
     facts = read_facts(home)
     thread = sender_threads(facts).get(strand)
     if thread is None:
-        raise PortError("reincarnate: room has no thread")
+        raise PortError(f"{verb}: room has no thread")
     if cites:
         from .cites import check_cite
         check_cite(facts, cites, thread)
@@ -1091,27 +1096,31 @@ def write_reincarnate(room: Path, why: str, *, fresh: bool = False, cites: str |
     owed = owed_lefts(wishes(facts), facts, thread, strand)
     if owed:
         # The successor reads what is left from the wish, not from this body's memory.
-        raise PortError("reincarnate: say what is left first, then reincarnate:\n" + "\n".join(
+        raise PortError(f"{verb}: say what is left first, then {verb}:\n" + "\n".join(
             f'  brnrd runtime wish {ident} --left "<step>" --left "<step>"   ({why}; --left same if nothing moved)'
             for ident, why in owed))
     held = unreplied_held(facts, strand, room)
     if held:
         # A person who wrote to this body hears from it before a stranger takes over.
-        raise PortError("reincarnate: reply to each person letter you hold first, even with just an ack:\n" + "\n".join(
+        raise PortError(f"{verb}: reply to each person letter you hold first, even with just an ack:\n" + "\n".join(
             f'  brnrd runtime send --re {ident} --to {channel} "…"   (from {letter.data.get("from") or letter.by})'
             for ident, (letter, channel) in held.items()))
     clone = resolve_clone(room)
     path = f"threads/{thread}/README.md"
     if not fresh and git(clone, "diff", "HEAD", "--quiet", "--", path, check=False).returncode:
         git(clone, "add", "--", path)
-        git(clone, "commit", "--only", "-m", f"reincarnate: {why}", "--", path)
+        git(clone, "commit", "--only", "-m", f"{verb}: {why}", "--", path)
     if not fresh and not _current_label(clone, strand).taint:
         outcome = send_to_self(clone)
         if outcome.status != "merged":
-            raise PortError(outcome.stderr or f"reincarnate: landing {outcome.status}: {', '.join(outcome.files)}")
+            raise PortError(outcome.stderr or f"{verb}: landing {outcome.status}: {', '.join(outcome.files)}")
     stem = mint(5)
     fact_id = f"{strand}/{stem}"
     fields = {"kind": "reincarnate", "id": fact_id, "why": why}
+    from .jack import _set_state, _state
+    fields["context"] = str(int(_state(room).get("context") or 0))
+    if carry is not None:
+        fields["carry"] = carry
     if fresh:
         fields["fresh"] = "true"
     if cites:
@@ -1119,7 +1128,6 @@ def write_reincarnate(room: Path, why: str, *, fresh: bool = False, cites: str |
     write_port(room, stem, _front(fields))
     write_send(room, to=f"thread:{thread}", sender=strand,
                body="Fresh reincarnation: start from main." if fresh else why, reincarnate=fact_id)
-    from .jack import _set_state
     _set_state(room, reincarnated=True)
     return fact_id
 
@@ -1322,7 +1330,9 @@ def fact_from_port(fm: dict[str, str], strand: str, gen: int | None,
         return Fact(
             kind="reincarnate", by=f"strand:{strand}", id=fact_id,
             data={"strand": strand, "gen": gen, "why": fm["why"], **({"fresh": True} if fm.get("fresh") == "true" else {}),
-                  **({"cites": fm["cites"]} if fm.get("cites") else {})},
+                  **({"cites": fm["cites"]} if fm.get("cites") else {}),
+                  **({"context": int(fm["context"])} if fm.get("context", "").isdigit() else {}),
+                  **({"carry": fm["carry"]} if "carry" in fm else {})},
         )
     if kind == "face":
         from .faces import face_of
