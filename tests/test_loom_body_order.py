@@ -76,13 +76,13 @@ def _which(names):
     return lambda name: f"/bin/{name}" if name in names else None
 
 
-def _gauge(root, shell, left, *, error=None, windows=True):
+def _gauge(root, shell, left, *, error=None, windows=True, age=0, reset_in=86400):
     import json
     path = root / "loom" / "usage" / f"{shell}.json"
     path.parent.mkdir(parents=True, exist_ok=True)
     now = time.time()
-    reset = datetime.fromtimestamp(now + 86400, timezone.utc).isoformat()
-    payload = {"at": now, "windows": [
+    reset = datetime.fromtimestamp(now + reset_in, timezone.utc).isoformat()
+    payload = {"at": now - age, "windows": [
         {"name": "week", "left_pct": left, "resets_at": reset},
     ] if windows else []}
     if error is not None:
@@ -121,7 +121,8 @@ def test_spend_picks_in_engine_order_using_the_initiative_share(tmp_path, monkey
     preferences = tmp_path / "loom/preferences.toml"
     with preferences.open("a") as handle:
         handle.write('spend.burn = ["codex"]\nspend.keep = "grok"\n')
-    _gauge(tmp_path, "grok", 65)
+    # Collectors poll every ten minutes. A current window can be six minutes old.
+    _gauge(tmp_path, "grok", 65, age=360)
     _gauge(tmp_path, "codex", 90)
 
     assert adapters.spend_choice(home) == "grok"
@@ -148,6 +149,8 @@ def test_spend_skips_unavailable_and_unusable_readings(tmp_path, monkeypatch):
     _gauge(tmp_path, "grok", 1)
     assert adapters.spend_choice(home) == "codex"
     _gauge(tmp_path, "grok", 90, error="expired")
+    assert adapters.spend_choice(home) == "codex"
+    _gauge(tmp_path, "grok", 90, age=360, reset_in=-60)
     assert adapters.spend_choice(home) == "codex"
     _gauge(tmp_path, "codex", 1)
     with pytest.raises(ValueError, match="ahead of its initiative pace") as raised:

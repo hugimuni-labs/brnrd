@@ -317,19 +317,27 @@ def installed_shells(home) -> list[str]:
 
 def spend_choice(home) -> str:
     """Pin the first enabled, installed engine with room under its initiative pace."""
+    import json
     import time
 
     from .config import load_config
     from .idle import ahead, share_for
-    from .usage import collector_failed, fuels, gauge_windows, reading
+    from .usage import _past_reset, collector_failed, fuels, gauge_windows, week_pace
 
     installed = installed_shells(home)
     floor = load_config(home.root).hold_floor_pct
     now = time.time()
     for shell in installed:
-        value = reading(home, shell, cached_only=True)
+        path = home.root / "loom" / "usage" / f"{shell}.json"
+        try:
+            value = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
         windows = gauge_windows(value)
-        if not windows or collector_failed(value):
+        if not windows or collector_failed(value) or _past_reset(value, now):
+            continue
+        week = next((window for window in windows if window["name"] == "week"), None)
+        if week is None or week_pace(week, now) is None:
             continue
         if all(window["left_pct"] > floor for window in windows) and ahead(
             {"windows": windows}, now, share=share_for(home, shell)
