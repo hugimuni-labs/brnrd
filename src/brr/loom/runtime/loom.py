@@ -796,7 +796,7 @@ def _wake_opening(core, occasion, gone, carry, cost, *, owed, hand):
     if owed:
         return identity, opening + remaining, ""
     if hand:
-        opening += '\nAt the first tool boundary, call `"$BRNRD_JACK" --event post` to read the room.\n'
+        opening += '\nCall `"$BRNRD_JACK" --event start`, then `"$BRNRD_JACK" --event post` at the first tool boundary.\n'
     return identity, opening, remaining
 
 
