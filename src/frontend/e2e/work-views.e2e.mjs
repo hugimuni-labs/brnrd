@@ -123,3 +123,27 @@ test('a goal shows its linked work and opens its ask and its latest delivery', a
 		await B.close();
 	}
 });
+
+test('a backlink to a wish opens its waiting review, or its history when none waits', async () => {
+	const parts = fixture();
+	parts['thread/inbox'].board.calls.find((call) => call.wish === 'w-bravo0000000').delivery_id =
+		'wish.result:bravo-v1';
+	const B = await open({ parts, viewport: { width: 390, height: 844 } });
+	try {
+		const { page } = B;
+		const base = new URL(page.url());
+		base.search = '?wish=w-bravo0000000';
+		await page.goto(base.href);
+		await page.getByRole('heading', { name: 'bravo happens' }).waitFor();
+		equal(new URL(page.url()).searchParams.get('delivery'), 'wish.result:bravo-v1');
+		equal(await page.getByRole('button', { name: 'Accept', exact: true }).isVisible(), true);
+
+		base.search = '?wish=w-charlie0000000';
+		await page.goto(base.href);
+		await page.waitForSelector('.brd.sheet');
+		equal(new URL(page.url()).searchParams.get('delivery'), null);
+		equal(B.errors.length, 0, B.errors.join('\n'));
+	} finally {
+		await B.close();
+	}
+});
