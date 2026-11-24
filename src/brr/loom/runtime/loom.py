@@ -709,10 +709,11 @@ def _prepare(home: Home, strand: str, thread: str, gen: int,
     attachments = letter_attachments(home.root, facts)
     reply_context = _reply_context(facts, thread, letters, room)
     from .dispositions import is_person
+    ordered_letters = sorted(letters, key=lambda letter: not is_person(letter))
     rows = [dict(letter.data, attachments=attachments.get(letter.id, []),
                  reply_context=reply_context.get(letter.id, ""),
                  reply_to=letter_owners(facts, main_snapshot(home))[letter.id].reply_to)
-            for letter in sorted(letters, key=lambda letter: not is_person(letter))]
+            for letter in ordered_letters]
     atomic_write(owed_path, json.dumps(rows))
     part_path = room / "port" / "loom.md"
     inherited = _read_by_predecessors(facts, thread, strand, letters, threads)
@@ -775,8 +776,11 @@ def _prepare(home: Home, strand: str, thread: str, gen: int,
     owed = any(not letter.data.get("reincarnate") for letter in letters)
     # A note deliberately written after the carry updates its instructions.
     amended = any(line.startswith("After the molt, ") for line in context_note.splitlines())
+    first = ordered_letters[0] if ordered_letters else None
+    person_letter = first.id if first is not None and is_person(first) else ""
     core, occasion, later = _wake_opening(core, occasion, gone, carry, cost,
-                                         owed=owed or amended, hand=jack == "hand")
+                                         owed=owed or amended, hand=jack == "hand",
+                                         person_letter=person_letter)
     _record_sizes(home, room, strand, gen, thread, core + occasion, deferred=bool(later))
     atomic_write(core_path, core)
     later_path = room / "port" / "later.md"
@@ -810,32 +814,35 @@ def _prepare(home: Home, strand: str, thread: str, gen: int,
     return room
 
 
-def _wake_opening(core, occasion, gone, carry, cost, *, owed, hand):
-    from .briefing import TITLE
+def _wake_opening(core, occasion, gone, carry, cost, *, owed, hand, person_letter=""):
     from .selfrepo import hold_back
 
     receipt = cost + "\n" if cost else ""
     occasion = occasion.removeprefix(receipt)
+    mail = ""
+    if person_letter:
+        marker = f"## Letters\n### {person_letter} from "
+        before, found, after = occasion.partition(marker)
+        if found and (not before or before.endswith("\n")):
+            mail, occasion = found + after, before
     if carry:
         header = gone.partition("\n")[0] + "\n"
         opening = header + (carry if carry.endswith("\n") else carry + "\n")
         if core and not owed:
-            identity, title, briefing = core.partition(f"## {TITLE}\n")
             rest = occasion.replace(opening, "", 1)
             held = ""
             if rest.startswith("## Held\n"):
                 end = rest.find("\n## ", len("## Held\n") - 1)
                 end = end + 1 if end >= 0 else len(rest)
                 held, rest = rest[:end], rest[end:]
-            rest = title + briefing + rest
             initial = receipt + held + opening
             if hand:
                 initial += '\nCall `"$BRNRD_JACK" --event start` to read the room.\n'
-            return identity, initial, rest
+            return core, initial, rest
         if opening in occasion:
             occasion = opening + occasion.replace(opening, "", 1)
     if owed or carry:
-        return core, receipt + occasion, ""
+        return core, mail + receipt + occasion, ""
     kept, later = hold_back(occasion)
     return core, receipt + kept, later
 

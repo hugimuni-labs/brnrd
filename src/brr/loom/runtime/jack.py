@@ -1002,7 +1002,7 @@ def execute(event: str, room: Path, stdin_text: str) -> str:
         if first:
             text = first + "\n" + text
         if later:
-            text = later + text
+            text += later
         boundary = _boundary_reading(room, "wake")
         if not (parsed.ids or opened or plan or broken or left or later or _boundary_line(text, "held next: ")):
             return ""
@@ -1042,7 +1042,7 @@ def execute(event: str, room: Path, stdin_text: str) -> str:
                 return ""
             return _json({"hookSpecificOutput": {"hookEventName": hook, "additionalContext": "\n".join(
                 filter(None, (later, guarded, paused, over, left, people)))}})
-        text = later + news if later else news
+        text = news + later
         if people:
             text = text.rstrip("\n") + "\n" + people + "\n"
         if over:
@@ -1130,7 +1130,8 @@ def _rest_hold(room: Path, parsed: Boundary) -> str:
     _working(room, rest_held={"gen": parsed.gen, "wishes": [*held_wishes, free[0]]})
     return _json({"decision": "block", "reason":
                   f"Rest held: {free[0]} can move and {shell} has {left:g}% left. "
-                  'Open it (send --spend), park it with a real wait, or rest with '
+                  "Before stopping, decide what most needs to move across the goals you hold. "
+                  "Take that step, park on its actual dependency, or record why it must wait with "
                   '`brnrd runtime rest --why "<reason>"`.'})
 
 
