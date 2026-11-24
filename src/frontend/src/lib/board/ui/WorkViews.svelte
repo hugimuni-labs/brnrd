@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { page } from '$app/state';
 	import { replaceState } from '$app/navigation';
-	import { onMount } from 'svelte';
+	import { onMount, untrack } from 'svelte';
 	import { allCalls, answered } from '../calls.ts';
 	import type { Call, Goal, GoalAsk } from '../types.ts';
 	import { board } from './board.svelte.ts';
@@ -59,10 +59,23 @@
 		return letter?.verdict === 'correct' ? 'correction recorded' : undefined;
 	});
 
+	// A backlink names the wish (a PR footer, a message): once the board has loaded, it opens the review
+	// waiting on that wish's current delivery, or the wish's history when nothing waits.
+	const linkedWish = page.url.searchParams.get('wish');
+	let linkResolved = false;
+	$effect(() => {
+		if (linkResolved || !linkedWish || target || !b.model) return;
+		linkResolved = true;
+		const review = reviews.find((call) => call.wish === linkedWish && call.delivery_id);
+		untrack(() => {
+			if (!review) return b.openBead(linkedWish, 'keep');
+			view = 'ready';
+			select(review);
+		});
+	});
+
 	onMount(() => {
 		if (target) view = 'ready';
-		const wish = page.url.searchParams.get('wish');
-		if (wish && !target) b.openBead(wish, 'keep');
 	});
 
 	function select(call: Call | null) {
