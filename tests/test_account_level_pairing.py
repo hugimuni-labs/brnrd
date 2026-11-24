@@ -244,6 +244,27 @@ def test_dashboard_repos_carries_the_registry_derived_messenger_doors(env):
     assert doors["signal"] is False
 
 
+def test_compact_account_view_carries_messenger_status_without_building_repo_views(env, monkeypatch):
+    from brnrd.routers import dashboard
+
+    _, client, _ = env
+    headers = _account(client)
+    _login_session(client, headers)
+    full = client.get("/v1/dashboard/repos").json()
+
+    def unexpected(*args, **kwargs):
+        raise AssertionError("account should skip dashboard-only queries")
+
+    monkeypatch.setattr(dashboard, "_repo_views", unexpected)
+    monkeypatch.setattr(dashboard, "evaluate_capabilities", unexpected)
+    monkeypatch.setattr(dashboard, "_machines_summary_out", unexpected)
+    response = client.get("/v1/dashboard/repos?view=account")
+    assert response.status_code == 200
+    assert response.json() == {
+        key: full[key] for key in ("account", "installed_repos", "install_url", "notice", "messenger_doors")
+    }
+
+
 def test_dashboard_repos_carries_the_off_door_reason(env):
     """brr/every-door-on-the-page — the frontend renders every door,
     including dark ones, with an honest reason: a connector nobody ever

@@ -21,6 +21,7 @@ test('a signed-in read carries the GitHub login the deletion confirm needs', asy
 	assert.deepEqual(read, {
 		kind: 'authed',
 		githubLogin: 'octo',
+		messengerDoors: [],
 		github: { notice: null, repos: [], installUrl: '' }
 	});
 });
@@ -42,7 +43,7 @@ test('the GitHub App return is read here: its notice and the repos the App reach
 	}) as unknown as typeof fetch;
 	const params = githubReturn('?installation_id=42&notice=github-synced');
 	const read = await readAccount(fetchImpl, params);
-	assert.equal(asked, '/v1/dashboard/repos?notice=github-synced&installation_id=42');
+	assert.equal(asked, '/v1/dashboard/repos?notice=github-synced&installation_id=42&view=account');
 	assert.ok(read.kind === 'authed');
 	assert.equal(read.github.notice, 'GitHub installations synced.');
 	assert.deepEqual(read.github.repos, ['octo/app']);

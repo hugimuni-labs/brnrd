@@ -41,7 +41,7 @@ export interface ConnectContext {
 	board?: boolean;
 }
 
-/** A loom pair approves a computer: no repository panel, no picker, no doors after. */
+/** A loom pair approves a computer: without a repository panel or picker. */
 export function isLoomPair(
 	context: Pick<ConnectContext, 'kind' | 'suggested_repo_full_name'> | null
 ): boolean {

@@ -1277,6 +1277,7 @@ def dashboard_repos_api(
     installation_id: str | None = None,
     notice: str | None = None,
     db: Session = Depends(get_db),
+    view: str | None = None,
 ) -> JSONResponse:
     """Account-scoped repo-management JSON twin for the SvelteKit `/repos` route (#327)."""
     account_id = _account_id(request, db)
@@ -1296,24 +1297,31 @@ def dashboard_repos_api(
     settings = request.app.state.settings
     identities = _messenger_identities(request, settings)
     repos = _repos(db, account.id)
-    repo_views = _repo_views(db, repos)
     installed = _installed_repos(db, account.id)
-    installations = _installations(db, account.id)
     connected_names = {repo.repo_full_name.casefold() for repo in repos}
+    account_view = {
+        "account": {"id": account.id, "github_login": account.github_login},
+        "installed_repos": [
+            _installed_repo_out(row, connected_names=connected_names) for row in installed
+        ],
+        "install_url": settings.github_install_url,
+        "notice": _notice_text(notice),
+        "messenger_doors": _messenger_door_rows(db, account.id, identities),
+    }
+    if view == "account":
+        return JSONResponse(account_view)
+    repo_views = _repo_views(db, repos)
+    installations = _installations(db, account.id)
     return JSONResponse(
         {
+            **account_view,
             "generated_at": datetime.now(timezone.utc).isoformat(),
-            "account": {"id": account.id, "github_login": account.github_login},
             "connected_repos": [
                 _repo_view_out(row, bot_login=settings.github_bot_login)
                 for row in repo_views
             ],
             "connected_count": len(repos),
             "installations": [_installation_out(row) for row in installations],
-            "installed_repos": [
-                _installed_repo_out(row, connected_names=connected_names)
-                for row in installed
-            ],
             # design-capability-panel.md build step 1: one server-evaluated
             # registry, additive to this response — no existing field
             # changes, nothing removed. Flat (each row carries its own
@@ -1321,10 +1329,8 @@ def dashboard_repos_api(
             "capabilities": [cap.to_wire() for cap in evaluate_capabilities(db, account, settings)],
             "github_sync_configured": _github_sync_configured(request),
             "oauth_ready": _github_oauth_ready(request),
-            "install_url": settings.github_install_url,
             "github_app_slug": settings.github_app_slug,
             "github_bot_login": settings.github_bot_login.strip().lstrip("@"),
-            "notice": _notice_text(notice),
             "setup_installation_id": installation_id or "",
             # The same three lines each connected repo carries as
             # `setup_command`, with a placeholder where a real checkout's
@@ -1333,14 +1339,6 @@ def dashboard_repos_api(
             # no repo row to read the command off. Account-level like
             # `install_url` and `github_app_slug` beside it.
             "pairing_command": pairing_command(PAIR_REPO_PLACEHOLDER),
-            # #1465 — the registry-derived connector set: every declared
-            # messenger door (Telegram, WhatsApp, Slack, Signal today —
-            # `messenger_doors.PLATFORMS`), each with its own
-            # `deep_link_available` flag. No user-facing copy here (see
-            # `messenger_doors.py`'s module docstring) — the renderer picks
-            # labels/icons per platform. A new connector joins this array
-            # the moment its registry entry exists, with no frontend edit.
-            "messenger_doors": _messenger_door_rows(db, account.id, identities),
             # Deprecated (#1465), kept one release: superseded by
             # `messenger_doors[platform=telegram].deep_link_available` +
             # the generalized `POST /v1/dashboard/pair`. Left in place so

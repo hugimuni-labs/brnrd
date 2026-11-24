@@ -286,6 +286,9 @@ def told(facts) -> dict[str, Wish]:
     return cached_projection(facts, "wishes", (), lambda rows: wishes(kind_facts(rows, *WISH_KINDS)))
 
 
+ONBOARDING_WISH = 'brnrd knows the person it works for'
+
+
 def waits_on(found: dict[str, Wish], main: dict) -> dict[str, str]:
     """Who each open ask waits on, derived and never stored.
 
@@ -298,7 +301,10 @@ def waits_on(found: dict[str, Wish], main: dict) -> dict[str, str]:
     nobody else will wake for it.
     """
     from .lifecycle import CLOSED
-    asks = {w.id: w for w in found.values() if w.open and w.sender == "resident"}
+    asks = {
+        w.id: w for w in found.values()
+        if w.open and w.sender == "resident" and (w.parent or w.line != ONBOARDING_WISH)
+    }
     onward: dict[tuple[str, str], Wish] = {}
     for w in asks.values():
         onward.setdefault((w.thread, w.parent), w)

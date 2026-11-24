@@ -4,6 +4,7 @@
 	import AccountDeletion from '$lib/AccountDeletion.svelte';
 	import BillingPanel from '$lib/BillingPanel.svelte';
 	import AccountSetup from '$lib/AccountSetup.svelte';
+	import MessengerDoors from '$lib/MessengerDoors.svelte';
 	import {
 		ACCOUNT_PATH,
 		githubReturn,
@@ -70,6 +71,9 @@
 				<p class="warn">{account.message}</p>
 			{:else}
 				<AccountSetup bind:board />
+				<div id="messengers">
+					<MessengerDoors doors={account.messengerDoors} heading="Telegram and WhatsApp" embedded />
+				</div>
 				{#if account.github.notice || account.github.repos.length}
 					<section id="github" class="github" aria-label="GitHub">
 						<h2>GitHub</h2>
@@ -159,6 +163,12 @@
 	.acct :global(.text-stone-200),
 	.acct :global(.text-stone-300) {
 		color: #171717;
+	}
+	.acct :global(#messengers [class*='bg-amber-950']) {
+		background: #fff;
+	}
+	.acct :global(#messengers .text-sky-200) {
+		color: #17587b;
 	}
 	.acct :global(.text-stone-400) {
 		color: #555;

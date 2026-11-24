@@ -6,7 +6,7 @@
 // It learns the session the way the dashboard does: `GET /v1/dashboard/repos`
 // answers 401 to an anonymous visitor and otherwise carries the GitHub login
 // that AccountDeletion's confirmation needs. One read, both answers.
-import { ReposAuthError, fetchRepos } from './repos.ts';
+import { ReposAuthError, fetchRepos, type MessengerDoor } from './repos.ts';
 
 export const ACCOUNT_PATH = '/account';
 
@@ -21,7 +21,12 @@ export interface GitHubRead {
 }
 
 export type AccountRead =
-	| { kind: 'authed'; githubLogin: string | null; github: GitHubRead }
+	| {
+			kind: 'authed';
+			githubLogin: string | null;
+			github: GitHubRead;
+			messengerDoors: MessengerDoor[];
+	  }
 	| { kind: 'anon' }
 	| { kind: 'error'; message: string };
 
@@ -39,10 +44,11 @@ export async function readAccount(
 	params: { notice?: string; installationId?: string } = {}
 ): Promise<AccountRead> {
 	try {
-		const repos = await fetchRepos(fetchImpl, params);
+		const repos = await fetchRepos(fetchImpl, { ...params, accountOnly: true });
 		return {
 			kind: 'authed',
 			githubLogin: repos.account?.github_login ?? null,
+			messengerDoors: repos.messenger_doors ?? [],
 			github: {
 				notice: params.notice ? (repos.notice ?? null) : null,
 				repos: (repos.installed_repos ?? []).map((r) => r.repo_full_name),

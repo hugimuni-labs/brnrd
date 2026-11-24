@@ -21,7 +21,7 @@ const free = {
 	cancel_at_period_end: false
 };
 
-async function account(path, { sub, repos = {} }) {
+async function account(path, { sub, repos = {}, pairedChats = [] }) {
 	// The default parts: this account's loom has sent its board, so readiness is ready.
 	const B = await open({ site: cloud, ready: '.brd header' });
 	const asked = [];
@@ -29,6 +29,9 @@ async function account(path, { sub, repos = {} }) {
 		asked.push(new URL(r.request().url()).search);
 		r.fulfill(json({ account: { github_login: 'ada' }, connected_repos: [], ...repos }));
 	});
+	await B.page.route('**/v1/dashboard/paired-chats', (r) =>
+		r.fulfill(json({ paired_chats: pairedChats }))
+	);
 	await B.page.route('**/v1/stats/pricing', (r) => r.fulfill(json({})));
 	await B.page.route('**/v1/accounts/subscription', (r) => r.fulfill(json(sub)));
 	await B.page.goto(B.base + path.replace(/^\//, ''));
@@ -78,6 +81,62 @@ test('the GitHub App return shows its outcome and repos here, once', async () =>
 		);
 		const url = new URL(B.page.url());
 		equal(url.pathname + url.search, '/account');
+	} finally {
+		await B.close();
+	}
+});
+
+const messengerDoors = [
+	{ platform: 'telegram', deep_link_available: true, paired: false },
+	{ platform: 'whatsapp', deep_link_available: true, paired: false }
+];
+
+test('a loom approval offers both phone chats while setup continues', async () => {
+	const B = await open({ site: cloud, ready: '.brd header' });
+	try {
+		await B.page.route('**/v1/connect/BR-12345678', (r) =>
+			r.fulfill(
+				json(
+					r.request().method() === 'POST'
+						? { ok: true, notice: 'Approved' }
+						: {
+								code: 'BR-12345678',
+								status: 'pending',
+								kind: 'loom',
+								repos: [],
+								suggested_repo_full_name: 'ada/self',
+								suggested_forge: 'github'
+							}
+				)
+			)
+		);
+		await B.page.route('**/v1/dashboard/repos?view=account', (r) =>
+			r.fulfill(json({ messenger_doors: messengerDoors }))
+		);
+		await B.page.route('**/v1/dashboard/paired-chats', (r) =>
+			r.fulfill(json({ paired_chats: [] }))
+		);
+		await B.page.goto(B.base + 'connect/BR-12345678#BR-12345678');
+		await B.page.getByRole('button', { name: 'approve this computer' }).click();
+		await B.page.getByTestId('back-to-terminal').waitFor();
+		await B.page.getByTestId('connect-telegram').waitFor();
+		await B.page.getByTestId('connect-whatsapp').waitFor();
+		equal(B.errors.length, 0);
+	} finally {
+		await B.close();
+	}
+});
+
+test('Account shows the bound handle and the unconnected messenger', async () => {
+	const { B } = await account('/account#messengers', {
+		sub: free,
+		repos: { messenger_doors: messengerDoors },
+		pairedChats: [{ id: 'chat-1', platform: 'telegram', paired: true, principal_display: '@ada' }]
+	});
+	try {
+		await B.page.getByTestId('paired-telegram').getByText('@ada', { exact: true }).waitFor();
+		await B.page.getByTestId('door-whatsapp').getByText('Not connected').waitFor();
+		equal(B.errors.length, 0);
 	} finally {
 		await B.close();
 	}
