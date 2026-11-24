@@ -41,6 +41,9 @@ if "Next step: inherited" in ctx.wake():
     for letter in letters:
         ctx.send("thread:work", note="finished inherited work", re=letter.id)
 else:
+    opening = (ctx.room / "port/occasion.md").read_text()
+    assert opening.startswith("## Letters\\n")
+    assert opening.index("second ask") < opening.index("## threads/work/README.md")
     assert {{l.body for l in letters}} == {{"first ask", "second ask"}}
     ctx.send("channel:fake", "first answer", re={first!r})
     path = ctx.room / "self/threads/work/README.md"
@@ -62,6 +65,8 @@ assert not (ctx.room / "port/reincarnate-pending").exists()
         wait_until(received.exists, 30, loom.dump)
         result = json.loads(received.read_text())
         assert "Next step: inherited" in result["wake"]
+        assert result["wake"].index("## loom briefing") < result["wake"].index("Carried across:")
+        assert "What do you and the person need most now?" in result["wake"]
         # The ack settled the second ask; the successor carries its work from the README.
         assert "second ask" not in result["bodies"] and "first ask" not in result["bodies"]
         assert any(f.kind == "letter" and f.data.get("re") == second and f.data.get("to") == "channel:fake"

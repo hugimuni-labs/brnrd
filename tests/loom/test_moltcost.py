@@ -566,6 +566,6 @@ def test_a_quiet_molt_keeps_the_carry_opaque_and_defers_the_room():
     core, opening, later = _wake_opening(
         identity + briefing, occasion, gone, carry, "last molt: 120 tokens", owed=False, hand=False,
     )
-    assert core == identity
+    assert core == identity + briefing
     assert opening == "last molt: 120 tokens\n" + gone
-    assert later == briefing + "## threads/t/README.md\nCurrent spec\n## Loom\n"
+    assert later == "## threads/t/README.md\nCurrent spec\n## Loom\n"

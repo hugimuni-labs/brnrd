@@ -1130,7 +1130,8 @@ def _rest_hold(room: Path, parsed: Boundary) -> str:
     _working(room, rest_held={"gen": parsed.gen, "wishes": [*held_wishes, free[0]]})
     return _json({"decision": "block", "reason":
                   f"Rest held: {free[0]} can move and {shell} has {left:g}% left. "
-                  'Open it (send --spend), park it with a real wait, or rest with '
+                  "Before stopping, decide what most needs to move across the goals you hold. "
+                  "Take that step, park on its actual dependency, or record why it must wait with "
                   '`brnrd runtime rest --why "<reason>"`.'})
 
 
