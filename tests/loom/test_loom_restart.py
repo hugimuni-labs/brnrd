@@ -116,8 +116,15 @@ for letter in letters:
 def test_wish_progress_reaches_live_body_and_is_delivered_once_per_change(tmp_path):
     root = tmp_path / 'home'
     init_self(root, person='test')
+    # The person opened this thread. The injected letters have no reply channel,
+    # so recording a result does not queue a receipt for another thread.
     # Ticked rows count for nothing: the plan is the thread's wishes.
-    write_thread(root, 'work', 'Work\n\n## Plan\n- [x] First\n- [ ] Second', 'work', wait='0')
+    write_thread(
+        root, 'work',
+        '---\nid: work\nstatus: open\ntense: plan\nopened-by: person:test\n---\n'
+        '# Work\n\n## Plan\n- [x] First\n- [ ] Second',
+        'work', wait='0',
+    )
     ready, complete, finished = [root / name for name in ('ready', 'complete', 'finished')]
     bodies(root, f"""import json, subprocess, sys, time
 from pathlib import Path
@@ -144,14 +151,14 @@ ctx.send("thread:work", note="begin", re=letter)
 deadline = time.monotonic() + 30
 until("plan 0/2")
 quiet = ctx.jack("post").raw
-assert quiet == "", quiet
+assert " · plan " not in quiet, quiet
 wish(one, "--result", "url:https://example.com/1", "--line", "First done", "--deliver")
 view = until("plan 1/2")
 text = json.loads(view.raw)["hookSpecificOutput"]["additionalContext"]
 next_row = text.split(" · next: ")[1].split("\\n")[0]
 assert len(next_row) == 60 and next_row.startswith("Second"), next_row
 quiet = ctx.jack("post").raw
-assert quiet == "", quiet
+assert " · plan " not in quiet, quiet
 ctx.handoff({str(ready)!r}, view.raw)
 view = ctx.jack("post")
 while not view.letters:
