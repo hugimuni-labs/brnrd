@@ -329,13 +329,15 @@ test('a signed-in cloud page without a board opens Account', async () => {
 		page = await ctx.newPage();
 	await page.route('**/v1/loom/index', (r) => r.fulfill({ status: 404, body: '{}' }));
 	await page.route('**/v1/loom/consent', (r) => r.fulfill({ json: { state: 'none' } }));
-	await page.route('**/v1/dashboard/repos', (r) =>
-		r.fulfill({
-			json: {
-				account: { github_login: 'ada' },
-				connected_repos: []
-			}
-		})
+	await page.route(
+		(url) => url.pathname === '/v1/dashboard/repos',
+		(r) =>
+			r.fulfill({
+				json: {
+					account: { github_login: 'ada' },
+					connected_repos: []
+				}
+			})
 	);
 	await page.goto(B.base);
 	await page.getByRole('heading', { name: 'Set up brnrd' }).waitFor();

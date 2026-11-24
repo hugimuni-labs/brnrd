@@ -403,7 +403,7 @@ def test_setup_seeds_a_self_so_a_letter_has_a_thread_to_land_on(tmp_path, monkey
 
 def test_setup_turns_the_onboarding_list_into_asks_the_first_wake_shows(tmp_path, monkeypatch):
     from brr.loom.runtime.ledger import read_facts
-    from brr.loom.runtime.wishes import waits_on, wake_wishes, wishes
+    from brr.loom.runtime.wishes import ONBOARDING_WISH, waits_on, wake_wishes, wishes
     from brr.loom.runtime.lifecycle import main_snapshot
     monkeypatch.setattr(setup_channel, 'pair', lambda *a, **kw: None)
     argv = ['--home', str(tmp_path), '--kind', 'fake', '--name', 'desk', '--person', 'ada']
@@ -411,7 +411,7 @@ def test_setup_turns_the_onboarding_list_into_asks_the_first_wake_shows(tmp_path
     home = Home(tmp_path)
     found = wishes(read_facts(home))
     # The resident's own wish, written by the loom: the person said nothing yet.
-    [own] = [w for w in found.values() if w.line == setup_channel.ONBOARDING_WISH]
+    [own] = [w for w in found.values() if w.line == ONBOARDING_WISH]
     assert own.sender == 'resident' and not own.says and not own.parent
     asks = [w for w in found.values() if w.parent == own.id]
     assert [w.line for w in sorted(asks, key=lambda w: w.born)][0] == 'What should I call you?'
@@ -421,7 +421,7 @@ def test_setup_turns_the_onboarding_list_into_asks_the_first_wake_shows(tmp_path
     assert not [f for f in read_facts(home) if f.kind == 'wish' and not f.by.startswith('loom:')]
     # They wait on the person, and the home thread's next body wakes with them.
     heads = waits_on(found, main_snapshot(home))
-    assert {heads[w.id] for w in asks} == {'operator'}
+    assert heads == {w.id: 'operator' for w in asks}
     wake = wake_wishes(read_facts(home), home.main_thread())
     assert 'What should I call you?' in wake and 'What do you want help with first?' in wake
     # The list is the self's: a line added later is asked, none twice.

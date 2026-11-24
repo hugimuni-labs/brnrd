@@ -1,6 +1,8 @@
 <script lang="ts">
+	import { onMount } from 'svelte';
 	import HomeAccess from './HomeAccess.svelte';
 	import { resolve } from '$app/paths';
+	import '$lib/board/ui/board.css';
 	import {
 		ConnectAuthError,
 		approvalProofFromHash,
@@ -61,6 +63,11 @@
 	// output read as environment noise.
 	let submitted = $state<{ code: string; hash: string } | null>(null);
 	let approved = $state(false);
+
+	onMount(() => {
+		document.documentElement.classList.add('board');
+		return () => document.documentElement.classList.remove('board');
+	});
 
 	let code = $derived(codeInFlight(submitted, initialCode));
 	// The URL fragment carrying the initiator proof
@@ -180,18 +187,14 @@
 				loomPair ? showBoard : null
 			);
 			if (result.ok) {
-				// A loom goes on in the terminal that asked; the doors are the
-				// daemon flow's next step, not this one's.
 				approvedLoom = loomPair;
-				if (!approvedLoom) {
-					try {
-						const repos = await fetchRepos();
-						messengerDoors = repos.messenger_doors ?? null;
-					} catch {
-						messengerDoors = null;
-					}
-				}
 				approved = true;
+				try {
+					const repos = await fetchRepos(fetch, { accountOnly: true });
+					messengerDoors = repos.messenger_doors ?? null;
+				} catch {
+					messengerDoors = null;
+				}
 			}
 		} catch (e) {
 			if (e instanceof ConnectAuthError) unauthenticated = true;
@@ -214,240 +217,288 @@
 
 <!-- The done phase renders the two-column messenger-door grid; the entry and
      confirm phases are a single column and read better narrow. -->
-<div class="mx-auto p-6 {phase === 'done' ? 'max-w-2xl' : 'max-w-xl'}">
-	<div class="flex items-start justify-between gap-4">
-		<p class="eyebrow">pairing handshake</p>
-		{#if phase !== 'entry'}
-			<a
-				href={resolve('/')}
-				class="font-mono text-[11px] tracking-wide text-ink-quiet uppercase hover:text-stone-300"
-				>dashboard</a
-			>
-		{/if}
-	</div>
-	<!-- The heading does not change between entry and confirm, deliberately.
+<main class="brd connect">
+	<div class="sheet mx-auto w-full p-6 {phase === 'done' ? 'max-w-2xl' : 'max-w-xl'}">
+		<div class="flex items-start justify-between gap-4">
+			<p>Setup</p>
+			{#if phase !== 'entry'}
+				<a
+					href={resolve('/')}
+					class="font-mono text-[11px] tracking-wide text-ink-quiet uppercase hover:text-stone-300"
+					>Board</a
+				>
+			{/if}
+		</div>
+		<!-- The heading does not change between entry and confirm, deliberately.
 	     A panel whose title renames itself under the reader is a second
 	     screen wearing the first one's URL — and the second screen is the
 	     thing this flow exists to have deleted. -->
-	<h1 class="mt-1 font-mono text-2xl font-semibold tracking-tight text-amber-100">
-		{phase === 'done' ? 'Computer connected' : 'Connect your computer'}
-	</h1>
+		<h1 class="mt-1 font-mono text-2xl font-semibold tracking-tight text-amber-100">
+			{phase === 'done' ? 'Computer connected' : 'Connect your computer'}
+		</h1>
 
-	<section class="panel mt-6 p-5">
-		{#if phase === 'entry'}
-			<!-- Phase 1: code entry form -->
-			<p class="text-sm text-stone-300">
-				Run <code class="font-mono text-amber-200">brnrd setup</code> (or
-				<code class="font-mono text-amber-200">brnrd account connect</code>) on your computer, then
-				enter the one-time code it prints.
-			</p>
-			<form
-				class="mt-5"
-				onsubmit={(event) => {
-					event.preventDefault();
-					submitCode();
-				}}
-			>
-				<label
-					class="font-mono text-[11px] tracking-wide text-amber-200/80 uppercase"
-					for="pair-code"
+		<section class="mt-6">
+			{#if phase === 'entry'}
+				<!-- Phase 1: code entry form -->
+				<p class="text-sm text-stone-300">
+					Run <code class="font-mono text-amber-200">brnrd setup</code> (or
+					<code class="font-mono text-amber-200">brnrd account connect</code>) on your computer,
+					then enter the one-time code it prints.
+				</p>
+				<form
+					class="mt-5"
+					onsubmit={(event) => {
+						event.preventDefault();
+						submitCode();
+					}}
 				>
-					pairing code
-				</label>
-				<input
-					id="pair-code"
-					bind:value={enteredCode}
-					class="mt-2 w-full border border-stone-700 bg-stone-950 px-3 py-3 font-mono text-lg tracking-wider text-stone-100 uppercase"
-					placeholder="BR-XXXXXXXX"
-					autocomplete="one-time-code"
-					spellcheck="false"
-				/>
-				<button
-					type="submit"
-					disabled={submitting}
-					class="mt-4 cursor-pointer border border-sky-700 bg-sky-950/40 px-4 py-2 font-mono text-sm tracking-wide text-sky-100 uppercase hover:border-sky-500 disabled:cursor-not-allowed disabled:border-stone-800 disabled:text-ink-mute"
-					>continue</button
-				>
-			</form>
-			{#if entryError}<p class="mt-3 text-sm text-red-400">{entryError}</p>{/if}
-		{:else if phase === 'confirm'}
-			<!-- Phase 2 sits *below* phase 1's own field rather than replacing
+					<label
+						class="font-mono text-[11px] tracking-wide text-amber-200/80 uppercase"
+						for="pair-code"
+					>
+						pairing code
+					</label>
+					<input
+						id="pair-code"
+						bind:value={enteredCode}
+						class="mt-2 w-full border border-stone-700 bg-stone-950 px-3 py-3 font-mono text-lg tracking-wider text-stone-100 uppercase"
+						placeholder="BR-XXXXXXXX"
+						autocomplete="one-time-code"
+						spellcheck="false"
+					/>
+					<button
+						type="submit"
+						disabled={submitting}
+						class="mt-4 cursor-pointer border border-sky-700 bg-sky-950/40 px-4 py-2 font-mono text-sm tracking-wide text-sky-100 uppercase hover:border-sky-500 disabled:cursor-not-allowed disabled:border-stone-800 disabled:text-ink-mute"
+						>continue</button
+					>
+				</form>
+				{#if entryError}<p class="mt-3 text-sm text-red-400">{entryError}</p>{/if}
+			{:else if phase === 'confirm'}
+				<!-- Phase 2 sits *below* phase 1's own field rather than replacing
 			     it: the code stays on screen, accepted, and the repository
 			     appears under it. One panel that grows, not two panels that
 			     swap. -->
-			<div class="flex items-baseline justify-between gap-3">
-				<p class="font-mono text-[11px] tracking-wide text-amber-200/80 uppercase">pairing code</p>
-				<p class="font-mono text-[11px] tracking-wide text-ink-quiet uppercase">accepted</p>
-			</div>
-			<p
-				class="mt-2 w-full border border-stone-800 bg-stone-950/60 px-3 py-3 font-mono text-lg tracking-wider text-ink-quiet"
-				data-testid="accepted-code"
-			>
-				{code}
-			</p>
-			{#if context && requesterLabel(context)}
-				<p class="mt-2 text-sm text-stone-300" data-testid="requester">
-					asked by <span class="font-mono text-amber-200">{requesterLabel(context)}</span>
+				<div class="flex items-baseline justify-between gap-3">
+					<p class="font-mono text-[11px] tracking-wide text-amber-200/80 uppercase">
+						pairing code
+					</p>
+					<p class="font-mono text-[11px] tracking-wide text-ink-quiet uppercase">accepted</p>
+				</div>
+				<p
+					class="mt-2 w-full border border-stone-800 bg-stone-950/60 px-3 py-3 font-mono text-lg tracking-wider text-ink-quiet"
+					data-testid="accepted-code"
+				>
+					{code}
 				</p>
-			{/if}
-			<p class="mt-2 text-xs text-ink-quiet">
-				Only approve a code you started yourself, on your own computer. If someone sent you this
-				link, close the page.
-			</p>
-
-			{#if context?.github_login}
-				<p class="mt-2 text-sm text-stone-400">
-					Signed in as @{context.github_login}
-					·
-					<a
-						class="text-amber-200 underline"
-						href={loginUrlForConnect(code, hash, true)}
-						rel="external">Switch GitHub account</a
-					>
-				</p>
-			{/if}
-
-			{#if contextError}
-				<p class="text-sm text-red-400">{contextError}</p>
-			{:else if unauthenticated}
-				<p class="text-sm text-stone-400">
-					Sign in to approve this computer — <a
-						class="text-sky-400 underline"
-						href={loginUrlForConnect(code, hash)}
-						rel="external">log in</a
-					>.
-				</p>
-			{:else if context === null}
-				<p class="text-sm text-ink-quiet">Loading…</p>
-			{:else if result?.ok}
-				<!-- Shouldn't reach here — result.ok transitions to 'done' — guard only -->
-				<p class="text-sm text-amber-200">{result.notice}</p>
-			{:else}
-				<p class="mt-4 text-sm text-stone-400">
-					{suggested && !showPicker
-						? 'This is the repository your checkout named. Connect it and the terminal takes over from there.'
-						: 'Choose the repository this daemon should serve.'}
+				{#if context && requesterLabel(context)}
+					<p class="mt-2 text-sm text-stone-300" data-testid="requester">
+						asked by <span class="font-mono text-amber-200">{requesterLabel(context)}</span>
+					</p>
+				{/if}
+				<p class="mt-2 text-xs text-ink-quiet">
+					Only approve a code you started yourself, on your own computer. If someone sent you this
+					link, close the page.
 				</p>
 
-				{#if notice}
-					<p class="mt-4 text-sm text-stone-300">{notice}</p>
-					<!-- The one terminal notice with somewhere to go: this pairing
+				{#if context?.github_login}
+					<p class="mt-2 text-sm text-stone-400">
+						Signed in as @{context.github_login}
+						·
+						<a
+							class="text-amber-200 underline"
+							href={loginUrlForConnect(code, hash, true)}
+							rel="external">Switch GitHub account</a
+						>
+					</p>
+				{/if}
+
+				{#if contextError}
+					<p class="text-sm text-red-400">{contextError}</p>
+				{:else if unauthenticated}
+					<p class="text-sm text-stone-400">
+						Sign in to approve this computer — <a
+							class="text-sky-400 underline"
+							href={loginUrlForConnect(code, hash)}
+							rel="external">log in</a
+						>.
+					</p>
+				{:else if context === null}
+					<p class="text-sm text-ink-quiet">Loading…</p>
+				{:else if result?.ok}
+					<!-- Shouldn't reach here — result.ok transitions to 'done' — guard only -->
+					<p class="text-sm text-amber-200">{result.notice}</p>
+				{:else}
+					<p class="mt-4 text-sm text-stone-400">
+						{suggested && !showPicker
+							? 'This is the repository your checkout named. Connect it and the terminal takes over from there.'
+							: 'Choose the repository this daemon should serve.'}
+					</p>
+
+					{#if notice}
+						<p class="mt-4 text-sm text-stone-300">{notice}</p>
+						<!-- The one terminal notice with somewhere to go: this pairing
 					     named no repo, and the account has nothing to fall back to.
 					     Every other status here is genuinely terminal. -->
-					{#if needsRepoEnable(context)}
-						<a
-							href={resolve(
-								`/dashboard/repos?next=${encodeURIComponent(connectNextUrl(code, hash))}`
-							)}
-							class="mt-3 inline-flex items-center border border-amber-700 bg-amber-950/40 px-3 py-1.5 font-mono text-[11px] tracking-wide text-amber-100 uppercase hover:border-amber-500"
-							>connect a repository</a
-						>
-					{/if}
-				{:else if linkIncomplete}
-					<!-- A live code but the link lost its #… tail. -->
-					<p class="mt-4 text-sm text-stone-300">
-						This approval link is incomplete. Copy the whole link your terminal printed — including
-						everything after the <code class="font-mono text-amber-200">#</code> — and open that. It
-						carries the proof that <em>you</em> are the one who asked to pair.
-					</p>
-				{:else if canApprove(context)}
-					{#if loomPair}
-						<label class="mt-4 flex items-start gap-2 text-sm text-stone-300">
-							<input
-								type="checkbox"
-								data-testid="show-board"
-								class="mt-1"
-								bind:checked={showBoard}
-							/>
-							<span
-								>Show this computer's board on brnrd.dev: its threads, wishes and asks, seen only
-								when you are signed in. Change it any time in settings.</span
+						{#if needsRepoEnable(context)}
+							<a
+								href={resolve(
+									`/dashboard/repos?next=${encodeURIComponent(connectNextUrl(code, hash))}`
+								)}
+								class="mt-3 inline-flex items-center border border-amber-700 bg-amber-950/40 px-3 py-1.5 font-mono text-[11px] tracking-wide text-amber-100 uppercase hover:border-amber-500"
+								>connect a repository</a
 							>
-						</label>
-						<button
-							type="button"
-							data-testid="approve-computer"
-							class="mt-4 cursor-pointer border border-amber-700 bg-amber-950/40 px-3 py-1.5 font-mono text-[11px] tracking-wide text-amber-100 uppercase hover:border-amber-500 disabled:cursor-not-allowed disabled:border-stone-800 disabled:text-ink-mute"
-							disabled={posting}
-							onclick={() => approve(true)}
-							>{posting ? 'approving…' : 'approve this computer'}</button
-						>
-					{:else if suggested && !showPicker}
-						<!-- Primary path: the pairing already knows its repo. -->
-						<div class="subpanel mt-4 p-4">
-							<p class="font-mono text-[10px] tracking-wide text-amber-200/80 uppercase">
-								repository
-							</p>
-							<p class="mt-1 font-mono text-sm text-stone-200">{suggested}</p>
-							{#if suggestedIsLocal}
-								<p class="mt-1 font-mono text-[10px] tracking-wide text-ink-quiet">
-									no forge behind this one — a local checkout, named from its folder
-								</p>
-							{/if}
+						{/if}
+					{:else if linkIncomplete}
+						<!-- A live code but the link lost its #… tail. -->
+						<p class="mt-4 text-sm text-stone-300">
+							This approval link is incomplete. Copy the whole link your terminal printed —
+							including everything after the <code class="font-mono text-amber-200">#</code> — and
+							open that. It carries the proof that <em>you</em> are the one who asked to pair.
+						</p>
+					{:else if canApprove(context)}
+						{#if loomPair}
+							<label class="mt-4 flex items-start gap-2 text-sm text-stone-300">
+								<input
+									type="checkbox"
+									data-testid="show-board"
+									class="mt-1"
+									bind:checked={showBoard}
+								/>
+								<span
+									>Show this computer's board on brnrd.dev: its threads, wishes and asks, seen only
+									when you are signed in. Change it any time in settings.</span
+								>
+							</label>
 							<button
 								type="button"
+								data-testid="approve-computer"
 								class="mt-4 cursor-pointer border border-amber-700 bg-amber-950/40 px-3 py-1.5 font-mono text-[11px] tracking-wide text-amber-100 uppercase hover:border-amber-500 disabled:cursor-not-allowed disabled:border-stone-800 disabled:text-ink-mute"
 								disabled={posting}
 								onclick={() => approve(true)}
-								>{posting ? 'connecting…' : `connect ${suggested}`}</button
-							>
-							{#if context.repos.length > 0}
-								<button
-									type="button"
-									class="mt-4 ml-3 cursor-pointer font-mono text-[11px] tracking-wide text-ink-quiet uppercase underline hover:text-stone-300"
-									onclick={() => (showPicker = true)}>connect a different repo instead</button
-								>
-							{/if}
-						</div>
-					{:else}
-						<div class="subpanel mt-4 p-4">
-							<label
-								class="font-mono text-[10px] tracking-wide text-amber-200/80 uppercase"
-								for="repo_id">repository</label
-							>
-							<select
-								id="repo_id"
-								bind:value={repoId}
-								class="mt-2 w-full border border-stone-700 bg-stone-950 px-2 py-1.5 font-mono text-sm text-stone-200"
-							>
-								{#each context.repos as repo (repo.id)}
-									<option value={repo.id}>{repo.repo_full_name}</option>
-								{/each}
-							</select>
-							<button
-								type="button"
-								class="mt-4 cursor-pointer border border-amber-700 bg-amber-950/40 px-3 py-1.5 font-mono text-[11px] tracking-wide text-amber-100 uppercase hover:border-amber-500 disabled:cursor-not-allowed disabled:border-stone-800 disabled:text-ink-mute"
-								disabled={posting || !repoId}
-								onclick={() => approve(false)}
 								>{posting ? 'approving…' : 'approve this computer'}</button
 							>
-							{#if suggested}
+						{:else if suggested && !showPicker}
+							<!-- Primary path: the pairing already knows its repo. -->
+							<div class="subpanel mt-4 p-4">
+								<p class="font-mono text-[10px] tracking-wide text-amber-200/80 uppercase">
+									repository
+								</p>
+								<p class="mt-1 font-mono text-sm text-stone-200">{suggested}</p>
+								{#if suggestedIsLocal}
+									<p class="mt-1 font-mono text-[10px] tracking-wide text-ink-quiet">
+										no forge behind this one — a local checkout, named from its folder
+									</p>
+								{/if}
 								<button
 									type="button"
-									class="mt-4 ml-3 cursor-pointer font-mono text-[11px] tracking-wide text-ink-quiet uppercase underline hover:text-stone-300"
-									onclick={() => (showPicker = false)}>back to {suggested}</button
+									class="mt-4 cursor-pointer border border-amber-700 bg-amber-950/40 px-3 py-1.5 font-mono text-[11px] tracking-wide text-amber-100 uppercase hover:border-amber-500 disabled:cursor-not-allowed disabled:border-stone-800 disabled:text-ink-mute"
+									disabled={posting}
+									onclick={() => approve(true)}
+									>{posting ? 'connecting…' : `connect ${suggested}`}</button
 								>
-							{/if}
-						</div>
+								{#if context.repos.length > 0}
+									<button
+										type="button"
+										class="mt-4 ml-3 cursor-pointer font-mono text-[11px] tracking-wide text-ink-quiet uppercase underline hover:text-stone-300"
+										onclick={() => (showPicker = true)}>connect a different repo instead</button
+									>
+								{/if}
+							</div>
+						{:else}
+							<div class="subpanel mt-4 p-4">
+								<label
+									class="font-mono text-[10px] tracking-wide text-amber-200/80 uppercase"
+									for="repo_id">repository</label
+								>
+								<select
+									id="repo_id"
+									bind:value={repoId}
+									class="mt-2 w-full border border-stone-700 bg-stone-950 px-2 py-1.5 font-mono text-sm text-stone-200"
+								>
+									{#each context.repos as repo (repo.id)}
+										<option value={repo.id}>{repo.repo_full_name}</option>
+									{/each}
+								</select>
+								<button
+									type="button"
+									class="mt-4 cursor-pointer border border-amber-700 bg-amber-950/40 px-3 py-1.5 font-mono text-[11px] tracking-wide text-amber-100 uppercase hover:border-amber-500 disabled:cursor-not-allowed disabled:border-stone-800 disabled:text-ink-mute"
+									disabled={posting || !repoId}
+									onclick={() => approve(false)}
+									>{posting ? 'approving…' : 'approve this computer'}</button
+								>
+								{#if suggested}
+									<button
+										type="button"
+										class="mt-4 ml-3 cursor-pointer font-mono text-[11px] tracking-wide text-ink-quiet uppercase underline hover:text-stone-300"
+										onclick={() => (showPicker = false)}>back to {suggested}</button
+									>
+								{/if}
+							</div>
+						{/if}
+					{/if}
+
+					{#if result && !result.ok}
+						{#if result.refused}<HomeAccess refused />{:else}<p class="mt-3 text-sm text-red-400">
+								{result.notice}
+							</p>{/if}
 					{/if}
 				{/if}
-
-				{#if result && !result.ok}
-					{#if result.refused}<HomeAccess refused />{:else}<p class="mt-3 text-sm text-red-400">
-							{result.notice}
-						</p>{/if}
+			{:else}
+				<!-- Phase 3: done -->
+				{#if approvedLoom}
+					<p class="text-sm text-amber-200" data-testid="back-to-terminal">
+						Setup continues in your terminal. You can also connect a phone chat here.
+					</p>
+				{:else}
+					<p class="text-sm text-amber-200">{result?.notice ?? 'This computer is connected.'}</p>
+				{/if}
+				<MessengerDoors doors={messengerDoors} heading="Connect Telegram or WhatsApp" embedded />
+				{#if approvedLoom}
+					<a class="mt-4 inline-block underline" href={resolve('/account#messengers')}>
+						Manage chats in Account
+					</a>
 				{/if}
 			{/if}
-		{:else}
-			<!-- Phase 3: done -->
-			{#if approvedLoom}
-				<p class="text-sm text-amber-200" data-testid="back-to-terminal">
-					Approved. Go back to your terminal: brnrd goes on there.
-				</p>
-			{:else}
-				<p class="text-sm text-amber-200">{result?.notice ?? 'This computer is connected.'}</p>
-				<MessengerDoors doors={messengerDoors} heading="continue in another chat" />
-			{/if}
-		{/if}
-	</section>
-</div>
+		</section>
+	</div>
+</main>
+
+<style>
+	.connect {
+		overflow: auto;
+		background: #fafafa;
+	}
+
+	.sheet {
+		min-height: 100%;
+		background: #fff;
+		border-top: 5px solid var(--amber);
+	}
+
+	.connect :global([class*='text-amber-']),
+	.connect :global([class*='text-stone-']),
+	.connect :global(.text-ink-quiet) {
+		color: #292929;
+	}
+
+	.connect :global([class*='bg-stone-950']),
+	.connect :global([class*='bg-amber-950']),
+	.connect :global([class*='bg-sky-950']),
+	.connect :global(.subpanel) {
+		background: #fffaf0;
+		color: #171717;
+	}
+
+	.connect :global(.subpanel) {
+		border: 1px solid #ccc;
+	}
+
+	.connect :global(.text-sky-400) {
+		color: #17587b;
+	}
+
+	.connect :global(.text-red-400) {
+		color: #a32020;
+	}
+</style>

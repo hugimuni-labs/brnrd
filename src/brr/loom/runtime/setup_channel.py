@@ -128,7 +128,7 @@ def _bind(home, kind, name, person, folder, env, chats, *, timeout, out, qr, lin
         # The same code binds on either app: the link fills it in, typed it is the whole message.
         whatsapp = (f"open {door['whatsapp']} and send the text it fills in" if door.get('whatsapp') else
                     f"text {door['code']} by itself to brnrd's WhatsApp number")
-        intro = ("You can also add Telegram or WhatsApp." if web else
+        intro = ("Optional: connect Telegram or WhatsApp here or in Account on brnrd.dev." if web else
                  "No chat is bound to your brnrd account yet. Bind one, or both:")
         wait = "" if web else f"\nWaiting up to {timeout:g}s."
         out(f"{intro}\n"
@@ -783,9 +783,6 @@ def _take_offers(home, picked, rows, login, repo=SELF_REPO):
     return [key for key, _, _ in rows if key not in picked]
 
 
-ONBOARDING_WISH = 'brnrd knows the person it works for'
-
-
 def onboarding_asks(home, also=()):
     """``core/onboarding.md``'s list, as asks on the home thread: what brnrd
     asks a new person, carried like any ask and answered in chat.
@@ -798,7 +795,7 @@ def onboarding_asks(home, also=()):
     """
     from .ledger import append, read_facts
     from .verbs_wishes import wish_fact
-    from .wishes import wishes
+    from .wishes import ONBOARDING_WISH, wishes
     listed = home.root / 'self/core/onboarding.md'
     lines = [line[2:].strip() for line in listed.read_text().splitlines()
              if line.startswith('- ') and line[2:].strip()] if listed.is_file() else []
