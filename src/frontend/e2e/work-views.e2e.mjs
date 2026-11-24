@@ -59,6 +59,13 @@ test('a goal shows its linked work and opens its ask and its latest delivery', a
 	const delivery = 'wish.result:bravo-v1';
 	parts['thread/inbox'].board.calls.find((call) => call.wish === 'w-bravo0000000').delivery_id =
 		delivery;
+	Object.assign(
+		parts['thread/inbox'].board.calls.find((call) => call.wish === 'w-charlie0000000'),
+		{
+			blocks: 'alpha pilot brief',
+			meanwhile: [{ wish: 'w-foxtrot0000000', line: 'foxtrot outreach', state: 'read' }]
+		}
+	);
 	parts.index.goals = [
 		{
 			id: 'growth',
@@ -98,6 +105,8 @@ test('a goal shows its linked work and opens its ask and its latest delivery', a
 
 		await page.getByRole('button', { name: 'Needs you · which parser grammar?' }).click();
 		equal(await page.getByRole('heading', { name: 'which parser grammar?' }).isVisible(), true);
+		equal(await page.getByText('Holds up · alpha pilot brief').isVisible(), true);
+		equal(await page.getByRole('button', { name: 'foxtrot outreach · read' }).isVisible(), true);
 		equal(
 			await nav.getByRole('button', { name: 'Needs you 1' }).getAttribute('aria-pressed'),
 			'true'

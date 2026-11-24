@@ -78,3 +78,18 @@ def test_goal_verb_names_only_an_active_goal(monkeypatch):
         verbs_wishes._goal_fact(None, args(goal="nope"), facts(), "strand:x")
     with pytest.raises(ValueError, match="goes alone"):
         verbs_wishes._goal_fact(None, args(pick="why"), facts(), "strand:x")
+
+
+def test_an_ask_names_what_it_holds_up_and_what_moves_meanwhile():
+    from brr.loom.runtime.board import calls_of
+    rows = [*facts(), letter("L3", at(30)), wish("w-other", at(8), says=["L3"], thread="elsewhere"),
+            link("w-other", at(7))]
+    threads = [{"id": "work", "opened_by": "person:arseni", "status": "open"}]
+    ask = next(c for c in calls_of(threads, wishes(rows))["work"] if c["wish"] == "w-ask")
+    assert ask["blocks"] == "w-pilot"
+    # Same goal, any thread, newest first; the held wish itself never shows.
+    assert [m["wish"] for m in ask["meanwhile"]] == ["w-other", "w-board"]
+    unlinked = [f for f in rows if f.kind != "wish.goal"]
+    ask = next(c for c in calls_of(threads, wishes(unlinked))["work"] if c["wish"] == "w-ask")
+    # No goal: the same thread only.
+    assert [m["wish"] for m in ask["meanwhile"]] == ["w-board"]

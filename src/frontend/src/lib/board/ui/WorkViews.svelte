@@ -183,7 +183,18 @@
 				}}>← {view === 'needs' ? 'Needs you' : 'Ready'}</button
 			>
 			<h2>{selected.line}</h2>
+			{#if selected.blocks}<p><strong>Holds up</strong> · {selected.blocks}</p>{/if}
 			{#if selected.next}<p><strong>Next move</strong> · {selected.next}</p>{/if}
+			{#if selected.meanwhile?.length}
+				<p><strong>Continues meanwhile</strong></p>
+				{#each selected.meanwhile as other (other.wish)}
+					<p>
+						<button type="button" onclick={() => b.openBead(other.wish, 'keep')}
+							>{other.line} · {other.state}</button
+						>
+					</p>
+				{/each}
+			{/if}
 			{#if selected.parent}
 				<button type="button" onclick={() => b.openBead(selected!.parent!, 'keep')}
 					>Related work</button

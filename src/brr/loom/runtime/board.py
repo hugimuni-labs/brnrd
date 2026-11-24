@@ -209,6 +209,20 @@ def verdict_letters(facts) -> tuple[dict, dict]:
     return raised, said
 
 
+MEANWHILE = 3
+
+
+def meanwhile_of(parent, told: dict, held: set, limit: int = MEANWHILE) -> list[dict]:
+    """What keeps moving while an ask on ``parent`` waits: open wishes of the person under the same goal
+    (or, with no goal, on the same thread) that no person's answer holds up, most recently moved first."""
+    def kin(w):
+        return w.goal == parent.goal if parent.goal else w.thread == parent.thread
+    free = [w for w in told.values() if w.id != parent.id and w.sender == "person" and w.open
+            and w.state != "delivered" and w.id not in held and kin(w)]
+    free.sort(key=lambda w: w.at, reverse=True)
+    return [{"wish": w.id, "line": w.line, "state": w.state} for w in free[:limit]]
+
+
 def calls_of(threads: list[dict], told: dict, facts=()) -> dict[str, list[dict]]:
     """Each thread's calls: the one action each wish waiting on the person names (your-call.md, 4uwjt agreed in 4886).
 
@@ -228,15 +242,21 @@ def calls_of(threads: list[dict], told: dict, facts=()) -> dict[str, list[dict]]
         for o in t.get("opened_for") or []:
             opened.setdefault(o["wish"], t["id"])
     calls: dict[str, list[dict]] = {}
-    for ident, head in waits_on(told, main).items():
+    waits = waits_on(told, main)
+    # Wishes a person's answer holds up; everything else under the same goal or thread still moves.
+    held = {told[i].parent for i, head in waits.items() if not head.startswith("thread:") and told[i].parent}
+    for ident, head in waits.items():
         w = told[ident]
         if not head.startswith("thread:") and w.state != "delivered":
             call = {"kind": "ask", "wish": ident, "line": w.line, "waits": head,
                     "at": _iso(raised.get(ident, w.at)), "raised": raised.get(ident, w.at)}
             if parent := told.get(w.parent):
                 call["parent"] = parent.id
+                call["blocks"] = parent.line
                 if parent.left and parent.left["steps"]:
                     call["next"] = held_move(parent, [w])
+                if meanwhile := meanwhile_of(parent, told, held):
+                    call["meanwhile"] = meanwhile
             calls.setdefault(w.thread, []).append(call)
     for w in told.values():
         if w.verdict or w.state not in {"delivered", "expired"}:

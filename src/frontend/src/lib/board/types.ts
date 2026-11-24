@@ -66,6 +66,9 @@ export type Call = {
 	at: string;
 	waits?: string;
 	parent?: string;
+	// What the answer holds up, and the work that keeps moving meanwhile (board.py calls_of).
+	blocks?: string;
+	meanwhile?: { wish: string; line: string; state: string }[];
 	next?: string;
 	ref?: string;
 	result?: string;
