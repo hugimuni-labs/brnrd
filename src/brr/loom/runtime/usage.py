@@ -217,8 +217,9 @@ def fuel(home, shell: str) -> str:
 
 
 _SHELL_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*")
-#: What the status line and the board header say when a collector wrote an error and no window.
+#: Board error code for an unsuccessful quota reading.
 FAILS = "fails"
+QUOTA_UNAVAILABLE = "quota unavailable"
 #: A known steady state: the plan exposes no quota, so the line does not say ``fails``.
 UNMETERED = "unmetered"
 
@@ -257,7 +258,7 @@ def gauge_windows(payload) -> list[dict] | None:
 
 
 def collector_failed(payload) -> bool:
-    """True when the collector wrote an error string. The text stays in the file; the line says ``fails``."""
+    """True when the collector wrote an error string. The text stays in the file."""
     if not isinstance(payload, dict):
         return False
     error = payload.get("error")
@@ -338,8 +339,8 @@ def shell_fuels(home) -> dict[str, str]:
     """Window text per shell with a reading in ``loom/usage``.
 
     A shell with no file, or a file that yields no windows and no error, is
-    omitted. A collector error with no window is the word ``fails`` (the ask
-    says the same word, and the error text stays in the file). A reading whose
+    omitted. A collector error with no window is shown as quota unavailable.
+    A reading whose
     state is ``unmetered``, with no window and no error, is that word: a known
     gap, not a failure. A reading older than its newest reset that has already
     passed is kept and marked with ``?``
@@ -353,7 +354,7 @@ def shell_fuels(home) -> dict[str, str]:
         elif gauge_windows(payload) is not None and known_unmetered(payload):
             found[name] = UNMETERED
         elif gauge_windows(payload) is not None and collector_failed(payload):
-            found[name] = FAILS
+            found[name] = QUOTA_UNAVAILABLE
     return found
 
 
