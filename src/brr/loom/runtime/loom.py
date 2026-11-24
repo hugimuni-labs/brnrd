@@ -19,7 +19,7 @@ import tempfile
 import time
 import traceback
 from dataclasses import dataclass, field, replace
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from brr.daemon2.facts import Fact
@@ -314,14 +314,14 @@ def _loom_line(home, facts) -> str:
 
 
 def _build_wake(home, strand, gen, clone, thread, rows, part, owed_path, part_path, repo_file, core_path):
-    """Run the recipe; a home that cannot wake still wakes when it can be made to.
+    """Run the recipe; a start is never refused for the home's sake (11737, 11739).
 
-    The resident is who repairs its home, and it can only do that awake. So a
-    broken recipe is replaced by the packaged one, and owed letters that do not
-    fit are left for the first boundary, which shows unread letters whole. Only
-    a wake that cannot be built at all (no recipe fits even an empty occasion,
-    or one letter is larger than the budget) is refused. ``owed.json`` ends as
-    the letters the wake carried.
+    The resident is who repairs its home, and it can only do that awake. A letter
+    larger than the budget is cut in the wake and kept whole in ``port/letters/``.
+    A broken recipe is replaced by the packaged one; owed letters that do not fit
+    are left for the first boundary, which shows unread letters whole. A wake no
+    recipe can build, for any reason, boots on the loom's minimal wake (core, the
+    loom part and the letters). ``owed.json`` ends as the letters the wake carried.
     """
     def attempt(carried, text, recipe):
         atomic_write(owed_path, json.dumps(carried))
@@ -329,50 +329,91 @@ def _build_wake(home, strand, gen, clone, thread, rows, part, owed_path, part_pa
         return _run_recipe(clone, thread, owed_path, part_path, repo_file, core_path, recipe)
 
     from .converge import WAKE_FALLBACK, record
+    rows = _cut_letters(home, strand, gen, rows, owed_path.parent / "letters")
     recipe = None
     try:
-        code, occasion, why = attempt(rows, part, None)
-        broken = f"wake exited {code}: {why}"
-    except SelfError as exc:  # a recipe that is missing or not executable
-        code, occasion, why, broken = -1, "", str(exc), str(exc)
-    if code not in (0, 3):
-        recipe = seed_root() / "core" / "loom" / "wake"
-        _log(home, f"start {strand}: the self's core/loom/wake failed ({broken}); "
-                   "waking with the packaged recipe")
-        part = (f"your self's core/loom/wake failed ({broken[:400]}); brnrd's packaged recipe "
-                "built this wake instead; repair core/loom/wake and land it with send-self "
-                "before other work. ") + part
-        record(home, WAKE_FALLBACK, strand, gen, "recipe", {"want": "recipe", "error": broken[:400]})
-        code, occasion, why = attempt(rows, part, recipe)
-    if code == 3 and rows and not _oversized_letters(clone, thread, owed_path, part_path,
-                                                     repo_file, recipe=recipe):
-        best = None
-        low, high = 0, len(rows) - 1
-        while low <= high:
-            mid = (low + high) // 2
-            text = _deferred_line(rows[mid:], len(rows)) + part
-            result = attempt(rows[:mid], text, recipe)
-            if result[0] == 0:
-                best, low = (mid, text, result), mid + 1
-            else:
-                high = mid - 1
-        if best is not None:
-            mid, text, _ = best
-            # The search's last run may have failed, and a run unlinks the core
-            # and sizes files it would write: the best fit is run again, last.
-            code, occasion, why = attempt(rows[:mid], text, recipe)
-            _log(home, f"start {strand}: the wake carries {mid} of {len(rows)} owed letters; "
-                       "the rest arrive at the first boundary")
-            record(home, WAKE_FALLBACK, strand, gen, "letters", {
-                "want": "letters", "carried": mid,
-                "deferred": [str(row.get("id")) for row in rows[mid:]]})
+        try:
+            code, occasion, why = attempt(rows, part, None)
+            broken = f"wake exited {code}: {why}"
+        except SelfError as exc:  # a recipe that is missing or not executable
+            code, occasion, why, broken = -1, "", str(exc), str(exc)
+        if code not in (0, 3):
+            recipe = seed_root() / "core" / "loom" / "wake"
+            _log(home, f"start {strand}: the self's core/loom/wake failed ({broken}); "
+                       "waking with the packaged recipe")
+            part = (f"your self's core/loom/wake failed ({broken[:400]}); brnrd's packaged recipe "
+                    "built this wake instead; repair core/loom/wake and land it with send-self "
+                    "before other work. ") + part
+            record(home, WAKE_FALLBACK, strand, gen, "recipe", {"want": "recipe", "error": broken[:400]})
+            code, occasion, why = attempt(rows, part, recipe)
+        if code == 3 and rows:
+            best = None
+            low, high = 0, len(rows) - 1
+            while low <= high:
+                mid = (low + high) // 2
+                text = _deferred_line(rows[mid:], len(rows)) + part
+                result = attempt(rows[:mid], text, recipe)
+                if result[0] == 0:
+                    best, low = (mid, text, result), mid + 1
+                else:
+                    high = mid - 1
+            if best is not None:
+                mid, text, _ = best
+                # The search's last run may have failed, and a run unlinks the core
+                # and sizes files it would write: the best fit is run again, last.
+                code, occasion, why = attempt(rows[:mid], text, recipe)
+                if code == 0:
+                    _log(home, f"start {strand}: the wake carries {mid} of {len(rows)} owed letters; "
+                               "the rest arrive at the first boundary")
+                    record(home, WAKE_FALLBACK, strand, gen, "letters", {
+                        "want": "letters", "carried": mid,
+                        "deferred": [str(row.get("id")) for row in rows[mid:]]})
+                    return occasion
+        if code == 0:
             return occasion
-        attempt(rows, part, recipe)
-    if code != 0:
-        raise WakeFailure(f"wake exited {code}: {why}",
-                          _oversized_letters(clone, thread, owed_path, part_path, repo_file,
-                                             recipe=recipe))
+        broken = f"wake exited {code}: {why}"
+    except Exception as exc:  # noqa: BLE001 - a recipe that hangs or the loom's own fault
+        broken = f"{type(exc).__name__}: {exc}"
+    # The body that boots on the minimal wake is who repairs the recipe.
+    from .selfrepo import minimal_wake
+    atomic_write(owed_path, json.dumps(rows))
+    atomic_write(part_path, part)
+    core, occasion = minimal_wake(clone, thread, owed_path, part_path, repo_file, broken, home)
+    atomic_write(core_path, core)
+    atomic_write(core_path.with_name("sizes.json"), json.dumps({
+        "total": len((core + occasion).encode("utf-8")),
+        "parts": {"core": len(core.encode("utf-8")), "minimal": len(occasion.encode("utf-8"))},
+        "folded": ["minimal"]}))
+    _log(home, f"start {strand}: no recipe built the wake ({broken[:400]}); waking on the minimal wake")
+    record(home, WAKE_FALLBACK, strand, gen, "minimal", {"want": "minimal", "error": broken[:400]})
     return occasion
+
+
+def _cut_letters(home, strand, gen, rows, folder):
+    """Letters larger than the budget, cut to their head in the wake and kept whole in ``folder``."""
+    from .selfrepo import wake_budget
+    from .converge import WAKE_FALLBACK, record
+    limit = wake_budget()
+    keep = max(256, limit // 4)
+    out = []
+    for row in rows:
+        body = str(row.get("body", ""))
+        size = len((body + "\n".join(row.get("attachments", ())) + row.get("reply_context", "")).encode("utf-8"))
+        if size <= limit:
+            out.append(row)
+            continue
+        folder.mkdir(parents=True, exist_ok=True)
+        path = folder / (re.sub(r"[^A-Za-z0-9._-]", "_", str(row.get("id"))) + ".md")
+        atomic_write(path, body + "".join(f"\n{line}" for line in row.get("attachments", ()))
+                     + (f"\n{row['reply_context']}" if row.get("reply_context") else ""))
+        head = body.encode("utf-8")[:keep].decode("utf-8", "ignore")
+        cut = dict(row, body=head + f"\n[Cut at {len(head.encode('utf-8'))} of {size} bytes to fit the wake; "
+                                    f"the whole letter is at {path}.]\n", attachments=[], reply_context="")
+        out.append(cut)
+        _log(home, f"start {strand}: letter {row.get('id')} is {size}B, over the {limit}B wake; cut, whole at {path}")
+        record(home, WAKE_FALLBACK, strand, gen, f"letter:{row.get('id')}",
+               {"want": "letter", "letter": str(row.get("id")), "size": size, "path": str(path)})
+    return out
 
 
 def _record_sizes(home, room, strand, gen, thread, wake, *, deferred=False):
@@ -387,10 +428,12 @@ def _record_sizes(home, room, strand, gen, thread, wake, *, deferred=False):
                     else "recipe")
             parts = {key: size for key, size in parts.items() if key in {"core", "held"}}
             parts[name] = total - sum(parts.values())
-        _record(home, "wake.sizes", {
-            "thread": thread, "strand": strand, "gen": gen,
-            "budget": int(os.environ.get("LOOM_BUDGET_BYTES") or 24000),
-            "total": total, "parts": parts}, f"wake.sizes:{strand}:{gen}")
+        data = {"thread": thread, "strand": strand, "gen": gen,
+                "budget": int(os.environ.get("LOOM_BUDGET_BYTES") or 24000),
+                "total": total, "parts": parts}
+        if sizes.get("folded"):
+            data["folded"] = list(sizes["folded"])
+        _record(home, "wake.sizes", data, f"wake.sizes:{strand}:{gen}")
     except Exception as exc:  # noqa: BLE001
         _log(home, f"start {strand}: wake sizes not recorded ({exc})")
 
@@ -400,31 +443,6 @@ def _deferred_line(rest, total):
     return (f"the wake had room for {total - len(rest)} of {total} owed letters; the other "
             f"{len(rest)} ({ids}) arrive whole at your first tool boundary: read them "
             "before you act on the ones below. ")
-
-
-def _oversized_letters(clone, thread, owed, part, repos, recipe=None):
-    """Prove input-local failure without interpreting a recipe's exit codes.
-
-    The wake budget is the recipe contract. A large home plus small mail is
-    still the home's fault. Even intrinsically oversized mail is not blamed
-    when the very same recipe cannot run with an empty occasion.
-    """
-    raw = os.environ.get("LOOM_BUDGET_BYTES") or "24000"
-    if not raw.isdigit():
-        return ()
-    limit = int(raw)
-    large = tuple(f["id"] for f in json.loads(owed.read_text())
-                  if len((f["body"] + "\n".join(f.get("attachments", ())) +
-                          f.get("reply_context", "")).encode("utf-8")) > limit)
-    if not large:
-        return ()
-    try:
-        with tempfile.TemporaryFile(mode="w+") as output:
-            ok = run_wake(clone, thread, loom_part=part, repos=repos,
-                          stdout=output, stderr=output, recipe=recipe) == 0
-    except Exception:
-        return ()
-    return large if ok else ()
 
 
 def _failed_words(thread: str, body: str, tail: str, attempts: int = 2) -> str:
@@ -1386,6 +1404,21 @@ def _room_kept(home: Home, strand: str) -> list[str]:
     return lines
 
 
+def _start_failed_notice(home, facts, thread: str, gen: int, letter, channel: str) -> None:
+    """Tell the person once per streak of home-caused failures that their letter waits.
+
+    The router retries a refused home when self moves, or ten minutes after the
+    attempt (``Router._home_retry_waiting``); silence for those ten minutes reads as
+    a lost letter (inbox, 2026-11-23 17:41Z).
+    """
+    retry = datetime.now(timezone.utc) + timedelta(seconds=600)
+    notice(home, facts, "start-failed", f"{channel} {thread}:streak:{_home_streak(facts, thread, gen)}",
+           "I couldn't start just now, so your message is waiting. "
+           f"I'll try again by about {retry.astimezone():%H:%M}, sooner if the fault is fixed first.",
+           "Nothing to do; I'll answer once I start.",
+           about=letter, channel=channel, passive=True)
+
+
 def _home_streak(facts, thread: str, gen: int) -> int:
     """The first generation of the home-caused failures that end at ``gen``."""
     ends = sorted(((int(f.data["gen"]), f) for f in kind_facts(facts, "attempt.ended")
@@ -1498,6 +1531,9 @@ def _end_attempt(home, facts, strand, thread, gen, code, letters, cause, failure
         ident, author = letter.id, str(letter.data.get("from", ""))
         if cause == "failed" and failure_origin == "home" and ident not in failure_letters:
             dispositions.append({"id": ident, "outcome": "retry", "reason": "home-caused failure"})
+            channel = channels.get(ident)
+            if author.startswith(("p-", "person:")) and channel:
+                _start_failed_notice(home, facts, thread, gen, letter, channel)
             continue
         if limit:
             dispositions.append({"id": ident, "outcome": "retry", "reason": "core limit; wait or permitted move"})
@@ -1941,8 +1977,12 @@ def _wake_letter(home, facts, thread, leased, letter, channel, *, parked=True, h
             named = leased
         else:
             named = next((target for target in _continue_targets(home, facts, thread, leased)
-                          if target[0] == shell),
-                         f"{_subscription_name(shell)} isn't available with a healthy limit right now.")
+                          if target[0] == shell), None)
+            if named is None:
+                # Fuel is the one refusal, and the person holds its override (11739).
+                named = (f"{_subscription_name(shell)} isn't available with a healthy limit right now. "
+                         + (f"Reply wake {shell} to start it anyway."
+                            if shell in _wake_shells(home, leased[0]) else ""))
     else:
         named = _wake_body(home, facts, thread, leased, said)
     disposition = {"id": ident, "outcome": "done"}

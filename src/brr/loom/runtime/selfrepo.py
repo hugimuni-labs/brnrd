@@ -979,6 +979,53 @@ def wake_budget() -> int:
     return int(os.environ.get("LOOM_BUDGET_BYTES") or 24000)
 
 
+def minimal_wake(clone: Path, thread: str, owed: Path, loom_part: Path, repos: Path | None,
+                 why: str, home=None) -> tuple[str, str]:
+    """``(core, occasion)`` built by the loom alone, for a wake no recipe could build.
+
+    A start is never refused for the home's sake (11737, 2026-11-23): the
+    body that boots on this is who repairs the recipe. Core and letters whole,
+    the loom part, and one line naming what was cut and why. No recipe runs.
+    """
+    def read(rel: str) -> str:
+        try:
+            text = (clone / rel).read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError) as exc:
+            text = f"[{rel} could not be read: {exc}]"
+        return text if text.endswith("\n") or not text else text + "\n"
+
+    from .briefing import section as briefing_section
+    core = (f"## core/identity.md\n{read('core/identity.md')}"
+            f"## memory/stance.md\n{read('memory/stance.md')}" + briefing_section(home))
+    try:
+        letters = json.loads(Path(owed).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        letters = []
+    chunks = ["## Letters\n"]
+    for item in letters if isinstance(letters, list) else ():
+        if not isinstance(item, dict):
+            continue
+        body = str(item.get("body", ""))
+        chunks.append(f"### {item.get('id')} from {item.get('from')} · reply {item.get('reply_to', '-')}\n"
+                      + (body if body.endswith("\n") else body + "\n"))
+        chunks.extend(str(line) if str(line).endswith("\n") else f"{line}\n"
+                      for line in item.get("attachments", ()))
+        if item.get("reply_context"):
+            context = str(item["reply_context"])
+            chunks.append(context if context.endswith("\n") else context + "\n")
+    loom = ""
+    for path in (loom_part, repos):
+        if path is not None and Path(path).is_file():
+            text = Path(path).read_text(encoding="utf-8", errors="replace")
+            loom += text if text.endswith("\n") or not text else text + "\n"
+    reason = " ".join(why.split())[:400]
+    occasion = (f"[Minimal wake: the recipe could not build this one ({reason}). Cut: threads/{thread}/README.md, "
+                "held, wishes, topics, people and the tree, all whole on disk. Repair core/loom/wake "
+                "or what it reads and land it with send-self before other work.]\n"
+                + f"## Loom\n{loom}" + "".join(chunks))
+    return core, occasion
+
+
 def run_wake(room_dir: Path, thread: str, owed: Path | None = None, *,
              loom_part: Path | None = None, repos: Path | None = None,
              core: Path | None = None, stdout=None, stderr=None,
@@ -1027,6 +1074,7 @@ def run_wake(room_dir: Path, thread: str, owed: Path | None = None, *,
     from .wishes import insert_wishes, wake_wishes
     section = ""
     held_rows = []
+    goal_rows = []
     try:
         home = home_of_room(clone.parent)
     except ValueError:
@@ -1049,7 +1097,8 @@ def run_wake(room_dir: Path, thread: str, owed: Path | None = None, *,
         from .queues import held_rows_for
         from .wishes import waits_on
 
-        held_rows = goal_lines(home) + held_rows_for(
+        goal_rows = goal_lines(home)
+        held_rows = goal_rows + held_rows_for(
             told_wishes, waits_on(told_wishes, main), thread, home.main_thread())
     from .briefing import section as briefing_section
     briefing = briefing_section(home)
@@ -1064,8 +1113,13 @@ def run_wake(room_dir: Path, thread: str, owed: Path | None = None, *,
     # the tree is what gives way to the topic heads.
     limit = wake_budget()
     held = fit_held(held_rows, limit // 8)
-    env["LOOM_BUDGET_BYTES"] = str(max(0, limit - len(
-        (section + briefing + topics + held + ((cost + "\n") if cost else "")).encode("utf-8"))))
+
+    def recipe_budget() -> str:
+        return str(max(0, limit - len(
+            (section + briefing + topics + held + ((cost + "\n") if cost else "")).encode("utf-8"))))
+
+    env["LOOM_BUDGET_BYTES"] = recipe_budget()
+    folded: list[str] = []
     if core is not None:
         # Absent after the run means the recipe kept the core in stdout.
         Path(core).unlink(missing_ok=True)
@@ -1099,13 +1153,36 @@ def run_wake(room_dir: Path, thread: str, owed: Path | None = None, *,
             handle.close()
             part_file = handle.name
             env["LOOM_PART"] = handle.name
-        proc = subprocess.run([*argv, thread, owed_arg], cwd=clone, env=env,
-                              stdout=subprocess.PIPE, stderr=stderr,
-                              timeout=5 if preview_handover is not None else 60)
-        output = proc.stdout.decode("utf-8")
         if preview_handover is not None:
-            (stdout or sys.stdout).write(output)
+            proc = subprocess.run([*argv, thread, owed_arg], cwd=clone, env=env,
+                                  stdout=subprocess.PIPE, stderr=stderr, timeout=5)
+            (stdout or sys.stdout).write(proc.stdout.decode("utf-8"))
             return proc.returncode
+        proc = subprocess.run([*argv, thread, owed_arg], cwd=clone, env=env,
+                              stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=60)
+        if proc.returncode == 3:
+            # Over budget: the loom's own parts give way before the wake is refused.
+            # Each is whole one command away; a refused wake costs the person a letter.
+            rest = len(held_rows) - len(goal_rows)
+            hard = fit_held(goal_rows, limit // 8) if goal_rows else "## Held\n"
+            if rest > 0:
+                hard += f"[Cut {rest} queue rows to fit. Whole in brnrd runtime wishes.]\n"
+            if hard != held:
+                held = hard
+                folded.append("held")
+            if section:
+                section = (f"## Wishes\n[Folded {len(section.encode('utf-8'))} bytes to fit. "
+                           f"Whole in brnrd runtime wishes --thread {thread}.]\n")
+                folded.append("wishes")
+            if folded:
+                env["LOOM_BUDGET_BYTES"] = recipe_budget()
+                if sizes is not None:
+                    Path(sizes).unlink(missing_ok=True)
+                proc = subprocess.run([*argv, thread, owed_arg], cwd=clone, env=env,
+                                      stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=60)
+        if not isinstance(stderr, int):  # subprocess.DEVNULL discards it
+            (stderr or sys.stderr).write(proc.stderr.decode("utf-8", "replace"))
+        output = proc.stdout.decode("utf-8")
         if proc.returncode == 0:
             # Match either recipe heading in read order. A letter can quote
             # the newer heading while the pinned recipe still writes the old one.
@@ -1131,8 +1208,11 @@ def run_wake(room_dir: Path, thread: str, owed: Path | None = None, *,
         if proc.returncode == 0 and sizes is not None:
             kept = Path(core).read_text(encoding="utf-8") if core is not None and Path(core).is_file() else ""
             generated = section + topics + ((cost + "\n") if cost else "")
-            Path(sizes).write_text(json.dumps(wake_sizes(
-                Path(sizes), kept + output, briefing=briefing, generated=generated, held=held, legacy_letters=legacy_letters)), encoding="utf-8")
+            measured = wake_sizes(
+                Path(sizes), kept + output, briefing=briefing, generated=generated, held=held, legacy_letters=legacy_letters)
+            if folded:
+                measured["folded"] = folded
+            Path(sizes).write_text(json.dumps(measured), encoding="utf-8")
         (stdout or sys.stdout).write(output)
         return proc.returncode
     finally:

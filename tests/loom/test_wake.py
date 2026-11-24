@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -836,3 +837,37 @@ def test_wake_opens_with_held_goals_and_queue(tmp_path):
     assert held.index("goal launch: First draft") < held.index('held w-held')
     assert wake.index("## Held\n") < wake.index(f"## threads/{thread}/README.md") < wake.index("## Letters\n")
     assert json.loads(sizes.read_text())["parts"]["held"] > 0
+
+
+def test_the_seed_recipe_folds_topics_before_refusing_and_keeps_the_page_in_hand(tmp_path: Path) -> None:
+    # A new self gets the fold the inbox's own recipe landed after 2026-11-23 17:41Z.
+    home = tmp_path / "home"
+    assert cli(["init", "--home", str(home), "--person", "arseni"]).returncode == 0
+    self_dir = home / "self"
+    write_thread(self_dir, "w-1", "The w-1 headline")
+    (self_dir / "people" / "arseni" / "page.md").write_text(PAGE, encoding="utf-8")
+    (self_dir / "topics").mkdir(exist_ok=True)
+    for i in range(10):
+        (self_dir / "topics" / f"topic-{i:02}.md").write_text(
+            f"# t\n\n### 2026-10-{i + 1:02} · entry-{i:02}-" + "z" * 60 + "\n", encoding="utf-8")
+    commit(self_dir, "page and topics")
+    clone = selfrepo.room(home, "s1")
+    owed = tmp_path / "owed.json"
+    owed.write_text(json.dumps([{"id": "p-arseni/ab12", "from": "person:arseni", "body": "hi\n"}]),
+                    encoding="utf-8")
+    sizes = tmp_path / "sizes.json"
+    full = wake(clone, "w-1", owed, LOOM_BUDGET_BYTES="100000", LOOM_SIZES=str(sizes))
+    assert full.returncode == 0, full.stderr
+    parts = json.loads(sizes.read_text())
+    fixed = sum(size for name, size in parts.items() if name != "tree")
+    receipt = len("## Topics\n[the wake folded this section to fit; topics/ is whole on disk]\n")
+    assert parts["topics"] > parts["readme"] + receipt + 100
+    limit = fixed - parts["topics"] + receipt + 5
+    folded = wake(clone, "w-1", owed, LOOM_BUDGET_BYTES=str(limit))
+    assert folded.returncode == 0, folded.stderr
+    assert "## Topics\n[the wake folded this section to fit; topics/ is whole on disk]\n" in folded.stdout
+    assert "entry-09" not in folded.stdout
+    assert "### arseni\n" in folded.stdout and "hi\n" in folded.stdout
+    # The tree's omitted receipt is outside the budget by design (fit_tree).
+    receiptless = re.sub(r"^omitted \d+ entries; each is one read away\n", "", folded.stdout, flags=re.M)
+    assert len(receiptless.encode("utf-8")) <= limit

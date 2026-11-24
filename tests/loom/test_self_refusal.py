@@ -10,7 +10,8 @@ from _step import Loom, wait_until, write_thread, kill_bodies
 
 
 @pytest.mark.parametrize("fault", ["plan", "identity", "stance"])
-def test_self_refusal_stays_owed_and_one_notice_repairs_home(tmp_path, fault):
+def test_a_home_that_cannot_build_its_wake_boots_on_the_minimal_wake(tmp_path, fault):
+    """A start is never refused for the home's sake (his 11737, 2026-11-23): the first attempt boots."""
     root = tmp_path / "home"
     write_thread(root, "work", "The ask", "answer-fast", wait="0")
     clone = root / "self"
@@ -26,55 +27,54 @@ def test_self_refusal_stays_owed_and_one_notice_repairs_home(tmp_path, fault):
         path = clone / ("core/identity.md" if fault == "identity" else "memory/stance.md")
         path.write_text("x" * 30000)
     git(clone, "add", "-A")
-    git(clone, "commit", "-m", "Home state that cannot wake")
+    git(clone, "commit", "-m", "Home state no recipe can fit")
     ident = inject_letter(root, to="thread:work", body="Please answer")
     loom = Loom(root)
     loom.start()
     try:
-        wait_until(lambda: len([f for f in loom.facts() if f.kind == "attempt.ended"
-                               and f.data["thread"] == "work"]) >= 1, 15, loom.dump)
-        import time
-        time.sleep(0.5)
-        facts = loom.facts()
-        assert len([f for f in facts if f.kind == "attempt.ended"
-                    and f.data["thread"] == "work"]) == 1
-        fate = letter_owners(facts, main_snapshot(Home(root)))[ident]
-        assert not fate.done and fate.owner == "loom"
-        ends = [f for f in facts if f.kind == "attempt.ended" and f.data["thread"] == "work"]
-        assert all(d["outcome"] == "retry" and d["reason"] == "home-caused failure"
-                   for f in ends for d in f.data["dispositions"] if d["id"] == ident)
-        notices = [f for f in facts if f.kind == "letter" and f.id.startswith("loom/self-refusal-")]
-        assert len(notices) == 1
-        assert notices[0].data["to"] == "thread:inbox"
-        assert not any(f.kind == "letter" and f.id.startswith("loom/failed-message-") for f in facts)
-        assert not any(f.kind == "letter" and str(f.data.get("to", "")).startswith("channel:") for f in facts)
-        # Repair main. The original letter, rather than a resend, now runs.
-        if fault == "plan":
-            path.write_text(path.read_text().split("\n## Plan")[0])
-        else:
-            path.write_text("The resident.\n")
-        git(clone, "add", "-A")
-        git(clone, "commit", "-m", "Repair the home")
         wait_until(lambda: letter_owners(loom.facts(), main_snapshot(loom.home))[ident].done,
                    15, loom.dump)
+        facts = loom.facts()
+        ends = [f for f in facts if f.kind == "attempt.ended" and f.data["thread"] == "work"]
+        assert not any(f.data["evidence"].get("home_failure") for f in ends)
+        [minimal] = [f for f in facts if f.kind == "wake.fallback" and f.data.get("want") == "minimal"]
+        assert "wake exited 3" in minimal.data["error"]
+        [sizes] = [f for f in facts if f.kind == "wake.sizes" and f.data["strand"] == minimal.data["strand"]]
+        assert sizes.data["folded"] == ["minimal"]
+        wake = (loom.home.room(minimal.data["strand"]) / "port/wake.md").read_text()
+        assert "[Minimal wake: the recipe could not build this one (wake exited 3" in wake
+        assert "Please answer" in wake and ("x" * 30000 in wake) == (fault != "plan")
+        assert not any(f.kind == "letter" and f.id.startswith(("loom/self-refusal-", "loom/start-failed-"))
+                       for f in facts)
     finally:
         loom.halt()
         kill_bodies(loom)
     assert not loom.errors
 
 
-def test_intrinsically_oversized_letter_keeps_input_failure_path(tmp_path):
+def test_an_oversized_letter_is_cut_in_the_wake_and_kept_whole_in_port(tmp_path):
+    """No input-failure path either (his 11739): the letter boots, cut, with where it is whole."""
     root = tmp_path / "home"
     write_thread(root, "work", "The ask", "answer-fast", wait="0")
-    ident = inject_letter(root, to="thread:work", body="x" * 30000)
+    body = "head-of-the-letter " + "x" * 30000 + " tail-of-the-letter"
+    ident = inject_letter(root, to="thread:work", body=body)
     loom = Loom(root)
     loom.start()
     try:
-        wait_until(lambda: letter_owners(loom.facts(), main_snapshot(loom.home))[ident].owner == "operator",
-                   15, loom.dump)
-        ends = [f for f in loom.facts() if f.kind == "attempt.ended" and f.data["thread"] == "work"]
-        assert len(ends) == 2
-        assert ends[0].data["dispositions"][0]["reason"] == "first failed attempt"
+        wait_until(lambda: letter_owners(loom.facts(), main_snapshot(loom.home))[ident].done, 15, loom.dump)
+        facts = loom.facts()
+        ends = [f for f in facts if f.kind == "attempt.ended" and f.data["thread"] == "work"]
+        assert not any(f.data["cause"] == "failed" for f in ends)
+        [cut] = [f for f in facts if f.kind == "wake.fallback" and f.data.get("want") == "letter"]
+        assert cut.data["letter"] == ident
+        room = loom.home.room(cut.data["strand"])
+        wake = (room / "port/wake.md").read_text()
+        assert "head-of-the-letter" in wake and "tail-of-the-letter" not in wake
+        assert f"the whole letter is at {cut.data['path']}.]" in wake
+        from pathlib import Path
+        assert Path(cut.data["path"]).read_text() == body
+        assert not any(f.kind == "letter" and f.id.startswith(("loom/failed-message-", "loom/self-refusal-"))
+                       for f in facts)
     finally:
         loom.halt()
         kill_bodies(loom)
@@ -249,3 +249,57 @@ def test_home_retry_fallback_survives_router_restart(tmp_path):
                                           'reason': 'home-caused failure'}]})
     assert Router(home)._home_retry_waiting([attempt(599)], 'work')
     assert not Router(home)._home_retry_waiting([attempt(601)], 'work')
+
+
+def test_a_person_whose_letter_waits_on_a_broken_home_hears_once_per_streak(tmp_path, monkeypatch):
+    """Inbox 2026-11-23 17:41Z: the letter waited ten minutes in silence. The chat is faked.
+
+    Size never refuses a start now; a home whose start still fails (the minimal
+    wake failing too) tells the person once per streak, on their channel."""
+    from brr.loom.runtime import loom as loom_module
+    from brr.loom.runtime.selfrepo import SelfError
+    root = tmp_path / "home"
+    write_thread(root, "work", "The ask", "answer-fast", wait="0")
+    clone = root / "self"
+    build = loom_module._build_wake
+    broken = [True]
+
+    def build_wake(*args, **kwargs):
+        if broken[0]:
+            raise SelfError("the recipe and its fallbacks failed")
+        return build(*args, **kwargs)
+
+    monkeypatch.setattr(loom_module, "_build_wake", build_wake)
+    asks = []
+    monkeypatch.setattr(loom_module, "reply_channels",
+                        lambda facts, home=None: {ident: "fake" for ident in asks})
+    asks.append(inject_letter(root, to="thread:work", body="Please answer"))
+    loom = Loom(root)
+    loom.start()
+    ends = lambda: [f for f in loom.facts() if f.kind == "attempt.ended" and f.data["thread"] == "work"]
+    words = lambda: [f for f in loom.facts() if f.kind == "letter" and f.id.startswith("loom/start-failed-")]
+    try:
+        wait_until(lambda: len(ends()) >= 1, 15, loom.dump)
+        wait_until(lambda: len(words()) == 1, 5, loom.dump)
+        [word] = words()
+        assert word.data["to"] == "fake" and word.data["notice"] and word.data["about"] == asks[0]
+        assert word.data["body"].startswith("I couldn't start just now, so your message is waiting. "
+                                            "I'll try again by about ")
+        # Self moves without the repair: the router retries, the home fails again, same streak.
+        (clone / "threads/work/note.md").write_text("still broken\n")
+        git(clone, "add", "-A")
+        git(clone, "commit", "-m", "Not the repair")
+        wait_until(lambda: len(ends()) >= 2, 15, loom.dump)
+        assert all(f.data["evidence"].get("home_failure") for f in ends())
+        assert len(words()) == 1
+        broken[0] = False
+        (clone / "threads/work/note.md").write_text("repaired\n")
+        git(clone, "add", "-A")
+        git(clone, "commit", "-m", "Repair the home")
+        wait_until(lambda: letter_owners(loom.facts(), main_snapshot(loom.home))[asks[0]].done,
+                   15, loom.dump)
+        assert len(words()) == 1
+    finally:
+        loom.halt()
+        kill_bodies(loom)
+    assert not loom.errors

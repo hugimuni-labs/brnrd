@@ -468,6 +468,12 @@ def fit_tree(fixed: str, lines: list[str], limit: int) -> str:
     return block
 
 
+SQUEEZE = (
+    ("topics", "## Topics\n[the wake folded this section to fit; topics/ is whole on disk]\n"),
+    ("people", "## People\n[the wake folded the pages in hand to fit; people/<name>/page.md is whole on disk]\n"),
+)
+
+
 def main() -> None:
     if len(sys.argv) != 3:
         die("usage: wake <thread-id> <owed.json>")
@@ -511,6 +517,13 @@ def main() -> None:
         return
     if total > limit:
         parts = fixed_parts(root, thread, loom, owed, total - limit, limit)
+    # Past the README, the topics and then the person pages fold to a receipt:
+    # both are one read away on disk, and a wake that refuses costs a letter.
+    for name, receipt in SQUEEZE:
+        if sum(len(text.encode("utf-8")) for text in parts.values()) <= limit:
+            break
+        if parts[name]:
+            parts[name] = receipt
     head, tail = split(parts)
     fixed = head + tail
     total = len(fixed.encode("utf-8"))

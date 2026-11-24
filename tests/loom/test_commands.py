@@ -375,3 +375,26 @@ def test_continue_survives_restart_and_named_wake_is_one_off(tmp_path, monkeypat
         loom.halt()
         kill_bodies(loom)
     assert not loom.errors
+
+
+def test_a_fuel_refusal_names_its_override_and_the_override_starts_the_body(tmp_path, monkeypatch):
+    """His 11739: fuel is the one refusal, and its own words name the word that starts the body anyway."""
+    home = _home(tmp_path, monkeypatch)
+    loom = Loom(home.root)
+    composer = _Composer(loom.home)
+    ident = composer.says("continue", "second", "continue on claude")
+    loom.start()
+    try:
+        wait_until(lambda: any(f.id == f"letter.disposed:{ident}" for f in loom.facts()), 10, loom.dump)
+        [refused] = [f for f in loom.facts() if f.kind == "letter" and f.id.startswith("loom/wake-refused-")]
+        assert "isn't available with a healthy limit right now. Reply wake claude to start it anyway." \
+            in refused.data["body"]
+        assert _leases(loom, "second") == []
+        composer.says("override", "second", "wake claude")
+        wait_until(lambda: _leases(loom, "second"), 10, loom.dump)
+        lease = next(f for f in loom.facts() if f.kind == "lease" and f.data["thread"] == "second")
+        assert (lease.data["shell"], lease.data["body_source"]) == ("claude", "wake word")
+    finally:
+        loom.halt()
+        kill_bodies(loom)
+    assert not loom.errors
