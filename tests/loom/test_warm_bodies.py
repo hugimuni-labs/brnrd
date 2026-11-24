@@ -206,3 +206,111 @@ def test_a_quiet_deadline_does_not_start_a_turn(tmp_path, monkeypatch, shell, co
     assert "decision" not in raw
     # Slept the hook out to its ceiling (timeout 91, margin 90), no block.
     assert now[0] == pytest.approx(1.0)
+
+
+def _idle_card(room, monkeypatch, shell: str) -> None:
+    """An idle card the jack actually reads. A fuel line is enough to count."""
+    from brr.loom.runtime import usage
+    from brr.loom.runtime.home import home_of_room
+    from brr.loom.runtime.jack import _idle
+    monkeypatch.setattr(usage, "reading", lambda *_args, **_kwargs: None)
+    (room / "port/in/idle.md").write_text("fuel readings: codex week 80% left\n")
+    assert _idle(room, home_of_room(room), shell) is not None
+
+
+def _record_rest(room, why: str = "nothing owed") -> None:
+    from brr.daemon2.facts import Fact
+    from brr.loom.runtime.home import home_of_room
+    from brr.loom.runtime.ledger import append
+    from test_jack import STRAND
+    append(home_of_room(room), Fact(
+        kind="rest.why", by=f"strand:{STRAND}", id=f"rest.why:{STRAND}:1",
+        data={"strand": STRAND, "gen": 1, "why": why, "wishes": []}))
+
+
+@pytest.mark.parametrize("shell", BODIES)
+def test_passive_idle_with_a_card_holds_without_a_turn(tmp_path, monkeypatch, shell):
+    """The boundary's rest prompt is not a record. The card must not start a turn."""
+    from brr.loom.runtime.port import render_boundary
+    from test_jack import STRAND
+    room = _room(tmp_path)
+    (room / "port/in/boundary.md").write_text(render_boundary(
+        STRAND, 1, "ta", [], set(), {"s-ab12-bbbbbb": "tb"},
+        held_next="rest costs fuel lapsing if unspent"))
+    now = _clock(monkeypatch)
+    _idle_card(room, monkeypatch, shell)
+    raw = _stop(
+        room, monkeypatch, shell,
+        {"session_id": f"sess-idle-{shell}", "stop_hook_active": False},
+        wait="0.2\n", timeout="91",
+    )
+    assert raw == ""
+    assert "decision" not in raw
+    assert now[0] == pytest.approx(1.0)
+
+
+@pytest.mark.parametrize("shell", BODIES)
+def test_recorded_rest_with_an_idle_card_releases(tmp_path, monkeypatch, shell):
+    room = _room(tmp_path)
+    _write(room, [])
+    now = _clock(monkeypatch)
+    _idle_card(room, monkeypatch, shell)
+    _record_rest(room)
+    raw = _stop(
+        room, monkeypatch, shell,
+        {"session_id": f"sess-rest-{shell}", "stop_hook_active": False},
+        wait="30\n", timeout="21660",
+    )
+    assert raw == ""
+    assert "decision" not in raw
+    # Released at once. Sleeping the hook out would still be holding the body.
+    assert now[0] == 0
+
+
+@pytest.mark.parametrize("shell", BODIES)
+def test_a_letter_wakes_the_same_session_over_rest_and_an_idle_card(
+        tmp_path, monkeypatch, shell):
+    """Rest releases only when nothing is owed. A letter already there is one block."""
+    room = _room(tmp_path)
+    body = f"arrived for {shell}"
+    _write(room, [_letter(body)])
+    _clock(monkeypatch)
+    _idle_card(room, monkeypatch, shell)
+    _record_rest(room)
+    session = {"session_id": f"sess-wake-{shell}", "stop_hook_active": True}
+    raw = _stop(room, monkeypatch, shell, session, wait="30\n", timeout="21660")
+    payload = json.loads(raw)
+    assert payload["decision"] == "block"
+    assert payload["reason"].count(body) == 1
+    _reply(room, "p-test/abcde")
+    assert _stop(room, monkeypatch, shell, session, wait="0.2\n", timeout="91") == ""
+
+
+@pytest.mark.parametrize("shell", BODIES)
+def test_a_letter_during_passive_idle_reaches_that_session_once(
+        tmp_path, monkeypatch, shell):
+    from brr.loom.runtime import jack as jack_mod
+    room = _room(tmp_path)
+    body = f"during idle {shell}"
+    session = f"sess-during-{shell}"
+    now = _clock(monkeypatch)
+    _idle_card(room, monkeypatch, shell)
+    arrived = []
+
+    def sleep(seconds):
+        if not arrived:
+            _write(room, [_letter(body)])
+            arrived.append(session)
+        now[0] += min(seconds, 0.2)
+
+    monkeypatch.setattr(jack_mod.time, "sleep", sleep)
+    _write(room, [])
+    raw = _stop(
+        room, monkeypatch, shell,
+        {"session_id": session, "stop_hook_active": False},
+        wait="30\n", timeout="21660",
+    )
+    payload = json.loads(raw)
+    assert payload["decision"] == "block"
+    assert payload["reason"].count(body) == 1
+    assert arrived == [session]
