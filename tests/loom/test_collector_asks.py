@@ -126,9 +126,30 @@ def test_a_different_error_ends_the_old_ask_and_files_a_fresh_one(home):
     assert "codex login" in new.line
     # Another collector's asks are its own, under the same standing wish.
     for _ in range(2):
-        reads(home, "grok", "grok billing request failed")
+        reads(home, "grok", "grok billing HTTP 401; no authentication refresh attempted")
     grok, = asks(home, "grok")
     assert grok.parent == new.parent and asks(home, "codex")[1].open
+
+
+def test_grok_billing_request_failure_stays_on_fuel_display_without_an_ask(home):
+    from brr.loom.runtime import usage
+
+    home, _seat = home
+    for _ in range(2):
+        reads(home, "grok", "grok billing request failed")
+    assert usage.reading(home, "grok")["error"] == "grok billing request failed"
+    assert asks(home) == []
+
+    for _ in range(2):
+        reads(home, "grok", "grok billing HTTP 401; no authentication refresh attempted")
+    auth_ask, = asks(home)
+    assert auth_ask.open
+
+    for _ in range(2):
+        reads(home, "grok", "grok billing request failed")
+    old, = asks(home)
+    assert old.id == auth_ask.id and old.state == "dropped"
+    assert len(mails(home, old.id)) == 1
 
 
 def test_vibe_unmetered_shows_on_the_fuel_line_and_files_no_ask(home):
@@ -171,16 +192,16 @@ def test_vibe_unmetered_shows_on_the_fuel_line_and_files_no_ask(home):
 def test_an_ask_the_person_dropped_is_not_filed_again_while_the_error_holds(home):
     home, _seat = home
     for _ in range(2):
-        reads(home, "grok", "invalid grok credential or billing response")
+        reads(home, "grok", "grok billing HTTP 401; no authentication refresh attempted")
     ask, = asks(home)
     append(home, Fact(kind="wish.verdict", by="person:ada", id="wish.verdict:mine", data={
         "wish": ask.id, "as": "dropped", "evidence": "word", "ref": "later"}))
     for _ in range(3):
-        reads(home, "grok", "invalid grok credential or billing response")
+        reads(home, "grok", "grok billing HTTP 401; no authentication refresh attempted")
     assert [a.id for a in asks(home)] == [ask.id]
     # A clean reading in between makes it a new fault.
     reads(home, "grok", windows=["week"])
     for _ in range(2):
-        reads(home, "grok", "invalid grok credential or billing response")
+        reads(home, "grok", "grok billing HTTP 401; no authentication refresh attempted")
     old, new = asks(home)
     assert old.id == ask.id and new.open and new.line == ask.line

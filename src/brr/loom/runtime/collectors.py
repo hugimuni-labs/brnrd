@@ -15,8 +15,8 @@ error and no windows, is a known steady state: the open ask ends (``is
 unmetered``), nothing is filed, and the same marker is written so a later
 error is a new fault. The marker is this home's: a router that moves
 to another install has none there and stays quiet, the side that never asks
-twice. One reading is no error: a network blip heals by
-the next refresh, so an error asks only once two readings carry it.
+twice. An actionable error asks only once two readings carry it. Grok billing
+failures without evidence of an authentication problem stay on the fuel display.
 """
 
 from __future__ import annotations
@@ -37,6 +37,13 @@ FIXES = {
     "claude": "log in to claude again (`claude`, then /login)",
     "codex": "log in to codex again (`codex login`), or check the account it runs on",
 }
+# Keep ambiguous billing and transport failures on the fuel display.
+_GROK_AUTH_ERRORS = (
+    "grok billing HTTP 401;",
+    "grok access key absent or auth.json unreadable",
+    "grok first-party access key absent",
+    "grok access key expired;",
+)
 #: How many refreshes in a row must carry the same error before it is an ask.
 READINGS = 2
 #: The drop ref that marks an ask the loom ended; the same error may ask again after it.
@@ -113,7 +120,8 @@ def observe_collectors(home, facts, armed: bool):
         parent = next((w.id for w in found.values() if (w.thread, w.line) == (thread, FUEL_WISH)), None)
         mine = sorted((w for w in found.values() if parent and w.parent == parent
                        and w.line.startswith(_prefix(shell))), key=lambda w: (w.born, w.id))
-        want = line(shell, error) if error else None
+        actionable = error and (shell != "grok" or error.startswith(_GROK_AUTH_ERRORS))
+        want = line(shell, error) if actionable else None
         for ask in mine:
             if ask.open and ask.line != want:
                 why = "is unmetered" if unmetered else "reads again" if clean else "fails otherwise now"

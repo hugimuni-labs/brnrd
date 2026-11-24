@@ -662,7 +662,7 @@ def _reading(directory: Path, shell: str, windows: list, error: str | None = Non
 
 def test_usage_moves_the_header_fuel_without_a_recompute(parts, monkeypatch):
     """The header reads the files the status line reads. A usage write is not a ledger move, and a collector
-    error with no window is the word ``fails``, not an absent shell and not the error text."""
+    error with no window remains visible without exposing the error text."""
     from brr.loom.runtime import board
     from brr.loom.runtime.usage import shell_fuels
     root = parts.home.root
@@ -690,7 +690,7 @@ def test_usage_moves_the_header_fuel_without_a_recompute(parts, monkeypatch):
     words = shell_fuels(parts.home)
     assert words["claude"] == "session 15% week 48%"
     assert words["grok"] == "week 58%"
-    assert words["vibe"] == "fails"
+    assert words["vibe"] == "quota unavailable"
     assert [row["shell"] for row in fuel] == sorted(words)
     held = parts.hashes["thread/web"]
     assert not parts.step()
