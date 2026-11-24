@@ -36,7 +36,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
-from sqlalchemy import delete, select, update
+from sqlalchemy import delete, or_, select, update
 from sqlalchemy.orm import Session
 
 from . import stripe_api
@@ -44,15 +44,20 @@ from .config import Settings
 from .models import (
     Account,
     ActivityRecord,
+    BoardConsent,
     ChannelRoute,
     ConfigChangeRequest,
     CreditBucket,
     Daemon,
+    DaemonRepo,
     Event,
     GitHubInstallation,
     GitHubInstalledRepo,
+    LoomPart,
     PairRequest,
     Repo,
+    RunReleaseRequest,
+    RunRespawnRequest,
     RunStopRequest,
     RunnerWakeRequest,
     Subscription,
@@ -62,27 +67,33 @@ from .models import (
     BillingLedgerEntry,
 )
 
-# Every store carrying its own ``account_id`` column (matches Art 30 record
-# §A/§B rows: Router identity routing = ChannelRoute, Session tokens =
-# Token, Operational telemetry = Daemon; ConfigChangeRequest/TgPairCode/
-# PairRequest/RunnerWakeRequest/RunStopRequest are the loom-envelope /
-# pairing rows the Art 30 record does not enumerate individually — a real
-# gap between the record and the schema, flagged in the PR rather than
-# left to grep). Deleted directly by account_id: none of these require
-# walking the account's repos first.
+# Every row is reached through one of four id sets, and the order below is
+# the foreign-key order: a child goes before the row it points at.
 #
-# Order matters for FK safety: Daemon.token_id is a NOT NULL FK to
-# tokens.id, so Daemon must go before Token.
-_ACCOUNT_ID_MODELS_BEFORE_TOKEN = (
-    ConfigChangeRequest,
-    ChannelRoute,
-    TgPairCode,
-    PairRequest,
-    Daemon,
-)
-_ACCOUNT_ID_MODELS_AFTER_TOKEN = (
+#   repos   <- tokens.repo_id, daemons.repo_id, events, activity_records,
+#              loom_parts, daemon_repos, channel_routes, tg_pair_codes,
+#              config_change_requests
+#   tokens  <- daemons.token_id, activity_records.token_id
+#   daemons <- loom_parts.daemon_id, daemon_repos.daemon_id,
+#              activity_records.daemon_id
+#   accounts <- everything with an account_id (the account row itself is
+#              kept as a tombstone, see the module docstring)
+#
+# ``tests/test_brnrd_account_deletion.py`` walks ``Base.metadata`` and fails
+# when a table gains a foreign key into this graph that the sweep does not
+# name, so a new store cannot silently turn deletion back into a 500.
+#
+# Matches the Art 30 record §A/§B rows (ChannelRoute = router identity,
+# Token = session tokens, Daemon/LoomPart/DaemonRepo = operational
+# telemetry, Event = message relay, ActivityRecord = activity aggregation).
+# The loom-envelope and pairing rows (ConfigChangeRequest, TgPairCode,
+# PairRequest, Runner*/Run*Request, BoardConsent) are not enumerated there
+# individually; that gap is the record's, not this sweep's.
+_ACCOUNT_ID_REQUEST_MODELS = (
     RunnerWakeRequest,
     RunStopRequest,
+    RunReleaseRequest,
+    RunRespawnRequest,
 )
 
 # The tombstone value fits accounts.github_id's VARCHAR(32) exactly:
@@ -168,23 +179,65 @@ def delete_account(db: Session, settings: Settings, account: Account) -> Deletio
     repo_ids = list(
         db.execute(select(Repo.id).where(Repo.account_id == account_id)).scalars()
     )
+    owned_token = Token.account_id == account_id
     if repo_ids:
-        # Repo-content stores with no account_id column of their own
-        # (Art 30 record §B "Message relay" = Event, "Activity record
-        # aggregation" = ActivityRecord).
-        db.execute(delete(ActivityRecord).where(ActivityRecord.repo_id.in_(repo_ids)))
-        db.execute(delete(Event).where(Event.repo_id.in_(repo_ids)))
+        owned_token = or_(owned_token, Token.repo_id.in_(repo_ids))
+    token_ids = list(db.execute(select(Token.id).where(owned_token)).scalars())
+    # A daemon is the account's by its own account_id (nullable, for rows
+    # paired before connection identity moved to the account) or by the token
+    # it authenticates with. Another account's daemon that merely names one
+    # of these repos as its default routing repo keeps running; its pointer
+    # is cleared below instead.
+    owned_daemon = Daemon.account_id == account_id
+    if token_ids:
+        owned_daemon = or_(owned_daemon, Daemon.token_id.in_(token_ids))
+    daemon_ids = list(db.execute(select(Daemon.id).where(owned_daemon)).scalars())
 
-    for model in _ACCOUNT_ID_MODELS_BEFORE_TOKEN:
-        db.execute(delete(model).where(model.account_id == account_id))
+    def _delete_where_any(model, *clauses):
+        live = [c for c in clauses if c is not None]
+        if live:
+            db.execute(delete(model).where(or_(*live)))
+
+    def _in(column, values):
+        return column.in_(values) if values else None
+
+    # Children of daemons, tokens and repos.
+    _delete_where_any(
+        ActivityRecord,
+        _in(ActivityRecord.repo_id, repo_ids),
+        _in(ActivityRecord.token_id, token_ids),
+        _in(ActivityRecord.daemon_id, daemon_ids),
+    )
+    if repo_ids:
+        db.execute(delete(Event).where(Event.repo_id.in_(repo_ids)))
+        db.execute(delete(BoardConsent).where(BoardConsent.repo_id.in_(repo_ids)))
+    _delete_where_any(
+        LoomPart,
+        LoomPart.account_id == account_id,
+        _in(LoomPart.daemon_id, daemon_ids),
+        _in(LoomPart.repo_id, repo_ids),
+    )
+    _delete_where_any(
+        DaemonRepo,
+        _in(DaemonRepo.daemon_id, daemon_ids),
+        _in(DaemonRepo.repo_id, repo_ids),
+    )
+    for model in (ConfigChangeRequest, ChannelRoute, TgPairCode, PairRequest):
+        _delete_where_any(model, model.account_id == account_id, _in(model.repo_id, repo_ids))
+
+    if daemon_ids:
+        db.execute(delete(Daemon).where(Daemon.id.in_(daemon_ids)))
+    if repo_ids:
+        db.execute(update(Daemon).where(Daemon.repo_id.in_(repo_ids)).values(repo_id=None))
 
     # All tokens for this account — session, API-key, and daemon — not just
     # ones carrying a repo_id. issue_session_token() mints the dashboard's
     # own session cookie with repo_id=None, so a repo-scoped-only sweep
     # would leave the very session performing this deletion still valid.
-    db.execute(delete(Token).where(Token.account_id == account_id))
+    if token_ids:
+        db.execute(delete(Token).where(Token.id.in_(token_ids)))
 
-    for model in _ACCOUNT_ID_MODELS_AFTER_TOKEN:
+    for model in _ACCOUNT_ID_REQUEST_MODELS:
         db.execute(delete(model).where(model.account_id == account_id))
 
     installation_ids = list(
