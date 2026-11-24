@@ -71,9 +71,15 @@
 				<p class="warn">{account.message}</p>
 			{:else}
 				<AccountSetup bind:board />
-				<div id="messengers">
-					<MessengerDoors doors={account.messengerDoors} heading="Telegram and WhatsApp" embedded />
-				</div>
+				{#if account.messengerDoors.length}
+					<div id="messengers">
+						<MessengerDoors
+							doors={account.messengerDoors}
+							heading="Telegram and WhatsApp"
+							embedded
+						/>
+					</div>
+				{/if}
 				{#if account.github.notice || account.github.repos.length}
 					<section id="github" class="github" aria-label="GitHub">
 						<h2>GitHub</h2>
