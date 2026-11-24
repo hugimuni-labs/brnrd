@@ -38,6 +38,7 @@
 	let figure = $state<PriceFigure | null | undefined>(undefined);
 	let offer = $derived(subscribeOffer(figure));
 	let hasSubscription = $derived(subscription !== null && subscription.status !== null);
+	let member = $derived(!hasSubscription && subscription?.access === 'member');
 	let installOffer = $derived(installSessionOffer(subscription));
 	let boardReady = $state(false);
 	let checkoutPending = $derived(notice?.kind === 'subscription' && !hasSubscription);
@@ -87,8 +88,11 @@
 		}
 	});
 
+	// Readiness is the board's, read for every account: tier says what the
+	// account pays for, never whether its loom is connected. Read only for
+	// subscribers, a free or comped account that had added its loom was
+	// still told to set brnrd up (letter 11758).
 	$effect(() => {
-		if (!hasSubscription) return;
 		let current = true;
 		void getJSON(`${BASE}/index`)
 			.then((index) => {
@@ -137,6 +141,12 @@
 		});
 </script>
 
+{#snippet boardLink()}
+	<a href={resolve(boardReady ? '/' : '/account#setup')} class="text-amber-200 underline"
+		>{boardReady ? 'Open your board' : 'Set up brnrd'}</a
+	>
+{/snippet}
+
 <div class="panel p-4">
 	{#if notice}
 		<p
@@ -163,7 +173,7 @@
 	{:else}
 		<div class="flex flex-wrap items-baseline justify-between gap-2">
 			<p class="font-mono text-sm font-semibold text-amber-100">
-				{subscription.tier}
+				{member ? 'member' : subscription.tier}
 				{#if hasSubscription && subscription.cadence}
 					<span class="text-ink-quiet">· {subscription.cadence}</span>
 				{/if}
@@ -181,10 +191,17 @@
 			{/if}
 		</div>
 
-		{#if !hasSubscription}
+		{#if member}
+			<p class="mt-2 text-sm leading-relaxed text-stone-400">
+				Hosted access is included for this account: the board here and messaging through brnrd.dev,
+				no subscription needed.
+				{@render boardLink()}.
+			</p>
+		{:else if !hasSubscription}
 			<!-- subscribe CTA -->
 			<p class="mt-2 text-sm leading-relaxed text-stone-400">
-				{SUBSCRIBE_PITCH} <a href={resolve('/')} class="text-amber-200 underline">Set up brnrd</a>.
+				{SUBSCRIBE_PITCH}
+				{@render boardLink()}.
 			</p>
 			<div class="mt-3 flex flex-wrap items-center gap-3">
 				<button
@@ -205,11 +222,7 @@
 				unchanged while your subscription is live
 			</p>
 		{:else}
-			<a
-				href={resolve(boardReady ? '/' : '/account#setup')}
-				class="mt-3 inline-block text-sm text-amber-200 underline"
-				>{boardReady ? 'Open your board' : 'Set up brnrd'}</a
-			>
+			<p class="mt-3 text-sm">{@render boardLink()}</p>
 			{#if installOffer}
 				<p class="install-offer mt-3 text-sm text-amber-100">
 					{installOffer.lead}

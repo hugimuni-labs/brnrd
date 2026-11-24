@@ -4,7 +4,13 @@
 	import AccountDeletion from '$lib/AccountDeletion.svelte';
 	import BillingPanel from '$lib/BillingPanel.svelte';
 	import AccountSetup from '$lib/AccountSetup.svelte';
-	import { ACCOUNT_PATH, loginFor, readAccount, type AccountRead } from '$lib/accountPage';
+	import {
+		ACCOUNT_PATH,
+		githubReturn,
+		loginFor,
+		readAccount,
+		type AccountRead
+	} from '$lib/accountPage';
 	import '$lib/board/ui/board.css';
 	import { forget } from '$lib/board/cache';
 
@@ -23,9 +29,15 @@
 	onMount(() => {
 		// the board's page drops the layout's dark scanline overlay the same way
 		document.documentElement.classList.add('board');
-		void readAccount().then((a) => {
+		const back = githubReturn(window.location.search);
+		void readAccount(fetch, back).then((a) => {
 			account = a;
-			if (a.kind === 'anon') window.location.replace(loginFor(ACCOUNT_PATH));
+			// Signed out, the GitHub return comes back here with its params after sign-in.
+			if (a.kind === 'anon')
+				window.location.replace(loginFor(ACCOUNT_PATH + window.location.search));
+			// Read once: a reload neither re-syncs nor re-announces.
+			else if (back.notice || back.installationId)
+				history.replaceState(history.state, '', ACCOUNT_PATH + window.location.hash);
 		});
 		return () => document.documentElement.classList.remove('board');
 	});
@@ -58,6 +70,31 @@
 				<p class="warn">{account.message}</p>
 			{:else}
 				<AccountSetup bind:board />
+				{#if account.github.notice || account.github.repos.length}
+					<section id="github" class="github" aria-label="GitHub">
+						<h2>GitHub</h2>
+						{#if account.github.notice}
+							<p class="subpanel note" role="status">{account.github.notice}</p>
+						{/if}
+						{#if account.github.repos.length}
+							<p>The brnrd-dev GitHub App reaches:</p>
+							<ul>
+								{#each account.github.repos as repo (repo)}
+									<li><code>{repo}</code></li>
+								{/each}
+							</ul>
+						{/if}
+						{#if account.github.installUrl}
+							<p>
+								<!-- eslint-disable svelte/no-navigation-without-resolve -- GitHub's own install page -->
+								<a class="topics-link" href={account.github.installUrl} rel="external"
+									>Choose which repos the App reaches</a
+								>
+								<!-- eslint-enable svelte/no-navigation-without-resolve -->
+							</p>
+						{/if}
+					</section>
+				{/if}
 				<h2 id="subscription">Subscription</h2>
 				<BillingPanel />
 				<AccountDeletion githubLogin={account.githubLogin} />
@@ -183,6 +220,16 @@
 	}
 	.acct :global(input:focus) {
 		border-color: #b00;
+	}
+	.github {
+		margin: 0 0 1.5rem;
+	}
+	.github .note {
+		padding: 6px 10px;
+	}
+	.github ul {
+		margin: 0.25rem 0 0.75rem;
+		padding-left: 1.25rem;
 	}
 	/* the deletion block: a rule above, as the board separates a column's parts */
 	.acct :global(.border-stone-800) {

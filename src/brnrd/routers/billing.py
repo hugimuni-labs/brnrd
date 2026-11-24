@@ -67,11 +67,15 @@ def _ensure_customer(db: Session, settings, account: Account) -> str:
 def _subscription_out(
     db: Session, settings, subscription: Subscription | None, account: Account
 ) -> schemas.SubscriptionOut:
+    from ..home_access import decide
+
+    access = decide(db, settings, account).why
     if subscription is None:
-        return schemas.SubscriptionOut(tier=account.tier)
+        return schemas.SubscriptionOut(tier=account.tier, access=access)
     link = billing.install_session_link(db, settings, account.id)
     return schemas.SubscriptionOut(
         tier=account.tier,
+        access=access,
         status=subscription.status,
         cohort=subscription.cohort,
         cadence=subscription.cadence,

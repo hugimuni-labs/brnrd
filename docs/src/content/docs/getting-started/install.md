@@ -107,6 +107,20 @@ anything; `--no-start` writes the service and leaves it for the next login.
 `uninstall` do what they say. `brnrd setup` pairs a channel such as Telegram,
 so letters reach you away from the terminal.
 
+## Add a project
+
+From the project's folder, after `brnrd setup`:
+
+```bash
+brnrd add        # or: brnrd add .   or: brnrd add ~/code/app
+```
+
+It adds the project to the brnrd that setup made, in the same home, with no
+second pairing. A checkout with an `origin` is added by that URL, so brnrd
+works on it in its own copy and sends changes as pull requests; a folder
+without one is added by its path. Running it again changes nothing. Then ask
+brnrd for work in it by name.
+
 ## Open the local board
 
 The board is the resident's page on this computer: its threads and what each

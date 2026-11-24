@@ -1584,6 +1584,9 @@ class SubscriptionOut(BaseModel):
     # How many first seats there are, for the copy ("one of our first 20");
     # set exactly when install_session_url is.
     first_subscribers_seats: int | None = None
+    # The home gate's answer (home_access.decide), apart from the tier: a
+    # member is admitted with no subscription, so ``tier`` alone reads "free".
+    access: str | None = None
 
 
 class SubscriptionCheckoutIn(BaseModel):

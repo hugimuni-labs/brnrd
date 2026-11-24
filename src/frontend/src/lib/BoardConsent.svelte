@@ -3,6 +3,9 @@
 	// board here answers once, on a page of its own, never over the old app. `ask` and `declined` are answered here;
 	// `waiting` is the page between a yes and the loom's first push. The words name what the board part carries
 	// (brr.loom.runtime.board: threads, wishes, letters, and each strand's tool lines as tooltrace caps them).
+	// The buttons carry `border` and `border-amber-700` so /account's skin draws them as its buttons, the yes
+	// as the filled act the section exists for; without a border class that skin draws them borderless, as
+	// text (letter 11758).
 	let {
 		step,
 		lastSeen = null,
@@ -47,10 +50,10 @@
 		<p><strong>Not sent:</strong> the contents of your files.</p>
 		<p>You can stop it any time. Stopping deletes the copy here.</p>
 		<div class="acts">
-			<button class="yes" disabled={busy} onclick={() => answer(true)}
-				>Send my board to brnrd.dev</button
+			<button class="yes border border-amber-700" disabled={busy} onclick={() => answer(true)}
+				>Turn on board sharing</button
 			>
-			<button class="no" disabled={busy} onclick={() => answer(false)}>Not now</button>
+			<button class="no border" disabled={busy} onclick={() => answer(false)}>Not now</button>
 		</div>
 	{:else if step === 'declined'}
 		<h1>Your board stays on your machine</h1>
@@ -60,8 +63,8 @@
 			<code>127.0.0.1:&lt;board_port&gt;</code>.
 		</p>
 		<div class="acts">
-			<button class="yes" disabled={busy} onclick={() => answer(true)}
-				>Send my board after all</button
+			<button class="yes border border-amber-700" disabled={busy} onclick={() => answer(true)}
+				>Turn on board sharing</button
 			>
 		</div>
 	{/if}
