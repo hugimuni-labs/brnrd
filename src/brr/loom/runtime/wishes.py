@@ -186,8 +186,6 @@ def wishes(facts: Iterable[Fact]) -> dict[str, Wish]:
                 wish.reads.append(dict(d, at=fact.at, writer=fact.by))
             elif fact.kind == "wish.result":
                 wish.results.append(dict(d, at=fact.at, writer=fact.by, delivery_id=fact.id))
-                if d.get("delivered") and wish.verdict and wish.verdict.get("delivery_id"):
-                    wish.verdict = None
             elif fact.kind == "wish.top":
                 wish.tops.append({"at": fact.at, "ref": d.get("ref"), "by": fact.by})
                 continue
@@ -200,8 +198,6 @@ def wishes(facts: Iterable[Fact]) -> dict[str, Wish]:
                 # A left is the plan, not news on the wish: its age stays the last stamp's.
                 continue
             else:
-                if d.get("delivery_id") and d["delivery_id"] != delivery_id(wish):
-                    continue
                 wish.verdict = dict(d, at=fact.at, writer=fact.by)
         wish.at = fact.at
     asked = [w for w in found.values() if w.sender == "resident"]
@@ -220,6 +216,9 @@ def wishes(facts: Iterable[Fact]) -> dict[str, Wish]:
                 # Merged and in the code the loom runs: delivered, until a rollback.
                 if (merge := held_merge(result, start)):
                     result.update(delivered=True, held=merge)
+        scope = (wish.verdict or {}).get("delivery_id")
+        if scope and scope != delivery_id(wish):
+            wish.verdict = None
         wish.heard_at = max([named.get(wish.id, ""), *(s["at"] for s in wish.stamps
                              if any(i in letters and _person(letters[i]) for i in s["letters"]))])
         if wish.sender == "person":
