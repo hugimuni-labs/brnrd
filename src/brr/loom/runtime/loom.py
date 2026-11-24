@@ -314,7 +314,7 @@ def _loom_line(home, facts) -> str:
 
 
 def _build_wake(home, strand, gen, clone, thread, rows, part, owed_path, part_path, repo_file, core_path):
-    """Run the recipe; a start is never refused for the home's sake (his 11737, 11739).
+    """Run the recipe; a start is never refused for the home's sake (11737, 11739).
 
     The resident is who repairs its home, and it can only do that awake. A letter
     larger than the budget is cut in the wake and kept whole in ``port/letters/``.
@@ -1979,7 +1979,7 @@ def _wake_letter(home, facts, thread, leased, letter, channel, *, parked=True, h
             named = next((target for target in _continue_targets(home, facts, thread, leased)
                           if target[0] == shell), None)
             if named is None:
-                # Fuel is the one refusal, and the person holds its override (his 11739).
+                # Fuel is the one refusal, and the person holds its override (11739).
                 named = (f"{_subscription_name(shell)} isn't available with a healthy limit right now. "
                          + (f"Reply wake {shell} to start it anyway."
                             if shell in _wake_shells(home, leased[0]) else ""))

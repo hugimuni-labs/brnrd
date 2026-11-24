@@ -12,8 +12,12 @@ from _step import Loom, wait_until, write_thread
 
 def test_two_failed_starts_are_visible_to_operator_and_a_note_retires_them(tmp_path, monkeypatch, capsys):
     root = tmp_path / 'home'
-    write_thread(root, 'work', 'Over-budget wake', 'answer-fast', wait='0')
-    ident = inject_letter(root, to='thread:work', body='Please answer' * 3000)
+    from test_lifecycle import bodies
+    # A body that dies before answering: size no longer fails a start (11737),
+    # so the two failed starts come from the body itself.
+    write_thread(root, 'work', 'A body that crashes', 'custom', wait='0')
+    bodies(root, 'import sys\nsys.exit(1)\n')
+    ident = inject_letter(root, to='thread:work', body='Please answer')
     loom = Loom(root)
     loom.start()
     try:

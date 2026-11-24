@@ -983,7 +983,7 @@ def minimal_wake(clone: Path, thread: str, owed: Path, loom_part: Path, repos: P
                  why: str, home=None) -> tuple[str, str]:
     """``(core, occasion)`` built by the loom alone, for a wake no recipe could build.
 
-    A start is never refused for the home's sake (his 11737, 2026-11-23): the
+    A start is never refused for the home's sake (11737, 2026-11-23): the
     body that boots on this is who repairs the recipe. Core and letters whole,
     the loom part, and one line naming what was cut and why. No recipe runs.
     """
