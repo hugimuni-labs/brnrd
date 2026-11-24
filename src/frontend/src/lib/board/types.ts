@@ -143,7 +143,28 @@ export type Machine = {
 	seen?: string;
 };
 
-export type Goal = { id: string; stands: string; next: string; now: string; stake: string };
+export type GoalAsk = { wish: string; line: string; blocks: string; waits: string; at: string };
+export type GoalDelivery = {
+	wish: string;
+	line: string;
+	ref?: string;
+	delivery_id?: string;
+	at: string;
+};
+// Prose from the goal file; the rest is read from the wishes linked to it (wish --goal).
+export type Goal = {
+	id: string;
+	stands: string;
+	next: string;
+	now: string;
+	stake: string;
+	progress?: Record<string, number>;
+	asks?: GoalAsk[];
+	blocked?: boolean;
+	delivery?: GoalDelivery;
+	moved?: string;
+	stalled?: boolean;
+};
 
 export type Index = {
 	goals?: Goal[];

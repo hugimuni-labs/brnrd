@@ -696,6 +696,45 @@ def machines_of(home: Home, facts) -> list[dict]:
     return sorted(rows, key=lambda r: (not r["lead"], r["id"]))
 
 
+GOAL_STALL = 24 * 3600
+
+
+def goal_progress(goals: list[dict], told: dict, waits: dict[str, str], now: float | None = None) -> list[dict]:
+    """Each active goal with what the ledger says about the work linked to it (``wish --goal``).
+
+    ``waits`` is ``waits_on``: who each open ask waits on. ``progress``: the linked wishes counted by
+    state; ``asks``: the open asks on them that wait on a person (not on another thread), each with
+    the wish it blocks; ``delivery``: the latest delivered result; ``moved``: the last fact on any of
+    them, and ``stalled`` once that is older than a day. ``blocked`` holds only when every open
+    linked wish waits on an ask: one free move under the goal means it does not wait on the person.
+    """
+    now = time.time() if now is None else now
+    out = []
+    for goal in goals:
+        linked = [w for w in told.values() if w.goal == goal["id"]]
+        ids = {w.id for w in linked}
+        asks = [told[i] for i, head in waits.items()
+                if i in told and told[i].parent in ids and not head.startswith("thread:")
+                and told[i].state != "delivered"]
+        waiting = {a.parent for a in asks}
+        live = [w for w in linked if w.open]
+        delivered = [(r["at"], w, r) for w in linked for r in w.results if r.get("delivered")]
+        row = dict(goal, progress=dict(Counter(w.state for w in linked)),
+                   asks=[{"wish": a.id, "line": a.line, "blocks": a.parent, "waits": waits[a.id], "at": _iso(a.at)}
+                         for a in asks],
+                   blocked=bool(live) and all(w.id in waiting for w in live))
+        if delivered:
+            at, w, r = max(delivered, key=lambda d: d[0])
+            row["delivery"] = {"wish": w.id, "line": r.get("line") or w.line, "ref": r.get("ref"),
+                               "delivery_id": r.get("delivery_id"), "at": _iso(at)}
+        if linked:
+            moved = max(w.at for w in linked)
+            row["moved"] = _iso(moved)
+            row["stalled"] = bool(live) and now - datetime.fromisoformat(moved).timestamp() > GOAL_STALL
+        out.append(row)
+    return out
+
+
 def compute(home: Home, facts, config, tools: dict, live: dict, person: str | None = None,
             typed: dict | None = None) -> dict[str, dict]:
     """Every part by name. The index is hashes, counts and short rows; fat rows ride in their own part.
@@ -744,7 +783,9 @@ def compute(home: Home, facts, config, tools: dict, live: dict, person: str | No
              "wishes": counts, **_as(home, person), "person_names": person_names(home.root / "self"), "parts": hashes, "faces": FACES}
     if machines := machines_of(home, facts):
         index["machines"] = machines
-    index["goals"] = active_goals(home)
+    found = told_of(facts)
+    owners = {t["id"]: {"opened-by": t.get("opened_by"), "status": t.get("status")} for t in threads}
+    index["goals"] = goal_progress(active_goals(home), found, waits_on(found, owners))
     parts["index"] = index
     return parts
 
