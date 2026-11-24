@@ -95,6 +95,8 @@ class Wish:
     said_at: str = ""
     tops: list[dict] = field(default_factory=list)
     pick: dict | None = None
+    # The goal this wish serves, by its file name under the self's goals/; empty: none named.
+    goal: str = ""
 
     @property
     def ranked_at(self) -> str:
@@ -158,7 +160,7 @@ def wishes(facts: Iterable[Fact]) -> dict[str, Wish]:
     found: dict[str, Wish] = {}
     for fact in ordered:
         if fact.kind not in {"wish", "wish.read", "wish.result", "wish.verdict", "wish.left",
-                             "wish.top", "wish.pick"}:
+                             "wish.top", "wish.pick", "wish.goal"}:
             continue
         d = fact.data
         ident = d["wish"]
@@ -191,6 +193,10 @@ def wishes(facts: Iterable[Fact]) -> dict[str, Wish]:
                 continue
             elif fact.kind == "wish.pick":
                 wish.pick = {"at": fact.at, "why": d.get("why", ""), "by": fact.by}
+                continue
+            elif fact.kind == "wish.goal":
+                # Which goal the work serves: a link, not news on the wish.
+                wish.goal = str(d.get("goal") or "")
                 continue
             elif fact.kind == "wish.left":
                 steps = wish.left["steps"] if d.get("same") and wish.left else list(d.get("steps") or ())
@@ -275,7 +281,7 @@ def _answer(asked: list[Wish], letters: dict, ordered: list[Fact]) -> None:
         ask.answer = next(iter(stamped), None) or next((i for i, f in letters.items() if answers(f)), "")
 
 
-WISH_KINDS = ("wish", "wish.read", "wish.result", "wish.verdict", "wish.left", "wish.top", "wish.pick",
+WISH_KINDS = ("wish", "wish.read", "wish.result", "wish.verdict", "wish.left", "wish.top", "wish.pick", "wish.goal",
               # A merged result reads delivered only by the commit the loom runs: without
               # loom.started here, told() keeps a finished wish granting and Next build.
               "loom.started",

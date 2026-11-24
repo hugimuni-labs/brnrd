@@ -3,7 +3,7 @@
 	import { replaceState } from '$app/navigation';
 	import { onMount } from 'svelte';
 	import { allCalls, answered } from '../calls.ts';
-	import type { Call } from '../types.ts';
+	import type { Call, Goal, GoalAsk } from '../types.ts';
 	import { board } from './board.svelte.ts';
 	import Ref from './Ref.svelte';
 
@@ -74,6 +74,39 @@
 		if (url.href !== page.url.href) replaceState(url, page.state);
 	}
 
+	function openAsk(ask: GoalAsk) {
+		const call = asks.find((c) => c.wish === ask.wish);
+		if (!call) return b.openBead(ask.wish, 'keep');
+		b.closeBead();
+		view = 'needs';
+		select(call);
+	}
+
+	function openDelivery(goal: Goal) {
+		const d = goal.delivery;
+		if (!d) return;
+		if (!d.delivery_id) return b.openBead(d.wish, 'keep');
+		b.closeBead();
+		view = 'ready';
+		// The live review when it is still waiting, so Accept and Correct act on it; else the record.
+		const live = reviews.find((c) => c.delivery_id === d.delivery_id);
+		if (live) return select(live);
+		select({
+			kind: 'verdict',
+			wish: d.wish,
+			delivery_id: d.delivery_id,
+			line: d.line,
+			at: d.at,
+			ref: d.ref
+		});
+	}
+
+	function tally(goal: Goal): string {
+		const counts = Object.entries(goal.progress ?? {});
+		if (!counts.length) return 'No work linked yet';
+		return counts.map(([state, n]) => `${n} ${state}`).join(' · ');
+	}
+
 	function switchView(next: typeof view) {
 		b.closeBead();
 		select(null);
@@ -102,7 +135,28 @@
 			<h2>Goals</h2>
 			{#each b.model.goals ?? [] as goal (goal.id)}
 				<details>
-					<summary><strong>{goal.id.replaceAll('-', ' ')}</strong> · {goal.stands}</summary>
+					<summary>
+						<strong>{goal.id.replaceAll('-', ' ')}</strong> · {goal.stands}
+						{#if goal.blocked}<em> · waits on you</em>{:else if goal.stalled}<em>
+								· stalled</em
+							>{/if}
+					</summary>
+					<p>
+						{tally(goal)}{#if goal.moved}
+							· last move {goal.moved.slice(0, 16).replace('T', ' ')}Z{/if}
+					</p>
+					{#each goal.asks ?? [] as ask (ask.wish)}
+						<p>
+							<button type="button" onclick={() => openAsk(ask)}>Needs you · {ask.line}</button>
+						</p>
+					{/each}
+					{#if goal.delivery}
+						<p>
+							<button type="button" onclick={() => openDelivery(goal)}
+								>Latest delivery · {goal.delivery.line}</button
+							>
+						</p>
+					{/if}
 					<dl>
 						<dt>Now</dt>
 						<dd>{goal.now}</dd>

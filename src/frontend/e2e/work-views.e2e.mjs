@@ -53,3 +53,64 @@ test('work views stay in reach on a phone and preserve the activity board', asyn
 		await B.close();
 	}
 });
+
+test('a goal shows its linked work and opens its ask and its latest delivery', async () => {
+	const parts = fixture();
+	const delivery = 'wish.result:bravo-v1';
+	parts['thread/inbox'].board.calls.find((call) => call.wish === 'w-bravo0000000').delivery_id =
+		delivery;
+	parts.index.goals = [
+		{
+			id: 'growth',
+			stands: 'No pipeline yet',
+			now: 'Pilot outreach',
+			next: 'A repeatable route',
+			stake: 'Paying users',
+			progress: { heard: 1, delivered: 1 },
+			asks: [
+				{
+					wish: 'w-charlie0000000',
+					line: 'which parser grammar?',
+					blocks: 'w-alpha',
+					waits: 'ada',
+					at: '2026-11-24T20:00:00Z'
+				}
+			],
+			blocked: true,
+			delivery: {
+				wish: 'w-bravo0000000',
+				line: 'bravo happens',
+				delivery_id: delivery,
+				at: '2026-11-24T21:00:00Z'
+			},
+			moved: '2026-11-24T21:00:00Z',
+			stalled: false
+		}
+	];
+	const B = await open({ parts, viewport: { width: 390, height: 844 } });
+	try {
+		const { page } = B;
+		const nav = page.getByRole('navigation', { name: 'Work views' });
+		await nav.getByRole('button', { name: 'Goals', exact: true }).click();
+		equal(await page.getByText('waits on you').isVisible(), true);
+		await page.locator('summary').click();
+		equal(await page.getByText('1 heard · 1 delivered', { exact: false }).isVisible(), true);
+
+		await page.getByRole('button', { name: 'Needs you · which parser grammar?' }).click();
+		equal(await page.getByRole('heading', { name: 'which parser grammar?' }).isVisible(), true);
+		equal(
+			await nav.getByRole('button', { name: 'Needs you 1' }).getAttribute('aria-pressed'),
+			'true'
+		);
+
+		await nav.getByRole('button', { name: 'Goals', exact: true }).click();
+		await page.locator('summary').click();
+		await page.getByRole('button', { name: 'Latest delivery · bravo happens' }).click();
+		equal(await page.getByRole('heading', { name: 'bravo happens' }).isVisible(), true);
+		equal(new URL(page.url()).searchParams.get('delivery'), delivery);
+		equal(await page.getByRole('button', { name: 'Accept', exact: true }).isVisible(), true);
+		equal(B.errors.length, 0, B.errors.join('\n'));
+	} finally {
+		await B.close();
+	}
+});
