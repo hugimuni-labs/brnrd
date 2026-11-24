@@ -313,6 +313,42 @@ def _hand() -> bool:
     return os.environ.get("BRNRD_BODY_JACK") == "hand"
 
 
+def _harness_stop(stdin_text: str) -> bool:
+    """This Stop belongs to a harness that turns a block into a model turn.
+
+    Claude, Codex and Grok send ``stop_hook_active`` on Stop: false on the
+    first stop, true after a block continued the turn. A quiet deadline must
+    not answer with a block. That would be inference with nothing new to say.
+    A payload without the key is the fake body and the older tests, which
+    still take the keepalive block.
+    """
+    try:
+        payload = json.loads(stdin_text or "{}")
+    except ValueError:
+        return False
+    return isinstance(payload, dict) and "stop_hook_active" in payload
+
+
+def _rest_recorded(room: Path, parsed: Boundary) -> bool:
+    """This generation has an explicit rest on record.
+
+    ``rest --why`` writes a ``rest.why`` fact. The room copy of that reason
+    is cleared on the next tool call, and the boundary line ``held next:
+    rest`` is only the prompt to record one. Neither is the record.
+    """
+    if not parsed.strand or not parsed.gen:
+        return False
+    said = _state(room).get("rest_reason") or {}
+    if said.get("gen") == parsed.gen and said.get("why"):
+        return True
+    from .ledger import kind_facts, read_facts
+    for fact in kind_facts(read_facts(home_of_room(room)), "rest.why"):
+        data = fact.data or {}
+        if data.get("strand") == parsed.strand and data.get("gen") == parsed.gen:
+            return True
+    return False
+
+
 def _block(room: Path, text: str, parsed: Boundary) -> str:
     count = int(_state(room).get("stop_blocks") or 0)
     if _hand() and count >= 3:
@@ -370,6 +406,10 @@ def _poll(room: Path, stdin_text: str = '') -> str:
     # mark, real work clears it. The loom displaces the longest held first.
     if not _state(room).get("held_at"):
         _set_state(room, held_at=time.time())
+    # One ledger read. A rest recorded while this hook sleeps cannot be this
+    # body's: the model is not running. A letter still wins, below.
+    recorded = _harness_stop(stdin_text) and _rest_recorded(
+        room, parse_boundary(_boundary_text(room)))
     while True:
         order = _order(room)
         if _state(room).get("reincarnated") or order == "end":
@@ -406,6 +446,10 @@ def _poll(room: Path, stdin_text: str = '') -> str:
         if (set(parsed.ids) - done if _hand() else
                 any(not letter.compact and letter.id not in done for letter in parsed.letters)):
             return _block(room, _stop_news(room, text, parsed), parsed)
+        if recorded:
+            # Explicit rest, and nothing owed on this boundary. Leave. An idle
+            # card is not a reason to start a turn on the way out.
+            return ""
         if (room / "port" / DISPLACED).exists():
             # Over the loom's max_held: leave warm memory for a body with work.
             # The next letter to this thread starts a fresh one.
@@ -414,12 +458,20 @@ def _poll(room: Path, stdin_text: str = '') -> str:
         if remaining <= 0:
             if _hand():
                 return ""
-            # Hold again by blocking, never by waiting on in this call: the
-            # shell ends a hook that outlives its timeout, and the body would
-            # then leave while it still owes. With no cache lifetime this
-            # happens only at the hook ceiling.
-            news = _stop_news(room, text, parsed)
+            # A harness with nothing new stays in this hook, idle card or not.
+            # A block here would be a model turn with nothing to say. Empty
+            # before the ceiling would end the session, which is rest's job,
+            # already returned above. The ceiling is the resource limit.
+            # The fake body sends no stop_hook_active, so it still blocks.
+            if _harness_stop(stdin_text):
+                if time.monotonic() >= ceiling:
+                    return ""
+                deadline = ceiling
+                continue
             idle = _idle(room, home, shell)
+            # First quiet stop: hold again by blocking. The shell ends a hook
+            # that outlives its timeout. With no cache lifetime this is the ceiling.
+            news = _stop_news(room, text, parsed)
             wakes = _boundary_line(text, "wakes at: ") or "the next letter"
             rest = "\n".join(filter(None, (rest_reason(_state(room), parsed.gen), f"wakes at: {wakes}"))) + "\n"
             extra = _unease(room)
