@@ -150,3 +150,31 @@ def test_an_ask_on_a_thread_the_home_thread_opened_waits_on_the_person():
     # A non-home thread still holds the asks of the threads it opened.
     facts = [*base(), wish("w-ask2", at(5), sender="resident", parent="w-want", thread="else")]
     assert waits_on(wishes(facts), main)["w-ask2"] == "thread:work"
+
+
+def test_acceptance_of_an_old_delivery_cannot_close_a_new_delivery():
+    first = delivered("w-want", at(8))
+    second = delivered("w-want", at(6))
+    verdict = Fact(kind="wish.verdict", by="person:arseni", at=at(7),
+                   data={"wish": "w-want", "as": "accepted", "evidence": "word",
+                         "ref": "L1", "delivery_id": first.id})
+    assert wishes([*base(), first, verdict])["w-want"].state == "accepted"
+    assert wishes([*base(), first, verdict, second])["w-want"].state == "delivered"
+    late = Fact(kind=verdict.kind, by=verdict.by, data=verdict.data, at=at(5))
+    assert wishes([*base(), first, second, late])["w-want"].state == "delivered"
+
+
+def test_acceptance_uses_the_delivery_effective_after_the_loom_loads_it(monkeypatch, tmp_path):
+    repo = tmp_path / "brnrd"
+    (repo / ".git").mkdir(parents=True)
+    monkeypatch.setenv("BRNRD_LOOM_SOURCE", str(repo))
+    result = Fact(kind="wish.result", by="strand:s-aaaa-work", at=at(8), data={
+        "wish": "w-want", "kind": "pr", "ref": "13", "line": "PR #13", "delivered": False,
+    })
+    start = Fact(kind="loom.started", by="loom:aaaa", at=at(7), data={
+        "commit": "loaded", "merges": {"brnrd#13": "merge-sha"},
+    })
+    verdict = Fact(kind="wish.verdict", by="person:arseni", at=at(6), data={
+        "wish": "w-want", "as": "accepted", "evidence": "word", "ref": "L1", "delivery_id": result.id,
+    })
+    assert wishes([*base(), result, start, verdict])["w-want"].state == "accepted"

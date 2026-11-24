@@ -2,8 +2,15 @@
 // thread, and beads. Shapes follow board.py; fields the board does not read are left out.
 
 export type Stamp = { stamp: string; at: string; ref?: string; line?: string; by?: string };
-export type Verdict = { as: string; at: string; evidence?: string; ref?: string };
+export type Verdict = {
+	as: string;
+	at: string;
+	evidence?: string;
+	ref?: string;
+	delivery_id?: string;
+};
 export type Result = {
+	delivery_id?: string;
 	ref?: string;
 	kind?: string;
 	line?: string;
@@ -48,14 +55,17 @@ export type Letter = {
 	pendingNote?: boolean;
 	wish?: string;
 	verdict?: string;
+	delivery_id?: string;
 };
 
 export type Call = {
 	kind: 'ask' | 'verdict';
+	delivery_id?: string;
 	wish: string;
 	line: string;
 	at: string;
 	waits?: string;
+	parent?: string;
 	next?: string;
 	ref?: string;
 	result?: string;
@@ -133,7 +143,10 @@ export type Machine = {
 	seen?: string;
 };
 
+export type Goal = { id: string; stands: string; next: string; now: string; stake: string };
+
 export type Index = {
+	goals?: Goal[];
 	v: number;
 	threads: Thread[];
 	fuel?: Fuel[];
@@ -174,6 +187,7 @@ export type ThreadPart = Partial<Thread> & {
 
 // What the board reads at once, assembled from the parts (parts.ts).
 export type Model = {
+	goals?: Goal[];
 	threads: Thread[];
 	letters: Letter[];
 	byId: Map<string, Letter>;

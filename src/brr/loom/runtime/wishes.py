@@ -185,7 +185,7 @@ def wishes(facts: Iterable[Fact]) -> dict[str, Wish]:
                 wish.reading = d["reading"]
                 wish.reads.append(dict(d, at=fact.at, writer=fact.by))
             elif fact.kind == "wish.result":
-                wish.results.append(dict(d, at=fact.at, writer=fact.by))
+                wish.results.append(dict(d, at=fact.at, writer=fact.by, delivery_id=fact.id))
             elif fact.kind == "wish.top":
                 wish.tops.append({"at": fact.at, "ref": d.get("ref"), "by": fact.by})
                 continue
@@ -216,6 +216,9 @@ def wishes(facts: Iterable[Fact]) -> dict[str, Wish]:
                 # Merged and in the code the loom runs: delivered, until a rollback.
                 if (merge := held_merge(result, start)):
                     result.update(delivered=True, held=merge)
+        scope = (wish.verdict or {}).get("delivery_id")
+        if scope and scope != delivery_id(wish):
+            wish.verdict = None
         wish.heard_at = max([named.get(wish.id, ""), *(s["at"] for s in wish.stamps
                              if any(i in letters and _person(letters[i]) for i in s["letters"]))])
         if wish.sender == "person":
@@ -621,3 +624,8 @@ def insert_wishes(prompt: str, section: str) -> str:
     if end < 0:
         return prompt + "\n" + section
     return prompt[:end + 1] + section + prompt[end + 1:]
+
+
+def delivery_id(wish: Wish | None) -> str | None:
+    """The fact that offered the current delivery."""
+    return next((r.get("delivery_id") for r in reversed(wish.results) if r["delivered"]), None) if wish else None

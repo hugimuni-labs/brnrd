@@ -64,6 +64,7 @@ export class Board {
 	// the composer
 	draft = $state('');
 	armed = $state<string | null>(null);
+	armedDelivery = $state<string | undefined>();
 	force = $state(false);
 	sendError = $state('');
 	// a newer build is out (SvelteKit's version poll); the page takes it unless the box holds a draft in hand
@@ -114,6 +115,7 @@ export class Board {
 				if (d?.body) {
 					this.draft = d.body;
 					this.armed = d.armed || null;
+					this.armedDelivery = d.delivery_id;
 				}
 			} catch {
 				/* a torn draft is no draft */
@@ -311,11 +313,11 @@ export class Board {
 		if (this.draft)
 			sessionStorage.setItem(
 				'board.draft',
-				JSON.stringify({ body: this.draft, armed: this.armed })
+				JSON.stringify({ body: this.draft, armed: this.armed, delivery_id: this.armedDelivery })
 			);
 		else sessionStorage.removeItem('board.draft');
 	}
-	async post(body: string, extra: { wish?: string; verdict?: string }) {
+	async post(body: string, extra: { wish?: string; verdict?: string; delivery_id?: string }) {
 		const r = await fetch(`${BASE}/letters`, {
 			method: 'POST',
 			headers: { 'Content-Type': 'application/json' },
@@ -356,18 +358,24 @@ export class Board {
 		}
 		this.force = false;
 		try {
-			await this.post(body, armedVerdict(this.armed, body));
+			const verdict = armedVerdict(this.armed, body);
+			await this.post(body, {
+				...verdict,
+				delivery_id: verdict.wish ? this.armedDelivery : undefined
+			});
 			this.draft = '';
 			this.armed = null;
+			this.armedDelivery = undefined;
 			this.keep();
 		} catch (e) {
 			this.sendError = (e as Error).message;
 		}
 	}
 	// A call's buttons: done/agree goes at once, correct arms the composer.
-	async answer(wish: string, act: 'done' | 'agree' | 'correct') {
+	async answer(wish: string, act: 'done' | 'agree' | 'correct', delivery_id?: string) {
 		if (act === 'correct') {
 			this.armed = wish;
+			this.armedDelivery = delivery_id;
 			this.draft = correctDraft(wish);
 			this.keep();
 			return;
@@ -376,7 +384,7 @@ export class Board {
 		this.sending.add(wish);
 		const { body, ...v } = verdictLetter(act, wish);
 		try {
-			await this.post(body, v);
+			await this.post(body, { ...v, delivery_id });
 		} catch (e) {
 			this.sendError = (e as Error).message;
 		} finally {
