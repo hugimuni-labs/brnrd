@@ -1463,7 +1463,7 @@ def enqueue_loom_letter(request: Request, db: Session, account: Account, payload
     if repo_id is None:
         return JSONResponse({"detail": "connect a repo first: the loom's relay inbox is repo-scoped"}, status_code=409)
     if payload.wish and payload.verdict:
-        again = _same_verdict(db, repo_id, account.github_login, payload.wish, payload.verdict)
+        again = _same_verdict(db, repo_id, account.github_login, payload.wish, payload.verdict, payload.delivery_id)
         if again is not None:
             return again
     limits.raise_if_denied(
@@ -1479,6 +1479,8 @@ def enqueue_loom_letter(request: Request, db: Session, account: Account, payload
         reply_to["body"] = payload.body
     if payload.wish:
         reply_to.update(wish=payload.wish, verdict=payload.verdict)
+    if payload.delivery_id:
+        reply_to["delivery_id"] = payload.delivery_id
     return inbox_service.enqueue(db, repo_id=repo_id, body=payload.text, source="web", reply_to=reply_to)
 
 
@@ -1487,7 +1489,8 @@ def enqueue_loom_letter(request: Request, db: Session, account: Account, payload
 VERDICT_REPEAT = timedelta(minutes=10)
 
 
-def _same_verdict(db: Session, repo_id: str, login: str, wish: str, verdict: str) -> Event | None:
+def _same_verdict(db: Session, repo_id: str, login: str, wish: str, verdict: str,
+                  delivery_id: str | None = None) -> Event | None:
     """The board letter already queued from this person with this verdict on this wish, inside the window."""
     since = datetime.now(timezone.utc).replace(tzinfo=None) - VERDICT_REPEAT
     rows = db.execute(
@@ -1498,7 +1501,8 @@ def _same_verdict(db: Session, repo_id: str, login: str, wish: str, verdict: str
     ).scalars()
     for row in rows:
         r = json.loads(row.reply_to or "{}")
-        if (r.get("platform"), r.get("user_id"), r.get("wish"), r.get("verdict")) == ("loom", login, wish, verdict):
+        if (r.get("platform"), r.get("user_id"), r.get("wish"), r.get("verdict"), r.get("delivery_id")) == (
+                "loom", login, wish, verdict, delivery_id):
             return row
     return None
 

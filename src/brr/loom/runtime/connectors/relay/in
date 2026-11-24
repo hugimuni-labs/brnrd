@@ -54,10 +54,11 @@ def pull_once(drop, state, client, cursor, failures=None):
             platform, chat = str(meta['cloud_platform']), str(meta['cloud_chat_id'])
             # brnrd.dev's composer: the account's own page is one chat, keyed by
             # its login, and the letter names the thread it was written on.
-            thread = wake = wish = verdict = None
+            thread = wake = wish = verdict = delivery_id = None
             if platform == 'loom':
                 chat, thread, wake = str(origin.get('user_id') or ''), origin.get('thread'), origin.get('body')
                 wish, verdict = origin.get('wish'), origin.get('verdict')
+                delivery_id = origin.get('delivery_id')
             ident = message_id(platform, chat, origin.get('message_id') or origin.get('comment_id') or event_id)
             # No slash/path from a remote id is ever used as a file name.
             import re
@@ -71,6 +72,8 @@ def pull_once(drop, state, client, cursor, failures=None):
             if (wish or verdict) and not (re.fullmatch(r'w-[A-Za-z0-9]+', str(wish or ''))
                                           and verdict in {'agree', 'correct'}):
                 raise ValueError('relay: unsafe loom wish or verdict')
+            if delivery_id and (not wish or not re.fullmatch(r'wish\.result:[A-Za-z0-9_.:-]{1,128}', str(delivery_id))):
+                raise ValueError('relay: unsafe delivery id')
             names = cloud._attachment_names(event.get('attachments'))
             if names is None:
                 raise ValueError('relay: unreadable attachments')
@@ -118,6 +121,8 @@ def pull_once(drop, state, client, cursor, failures=None):
             if wish:
                 # The board's verdict on a delivered wish: agree or correct.
                 fields['wish'], fields['verdict'] = wish, verdict
+            if delivery_id:
+                fields['delivery_id'] = delivery_id
             if missing:
                 fields['missing'] = ' '.join(map(str, missing))
             if large:

@@ -140,6 +140,7 @@ export function assemble(index: Index, threads: Map<string, ThreadPart>, loose?:
 			};
 	}
 	return {
+		goals: index.goals,
 		threads: index.threads.map((t) => join(t, threads.get(t.id))),
 		letters: [...byId.values()].sort(byAt),
 		byId,

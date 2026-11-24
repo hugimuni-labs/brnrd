@@ -185,7 +185,9 @@ def wishes(facts: Iterable[Fact]) -> dict[str, Wish]:
                 wish.reading = d["reading"]
                 wish.reads.append(dict(d, at=fact.at, writer=fact.by))
             elif fact.kind == "wish.result":
-                wish.results.append(dict(d, at=fact.at, writer=fact.by))
+                wish.results.append(dict(d, at=fact.at, writer=fact.by, delivery_id=fact.id))
+                if d.get("delivered") and wish.verdict and wish.verdict.get("delivery_id"):
+                    wish.verdict = None
             elif fact.kind == "wish.top":
                 wish.tops.append({"at": fact.at, "ref": d.get("ref"), "by": fact.by})
                 continue
@@ -198,6 +200,8 @@ def wishes(facts: Iterable[Fact]) -> dict[str, Wish]:
                 # A left is the plan, not news on the wish: its age stays the last stamp's.
                 continue
             else:
+                if d.get("delivery_id") and d["delivery_id"] != delivery_id(wish):
+                    continue
                 wish.verdict = dict(d, at=fact.at, writer=fact.by)
         wish.at = fact.at
     asked = [w for w in found.values() if w.sender == "resident"]
@@ -615,3 +619,8 @@ def insert_wishes(prompt: str, section: str) -> str:
     if end < 0:
         return prompt + "\n" + section
     return prompt[:end + 1] + section + prompt[end + 1:]
+
+
+def delivery_id(wish: Wish | None) -> str | None:
+    """The fact that offered the current delivery."""
+    return next((r.get("delivery_id") for r in reversed(wish.results) if r["delivered"]), None) if wish else None
