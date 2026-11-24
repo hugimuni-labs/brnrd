@@ -322,28 +322,22 @@ def github_app_setup(request: Request, installation_id: str | None = None, setup
     # setup_action itself is dropped from the redirect: grep -rn setup_action
     # over the repo (before this fix) found only this handler's own two lines
     # reading it — a param no reader consumes is noise on a URL a human
-    # sees. installation_id stays: routes/repos/+page.svelte forwards it to
-    # refresh().
+    # sees. installation_id stays: /account forwards it to the repos read.
     params = {k: v for k, v in {"installation_id": installation_id, "notice": notice}.items() if v}
-    # Land on /repos, not the bare dashboard (#1084): /repos is the screen
-    # that reads `installations` / `installed_repos` and can act on what a
-    # GitHub App install just produced (enable a repo) — the dashboard's own
-    # cold-start block only ever names /repos as "another page" to go to.
-    # This is also what actually happened live: the reporter's own unblock
-    # was "setting enable button here https://brnrd.dev/repos". An anonymous
-    # arrival (no session cookie yet) still lands here — /repos already
-    # degrades to a sign-in link with `next=/repos` for that case.
-    return RedirectResponse(url=f"/repos?{urlencode(params)}", status_code=303)
+    # Land on /account#github (letter 11758): the page a new account already
+    # has, in the board's style, which reads `notice` and `installation_id`
+    # and lists the repos the App now reaches. /repos (#1084) moved under the
+    # old /dashboard and its dark style; it still answers for anyone who goes
+    # there. An anonymous arrival is sent to sign in and back with the query.
+    return RedirectResponse(url=f"/account?{urlencode(params)}#github", status_code=303)
 
 
 @router.post("/sync")
 def github_installation_sync(request: Request, db: Session = Depends(get_db)) -> RedirectResponse:
     account_id = account_id_from_session_cookie(request, db)
     if account_id is None:
-        # Same reasoning as /setup's anonymous-arrival branch: /repos is the
-        # page that can act on a sync outcome, so that's the post-login
-        # landing too, not the bare dashboard.
-        return RedirectResponse(url="/login?next=/repos", status_code=303)
+        # Same landing as /setup: /account shows a sync outcome.
+        return RedirectResponse(url="/login?next=/account", status_code=303)
     try:
         result = sync_app_installations_for_account(
             db, request.app.state.settings, account_id
@@ -352,11 +346,8 @@ def github_installation_sync(request: Request, db: Session = Depends(get_db)) ->
     except Exception as e:
         print(f"[brnrd] github manual installation sync failed: {e}")
         notice = "github-sync-failed"
-    # Land on /repos, not the bare dashboard root (#1084 / this fix's sibling
-    # defect): the root `+page.svelte` reads no `notice` param at all, so
-    # every outcome of a manual re-sync rendered identically — nothing. Same
-    # target and param spelling as /setup below.
-    return RedirectResponse(url=f"/repos?notice={notice}", status_code=303)
+    # Same target and param spelling as /setup below: a page that reads `notice`.
+    return RedirectResponse(url=f"/account?notice={notice}#github", status_code=303)
 
 
 @router.post("/webhook")

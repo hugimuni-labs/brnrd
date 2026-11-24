@@ -697,6 +697,53 @@ def test_the_offers_start_on_and_enter_keeps_them(capsys):
     assert 'Enter confirms' in capsys.readouterr().out
 
 
+def _screen(out, width):
+    """The lines a terminal ``width`` wide shows after ``out``: wraps, cursor up, clear down."""
+    lines, row, col = [[]], 0, 0
+    i = 0
+    while i < len(out):
+        esc = re.match(r'\x1b\[([0-9;?]*)([A-Za-z])', out[i:])
+        if esc:
+            arg, op = esc.groups()
+            if op == 'A':
+                row = max(0, row - int(arg or 1))
+            elif op == 'J':
+                del lines[row + 1:]
+                lines[row] = lines[row][:col]
+            elif op == 'K' and arg == '2':
+                lines[row] = []
+            i += esc.end()
+            continue
+        ch = out[i]
+        i += 1
+        if ch == '\r':
+            col = 0
+        elif ch == '\n':
+            row, col = row + 1, 0
+            while len(lines) <= row:
+                lines.append([])
+        else:
+            if col == width:
+                row, col = row + 1, 0
+                while len(lines) <= row:
+                    lines.append([])
+            line = lines[row]
+            line[col:col + 1] = [ch]
+            col += 1
+    return [''.join(line) for line in lines if line]
+
+
+def test_a_narrow_window_redraws_the_picker_in_place(capsys, monkeypatch):
+    # Letter 11752: rows wider than the window wrapped, and each arrow left copies.
+    monkeypatch.setattr(setup_channel.shutil, 'get_terminal_size', lambda *a: shutil.os.terminal_size((24, 20)))
+    rows = [('cloud', 'brnrd cloud: chat on brnrd.dev from any browser', ''),
+            ('web', 'The page on this computer · connected', ''), ('tg', 'Telegram', '')]
+    setup_channel.checklist(rows, keys=iter(['\x1b[B', '\x1b[B', ' ', '\x1b[A', '\r']))
+    shown = ''.join(_screen(capsys.readouterr().out, 24))
+    assert shown.count('Telegram') == 1 and shown.count('brnrd cloud') == 1
+    assert shown.count('[') == 3
+
+
 def test_an_offer_that_cannot_be_had_shows_off_with_its_reason_and_cannot_be_switched_on(capsys):
     rows = [('repo', 'Back up', 'needs gh signed in'), ('app', 'App', '')]
     assert setup_channel.checklist(rows, keys=iter([' ', '\r'])) == {'app'}
