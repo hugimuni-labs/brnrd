@@ -137,7 +137,7 @@ def test_loom_part_points_at_wishes(home, jack):
     assert "--result pr:<url> --line" in core and "--deliver" in core
     assert "send --wish" not in part and "--left" not in part
     assert f'--read "waiting: <what>" --wait <{GRAMMAR}>`' in core
-    assert core.count("Rest is a choice") == 1 and "A sleep or poll loop is never the wait" in core
+    assert core.count("Stay present after the immediate job") == 1 and "A sleep or poll loop is never the wait" in core
     assert core.index("## memory/stance.md") < core.index("## loom briefing")
     assert "Resting between turns" not in part and "poll loop" not in part
 
