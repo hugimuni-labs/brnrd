@@ -19,7 +19,7 @@ from pathlib import Path
 from .adapters import body_label
 from .home import Home, thread_of
 from .project import cached_projection, fold, is_notice, projection_cache, sender_threads
-from .wishes import progress, wish_plan
+from .wishes import progress, wish_plans
 
 STATES = {"working", "holding", "idle", "parked", "failed", "molted", "settled", "stopped"}
 # The threads table's words for a start waiting on fuel; the board says parked.
@@ -180,8 +180,7 @@ def _wish_rows(told, facts) -> list[dict]:
 
     def last(wish):
         return max((_when(r["at"]) for r in wish.results), default=_when(wish.at))
-    from .waits import live
-    parked = {wish.id: read for wish, read in live(told)}
+    plans = wish_plans(told)
     rows = []
     for w in sorted(told.values(), key=lambda w: (not w.open, -last(w).timestamp(), w.id))[:WISHES]:
         says = []
@@ -193,13 +192,13 @@ def _wish_rows(told, facts) -> list[dict]:
             says.append(_bare({"id": say.letter, "from": letter.data.get("from"),
                                "at": _iso(letter.at), "head": text[:HEAD]}))
         answer = answers.get(w.id)
-        left, since = wish_plan(w)
+        left, since, parked = plans[w.id]
         rows.append(_bare({
             "id": w.id, "thread": w.thread, "from": w.sender, "line": w.line, "state": w.state,
             "origin": w.origin, "at": _iso(w.at), "says": says, "reading": w.reading, "rec": w.rec,
             # What the loom watches for this park, while it stands.
-            "wait": _bare({"on": parked[w.id]["wait"].get("on"), "since": _iso(parked[w.id]["at"]),
-                           "until": parked[w.id]["wait"].get("until")}) if w.id in parked else None,
+            "wait": _bare({"on": parked["wait"].get("on"), "since": _iso(parked["at"]),
+                           "until": parked["wait"].get("until")}) if parked is not None else None,
             "results": [_bare({"kind": r.get("kind"), "ref": r.get("ref"), "line": r.get("line"),
                                "delivered": bool(r.get("delivered")), "at": _iso(r["at"])})
                         for r in w.results],
