@@ -15,6 +15,7 @@ import {
 	leadName,
 	machinesTitle,
 	moved,
+	PARTS_AT_ONCE,
 	patchBeads,
 	Store,
 	type Beads
@@ -370,6 +371,28 @@ const part = (id: string, letters: Letter[], more = false): ThreadPart => ({
 	tools: {},
 	live: {},
 	more
+});
+
+test('parts: a fresh tab fetches every thread part, never more than PARTS_AT_ONCE at a time', async () => {
+	const names = Array.from({ length: 40 }, (_, i) => `t${i}`);
+	const idx = index(Object.fromEntries(names.map((n) => [`thread/${n}`, `h-${n}`])));
+	let flight = 0;
+	let most = 0;
+	const asked: string[] = [];
+	const store = new Store(async (p) => {
+		if (p === '/v1/loom/index') return idx;
+		asked.push(p);
+		flight++;
+		most = Math.max(most, flight);
+		await new Promise((r) => setTimeout(r, 1));
+		flight--;
+		return part(p.slice('/v1/loom/thread/'.length), []);
+	});
+	ok(await store.sync());
+	equal(asked.length, names.length);
+	equal(most, PARTS_AT_ONCE);
+	deepEqual([...store.threads.keys()].sort(), [...names].sort());
+	for (const n of names) equal(store.threads.get(n)!.id, n);
 });
 
 test('parts: only a moved hash is fetched again; a letter in two parts is held once', async () => {
