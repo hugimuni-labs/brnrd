@@ -158,6 +158,9 @@
 						{tally(goal)}{#if goal.moved}
 							· last move {goal.moved.slice(0, 16).replace('T', ' ')}Z{/if}
 					</p>
+					{#if goal.move}
+						<p>Ready · {goal.move.step}</p>
+					{/if}
 					{#each goal.asks ?? [] as ask (ask.wish)}
 						<p>
 							<button type="button" onclick={() => openAsk(ask)}>Needs you · {ask.line}</button>

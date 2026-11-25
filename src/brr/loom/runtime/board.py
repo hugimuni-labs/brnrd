@@ -733,12 +733,20 @@ def goal_progress(goals: list[dict], told: dict, waits: dict[str, str], now: flo
     state; ``asks``: the open asks on them that wait on a person (not on another thread), each with
     the wish it blocks; ``delivery``: the latest delivered result; ``moved``: the last fact on any of
     them, and ``stalled`` once that is older than a day. ``blocked`` holds only when every open
-    linked wish waits on an ask: one free move under the goal means it does not wait on the person.
+    linked wish waits on a person’s ask. The first runnable recorded step appears as ``move``.
     """
     now = time.time() if now is None else now
+    from .wishes import wish_plans
+
+    groups = {}
+    for wish in told.values():
+        if wish.goal:
+            groups.setdefault(wish.goal, []).append(wish)
+    plans = wish_plans({w.id: w for group in groups.values() for w in group if w.open})
+    held = {told[i].parent for i in waits if i in told and told[i].state != "delivered"}
     out = []
     for goal in goals:
-        linked = [w for w in told.values() if w.goal == goal["id"]]
+        linked = groups.get(goal["id"], [])
         ids = {w.id for w in linked}
         asks = [told[i] for i, head in waits.items()
                 if i in told and told[i].parent in ids and not head.startswith("thread:")
@@ -750,6 +758,12 @@ def goal_progress(goals: list[dict], told: dict, waits: dict[str, str], now: flo
                    asks=[{"wish": a.id, "line": a.line, "blocks": a.parent, "waits": waits[a.id], "at": _iso(a.at)}
                          for a in asks],
                    blocked=bool(live) and all(w.id in waiting for w in live))
+        for w in sorted(live, key=lambda w: (w.at, w.id), reverse=True):
+            left, steered, parked = plans[w.id]
+            if w.id in held or w.state == "delivered" or parked or steered or not left or not left["steps"]:
+                continue
+            row["move"] = {"wish": w.id, "step": " ".join(left["steps"][0].split())[:240]}
+            break
         if delivered:
             at, w, r = max(delivered, key=lambda d: d[0])
             row["delivery"] = {"wish": w.id, "line": r.get("line") or w.line, "ref": r.get("ref"),

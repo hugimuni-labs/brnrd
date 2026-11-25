@@ -328,7 +328,7 @@ def active_goals(home, tip: str | None = None) -> list[dict[str, str]]:
     return goals
 
 
-def goal_lines(home, now: float | None = None) -> list[str]:
+def goal_lines(home, now: float | None = None, *, told=None, waits=None) -> list[str]:
     """Read landed goals. Age follows the last commit that touched each file."""
     from .lifecycle import main_tip
     from .selfrepo import git
@@ -339,7 +339,12 @@ def goal_lines(home, now: float | None = None) -> list[str]:
     now = time.time() if now is None else now
     tip = main_tip(repo)
     lines = []
-    for goal in active_goals(home, tip):
+    goals = active_goals(home, tip)
+    if told is not None:
+        from .board import goal_progress
+
+        goals = goal_progress(goals, told, waits or {}, now=now)
+    for goal in goals:
         name = goal["id"]
         path = f"goals/{name}.md"
         line = (f"goal {name}: {goal['stands']} · next: {goal['next']}"
@@ -348,6 +353,12 @@ def goal_lines(home, now: float | None = None) -> list[str]:
         days = int((now - int(changed)) // 86400) if changed else 0
         if days >= 3:
             line += f" · unmoved {days}d"
+        if move := goal.get("move"):
+            line += f" · ready {move['wish']}: {move['step']}"
+        if asks := goal.get("asks"):
+            line += " · open asks: " + ", ".join(a["wish"] for a in asks[:3])
+            if len(asks) > 3:
+                line += f" +{len(asks) - 3} more"
         lines.append(line)
     return lines
 

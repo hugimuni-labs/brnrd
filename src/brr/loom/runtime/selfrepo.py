@@ -1097,9 +1097,9 @@ def run_wake(room_dir: Path, thread: str, owed: Path | None = None, *,
         from .queues import held_rows_for
         from .wishes import waits_on
 
-        goal_rows = goal_lines(home)
-        held_rows = goal_rows + held_rows_for(
-            told_wishes, waits_on(told_wishes, main), thread, home.main_thread())
+        waits = waits_on(told_wishes, main)
+        goal_rows = goal_lines(home, told=told_wishes, waits=waits)
+        held_rows = goal_rows + held_rows_for(told_wishes, waits, thread, home.main_thread())
     from .briefing import section as briefing_section
     briefing = briefing_section(home)
     topics = _wake_topics(clone, thread, owed)

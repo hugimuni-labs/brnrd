@@ -566,7 +566,23 @@ def wish_line(wish: Wish) -> str:
     return f"{_short(wish.id, 48)} · {state} · {_short(wish.line, 160)} · {_short(ref, 120)}"
 
 
-def wish_tree(wish: Wish, bodies: dict[str, str] | None = None, rows=()) -> list[str]:
+def wish_plan(wish: Wish) -> tuple[dict | None, list[list[str]]]:
+    """Latest remaining steps and the letter groups that arrived after them."""
+    left = wish.left
+    after = max(wish.born, left["at"]) if left is not None else wish.born
+    return left, [stamp["letters"] for stamp in wish.stamps
+                  if stamp["letters"] and stamp["at"] > after]
+
+
+def wish_plans(told: dict) -> dict:
+    """Project the plan and active park of each folded wish for board and wake."""
+    from .waits import live
+
+    parked = {wish.id: read for wish, read in live(told)}
+    return {wish.id: (*wish_plan(wish), parked.get(wish.id)) for wish in told.values()}
+
+
+def wish_tree(wish: Wish, bodies: dict[str, str] | None = None, rows=(), *, plan=None) -> list[str]:
     """One open wish as the wake shows it: done from its results, the latest left,
     and the steers that came after it. ``rows`` are Plan rows, read only for a wish
     that has no left yet."""
@@ -577,7 +593,7 @@ def wish_tree(wish: Wish, bodies: dict[str, str] | None = None, rows=()) -> list
     if refs:
         more = f" · +{len(refs) - 5}" if len(refs) > 5 else ""
         lines.append("  done: " + " · ".join(_short(ref, 60) for ref in refs[-5:]) + more)
-    left = wish.left
+    left, since, parked = plan if plan is not None else wish_plans({wish.id: wish})[wish.id]
     if left is not None:
         steps = " · ".join(_short(step, 100) for step in left["steps"][:8]) or "(no step listed)"
         lines.append(f"  left (gen {left['gen']}, {left['at'][5:16].replace('T', ' ')}): {steps}")
@@ -586,18 +602,21 @@ def wish_tree(wish: Wish, bodies: dict[str, str] | None = None, rows=()) -> list
         cited = [_short(row.rpartition(" · re: ")[0] or row, 80) for box, row in rows
                  if box is not False and wish.id in plan_citations(row) and receipt(wish.thread, row) is None]
         lines.append("  left: none said yet" + ("; README rows citing it: " + " · ".join(cited[:3]) if cited else ""))
-    since = [x for x in wish.stamps if x["letters"] and (left is None or x["at"] > left["at"])
-             and x["at"] > wish.born]
+    if parked is not None:
+        condition = parked["wait"].get("on")
+        if condition:
+            lines.append("  waits on: " + _short(condition, 120))
     if since:
         said = [f'{_letter_word(i)} "{_short((bodies or {}).get(i, ""), 60)}"'
-                for x in since[-3:] for i in x["letters"][:1]]
+                for letters in since[-3:] for i in letters[:1]]
         lines.append("  steered since: " + " · ".join(said))
     return lines
 
 
 def wake_wishes(facts: Iterable[Fact], thread: str, plan_rows=(), told: dict | None = None) -> str:
     facts = list(facts)
-    rows = [w for w in (wishes(facts) if told is None else told).values() if w.thread == thread and w.open]
+    told = wishes(facts) if told is None else told
+    rows = [w for w in told.values() if w.thread == thread and w.open]
     if not rows:
         return ""
     rows.sort(key=lambda w: (w.sender != "resident", w.id))
@@ -614,8 +633,9 @@ def wake_wishes(facts: Iterable[Fact], thread: str, plan_rows=(), told: dict | N
                     + (f" as: {_short(d['why'], 120)}" if d.get("why") else "") + "\n")
     # A delivered wish waits only on its acceptance; its result is the receipt, so
     # it takes its one line, without the tree, instead of crowding the README out.
+    plans = wish_plans({w.id: w for w in rows[:20]})
     section += "".join(line + "\n" for w in rows[:20]
-                       for line in ([wish_line(w)] if w.state == "delivered" else wish_tree(w, bodies, plan_rows)))
+                       for line in ([wish_line(w)] if w.state == "delivered" else wish_tree(w, bodies, plan_rows, plan=plans[w.id])))
     if len(rows) > 20:
         section += f"+{len(rows) - 20} more · wishes --thread {thread}\n"
     return section
