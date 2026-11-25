@@ -159,6 +159,26 @@ test('order: seated by freshest letter, your-call by since, quiet by opened newe
 	deepEqual(readFilters('{'), ['seated', 'your-call', 'waiting', 'mine']);
 });
 
+test('a cold load places its first paint, holds that order while parts arrive, then places the whole', () => {
+	const h = { first: true, held: false, now: 1000, last: 0 };
+	// first partial paint: nothing on screen yet, so it places straight away
+	deepEqual(arrange(['inbox', 'a', 'b'], [], { ...h, partial: true }).ids, ['inbox', 'a', 'b']);
+	// a later partial paint whose letters moved b ahead holds the screen; a column new to the index joins the end
+	deepEqual(arrange(['inbox', 'b', 'c', 'a'], ['inbox', 'a', 'b'], { ...h, partial: true }).ids, [
+		'inbox',
+		'a',
+		'b',
+		'c'
+	]);
+	// the whole model places at once, with no REORDER wait
+	deepEqual(arrange(['inbox', 'b', 'c', 'a'], ['inbox', 'a', 'b', 'c'], h).ids, [
+		'inbox',
+		'b',
+		'c',
+		'a'
+	]);
+});
+
 test('order moves at most once per REORDER; a new column lands at once; a hold keeps the screen', () => {
 	const want = ['inbox', 'b', 'a', 'new'],
 		have = ['inbox', 'a', 'b'];
