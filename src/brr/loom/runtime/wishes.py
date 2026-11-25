@@ -95,6 +95,8 @@ class Wish:
     said_at: str = ""
     tops: list[dict] = field(default_factory=list)
     pick: dict | None = None
+    # The goal this wish serves, by its file name under the self's goals/; empty: none named.
+    goal: str = ""
 
     @property
     def ranked_at(self) -> str:
@@ -158,7 +160,7 @@ def wishes(facts: Iterable[Fact]) -> dict[str, Wish]:
     found: dict[str, Wish] = {}
     for fact in ordered:
         if fact.kind not in {"wish", "wish.read", "wish.result", "wish.verdict", "wish.left",
-                             "wish.top", "wish.pick"}:
+                             "wish.top", "wish.pick", "wish.goal"}:
             continue
         d = fact.data
         ident = d["wish"]
@@ -185,12 +187,16 @@ def wishes(facts: Iterable[Fact]) -> dict[str, Wish]:
                 wish.reading = d["reading"]
                 wish.reads.append(dict(d, at=fact.at, writer=fact.by))
             elif fact.kind == "wish.result":
-                wish.results.append(dict(d, at=fact.at, writer=fact.by))
+                wish.results.append(dict(d, at=fact.at, writer=fact.by, delivery_id=fact.id))
             elif fact.kind == "wish.top":
                 wish.tops.append({"at": fact.at, "ref": d.get("ref"), "by": fact.by})
                 continue
             elif fact.kind == "wish.pick":
                 wish.pick = {"at": fact.at, "why": d.get("why", ""), "by": fact.by}
+                continue
+            elif fact.kind == "wish.goal":
+                # Which goal the work serves: a link, not news on the wish.
+                wish.goal = str(d.get("goal") or "")
                 continue
             elif fact.kind == "wish.left":
                 steps = wish.left["steps"] if d.get("same") and wish.left else list(d.get("steps") or ())
@@ -216,6 +222,9 @@ def wishes(facts: Iterable[Fact]) -> dict[str, Wish]:
                 # Merged and in the code the loom runs: delivered, until a rollback.
                 if (merge := held_merge(result, start)):
                     result.update(delivered=True, held=merge)
+        scope = (wish.verdict or {}).get("delivery_id")
+        if scope and scope != delivery_id(wish):
+            wish.verdict = None
         wish.heard_at = max([named.get(wish.id, ""), *(s["at"] for s in wish.stamps
                              if any(i in letters and _person(letters[i]) for i in s["letters"]))])
         if wish.sender == "person":
@@ -272,7 +281,7 @@ def _answer(asked: list[Wish], letters: dict, ordered: list[Fact]) -> None:
         ask.answer = next(iter(stamped), None) or next((i for i, f in letters.items() if answers(f)), "")
 
 
-WISH_KINDS = ("wish", "wish.read", "wish.result", "wish.verdict", "wish.left", "wish.top", "wish.pick",
+WISH_KINDS = ("wish", "wish.read", "wish.result", "wish.verdict", "wish.left", "wish.top", "wish.pick", "wish.goal",
               # A merged result reads delivered only by the commit the loom runs: without
               # loom.started here, told() keeps a finished wish granting and Next build.
               "loom.started",
@@ -641,3 +650,8 @@ def insert_wishes(prompt: str, section: str) -> str:
     if end < 0:
         return prompt + "\n" + section
     return prompt[:end + 1] + section + prompt[end + 1:]
+
+
+def delivery_id(wish: Wish | None) -> str | None:
+    """The fact that offered the current delivery."""
+    return next((r.get("delivery_id") for r in reversed(wish.results) if r["delivered"]), None) if wish else None

@@ -294,3 +294,18 @@ def test_cloud_board_press_closes_a_shaped_ask_on_its_thread(owner):
     [closure] = owed(owner, "first")
     assert closure.data["body"].startswith(f"closed &{ask}: board press agree (letter:relay:loom:")
     assert owed(owner, "inbox") == []
+
+
+def test_delivery_scope_survives_relay_and_controls_acceptance(owner):
+    wish(owner)
+    old = verdict("ev_old")
+    old["reply_to"]["delivery_id"] = "wish.result:previous"
+    current = verdict("ev_current")
+    current["reply_to"]["delivery_id"] = "wish.result:b1"
+    relay.pull_once(owner, FakeClient([old, current]), 0)
+    earlier, later = said(owner)
+    assert earlier.data["delivery_id"] == "wish.result:previous"
+    assert "verdict" not in earlier.data
+    accepted, = kinds(owner, "wish.verdict")
+    assert accepted.data["delivery_id"] == later.data["delivery_id"] == "wish.result:b1"
+    assert accepted.data["ref"] == later.id

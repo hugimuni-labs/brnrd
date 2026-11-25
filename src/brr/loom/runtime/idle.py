@@ -301,17 +301,16 @@ def candidates(home, facts, thread: str, children=(), now: float | None = None) 
     return _one(shared, thread, children)
 
 
-def goal_lines(home, now: float | None = None) -> list[str]:
-    """Read landed goals. Age follows the last commit that touched each file."""
+def active_goals(home, tip: str | None = None) -> list[dict[str, str]]:
+    """Read the public fields of active, landed goals."""
     from .lifecycle import main_tip
     from .selfrepo import ReadmeError, git, parse_frontmatter
 
     repo = home.root / "self"
     if not (repo / ".git").exists():
         return []
-    now = time.time() if now is None else now
-    tip = main_tip(repo)
-    lines = []
+    tip = tip or main_tip(repo)
+    goals = []
     entries = git(repo, "ls-tree", "-z", tip, "goals/").stdout
     for entry in entries.split("\0"):
         meta, _, path = entry.partition("\t")
@@ -325,7 +324,24 @@ def goal_lines(home, now: float | None = None) -> list[str]:
             continue
         if not all(isinstance(goal.get(field), str) and goal[field] for field in _GOAL_FIELDS):
             continue
-        name = Path(path).stem
+        goals.append({"id": Path(path).stem, **{field: goal[field] for field in _GOAL_FIELDS}})
+    return goals
+
+
+def goal_lines(home, now: float | None = None) -> list[str]:
+    """Read landed goals. Age follows the last commit that touched each file."""
+    from .lifecycle import main_tip
+    from .selfrepo import git
+
+    repo = home.root / "self"
+    if not (repo / ".git").exists():
+        return []
+    now = time.time() if now is None else now
+    tip = main_tip(repo)
+    lines = []
+    for goal in active_goals(home, tip):
+        name = goal["id"]
+        path = f"goals/{name}.md"
         line = (f"goal {name}: {goal['stands']} · next: {goal['next']}"
                 f" · now: {goal['now']} · stake: {goal['stake']}")
         changed = git(repo, "log", "-1", "--format=%ct", tip, "--", f":(literal){path}").stdout.strip()

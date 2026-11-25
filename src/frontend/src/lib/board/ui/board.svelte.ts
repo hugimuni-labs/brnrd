@@ -2,7 +2,7 @@
 // per page, handed to every component by context; the logic it calls is the tested modules one level up.
 import { getContext, setContext } from 'svelte';
 import { SvelteSet } from 'svelte/reactivity';
-import { BASE, getJSON, Store, type Beads } from '../parts.ts';
+import { BASE, getJSON, oneAtATime, Store, type Beads } from '../parts.ts';
 import type { BoardState, Letter, Model } from '../types.ts';
 import { normalize, panelIds, resolveRef, timeline, type Timeline } from '../bead.ts';
 import { allCalls, armedVerdict, correctDraft, verdictLetter } from '../calls.ts';
@@ -15,6 +15,9 @@ import { EMPTY, PLACE, paneScroll, readPlace, type Place } from '../place.ts';
 const KEY = Symbol('board');
 const local = (k: string, d: string) =>
 	typeof localStorage === 'undefined' ? d : (localStorage.getItem(k) ?? d);
+
+// How often a cold load repaints while its thread parts arrive.
+const PAINT_MS = 250;
 
 export class Board {
 	store: Store;
@@ -64,6 +67,7 @@ export class Board {
 	// the composer
 	draft = $state('');
 	armed = $state<string | null>(null);
+	armedDelivery = $state<string | undefined>();
 	force = $state(false);
 	sendError = $state('');
 	// a newer build is out (SvelteKit's version poll); the page takes it unless the box holds a draft in hand
@@ -114,6 +118,7 @@ export class Board {
 				if (d?.body) {
 					this.draft = d.body;
 					this.armed = d.armed || null;
+					this.armedDelivery = d.delivery_id;
 				}
 			} catch {
 				/* a torn draft is no draft */
@@ -127,9 +132,19 @@ export class Board {
 		return [...m.letters, ...unechoed(this.pending, m.letters)].filter(dated).sort(byAt);
 	});
 
-	async load() {
+	// One sync in flight; a load asked meanwhile reruns once after it (oneAtATime).
+	load = oneAtATime(() => this.syncOnce());
+
+	private async syncOnce() {
+		let painted = 0;
+		// A cold load paints as its parts arrive, at most every PAINT_MS.
+		const arrived = () => {
+			if (Date.now() - painted < PAINT_MS) return;
+			painted = Date.now();
+			this.model = this.store.model();
+		};
 		try {
-			if (await this.store.sync()) {
+			if (await this.store.sync(arrived)) {
 				this.model = this.store.model();
 				this.pending = unechoed(this.pending, this.model!.letters);
 				if (this.store.beads) this.beads = this.store.beads;
@@ -311,11 +326,11 @@ export class Board {
 		if (this.draft)
 			sessionStorage.setItem(
 				'board.draft',
-				JSON.stringify({ body: this.draft, armed: this.armed })
+				JSON.stringify({ body: this.draft, armed: this.armed, delivery_id: this.armedDelivery })
 			);
 		else sessionStorage.removeItem('board.draft');
 	}
-	async post(body: string, extra: { wish?: string; verdict?: string }) {
+	async post(body: string, extra: { wish?: string; verdict?: string; delivery_id?: string }) {
 		const r = await fetch(`${BASE}/letters`, {
 			method: 'POST',
 			headers: { 'Content-Type': 'application/json' },
@@ -356,18 +371,24 @@ export class Board {
 		}
 		this.force = false;
 		try {
-			await this.post(body, armedVerdict(this.armed, body));
+			const verdict = armedVerdict(this.armed, body);
+			await this.post(body, {
+				...verdict,
+				delivery_id: verdict.wish ? this.armedDelivery : undefined
+			});
 			this.draft = '';
 			this.armed = null;
+			this.armedDelivery = undefined;
 			this.keep();
 		} catch (e) {
 			this.sendError = (e as Error).message;
 		}
 	}
 	// A call's buttons: done/agree goes at once, correct arms the composer.
-	async answer(wish: string, act: 'done' | 'agree' | 'correct') {
+	async answer(wish: string, act: 'done' | 'agree' | 'correct', delivery_id?: string) {
 		if (act === 'correct') {
 			this.armed = wish;
+			this.armedDelivery = delivery_id;
 			this.draft = correctDraft(wish);
 			this.keep();
 			return;
@@ -376,7 +397,7 @@ export class Board {
 		this.sending.add(wish);
 		const { body, ...v } = verdictLetter(act, wish);
 		try {
-			await this.post(body, v);
+			await this.post(body, { ...v, delivery_id });
 		} catch (e) {
 			this.sendError = (e as Error).message;
 		} finally {

@@ -205,8 +205,22 @@ def verdict_letters(facts) -> tuple[dict, dict]:
             raised[d.get("wish")] = f.at
         elif (f.kind == "letter" and d.get("wish") and d.get("verdict") in {"agree", "correct"}
               and _person_side(str(d.get("from", "")))):
-            said[str(d["wish"])] = {"verdict": d["verdict"], "letter": str(d.get("id") or f.id), "at": f.at}
+            said[(str(d["wish"]), d.get("delivery_id"))] = {"verdict": d["verdict"], "letter": str(d.get("id") or f.id), "at": f.at}
     return raised, said
+
+
+MEANWHILE = 3
+
+
+def meanwhile_of(parent, told: dict, held: set, limit: int = MEANWHILE) -> list[dict]:
+    """What keeps moving while an ask on ``parent`` waits: open wishes of the person under the same goal
+    (or, with no goal, on the same thread) that no person's answer holds up, most recently moved first."""
+    def kin(w):
+        return w.goal == parent.goal if parent.goal else w.thread == parent.thread
+    free = [w for w in told.values() if w.id != parent.id and w.sender == "person" and w.open
+            and w.state != "delivered" and w.id not in held and kin(w)]
+    free.sort(key=lambda w: w.at, reverse=True)
+    return [{"wish": w.id, "line": w.line, "state": w.state} for w in free[:limit]]
 
 
 def calls_of(threads: list[dict], told: dict, facts=()) -> dict[str, list[dict]]:
@@ -228,13 +242,21 @@ def calls_of(threads: list[dict], told: dict, facts=()) -> dict[str, list[dict]]
         for o in t.get("opened_for") or []:
             opened.setdefault(o["wish"], t["id"])
     calls: dict[str, list[dict]] = {}
-    for ident, head in waits_on(told, main).items():
+    waits = waits_on(told, main)
+    # Wishes a person's answer holds up; everything else under the same goal or thread still moves.
+    held = {told[i].parent for i, head in waits.items() if not head.startswith("thread:") and told[i].parent}
+    for ident, head in waits.items():
         w = told[ident]
         if not head.startswith("thread:") and w.state != "delivered":
             call = {"kind": "ask", "wish": ident, "line": w.line, "waits": head,
                     "at": _iso(raised.get(ident, w.at)), "raised": raised.get(ident, w.at)}
             if parent := told.get(w.parent):
-                call["next"] = held_move(parent, [w])
+                call["parent"] = parent.id
+                call["blocks"] = parent.line
+                if parent.left and parent.left["steps"]:
+                    call["next"] = held_move(parent, [w])
+                if meanwhile := meanwhile_of(parent, told, held):
+                    call["meanwhile"] = meanwhile
             calls.setdefault(w.thread, []).append(call)
     for w in told.values():
         if w.verdict or w.state not in {"delivered", "expired"}:
@@ -242,9 +264,11 @@ def calls_of(threads: list[dict], told: dict, facts=()) -> dict[str, list[dict]]
         home = next((t for t in (opened.get(w.id), w.thread) if t in live), "inbox")
         result = [r for r in w.results if r.get("delivered")][-1]
         calls.setdefault(home, []).append({"kind": "verdict", "wish": w.id, "line": w.line, "ref": result.get("ref"),
-                                           "result": result.get("line"), "at": _iso(result["at"]), "raised": result["at"]})
+                                           "result": result.get("line"), "delivery_id": result.get("delivery_id"), "at": _iso(result["at"]), "raised": result["at"]})
     for c in (c for cs in calls.values() for c in cs):
-        v, at = said.get(c["wish"]), c.pop("raised")
+        at = c.pop("raised")
+        v = max((v for scope in {None, c.get("delivery_id")}
+                 if (v := said.get((c["wish"], scope)))), key=lambda v: v["at"], default=None)
         if v and v["at"] > at:
             c["closed"] = {"verdict": v["verdict"], "letter": v["letter"], "at": _iso(v["at"])}
     return calls
@@ -386,9 +410,9 @@ def letters_of(facts, typed: dict | None = None, told: dict | None = None) -> tu
                 says.append({"id": ident, "quote": body[offset:offset + size], "cites": "span"})
         every.append(dict(entry, at=_iso(heard.get(w.id, w.at)), says=says, sender=w.sender,
                           results=[{k: _iso(v) if k == "at" else v for k, v in r.items()
-                                    if k in {"kind", "ref", "line", "delivered", "at"}} for r in w.results],
+                                    if k in {"kind", "ref", "line", "delivered", "at", "delivery_id"}} for r in w.results],
                           verdict={k: _iso(v) if k == "at" else v for k, v in w.verdict.items()
-                                   if k in {"as", "evidence", "ref", "at"}} if w.verdict else None))
+                                   if k in {"as", "evidence", "ref", "at", "delivery_id"}} if w.verdict else None))
         for ident in dict.fromkeys(s["id"] for s in says):
             answered.setdefault(ident, []).append(entry)
     # Chatter: letters a reply or note cites as wanting nothing (send --chatter).
@@ -415,6 +439,7 @@ def letters_of(facts, typed: dict | None = None, told: dict | None = None) -> tu
         row = {"id": ident, "at": _iso(f.at), "from": sender, "to": d.get("to"), "threads": threads,
                "person": _person_side(sender), "notice": is_notice(f), "body": str(d.get("body") or ""),
                "re": d.get("re"), "wish": d.get("wish"), "shown": shown.get(ident),
+               "delivery_id": d.get("delivery_id"), "verdict": d.get("verdict"),
                "sent": sent.get(ident), "wishes": answered.get(ident), "chatter": chattered.get(ident),
                "open": _person_side(sender) and not (answered.get(ident) or chattered.get(ident)),
                "typed_by": (typed or {}).get(ident)}
@@ -628,9 +653,14 @@ def digest(part) -> str:
 _INDEX_THREAD = ("id", "title", "status", "last_at")
 
 
-def index_thread(thread: dict, counts: dict | None) -> dict:
-    """A thread row on the index: id, title, status, board state, wish counts, last_at."""
+def index_thread(thread: dict, counts: dict | None, letters: list | None = None) -> dict:
+    """A thread row on the index: id, title, status, board state, wish counts, last_at, letter_at.
+
+    ``letter_at`` is the newest letter's time, the board's column freshness. It rides here so a cold load
+    sorts the columns before the thread parts bring their letters, and the order does not move when they land.
+    """
     row = {k: thread.get(k) for k in _INDEX_THREAD}
+    row["letter_at"] = max((r.get("at") or "" for r in letters or ()), default=None)
     state = (thread.get("board") or {}).get("state")
     if state:
         row["board"] = {"state": state}
@@ -691,6 +721,45 @@ def machines_of(home: Home, facts) -> list[dict]:
     return sorted(rows, key=lambda r: (not r["lead"], r["id"]))
 
 
+GOAL_STALL = 24 * 3600
+
+
+def goal_progress(goals: list[dict], told: dict, waits: dict[str, str], now: float | None = None) -> list[dict]:
+    """Each active goal with what the ledger says about the work linked to it (``wish --goal``).
+
+    ``waits`` is ``waits_on``: who each open ask waits on. ``progress``: the linked wishes counted by
+    state; ``asks``: the open asks on them that wait on a person (not on another thread), each with
+    the wish it blocks; ``delivery``: the latest delivered result; ``moved``: the last fact on any of
+    them, and ``stalled`` once that is older than a day. ``blocked`` holds only when every open
+    linked wish waits on an ask: one free move under the goal means it does not wait on the person.
+    """
+    now = time.time() if now is None else now
+    out = []
+    for goal in goals:
+        linked = [w for w in told.values() if w.goal == goal["id"]]
+        ids = {w.id for w in linked}
+        asks = [told[i] for i, head in waits.items()
+                if i in told and told[i].parent in ids and not head.startswith("thread:")
+                and told[i].state != "delivered"]
+        waiting = {a.parent for a in asks}
+        live = [w for w in linked if w.open]
+        delivered = [(r["at"], w, r) for w in linked for r in w.results if r.get("delivered")]
+        row = dict(goal, progress=dict(Counter(w.state for w in linked)),
+                   asks=[{"wish": a.id, "line": a.line, "blocks": a.parent, "waits": waits[a.id], "at": _iso(a.at)}
+                         for a in asks],
+                   blocked=bool(live) and all(w.id in waiting for w in live))
+        if delivered:
+            at, w, r = max(delivered, key=lambda d: d[0])
+            row["delivery"] = {"wish": w.id, "line": r.get("line") or w.line, "ref": r.get("ref"),
+                               "delivery_id": r.get("delivery_id"), "at": _iso(at)}
+        if linked:
+            moved = max(w.at for w in linked)
+            row["moved"] = _iso(moved)
+            row["stalled"] = bool(live) and now - datetime.fromisoformat(moved).timestamp() > GOAL_STALL
+        out.append(row)
+    return out
+
+
 def compute(home: Home, facts, config, tools: dict, live: dict, person: str | None = None,
             typed: dict | None = None) -> dict[str, dict]:
     """Every part by name. The index is hashes, counts and short rows; fat rows ride in their own part.
@@ -700,6 +769,7 @@ def compute(home: Home, facts, config, tools: dict, live: dict, person: str | No
     on every letter.
     """
     from .asks import Beads
+    from .idle import active_goals
     snap, raw, letters, told = board_threads(home, facts, config, person, typed)
     threads = snap.get("threads") or []
     parts: dict[str, dict] = {}
@@ -734,10 +804,13 @@ def compute(home: Home, facts, config, tools: dict, live: dict, person: str | No
         parts["unthreaded"] = loose
     hashes = {name: digest(part) for name, part in parts.items()}
     index = {"v": 1, **{k: v for k, v in snap.items() if k not in {"at", "log"}},
-             "threads": [index_thread(t, counts.get(t["id"])) for t in threads],
+             "threads": [index_thread(t, counts.get(t["id"]), by_thread.get(t["id"])) for t in threads],
              "wishes": counts, **_as(home, person), "person_names": person_names(home.root / "self"), "parts": hashes, "faces": FACES}
     if machines := machines_of(home, facts):
         index["machines"] = machines
+    found = told_of(facts)
+    owners = {t["id"]: {"opened-by": t.get("opened_by"), "status": t.get("status")} for t in threads}
+    index["goals"] = goal_progress(active_goals(home), found, waits_on(found, owners))
     parts["index"] = index
     return parts
 
@@ -855,7 +928,7 @@ class Parts:
         self.typed_path, self.typed, self.typed_mtime = home.root / "loom/board/typed.json", {}, None
         self.changed = threading.Condition()
         self.stop = threading.Event()
-        self.said: dict[tuple[str, str], tuple[float, dict]] = {}  # (wish, verdict) -> (when, the answer sent)
+        self.said: dict[tuple[str, str, str | None], tuple[float, dict]] = {}  # (wish, verdict) -> (when, the answer sent)
 
     def step(self) -> bool:
         """One recompute when the ledger moved, one re-cut of the tapes when only they did, and a fuel splice when
@@ -977,7 +1050,7 @@ class Parts:
         return True
 
     def send(self, body: str, typed_by: str | None = None, wish: str | None = None,
-             verdict: str | None = None) -> dict:
+             verdict: str | None = None, delivery_id: str | None = None) -> dict:
         """One letter as the person into the main thread, dropped where the channel's own letters land.
 
         ``wish`` ties it to the wish a call names; ``verdict`` is agree or correct, as the relay writes
@@ -990,17 +1063,19 @@ class Parts:
             raise ValueError("wish is a wish id")
         if verdict not in (None, "agree", "correct"):
             raise ValueError("verdict is agree or correct")
+        if delivery_id and (not wish or not verdict or not re.fullmatch(r"wish\.result:[A-Za-z0-9_.:-]{1,128}", delivery_id)):
+            raise ValueError("invalid delivery id")
         if typed_by and not re.fullmatch(r"s-[a-z0-9]{2,8}-[a-z0-9]{4,12}", typed_by):
             raise ValueError("typed_by is a strand id")
         if wish and verdict:
             with self.changed:
-                again = self.said.get((wish, verdict))
+                again = self.said.get((wish, verdict, delivery_id))
                 if again and time.monotonic() - again[0] < VERDICT_REPEAT_S:
                     return again[1]
-                sent = self._send(body, typed_by, wish, verdict)
-                self.said[(wish, verdict)] = (time.monotonic(), sent)
+                sent = self._send(body, typed_by, wish, verdict, delivery_id)
+                self.said[(wish, verdict, delivery_id)] = (time.monotonic(), sent)
                 return sent
-        return self._send(body, typed_by, wish, verdict)
+        return self._send(body, typed_by, wish, verdict, delivery_id)
 
     def note_post(self, origin: str, route: str, letter: str, wish: str | None, verdict: str | None) -> None:
         """What this server saw on an accepted POST. Never the body: an overview joins on the letter id."""
@@ -1014,13 +1089,15 @@ class Parts:
         append(self.home, Fact(kind="board.post", by=f"loom:{self.home.install_id()}",
                                id="board.post:" + mint(12), data=data))
 
-    def _send(self, body: str, typed_by: str | None, wish: str | None, verdict: str | None) -> dict:
+    def _send(self, body: str, typed_by: str | None, wish: str | None, verdict: str | None,
+              delivery_id: str | None = None) -> dict:
         instance, user = person_channel(self.home, self.person)
         lands = self.home.main_thread()
         ident = f"{user}:board-{mint(10)}"  # a chat-scoped native id, as the connector writes
         drop = self.home.root / "loom/connectors" / instance / "state/in"
         drop.mkdir(parents=True, exist_ok=True)
         fields = {"kind": "letter", "id": ident, "to": user, "from": user, "thread": lands,
+                  **({"delivery_id": delivery_id} if delivery_id else {}),
                   **({"wish": wish} if wish else {}), **({"verdict": verdict} if wish and verdict else {})}
         if typed_by:
             with self.changed:
@@ -1315,7 +1392,8 @@ def handler(parts: Parts, port: int, spa=spa_root):
             try:
                 data = json.loads(self.rfile.read(min(int(self.headers.get("Content-Length") or 0), 1 << 20)))
                 wish, verdict = data.get("wish") or None, data.get("verdict") or None
-                sent = parts.send(str(data["body"]), data.get("typed_by") or None, wish, verdict)
+                sent = parts.send(str(data["body"]), data.get("typed_by") or None, wish, verdict,
+                                  data.get("delivery_id") or None)
             except (ValueError, KeyError, TypeError, AttributeError, LookupError) as exc:
                 raw = json.dumps({"error": str(exc)}).encode()
                 self.send_response(HTTPStatus.BAD_REQUEST)

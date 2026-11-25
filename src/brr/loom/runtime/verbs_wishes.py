@@ -106,6 +106,8 @@ def _wish_arguments(parser):
     parser.add_argument("--top", metavar="LETTER",
                         help="the person's letter that puts this wish on top of their order")
     parser.add_argument("--pick", metavar="WHY", help="the resident works this wish next, and why")
+    parser.add_argument("--goal", metavar="GOAL",
+                        help="the active goal this wish serves (its file name under goals/), or none")
     from .trust import ANSWERS
     parser.add_argument("--answer", choices=ANSWERS,
                         help="how the person answered this ask: took the rec, changed it, or said never")
@@ -119,6 +121,10 @@ def cmd_wish(args):
         facts = read_facts(home)
         if args.force and args.drop is None:
             raise ValueError("--force requires --drop")
+        if args.goal is not None:
+            append(home, _goal_fact(home, args, facts, by))
+            print(args.id)
+            return 0
         if args.top is not None or args.pick is not None:
             append(home, _rank_fact(args, facts, by))
             print(args.id)
@@ -283,6 +289,23 @@ def _rank_fact(args, facts, by):
     if ident is None or not _person(letters[ident]):
         raise ValueError(f"--top {args.top}: not a person's letter; their order is theirs alone")
     return Fact(kind="wish.top", by=by, id="wish.top:" + mint(12), data={"wish": args.id, "ref": ident})
+
+
+def _goal_fact(home, args, facts, by):
+    """``--goal``: link a wish to the active goal it serves, so the board counts it there; ``none`` unlinks."""
+    from .idle import active_goals
+    if any(x is not None for x in (args.top, args.pick, args.read, args.result, args.accept, args.drop,
+                                   args.answer)) or args.left or args.clear_wait:
+        raise ValueError("--goal goes alone")
+    if args.id not in wishes(facts):
+        raise ValueError(f"no wish {args.id}")
+    goal = args.goal.strip()
+    if goal == "none":
+        goal = ""
+    elif goal not in {g["id"] for g in active_goals(home)}:
+        names = ", ".join(sorted(g["id"] for g in active_goals(home))) or "none landed"
+        raise ValueError(f"--goal {goal}: not an active goal on the self's main (active: {names})")
+    return Fact(kind="wish.goal", by=by, id="wish.goal:" + mint(12), data={"wish": args.id, "goal": goal})
 
 
 HOST_FILE_MAX = 1 << 30
