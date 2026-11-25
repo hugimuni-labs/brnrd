@@ -557,6 +557,14 @@ def wish_line(wish: Wish) -> str:
     return f"{_short(wish.id, 48)} · {state} · {_short(wish.line, 160)} · {_short(ref, 120)}"
 
 
+def wish_plan(wish: Wish) -> tuple[dict | None, list[list[str]]]:
+    """Latest remaining steps and the letter groups that arrived after them."""
+    left = wish.left
+    after = max(wish.born, left["at"]) if left is not None else wish.born
+    return left, [stamp["letters"] for stamp in wish.stamps
+                  if stamp["letters"] and stamp["at"] > after]
+
+
 def wish_tree(wish: Wish, bodies: dict[str, str] | None = None, rows=()) -> list[str]:
     """One open wish as the wake shows it: done from its results, the latest left,
     and the steers that came after it. ``rows`` are Plan rows, read only for a wish
@@ -568,7 +576,7 @@ def wish_tree(wish: Wish, bodies: dict[str, str] | None = None, rows=()) -> list
     if refs:
         more = f" · +{len(refs) - 5}" if len(refs) > 5 else ""
         lines.append("  done: " + " · ".join(_short(ref, 60) for ref in refs[-5:]) + more)
-    left = wish.left
+    left, since = wish_plan(wish)
     if left is not None:
         steps = " · ".join(_short(step, 100) for step in left["steps"][:8]) or "(no step listed)"
         lines.append(f"  left (gen {left['gen']}, {left['at'][5:16].replace('T', ' ')}): {steps}")
@@ -577,11 +585,9 @@ def wish_tree(wish: Wish, bodies: dict[str, str] | None = None, rows=()) -> list
         cited = [_short(row.rpartition(" · re: ")[0] or row, 80) for box, row in rows
                  if box is not False and wish.id in plan_citations(row) and receipt(wish.thread, row) is None]
         lines.append("  left: none said yet" + ("; README rows citing it: " + " · ".join(cited[:3]) if cited else ""))
-    since = [x for x in wish.stamps if x["letters"] and (left is None or x["at"] > left["at"])
-             and x["at"] > wish.born]
     if since:
         said = [f'{_letter_word(i)} "{_short((bodies or {}).get(i, ""), 60)}"'
-                for x in since[-3:] for i in x["letters"][:1]]
+                for letters in since[-3:] for i in letters[:1]]
         lines.append("  steered since: " + " · ".join(said))
     return lines
 
