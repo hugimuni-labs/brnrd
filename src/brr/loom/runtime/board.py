@@ -653,9 +653,14 @@ def digest(part) -> str:
 _INDEX_THREAD = ("id", "title", "status", "last_at")
 
 
-def index_thread(thread: dict, counts: dict | None) -> dict:
-    """A thread row on the index: id, title, status, board state, wish counts, last_at."""
+def index_thread(thread: dict, counts: dict | None, letters: list | None = None) -> dict:
+    """A thread row on the index: id, title, status, board state, wish counts, last_at, letter_at.
+
+    ``letter_at`` is the newest letter's time, the board's column freshness. It rides here so a cold load
+    sorts the columns before the thread parts bring their letters, and the order does not move when they land.
+    """
     row = {k: thread.get(k) for k in _INDEX_THREAD}
+    row["letter_at"] = max((r.get("at") or "" for r in letters or ()), default=None)
     state = (thread.get("board") or {}).get("state")
     if state:
         row["board"] = {"state": state}
@@ -799,7 +804,7 @@ def compute(home: Home, facts, config, tools: dict, live: dict, person: str | No
         parts["unthreaded"] = loose
     hashes = {name: digest(part) for name, part in parts.items()}
     index = {"v": 1, **{k: v for k, v in snap.items() if k not in {"at", "log"}},
-             "threads": [index_thread(t, counts.get(t["id"])) for t in threads],
+             "threads": [index_thread(t, counts.get(t["id"]), by_thread.get(t["id"])) for t in threads],
              "wishes": counts, **_as(home, person), "person_names": person_names(home.root / "self"), "parts": hashes, "faces": FACES}
     if machines := machines_of(home, facts):
         index["machines"] = machines
