@@ -40,6 +40,9 @@ if (typeof window !== 'undefined') {
 export const leaving = (signal?: AbortSignal | null) =>
 	signal ? AbortSignal.any([signal, page.signal]) : page.signal;
 
+// A read the page cancelled as it left: no error to show or raise.
+export const cancelled = (e: unknown) => (e as Error | null)?.name === 'AbortError';
+
 export async function probeBoard(signal?: AbortSignal) {
 	try {
 		const response = await fetch(`${BASE}/index`, { cache: 'no-store', signal: leaving(signal) });

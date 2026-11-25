@@ -2,7 +2,7 @@
 // per page, handed to every component by context; the logic it calls is the tested modules one level up.
 import { getContext, setContext } from 'svelte';
 import { SvelteSet } from 'svelte/reactivity';
-import { BASE, getJSON, oneAtATime, Store, type Beads } from '../parts.ts';
+import { BASE, cancelled, getJSON, oneAtATime, Store, type Beads } from '../parts.ts';
 import type { BoardState, Letter, Model } from '../types.ts';
 import { normalize, panelIds, resolveRef, timeline, type Timeline } from '../bead.ts';
 import { allCalls, armedVerdict, correctDraft, verdictLetter } from '../calls.ts';
@@ -155,7 +155,7 @@ export class Board {
 			this.heard = new Date().toISOString();
 			this.error = '';
 		} catch (e) {
-			this.error = String(e);
+			if (!cancelled(e)) this.error = String(e);
 		}
 	}
 
@@ -211,7 +211,7 @@ export class Board {
 		if (p.bead) {
 			this.beadId = normalize(p.bead, this.model);
 			this.beadHist = p.hist;
-			if (!this.store.beads) this.store.loadBeads().then((x) => (this.beads ??= x));
+			if (!this.store.beads) void this.wantBeads();
 			else this.beads = this.store.beads;
 		}
 	}
@@ -261,9 +261,18 @@ export class Board {
 			this.beadHist = [...this.beadHist, this.beadId];
 		this.beadId = id;
 		if (this.store.beads) return void (this.beads = this.store.beads);
-		const got = await this.store.loadBeads();
 		// closed (or moved on) while the part was in flight: the beads are kept, the sheet stays as he left it
-		this.beads ??= got;
+		await this.wantBeads();
+	}
+	// The beads part for a press, a landing or a keystroke, which nobody else awaits. Its rejection ends here: the
+	// page's leave signal cancels reads still in flight, and an unhandled AbortError is a pageerror (webkit-ci).
+	wantBeads(): Promise<void> {
+		return this.store.loadBeads().then(
+			(x) => void (this.beads ??= x),
+			(e) => {
+				if (!cancelled(e)) this.error = String(e);
+			}
+		);
 	}
 	back() {
 		const h = [...this.beadHist],
@@ -278,7 +287,7 @@ export class Board {
 	select(id: string | null, col: string | null = null) {
 		this.sel = id;
 		this.selCol = id ? col : null;
-		if (id && !this.store.beads) this.store.loadBeads().then((x) => (this.beads ??= x));
+		if (id && !this.store.beads) void this.wantBeads();
 	}
 	// Thread chain roots plus the beads part, so a press draws the chain before the 1 MB part lands.
 	merged = $derived.by((): Beads | null => {
@@ -361,8 +370,12 @@ export class Board {
 		const body = this.draft;
 		if (!body.trim()) return;
 		this.sendError = '';
-		if (!this.store.beads) this.beads = await this.store.loadBeads();
-		else this.beads = this.store.beads;
+		try {
+			this.beads = this.store.beads ?? (await this.store.loadBeads());
+		} catch (e) {
+			if (!cancelled(e)) this.sendError = String(e);
+			return;
+		}
 		const miss = this.refs.filter((r) => !r.id).map((r) => r.t);
 		if (miss.length && !this.force) {
 			this.force = true;
