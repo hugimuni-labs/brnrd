@@ -94,14 +94,16 @@ export const REORDER = 10000;
 // Column order moves at most once per REORDER ms; a new thread takes its sorted place at once. While the bead sheet is
 // open, or a thread column is under the pointer (5095), nothing moves: a new thread joins at the end. `have` is the
 // order on screen; holding to creation order snapped a column that had just moved back to where it was made (4942).
-export type Hold = { first: boolean; held: boolean; now: number; last: number };
+// `partial`: a cold load still bringing its parts. Its first paint places at once; later paints hold that order (a
+// column's freshness waits on its letters, so each arriving part would move it) until the whole model places.
+export type Hold = { first: boolean; held: boolean; now: number; last: number; partial?: boolean };
 export function arrange(
 	want: string[],
 	have: string[],
 	h: Hold
 ): { ids: string[]; last: number; wait: number | null } {
 	have = have.filter((id) => want.includes(id));
-	if (!h.first && h.held)
+	if ((!h.first && h.held) || (h.partial && have.length))
 		return { ids: [...have, ...want.filter((id) => !have.includes(id))], last: h.last, wait: null };
 	if (h.first || h.now - h.last >= REORDER)
 		return { ids: want, last: want.join() !== have.join() ? h.now : h.last, wait: null };

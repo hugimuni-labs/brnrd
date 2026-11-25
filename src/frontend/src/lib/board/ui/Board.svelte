@@ -85,7 +85,8 @@
 			first,
 			held: !!b.beadId || !!b.hovered,
 			now: Date.now(),
-			last
+			last,
+			partial: !!b.model?.partial
 		});
 		// A cold paint's order is not the board's yet: the first whole model still places without waiting.
 		if (!b.model?.partial) first = false;
