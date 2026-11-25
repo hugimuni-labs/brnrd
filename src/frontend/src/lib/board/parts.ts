@@ -24,6 +24,14 @@ export const BASE = '/v1/loom';
 // (webkit-ci, 2026-11-25). pageshow gives a page restored from the back-forward cache a fresh signal.
 let page = new AbortController();
 if (typeof window !== 'undefined') {
+	// WebKit can refuse an in-flight read before pagehide. Cancel in beforeunload as well.
+	addEventListener('beforeunload', () => {
+		page.abort();
+		// If another listener cancels navigation, the still-active page can resume its reads.
+		setTimeout(() => {
+			if (!document.hidden && page.signal.aborted) page = new AbortController();
+		}, 0);
+	});
 	addEventListener('pagehide', () => page.abort());
 	addEventListener('pageshow', () => {
 		if (page.signal.aborted) page = new AbortController();
