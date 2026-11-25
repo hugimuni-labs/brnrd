@@ -181,6 +181,28 @@ export function keep(was: ThreadPart | undefined, got: ThreadPart): ThreadPart {
 	return prior.length ? { ...got, letters: [...prior, ...got.letters], more: was.more } : got;
 }
 
+// Thread parts in flight at once. A fresh tab moves every part; unbounded, two hundred reads each held a
+// database session on brnrd.dev and starved its pool (500s to the reader, timeouts on the loom's own PUTs).
+export const PARTS_AT_ONCE = 4;
+
+// `f` over `items` with at most `n` calls in flight, the results in `items`' order.
+export async function inTurns<T, R>(
+	items: T[],
+	n: number,
+	f: (item: T) => Promise<R>
+): Promise<R[]> {
+	const out: R[] = new Array(items.length);
+	let next = 0;
+	const lane = async () => {
+		while (next < items.length) {
+			const i = next++;
+			out[i] = await f(items[i]);
+		}
+	};
+	await Promise.all(Array.from({ length: Math.min(n, items.length) }, lane));
+	return out;
+}
+
 export class Store {
 	index: Index | null = null;
 	threads = new Map<string, ThreadPart>();
@@ -220,8 +242,10 @@ export class Store {
 		const index = (await this.get(`${BASE}/index`)) as Index;
 		if (this.index && JSON.stringify(this.index) === JSON.stringify(index)) return false;
 		const { fetch, drop } = moved(index, this.held);
-		const got = await Promise.all(
-			fetch.map((n) => this.get(`${BASE}/${n}`) as Promise<ThreadPart>)
+		const got = await inTurns(
+			fetch,
+			PARTS_AT_ONCE,
+			(n) => this.get(`${BASE}/${n}`) as Promise<ThreadPart>
 		);
 		fetch.forEach((n, i) => {
 			this.threads.set(n.slice(7), keep(this.threads.get(n.slice(7)), got[i]));
