@@ -27,7 +27,7 @@ from brr.daemon2.facts import Fact
 from .adapters import body_label, resolve
 from .bodies import COMMANDS, TABLE, Observation, decide, fact_for, row_for, state_of
 from .faces import propose, proposal_line
-from .health import Health, degraded_line
+from .health import Health, body_line
 from .roomsense import room_line
 from .library import problem_line
 from .since import since_gone
@@ -803,7 +803,7 @@ def _prepare(home: Home, strand: str, thread: str, gen: int,
                         next_wake=_next_wake(home, facts, state, thread),
                         **_held_boundary(home, facts, main_snapshot(home), thread),
                         repaired=_repaired(facts, strand, gen),
-                        degraded=degraded_line(facts, home.install_id()), room=room_line(facts),
+                        body=body_line(facts, home.install_id()), room=room_line(facts),
                         library=problem_line(facts, home.install_id()),
                         moved=moved_line(facts, strand, gen, home.install_id()),
                         face=proposal_line(propose(facts, strand, gen, thread)),
@@ -2312,7 +2312,7 @@ def _render_boundary(home, facts, strand, gen, context):
         attachments=letter_attachments(home.root, facts),
         reply_context=_reply_context(facts, context.thread, owed, home.room(strand)),
         repaired=_repaired(facts, strand, gen),
-        degraded=degraded_line(facts, home.install_id()), room=room_line(facts),
+        body=body_line(facts, home.install_id()), room=room_line(facts),
         library=problem_line(facts, home.install_id()),
         moved=moved_line(facts, strand, gen, home.install_id()),
         cited=_cited(home, facts, strand, gen, context.thread),
@@ -3097,6 +3097,8 @@ def run(root: Path | str, *, adapter: str = "fake", core: str = "haiku",
         inputs = Inputs(home, authorize=router.armed)
         router.presence = inputs.presence
         health = Health(home, read_facts(home), _log)
+        from .github_health import CredentialCheck
+        github = CredentialCheck(home, _log)
         from .snapshot import Publisher
         publisher = Publisher(home, _log, functools.partial(health.guard, backoff=False))
         board_port = None
@@ -3168,6 +3170,7 @@ def run(root: Path | str, *, adapter: str = "fake", core: str = "haiku",
                 return
             with tick_config(home.root, config):
                 router.config = config
+                github.step(config.forge_token)
                 if time.monotonic() >= next_usage:
                     health.guard("usage", _read_usage, home, usage, backoff=False)
                     next_usage = time.monotonic() + usage.REFRESH_INTERVAL

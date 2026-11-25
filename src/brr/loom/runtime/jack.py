@@ -112,7 +112,7 @@ def _ageless(line: str) -> str:
 
 
 def _slot(key: str) -> str:
-    """The place a line holds: a line that changed in place (``degraded:``, ``asks:``,
+    """The place a line holds: a line that changed in place (``body:``, ``asks:``,
     one ``opened:`` thread) is said anew, never also as gone."""
     if key.startswith(("opened: ", "waiting: ")):
         return " ".join(key.split()[:2])

@@ -313,7 +313,7 @@ def render_boundary(strand: str, gen: int, thread: str, letters: list[Fact],
                     attachments: dict[str, list[str]] | None = None,
                     reply_context: dict[str, str] | None = None,
                     budget: str = "", over: str = "", repaired: str = "",
-                    degraded: str = "", face: str = "", left: str = "", moved: str = "",
+                    body: str = "", face: str = "", left: str = "", moved: str = "",
                     library: str = "", forge: str = "", band: str = "",
                     done: str = "", room: str = "", cited: str = "", idle: str = "",
                     park_reminder: str = "", next_wake: str = "",
@@ -367,8 +367,8 @@ def render_boundary(strand: str, gen: int, thread: str, letters: list[Fact],
         lines.insert(2, repaired)
     if library:
         lines.insert(2, library)
-    if degraded:
-        lines.insert(2, degraded)
+    if body:
+        lines.insert(2, body)
     if room:
         # A person's channel off their own baseline (roomsense): every body on the seat sees it.
         lines.insert(2, room)

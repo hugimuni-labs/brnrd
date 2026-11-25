@@ -766,7 +766,7 @@ def test_loopback_site_reports_the_build_even_before_parts(parts, tmp_path):
 def test_board_port_failure_is_a_degraded_condition(parts, port):
     import socket
     from brr.loom.runtime.loom import _serve_board
-    from brr.loom.runtime.health import Health, degraded_line
+    from brr.loom.runtime.health import Health, body_line
 
     with socket.socket() as taken:
         taken.bind(("127.0.0.1", 0))
@@ -778,8 +778,8 @@ def test_board_port_failure_is_a_degraded_condition(parts, port):
         failed = next(f for f in facts if f.kind == "loom.degraded")
         assert failed.data["step"] == "board"
         assert f"board port {chosen}:" in failed.data["error"]
-        assert "board since" in degraded_line(facts)
-        assert failed.data["error"] in degraded_line(facts)
+        assert "body: board " in body_line(facts, parts.home.install_id())
+        assert failed.data["error"] in body_line(facts, parts.home.install_id())
         server = None
         def retry():
             nonlocal server
