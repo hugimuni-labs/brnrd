@@ -7,6 +7,7 @@ import sys
 
 VERBS = {
     "audit": ("audit", "main"),
+    "scars": ("scars", "main"),
     "where": ("service", "cmd_where"),
     "config": ("service", "cmd_config"),
     "loom": ("verbs_loom", "_loom"),
@@ -47,6 +48,7 @@ VERBS = {
 # One line per verb for ``brnrd runtime --help``; a verb's own ``--help`` has the rest.
 SUMMARY = {
     "audit": "verify the local record-only tool journal",
+    "scars": "scar displays and failures over the last seven days",
     "send": "send a letter: a reply (--re), a note, a new thread, a timer (--at)",
     "wish": "what is left on a wish (--left), its result, a park (--wait)",
     "ask": "ask a person for a decision or an act, --for the wish it unblocks",
