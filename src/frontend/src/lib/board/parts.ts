@@ -19,9 +19,22 @@ import type { Held } from './cache.ts';
 
 export const BASE = '/v1/loom';
 
+// A page being dismissed starts no reads and ends the ones in flight as cancellations. WebKit logs a console error for
+// a fetch it refuses during dismissal, even a caught one, and Playwright's WebKit raises that line as a pageerror
+// (webkit-ci, 2026-11-25). pageshow gives a page restored from the back-forward cache a fresh signal.
+let page = new AbortController();
+if (typeof window !== 'undefined') {
+	addEventListener('pagehide', () => page.abort());
+	addEventListener('pageshow', () => {
+		if (page.signal.aborted) page = new AbortController();
+	});
+}
+export const leaving = (signal?: AbortSignal | null) =>
+	signal ? AbortSignal.any([signal, page.signal]) : page.signal;
+
 export async function probeBoard(signal?: AbortSignal) {
 	try {
-		const response = await fetch(`${BASE}/index`, { cache: 'no-store', signal });
+		const response = await fetch(`${BASE}/index`, { cache: 'no-store', signal: leaving(signal) });
 		if (response.status === 401) return { kind: 'anon' } as const;
 		if (response.status === 402) return { kind: 'refused' } as const;
 		if (response.status === 404) return { kind: 'missing' } as const;
@@ -60,7 +73,7 @@ export function patchBeads(held: Beads, delta: BeadsDelta): Beads {
 }
 
 export async function getJSON(path: string): Promise<unknown> {
-	const r = await fetch(path, { cache: 'no-store' });
+	const r = await fetch(path, { cache: 'no-store', signal: leaving() });
 	if (!r.ok) throw new Error(`${path}: HTTP ${r.status}`);
 	return r.json();
 }
