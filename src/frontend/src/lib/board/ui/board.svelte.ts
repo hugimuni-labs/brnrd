@@ -2,7 +2,7 @@
 // per page, handed to every component by context; the logic it calls is the tested modules one level up.
 import { getContext, setContext } from 'svelte';
 import { SvelteSet } from 'svelte/reactivity';
-import { BASE, getJSON, Store, type Beads } from '../parts.ts';
+import { BASE, getJSON, oneAtATime, Store, type Beads } from '../parts.ts';
 import type { BoardState, Letter, Model } from '../types.ts';
 import { normalize, panelIds, resolveRef, timeline, type Timeline } from '../bead.ts';
 import { allCalls, armedVerdict, correctDraft, verdictLetter } from '../calls.ts';
@@ -15,6 +15,9 @@ import { EMPTY, PLACE, paneScroll, readPlace, type Place } from '../place.ts';
 const KEY = Symbol('board');
 const local = (k: string, d: string) =>
 	typeof localStorage === 'undefined' ? d : (localStorage.getItem(k) ?? d);
+
+// How often a cold load repaints while its thread parts arrive.
+const PAINT_MS = 250;
 
 export class Board {
 	store: Store;
@@ -129,9 +132,19 @@ export class Board {
 		return [...m.letters, ...unechoed(this.pending, m.letters)].filter(dated).sort(byAt);
 	});
 
-	async load() {
+	// One sync in flight; a load asked meanwhile reruns once after it (oneAtATime).
+	load = oneAtATime(() => this.syncOnce());
+
+	private async syncOnce() {
+		let painted = 0;
+		// A cold load paints as its parts arrive, at most every PAINT_MS.
+		const arrived = () => {
+			if (Date.now() - painted < PAINT_MS) return;
+			painted = Date.now();
+			this.model = this.store.model();
+		};
 		try {
-			if (await this.store.sync()) {
+			if (await this.store.sync(arrived)) {
 				this.model = this.store.model();
 				this.pending = unechoed(this.pending, this.model!.letters);
 				if (this.store.beads) this.beads = this.store.beads;

@@ -15,6 +15,7 @@ import {
 	leadName,
 	machinesTitle,
 	moved,
+	oneAtATime,
 	PARTS_AT_ONCE,
 	patchBeads,
 	Store,
@@ -393,6 +394,51 @@ test('parts: a fresh tab fetches every thread part, never more than PARTS_AT_ONC
 	equal(most, PARTS_AT_ONCE);
 	deepEqual([...store.threads.keys()].sort(), [...names].sort());
 	for (const n of names) equal(store.threads.get(n)!.id, n);
+});
+
+test('parts: a cold sync paints from its parts as they arrive, before the last one', async () => {
+	const idx = index({ 'thread/a': 'ha', 'thread/b': 'hb' }, [T('a'), T('b')]);
+	let release!: () => void;
+	const gate = new Promise<void>((r) => (release = r));
+	const store = new Store(async (p) => {
+		if (p === '/v1/loom/index') return idx;
+		if (p.endsWith('/b')) await gate;
+		return part(p.slice('/v1/loom/thread/'.length), []);
+	});
+	const seen: (string | undefined)[][] = [];
+	const done = store.sync(() =>
+		seen.push(store.model()!.threads.map((t) => (store.threads.has(t.id) ? t.id : undefined)))
+	);
+	await new Promise((r) => setTimeout(r, 5));
+	deepEqual(seen, [['a', undefined]]);
+	release();
+	ok(await done);
+	equal(store.cold, null);
+	deepEqual([...store.threads.keys()].sort(), ['a', 'b']);
+	// warm: a moved part is not painted early
+	seen.length = 0;
+	const warm = new Store(async (p) => (p === '/v1/loom/index' ? idx : part(p.slice(16), [])));
+	await warm.sync();
+	await warm.sync(() => seen.push([]));
+	deepEqual(seen, []);
+});
+
+test('oneAtATime: calls made while one runs fold into a single rerun', async () => {
+	let runs = 0;
+	let flight = 0;
+	let most = 0;
+	const load = oneAtATime(async () => {
+		runs++;
+		flight++;
+		most = Math.max(most, flight);
+		await new Promise((r) => setTimeout(r, 2));
+		flight--;
+	});
+	await Promise.all([load(), load(), load(), load()]);
+	equal(most, 1);
+	equal(runs, 2);
+	await load();
+	equal(runs, 3);
 });
 
 test('parts: only a moved hash is fetched again; a letter in two parts is held once', async () => {

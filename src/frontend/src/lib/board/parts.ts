@@ -203,8 +203,35 @@ export async function inTurns<T, R>(
 	return out;
 }
 
+// `run` one call at a time: a call made while one runs is folded into a single rerun after it, and both callers
+// await the same settling. The board's load is asked by mount, by every index event and by the poll; unfolded,
+// each overlapping sync fetched every part not held yet.
+export function oneAtATime(run: () => Promise<void>): () => Promise<void> {
+	let running: Promise<void> | null = null;
+	let again = false;
+	return () => {
+		if (running) {
+			again = true;
+			return running;
+		}
+		running = (async () => {
+			try {
+				do {
+					again = false;
+					await run();
+				} while (again);
+			} finally {
+				running = null;
+			}
+		})();
+		return running;
+	};
+}
+
 export class Store {
 	index: Index | null = null;
+	// A cold sync's index while its parts still arrive: model() paints from it, so the board shows before the last part.
+	cold: Index | null = null;
 	threads = new Map<string, ThreadPart>();
 	beads: Beads | null = null;
 	topics: Topic[] = [];
@@ -237,16 +264,21 @@ export class Store {
 		}
 	}
 
-	// Bring every part to the index's hashes; true when anything changed. Thread parts load in parallel.
-	async sync(): Promise<boolean> {
+	// Bring every part to the index's hashes; true when anything changed. Thread parts load PARTS_AT_ONCE at a time;
+	// on a cold sync (nothing held yet) each arriving part is kept at once and `arrived` is told, so the board paints early.
+	async sync(arrived?: () => void): Promise<boolean> {
 		const index = (await this.get(`${BASE}/index`)) as Index;
 		if (this.index && JSON.stringify(this.index) === JSON.stringify(index)) return false;
 		const { fetch, drop } = moved(index, this.held);
-		const got = await inTurns(
-			fetch,
-			PARTS_AT_ONCE,
-			(n) => this.get(`${BASE}/${n}`) as Promise<ThreadPart>
-		);
+		if (!this.index) this.cold = index;
+		const got = await inTurns(fetch, PARTS_AT_ONCE, async (n) => {
+			const p = (await this.get(`${BASE}/${n}`)) as ThreadPart;
+			if (this.cold) {
+				this.threads.set(n.slice(7), p);
+				arrived?.();
+			}
+			return p;
+		});
 		fetch.forEach((n, i) => {
 			this.threads.set(n.slice(7), keep(this.threads.get(n.slice(7)), got[i]));
 			this.held.set(n, index.parts[n]);
@@ -273,6 +305,7 @@ export class Store {
 			this.held.delete('unthreaded');
 		}
 		this.index = index;
+		this.cold = null;
 		return true;
 	}
 
@@ -334,10 +367,11 @@ export class Store {
 	}
 
 	model(): Model | null {
-		if (!this.index) return null;
+		const index = this.index ?? this.cold;
+		if (!index) return null;
 		const loose =
-			this.held.has('unthreaded') || this.index.parts.unthreaded ? this.unthreaded : undefined;
-		const m = assemble(this.index, this.threads, loose);
+			this.held.has('unthreaded') || index.parts.unthreaded ? this.unthreaded : undefined;
+		const m = assemble(index, this.threads, loose);
 		m.topics = this.topics;
 		return m;
 	}
