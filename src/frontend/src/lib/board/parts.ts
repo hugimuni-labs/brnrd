@@ -373,6 +373,7 @@ export class Store {
 			this.held.has('unthreaded') || index.parts.unthreaded ? this.unthreaded : undefined;
 		const m = assemble(index, this.threads, loose);
 		m.topics = this.topics;
+		if (!this.index) m.partial = true;
 		return m;
 	}
 }

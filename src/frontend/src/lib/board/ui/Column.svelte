@@ -55,6 +55,8 @@
 		void rows.length;
 		void W?.cards.length;
 		if (!pane) return;
+		/* a cold paint before this column's part arrived is not its first paint */
+		if (b.model?.partial && !b.store.threads.has(t.id)) return;
 		const at = landing ? landAt(b.place.y[t.id]) : null;
 		landing = false;
 		const bottom = first || pane.scrollHeight - pane.clientHeight - pane.scrollTop < 40;

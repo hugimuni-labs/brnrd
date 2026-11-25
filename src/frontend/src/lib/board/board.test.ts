@@ -406,14 +406,19 @@ test('parts: a cold sync paints from its parts as they arrive, before the last o
 		return part(p.slice('/v1/loom/thread/'.length), []);
 	});
 	const seen: (string | undefined)[][] = [];
-	const done = store.sync(() =>
-		seen.push(store.model()!.threads.map((t) => (store.threads.has(t.id) ? t.id : undefined)))
-	);
+	const partial: (boolean | undefined)[] = [];
+	const done = store.sync(() => {
+		seen.push(store.model()!.threads.map((t) => (store.threads.has(t.id) ? t.id : undefined)));
+		partial.push(store.model()!.partial);
+	});
 	await new Promise((r) => setTimeout(r, 5));
 	deepEqual(seen, [['a', undefined]]);
+	// marked partial, so the board does not hold its column order (Board.svelte place)
+	deepEqual(partial, [true]);
 	release();
 	ok(await done);
 	equal(store.cold, null);
+	equal(store.model()!.partial, undefined);
 	deepEqual([...store.threads.keys()].sort(), ['a', 'b']);
 	// warm: a moved part is not painted early
 	seen.length = 0;
