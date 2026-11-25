@@ -9,7 +9,7 @@
 	import Board from '$lib/board/ui/Board.svelte';
 	import BoardRecovery from '$lib/board/ui/BoardRecovery.svelte';
 	import Landing from '$lib/Landing.svelte';
-	import { BASE, probeBoard } from '$lib/board/parts';
+	import { BASE, leaving, probeBoard } from '$lib/board/parts';
 	import { cached, forget, restore, type Held } from '$lib/board/cache';
 
 	// One bundle, two doors. /v1/site declares the loopback: it always draws the board, whose own loading state
@@ -35,7 +35,7 @@
 		document.documentElement.classList.add('board');
 	};
 	async function readPart(path: string) {
-		const response = await fetch(path, { cache: 'no-store' });
+		const response = await fetch(path, { cache: 'no-store', signal: leaving() });
 		if (response.status === 402) refuse();
 		if (!response.ok) throw new Error(`${path}: HTTP ${response.status}`);
 		return response.json();
