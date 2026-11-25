@@ -579,10 +579,12 @@ def test_the_index_is_hashes_counts_and_short_rows(parts, monkeypatch):
     assert b"step step" not in raw and b"quote quote" not in raw
     assert b"w-loose" not in raw and b"w-web" not in raw
     for row in index["threads"]:
-        assert set(row) <= {"id", "title", "status", "last_at", "board", "counts"}
+        assert set(row) <= {"id", "title", "status", "last_at", "letter_at", "board", "counts"}
         assert set(row.get("board") or {}) <= {"state"}
     web = next(row for row in index["threads"] if row["id"] == "web")
     assert web["board"]["state"] and web["counts"]
+    # the column's freshness rides on the row, so a cold load sorts before the thread part arrives
+    assert web["letter_at"] == max(row["at"] for row in parts.parts["thread/web"]["letters"])
     assert parts.parts["thread/web"]["steps"][0]["text"] == fat
     assert [w["wish"] for w in parts.parts["thread/web"]["wishes"]] == ["w-web"]
     assert parts.parts["unthreaded"][0]["wish"] == "w-loose"

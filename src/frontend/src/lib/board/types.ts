@@ -88,6 +88,8 @@ export type Thread = {
 	url?: string;
 	opened_at?: string;
 	last_at?: string;
+	// the newest letter's time, on the index row, so the column order needs no thread part
+	letter_at?: string;
 	opened_for?: { wish: string }[];
 	strands?: Strand[];
 	steps?: Step[];

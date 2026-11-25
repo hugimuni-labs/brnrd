@@ -50,10 +50,13 @@ export function byThread(letters: Letter[]): Map<string, Letter[]> {
 	return by;
 }
 
-// Freshness is the newest letter; last_at (any fact a strand writes) only for a thread with none.
+// Freshness is the newest letter; last_at (any fact a strand writes) only for a thread with none. The index row's
+// letter_at gives it before the thread part brings the letters, so a cold load sorts as the whole board will.
 export const lastAt = (t: Thread, by: Map<string, Letter[]>): string => {
 	const ls = by.get(t.id) || [];
-	return ls.length ? ls[ls.length - 1].at : t.last_at || '';
+	const loaded = ls.length ? ls[ls.length - 1].at : '';
+	const newest = (t.letter_at || '') > loaded ? t.letter_at || '' : loaded;
+	return newest || t.last_at || '';
 };
 
 export function sortThreads(threads: Thread[], by: Map<string, Letter[]>): Thread[] {

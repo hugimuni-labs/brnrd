@@ -159,6 +159,24 @@ test('order: seated by freshest letter, your-call by since, quiet by opened newe
 	deepEqual(readFilters('{'), ['seated', 'your-call', 'waiting', 'mine']);
 });
 
+test("the index row's letter_at sorts a cold load as its letters will", () => {
+	const ts = [
+		T('a', { board: { state: 'seated' }, letter_at: '3', last_at: '9' }),
+		T('b', { board: { state: 'seated' }, letter_at: '5', last_at: '1' })
+	];
+	const whole = new Map([
+		['a', [L('x', '3')]],
+		['b', [L('y', '5')]]
+	]);
+	const ids = (by: Map<string, Letter[]>) => sortThreads(ts, by).map((t) => t.id);
+	// no parts, one part, both parts: one order, and last_at never outranks a letter time
+	deepEqual(ids(new Map()), ['b', 'a']);
+	deepEqual(ids(new Map([['a', [L('x', '3')]]])), ['b', 'a']);
+	deepEqual(ids(whole), ['b', 'a']);
+	// a letter newer than the index row's wins
+	deepEqual(ids(new Map([['a', [L('z', '7')]]])), ['a', 'b']);
+});
+
 test('a cold load places its first paint, holds that order while parts arrive, then places the whole', () => {
 	const h = { first: true, held: false, now: 1000, last: 0 };
 	// first partial paint: nothing on screen yet, so it places straight away
