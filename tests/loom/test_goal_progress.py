@@ -93,3 +93,42 @@ def test_an_ask_names_what_it_holds_up_and_what_moves_meanwhile():
     ask = next(c for c in calls_of(threads, wishes(unlinked))["work"] if c["wish"] == "w-ask")
     # No goal: the same thread only.
     assert [m["wish"] for m in ask["meanwhile"]] == ["w-board"]
+
+
+def test_board_and_wake_show_the_same_runnable_step_beside_an_open_ask(tmp_path, monkeypatch):
+    from brr.loom.runtime import lifecycle, selfrepo
+
+    rows = facts()
+    rows.extend(
+        Fact(kind="wish.left", by="strand:s-aaaa-work", at=at(5),
+             data={"wish": ident, "steps": [step]})
+        for ident, step in [("w-pilot", "Wait for verdict"), ("w-board", "Check the build")]
+    )
+    told = wishes(rows)
+    waits = {"w-ask": "person:arseni"}
+    (tmp_path / "self" / ".git").mkdir(parents=True)
+    home = SimpleNamespace(root=tmp_path)
+    monkeypatch.setattr(lifecycle, "main_tip", lambda repo: "main")
+    monkeypatch.setattr(selfrepo, "git", lambda *args: SimpleNamespace(stdout=""))
+    monkeypatch.setattr(idle, "active_goals", lambda *args: [GOAL])
+
+    def check(expected):
+        board = goal_progress([GOAL], told, waits, now=NOW.timestamp())[0]
+        wake, = idle.goal_lines(home, now=NOW.timestamp(), told=told, waits=waits)
+        assert board["asks"][0]["wish"] == "w-ask"
+        assert "open asks: w-ask" in wake
+        assert board.get("move") == expected
+        if expected:
+            assert f"ready {expected['wish']}: {expected['step']}" in wake
+        else:
+            assert " · ready " not in wake
+
+    check({"wish": "w-board", "step": "Check the build"})
+    rows.append(Fact(kind="wish.read", by="strand:s-aaaa-work", at=at(4),
+                     data={"wish": "w-board", "by": "resident", "reading": "waiting: CI", "wait": {"on": "ci:repo@sha"}}))
+    told = wishes(rows)
+    check(None)
+    rows.append(Fact(kind="wish.read", by="strand:s-aaaa-work", at=at(3),
+                     data={"wish": "w-board", "by": "resident", "reading": "CI passed"}))
+    told = wishes(rows)
+    check({"wish": "w-board", "step": "Check the build"})

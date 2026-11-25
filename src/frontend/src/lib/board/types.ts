@@ -165,6 +165,7 @@ export type Goal = {
 	stake: string;
 	progress?: Record<string, number>;
 	asks?: GoalAsk[];
+	move?: { wish: string; step: string };
 	blocked?: boolean;
 	delivery?: GoalDelivery;
 	moved?: string;
