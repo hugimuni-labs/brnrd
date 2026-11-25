@@ -211,6 +211,8 @@ export type ThreadPart = Partial<Thread> & {
 
 // What the board reads at once, assembled from the parts (parts.ts).
 export type Model = {
+	// Painted from a cold sync before its last part arrived: some threads are still missing.
+	partial?: boolean;
 	goals?: Goal[];
 	threads: Thread[];
 	letters: Letter[];

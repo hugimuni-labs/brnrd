@@ -87,7 +87,8 @@
 			now: Date.now(),
 			last
 		});
-		first = false;
+		// A cold paint's order is not the board's yet: the first whole model still places without waiting.
+		if (!b.model?.partial) first = false;
 		last = r.last;
 		if (r.ids.join() !== order.join()) order = r.ids;
 		if (r.wait != null && !timer) timer = setTimeout(() => ((timer = null), place()), r.wait);
@@ -118,7 +119,8 @@
 	});
 	$effect(() => {
 		const threads = b.model?.threads;
-		if (!threads) return;
+		// A cold paint is not a first look: threads still arriving did not move. The first whole model is the baseline.
+		if (!threads || b.model?.partial) return;
 		untrack(() => {
 			const now = seen(threads),
 				m = moves(prev, now, new Date().toISOString());
