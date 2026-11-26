@@ -438,6 +438,99 @@ for letter in ctx.owed():
     assert sum(1 for f in loom.facts() if f.kind == "letter" and f.id.startswith("loom/wait-")) == 1
 
 
+def test_goal_review_baseline_with_a_live_park(tmp_path, monkeypatch):
+    """Replay a due goal review and capture the ordinary wake as a positive control."""
+    import json
+    from brr.loom.runtime.project import holder
+    from brr.loom.runtime.selfrepo import _commit, git, init_self
+    from _step import Loom, kill_bodies, wait_until, write_thread
+    from test_lifecycle import bodies
+
+    state = {"state": "open", "url": "u"}
+    polled = []
+
+    class Forge:
+        def pull(self, repo, number):
+            polled.append((repo, number))
+            return dict(state)
+
+        def ci(self, repo, sha, since=None):
+            return {"state": "pending"}
+
+    monkeypatch.setattr(waits, "forge_for", lambda config: Forge())
+    monkeypatch.setattr(waits, "EVERY", 0)
+    root = tmp_path / "home"
+    init_self(root, person="test")
+    write_thread(root, "inbox", "Inbox", "parker", wait="0")
+    goals = root / "self" / "goals"
+    goals.mkdir(exist_ok=True)
+    (goals / "growth.md").write_text(
+        "---\nstatus: active\nstands: An interested contact awaits rehearsal.\n"
+        "next: Find qualified maintainers through public project research.\n"
+        "now: Review the route after the planned rehearsal remains parked.\n"
+        "stake: Build a repeatable route to a paying pilot.\n"
+        "review-at: '2020-01-01T00:00:00Z'\n---\n# Growth\n"
+    )
+    git(root / "self", "add", "goals/growth.md")
+    _commit(root / "self", "Seed growth goal.\n\nLoom-Label: taint=0; audience=self\n")
+    bodies(root, f'''import json, subprocess, sys
+from pathlib import Path
+from brr.loom.runtime.fakebody import Ctx
+from brr.loom.runtime.home import atomic_write
+ctx = Ctx(Path(sys.argv[1]))
+def verb(*args):
+    proc = subprocess.run([sys.executable, "-m", "brr.loom.runtime", *args[:1], "--room", str(ctx.room), *args[1:]],
+                          capture_output=True, text=True)
+    assert proc.returncode == 0, proc.stderr
+    return proc.stdout.strip()
+wake = ctx.wake() + (ctx.room / "port/in/boundary.md").read_text()
+if "carry the PR wait" in wake:
+    atomic_write(Path({str(root / "successor")!r}), wake)
+for letter in ctx.owed():
+    if letter.body == "begin":
+        wish = verb("wish", "new", "--line", "Ship it", "--say", letter.id)
+        verb("wish", wish, "--read", "waiting: the merge", "--wait", "pr:{REPO}#5")
+        atomic_write(Path({str(root / "parked")!r}), wish)
+        ctx.send("thread:inbox", note="waiting for the merge", re=letter.id)
+        ctx.reincarnate("carry the PR wait")
+        assert ctx.jack("stop").raw == ""
+        break
+    if letter.body == "Review the current route":
+        atomic_write(Path({str(root / "woken")!r}), json.dumps({{"id": letter.id, "body": letter.body, "wake": wake}}))
+    ctx.send("thread:inbox", note="read", re=letter.id)
+''')
+    inject_letter(root, to="thread:inbox", body="begin")
+    loom = Loom(root)
+    loom.start()
+    try:
+        wait_until((root / "successor").exists, 60, loom.dump)
+        wish = (root / "parked").read_text()
+        waiting = f"waiting: {wish} on pr:{REPO}#5 since "
+        successor = (root / "successor").read_text()
+        assert waiting in successor
+        next_wake = f"wakes at: pull request {REPO}#5"
+        assert next_wake in successor
+        assert any(f.kind == "attempt.ended" and f.data["cause"] == "reincarnated" for f in loom.facts())
+        wait_until(lambda: holder(loom.facts(), "inbox") is None, 60, loom.dump)
+        ended = [f.id for f in loom.facts() if f.kind == "attempt.ended"]
+        assert len(ended) >= 2  # Initial session and its successor.
+        polls_before = len(polled)
+        wait_until(lambda: len(polled) >= polls_before + 3, 20, loom.dump)
+        assert holder(loom.facts(), "inbox") is None
+        assert [f.id for f in loom.facts() if f.kind == "attempt.ended"] == ended
+        inject_letter(root, to="thread:inbox", body="Review the current route")
+        wait_until((root / "woken").exists, 60, loom.dump)
+        woken = json.loads((root / "woken").read_text())
+        assert "goal growth: An interested contact awaits rehearsal." in woken["wake"]
+        assert waiting in woken["wake"]
+        assert woken["body"] == "Review the current route"
+    finally:
+        loom.halt()
+        kill_bodies(loom)
+    assert not loom.errors, loom.errors
+
+
+
 def test_a_file_wait_resolves_when_the_path_exists_and_says_what_it_holds(ledger, tmp_path, monkeypatch):
     home, seat = ledger
     ident = heard(home, seat, "Suite")
