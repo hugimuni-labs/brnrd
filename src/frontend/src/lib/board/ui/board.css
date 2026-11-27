@@ -76,6 +76,46 @@
 	font-size: 12px;
 	line-height: 1.45;
 }
+/* Closed is one line. The plan is what shortens. Who and the pace stay. */
+.brd #resident button.closed {
+	font: inherit;
+	background: none;
+	border: 0;
+	padding: 0;
+	color: inherit;
+	text-align: left;
+	cursor: pointer;
+	display: flex;
+	align-items: baseline;
+	width: 100%;
+	min-width: 0;
+	white-space: nowrap;
+	overflow: hidden;
+}
+.brd #resident button.closed .who {
+	flex: 0 1 auto;
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+.brd #resident button.closed .plan {
+	flex: 1 1 auto;
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+.brd #resident button.closed .pace {
+	flex: 0 0 auto;
+}
+.brd #resident button.closed .plan::before,
+.brd #resident button.closed .pace::before {
+	content: ' · ';
+}
+.brd #resident .open {
+	display: flex;
+	flex-direction: column;
+	gap: 2px;
+}
 .brd #fuel {
 	display: inline-flex;
 	align-items: center;

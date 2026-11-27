@@ -178,6 +178,31 @@ export function residentText(p: Presence | undefined, fuel: Fuel[] | undefined):
 	return lines;
 }
 
+// Closed, the row is one line. The plan is the part that shortens. The pace
+// appears only when this shell's short window runs dry before its reset.
+const PLAN_CUT = 32;
+
+export function residentClosed(
+	p: Presence | undefined,
+	fuel: Fuel[] | undefined
+): { who: string; plan: string; pace: string; line: string } {
+	if (!p) return { who: '', plan: '', pace: '', line: '' };
+	const since = hm(p.since);
+	const who =
+		p.state === 'working' || p.state === 'holding'
+			? `${p.body || 'a body'} in the seat${since ? ` since ${since}` : ''}`
+			: `Seat empty${since ? ` since ${since}` : ''}. Last engine ${(p.last_body || p.body || 'unknown').split('/')[0]}`;
+	const raw = (p.now ?? '').replace(/\s+/g, ' ').trim();
+	const plan = raw.length > PLAN_CUT ? raw.slice(0, PLAN_CUT - 1).trimEnd() + '…' : raw;
+	const shell = p.shell || (p.body || p.last_body || '').split('/')[0];
+	const paceText = (fuel ?? []).find((item) => item.shell === shell)?.pace ?? '';
+	const pace = paceText.includes('before the reset')
+		? paceText.replace(/^session pace:\s*/, '')
+		: '';
+	const line = [who, plan, pace].filter((part) => part).join(' · ');
+	return { who, plan, pace, line };
+}
+
 // The leading machine, and on hover every machine this install has heard of. `seen` is the newest router beat
 // that reached this install, not liveness: a peer's facts come through the shuttle a couple of minutes late.
 export function leadName(machines: Machine[] | undefined): string {
