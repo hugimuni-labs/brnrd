@@ -209,9 +209,16 @@ def ingest(home, name, fm, attachments, authorize=None):
         for key in ('clean', 'refs', 'links', 'wake', 'wish', 'verdict', 'delivery_id'):
             if key in data:
                 fields[key] = data[key]
+        if data.get('channel'):
+            fields['place'] = data['channel']
         require(home, name, authorize)
         append(home, Fact(kind='letter', by=f'loom:{home.install_id()}', id=letter_id,
                           after=(source.id,), data=fields))
+        if 'verdict' not in fields:
+            from .loom import route_header
+            fresh = read_facts(home)
+            route_header(home, fresh, next(f for f in fresh if f.id == letter_id),
+                         'thread' if fm.get('thread') else 'reply')
     if source.data.get('refs_missing'):
         from .loom import notice
         facts = read_facts(home)

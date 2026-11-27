@@ -462,7 +462,9 @@ def notice(home: Home, facts: list[Fact], kind: str, subject: str, what: str, ca
            thread: str | None = None, about: Fact | None = None, stands: bool = False,
            taint: bool = False, channel: str | None = None,
            source_strand: str | None = None, passive: bool = False,
-           draft_only: bool = False, supersedes=False, links=(), closes_ask: str | None = None) -> bool | Fact:
+           draft_only: bool = False, supersedes=False, links=(), closes_ask: str | None = None,
+           place: str | None = None, header_for: str | None = None,
+           routes: list | tuple | None = None) -> bool | Fact:
     """The one writer of loom notices: what the loom cannot settle, a body is told.
 
     A notice is an owed letter from ``loom``, so it is shown at every
@@ -504,6 +506,12 @@ def notice(home: Home, facts: list[Fact], kind: str, subject: str, what: str, ca
     if channel is None:
         lines.append("passive: shown once, owed by nobody" if passive
                      else f"settle this notice with a reply or a note, re: {ident}")
+    if place is not None:
+        data["place"] = place
+    if header_for is not None:
+        data["header_for"] = header_for
+    if routes is not None:
+        data["routes"] = list(routes)
     data.update(body="\n".join(lines), label=label.as_dict())
     draft = Fact(kind="letter", by=_by(home), data=data, id=ident)
     if channel is not None:
@@ -539,6 +547,57 @@ def _supersede(home: Home, facts, kind: str, ident: str, covers=True) -> None:
                                  f"letter.disposed:{old}"))
         except LedgerConflict:
             pass
+
+
+_HEADER_CAUSES = frozenset({"paced", "pending", "failed", "settled"})
+
+
+def route_header(home: Home, facts, letter: Fact, rule: str) -> bool:
+    """One passive inbox line when a rule delivered the letter away from the inbox.
+
+    A verdict stays on ``heard``. A closed thread stays on the climb. The fourth
+    unshown header for one thread replaces that thread's lines with one notice.
+    """
+    from .lifecycle import CLOSED, read_thread
+    from .project import _destination, fold
+
+    thread = _destination(letter.data)
+    if not thread or thread == home.main_thread() or letter.data.get("verdict"):
+        return False
+    if not home.routable(thread) or read_thread(home, thread).get("status") in CLOSED:
+        return False
+    state = fold(facts)
+    shown = {ident for ids in state.shown.values() for ident in ids}
+    pending = [fact for fact in facts
+               if fact.kind == "letter" and fact.data.get("header_for") == thread
+               and fact.id not in state.handled and fact.id not in shown]
+    already: list[str] = []
+    for fact in pending:
+        already.extend(str(item) for item in fact.data.get("routes") or ())
+    ident = str(letter.data.get("id") or letter.id)
+    from .lifecycle import main_snapshot
+    from .owners import thread_axes
+    cause = str(thread_axes(facts, main_snapshot(home)).get(thread, {}).get("cause") or "")
+    cause_bit = f" · {cause}" if cause in _HEADER_CAUSES else ""
+    place = letter.data.get("place")
+    if len(already) >= 3:
+        routes = [*already, ident]
+        what = f"routed {len(routes)} · thread {thread} · {' '.join(routes)}"
+        subject = thread + ":" + ",".join(routes)
+        covers = lambda fact, thread=thread: fact.data.get("header_for") == thread
+    else:
+        routes = [ident]
+        who = letter.data.get("from") or ""
+        shown_place = place if place else "-"
+        what = (f"routed {ident} from {who} · place {shown_place} · thread {thread} · {rule}"
+                f"{cause_bit} · open: brnrd runtime letter {ident}")
+        subject = ident
+        covers = False
+    return bool(notice(
+        home, facts, "route", subject, what, "the letter stays on that thread",
+        thread=home.main_thread(), passive=True, header_for=thread, routes=routes,
+        place=str(place) if place else None, supersedes=covers,
+    ))
 
 
 def _closures(home: Home, facts: list[Fact], threads: list[str]) -> list[Fact]:

@@ -31,13 +31,16 @@ def test_composer_letter_lands_on_its_thread_from_the_owner_once(owner, body):
     relay.pull_once(owner, client, 0)
     relay.pull_once(owner, client, 0)
     source, = kinds(owner, "source")
-    letter, = kinds(owner, "letter")
+    letter, = [fact for fact in kinds(owner, "letter") if not fact.data.get("notice")]
     assert source.data["channel"] == "channel:relay/loom:arseni"
     assert letter.data == {
         "id": "letter:relay:loom:arseni:ev_w1", "from": "person:arseni", "to": "thread:first",
-        "body": "please look", "cites": source.id, "label": {"taint": False, "audience": ["self"]},
+        "body": "please look", "cites": source.id, "place": source.data["channel"],
+        "label": {"taint": False, "audience": ["self"]},
         **({"wake": body} if body else {}),
     }
+    header, = [fact for fact in kinds(owner, "letter") if fact.data.get("header_for") == "first"]
+    assert header.data["notice"] is True and header.data["to"] == "thread:inbox"
     assert source.data.get("wake") == body
     assert relay.person_dm(owner, source.data["channel"]) == "person:arseni"
 
@@ -50,7 +53,7 @@ def test_unknown_thread_falls_back_to_the_home_thread(owner):
 
 def test_unenrolled_account_stays_a_tainted_stranger(home):
     relay.pull_once(home, FakeClient([composer()]), 0)
-    letter, = kinds(home, "letter")
+    letter, = [fact for fact in kinds(home, "letter") if not fact.data.get("notice")]
     assert letter.data["from"] == "stranger:relay:loom:arseni"
     assert letter.data["label"]["taint"] is True
 

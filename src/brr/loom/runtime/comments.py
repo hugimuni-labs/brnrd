@@ -247,9 +247,17 @@ def observe_comments(home, facts, armed: bool, rows: list[dict]):
     """One notice per new comment, to the thread that claimed its pull request; only the lease holder writes."""
     if not armed or not rows:
         return facts
-    from .loom import notice
+    from .home import notice_id
+    from .loom import notice, route_header
     for row in rows:
         head, can = words(row, home.install_id())
-        notice(home, facts, "pr-comment", row["url"], head, can, thread=row["thread"],
-               taint=not row["standing"])
+        place = f"pr:{row['repo']}#{row['number']}"
+        if not notice(home, facts, "pr-comment", row["url"], head, can, thread=row["thread"],
+                      taint=not row["standing"], place=place):
+            continue
+        ident = notice_id("pr-comment", row["url"])
+        by_id = getattr(facts, "by_id", None)
+        letter = by_id[ident] if by_id is not None and ident in by_id else next(
+            fact for fact in facts if fact.id == ident)
+        route_header(home, facts, letter, "pr")
     return facts
