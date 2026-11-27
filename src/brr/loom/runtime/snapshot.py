@@ -370,8 +370,15 @@ def _seat_letters(v: View, strand: str | None) -> tuple[list[dict], int]:
     return out, more
 
 
-def _wake_line(v: View, thread: str, row: dict, seated: bool, strand: str | None) -> str | None:
-    """What the row says will happen next. The next-message line only when nothing else will wake it."""
+def _wake_line(v: View, thread: str, row: dict, seated: bool, strand: str | None,
+               word: str | None = None) -> str | None:
+    """What the row says will happen next. The next-message line only when nothing else will wake it.
+
+    A working seat has no clause: the inbox always has a park, and that park is not what the seat is doing.
+    Holding keeps its reasons.
+    """
+    if word == "working":
+        return None
     from .timers import parse_instant
     owed_by = str(row.get("owed-by") or "")
     person_owed = bool(row.get("owed")) and ("person" in owed_by or owed_by.startswith("operator"))
@@ -448,7 +455,7 @@ def presence(v: View) -> dict | None:
         "last_body": None if seated else label,
         "shell": shell or None,
         "letters": letters, "letters_more": more or None,
-        "wait": _wake_line(v, thread, row, seated, strand),
+        "wait": _wake_line(v, thread, row, seated, strand, word),
     }
     return {k: val for k, val in entry.items() if val not in (None, "", [], {})}
 

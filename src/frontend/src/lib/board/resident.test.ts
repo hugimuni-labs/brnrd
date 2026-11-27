@@ -126,6 +126,30 @@ describe('resident row', () => {
 		assert.doesNotMatch(closed.line, /your next message/);
 	});
 
+	it('shows the part after the last colon of a person letter', () => {
+		const lines = residentText(
+			{
+				state: 'working',
+				body: 'claude/fable',
+				letters: [
+					{
+						id: 'letter:cloud:telegram:155783668:11943',
+						filed: 'wish',
+						wish: 'w-residentrow1',
+						state: 'heard'
+					},
+					{ id: 'letter:cloud:telegram:155783668:11944', filed: 'chatter' },
+					{ id: 'letter:cloud:telegram:155783668:11945', filed: 'open' }
+				]
+			},
+			[]
+		);
+		assert.match(lines[1], /11943 filed as w-residentrow1 heard/);
+		assert.match(lines[1], /11944 chatter/);
+		assert.match(lines[1], /11945 not filed/);
+		assert.doesNotMatch(lines[1], /155783668|letter:cloud/);
+	});
+
 	it('an engine with no session window says so', () => {
 		const lines = residentText({ state: 'working', body: 'grok', shell: 'grok' }, fuel);
 		assert.match(lines[1], /No short window/);

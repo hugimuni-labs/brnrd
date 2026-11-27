@@ -116,6 +116,12 @@ function hm(iso: string | undefined): string {
 	return iso && iso.length >= 16 ? iso.slice(11, 16) + 'Z' : '';
 }
 
+// A person's cloud letter is letter:cloud:telegram:<chat>:<n>. The open row shows n.
+function letterName(id: string): string {
+	const cut = id.lastIndexOf(':');
+	return cut >= 0 ? id.slice(cut + 1) : id;
+}
+
 function gaugeBit(
 	name: string,
 	gauge: { left_pct: number; resets_at?: string } | undefined
@@ -148,10 +154,11 @@ export function residentText(p: Presence | undefined, fuel: Fuel[] | undefined):
 	}
 	if (p.letters?.length) {
 		const bits = p.letters.map((letter) => {
+			const name = letterName(letter.id);
 			if (letter.filed === 'wish')
-				return `${letter.id} filed as ${letter.wish || 'a wish'} ${letter.state || ''}`.trim();
-			if (letter.filed === 'chatter') return `${letter.id} chatter`;
-			return `${letter.id} not filed`;
+				return `${name} filed as ${letter.wish || 'a wish'} ${letter.state || ''}`.trim();
+			if (letter.filed === 'chatter') return `${name} chatter`;
+			return `${name} not filed`;
 		});
 		const more = p.letters_more ? ` ${p.letters_more} more not shown.` : '';
 		lines.push(`Letters it has read: ${bits.join('; ')}.${more}`);

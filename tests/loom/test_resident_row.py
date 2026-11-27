@@ -61,6 +61,49 @@ def test_a_seated_inbox_names_the_plan_and_the_letter(tmp_path, monkeypatch):
     assert "your next message" not in seat.get("wait", "")
 
 
+def _park(home):
+    append(home, Fact(kind="wish.read", by=f"strand:{SEAT}", id="wish.read:park", at=_at(-20), data={
+        "wish": WISH, "by": "resident",
+        "reading": "waiting: the inbox review of the resident row",
+        "wait": {"on": "pr:hugimuni-labs/brnrd#2866"}}))
+
+
+def _wish(home, letter):
+    append(home, Fact(kind="wish", by=f"strand:{SEAT}", id=WISH, data={
+        "wish": WISH, "from": "person", "line": "Build the row", "thread": "inbox",
+        "says": [{"letter": letter}]}))
+
+
+def test_a_working_seat_with_a_thread_wait_says_nothing_about_it(tmp_path, monkeypatch):
+    home = _home(tmp_path)
+    _lease(home)
+    letter = inject_letter(home.root, to="thread:inbox", body="Build the row")
+    append(home, Fact(kind="shown", by=f"strand:{SEAT}", id="shown:seat", at=_at(-30), data={
+        "strand": SEAT, "gen": 1, "ids": [letter]}))
+    _wish(home, letter)
+    _park(home)
+    seat = _doc(home, monkeypatch, alive=True)["presence"]
+    assert seat["state"] == "working"
+    assert "wait" not in seat
+
+
+def test_a_holding_seat_with_a_thread_wait_names_it(tmp_path, monkeypatch):
+    home = _home(tmp_path)
+    _lease(home)
+    letter = inject_letter(home.root, to="thread:inbox", body="Build the row")
+    append(home, Fact(kind="letter", by=f"strand:{SEAT}", id="seat/reply", at=_at(-90), data={
+        "id": "seat/reply", "from": f"strand:{SEAT}", "to": "channel:test", "re": letter,
+        "gen": 1, "body": "reading"}))
+    append(home, Fact(kind="shown", by=f"strand:{SEAT}", id="shown:seat", at=_at(-30), data={
+        "strand": SEAT, "gen": 1, "ids": [letter]}))
+    _wish(home, letter)
+    _park(home)
+    seat = _doc(home, monkeypatch, alive=True)["presence"]
+    assert seat["state"] == "holding"
+    assert seat["wait"] == "waiting on the inbox review of the resident row"
+    assert "your next message" not in seat["wait"]
+
+
 def test_an_empty_seat_with_nothing_pending_says_the_next_message(tmp_path, monkeypatch):
     home = _home(tmp_path)
     _lease(home, shell="codex", core="")
@@ -172,3 +215,14 @@ def test_the_boundary_gets_the_pace_as_its_own_line(tmp_path):
     assert line in text.splitlines()
     status = next(row for row in text.splitlines() if row.startswith("status:"))
     assert line not in status
+
+
+def test_a_changed_pace_is_one_new_line_and_not_gone():
+    from brr.loom.runtime.jack import _news
+    first = "session pace: dry in about 3h, before the reset"
+    second = "session pace: dry in about 1h, before the reset"
+    _, said, _ = _news(render_boundary(SEAT, 1, "inbox", [], set(), {}, pace=first), {"said": []}, False)
+    news, _, _ = _news(render_boundary(SEAT, 1, "inbox", [], set(), {}, pace=second), {"said": said}, False)
+    assert second in news.splitlines()
+    assert first not in news
+    assert not any(row.startswith("gone:") for row in news.splitlines())

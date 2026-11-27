@@ -109,7 +109,8 @@
 }
 .brd #resident button.closed .plan::before,
 .brd #resident button.closed .pace::before {
-	content: ' · ';
+	/* A normal space at the start of a nowrap flex item collapses, so the dot sat on the word before it. */
+	content: '\00a0·\00a0';
 }
 .brd #resident .open {
 	display: flex;
