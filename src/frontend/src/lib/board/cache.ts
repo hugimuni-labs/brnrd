@@ -45,9 +45,23 @@ export async function remember(path: string, json: unknown): Promise<void> {
 	}
 }
 
-// A get that remembers what it got; the Store's.
+// A get that remembers the parts it got; the Store's. The index waits for rememberIndex: kept as it arrived, a page
+// that left before its parts did would leave the next one the new index over the old parts, and the next sync would
+// trust those hashes and fetch nothing (chromium-recovery, 2026-11-27).
+let puts: Promise<void>[] = [];
 export const remembering = (get: (path: string) => Promise<unknown>) => (path: string) =>
-	get(path).then((j) => (remember(path, j), j));
+	get(path).then((j) => {
+		if (path !== `${BASE}/index`) puts.push(remember(path, j));
+		return j;
+	});
+
+// The index a sync has brought every part to, kept after the parts it names.
+export async function rememberIndex(index: Index): Promise<void> {
+	const parts = puts;
+	puts = [];
+	await Promise.all(parts);
+	await remember(`${BASE}/index`, index);
+}
 
 export async function forget(): Promise<void> {
 	try {
