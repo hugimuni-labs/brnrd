@@ -197,7 +197,7 @@
 	});
 </script>
 
-<div class="brd" class:sheet={!!b.beadId}>
+<div class="brd" class:sheet={!!b.beadId} data-partial={b.model?.partial ? '1' : undefined}>
 	<header>
 		{#if view === 'board'}
 			<a class="topics-link" href={resolve('/topics')}>topics</a>
