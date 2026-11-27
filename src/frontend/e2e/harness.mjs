@@ -17,10 +17,13 @@ export async function open({
 	viewport = { width: 1440, height: 900 },
 	consent = null,
 	site = null,
-	ready = '.brd .column.threadcol',
+	// A cold load paints a thread column before the parts it names have arrived. The first column is not the board.
+	ready = '.brd:not([data-partial]) .column.threadcol',
+	path = '/',
+	lag = null,
 	persistent = false
 } = {}) {
-	const loom = await partsServer(parts, 0, consent, site);
+	const loom = await partsServer(parts, 0, consent, site, lag);
 	process.env.BRNRD_DEV_TARGET = `http://127.0.0.1:${loom.port}`;
 	const vite = await createServer({
 		root,
@@ -74,7 +77,7 @@ export async function open({
 	});
 	page.on('request', (r) => requests.push(new URL(r.url()).pathname));
 	try {
-		await page.goto(base);
+		await page.goto(new URL(path, base).href);
 		await page.waitForSelector(ready, { timeout: 60_000 });
 	} catch (e) {
 		// a page that never got ready must not leave its browser and servers holding the test process open
