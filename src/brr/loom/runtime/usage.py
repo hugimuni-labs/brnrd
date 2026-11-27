@@ -130,6 +130,9 @@ def _refresh(path, script, after=0) -> None:
                     body["state"] = state
                     if reason:
                         body["reason"] = reason
+                samples = _kept_samples(path, at)
+                if samples:
+                    body["samples"] = samples
                 atomic_write(path, json.dumps(body) + "\n")
         finally:
             if claim is not None:
@@ -292,6 +295,148 @@ def window_text(window):
         text += (f" left · {days:.1f}d to reset · pace {left:.0f}%"
                  f" · {abs(ahead):.1f}d {'ahead' if ahead > 0 else 'behind'}")
     return text
+
+
+# A sample younger than this is noise, not an hour's burn.
+_PACE_MIN = 20 * 60
+# Keep two hours, so the hour the line needs is still in the file.
+_SAMPLE_KEEP = 2 * 3600
+
+
+def _sample_row(payload) -> dict | None:
+    """One reading reduced to the time and each window's level."""
+    if not isinstance(payload, dict):
+        return None
+    try:
+        at = float(payload["at"])
+    except (KeyError, TypeError, ValueError):
+        return None
+    if not math.isfinite(at):
+        return None
+    windows = []
+    for window in payload.get("windows") or []:
+        if not isinstance(window, dict) or not isinstance(window.get("name"), str):
+            continue
+        left = window.get("left_pct")
+        if isinstance(left, bool) or not isinstance(left, (int, float)) or not math.isfinite(left):
+            continue
+        windows.append({"name": window["name"], "left_pct": left})
+    return {"at": at, "windows": windows}
+
+
+def _kept_samples(path, at: float) -> list[dict]:
+    """Earlier readings still inside two hours, including the file about to be replaced."""
+    try:
+        previous = json.loads(Path(path).read_text())
+    except (OSError, ValueError):
+        return []
+    rows = []
+    if isinstance(previous, dict):
+        for raw in previous.get("samples") or []:
+            if isinstance(raw, dict):
+                row = _sample_row(raw)
+                if row is not None:
+                    rows.append(row)
+        current = _sample_row(previous)
+        if current is not None:
+            rows.append(current)
+    kept = {}
+    for row in rows:
+        if 0 < at - row["at"] <= _SAMPLE_KEEP:
+            kept[row["at"]] = row
+    return [kept[stamp] for stamp in sorted(kept)][-48:]
+
+
+def _session_level(row) -> float | None:
+    for window in row.get("windows") or []:
+        if isinstance(window, dict) and window.get("name") == "session":
+            left = window.get("left_pct")
+            if isinstance(left, (int, float)) and not isinstance(left, bool):
+                return float(left)
+    return None
+
+
+def session_pace(payload, now=None) -> dict | None:
+    """Burn of the session window over the last hour.
+
+    None when the reading has no session window. ``known`` is false until a
+    sample at least twenty minutes old exists: one reading cannot say a burn.
+    ``falling`` is false when the level did not drop. ``about_h`` is the dry
+    time rounded to an hour, so the sentence stays still while a percent ticks.
+    """
+    if not isinstance(payload, dict):
+        return None
+    windows = gauge_windows(payload)
+    if not windows:
+        return None
+    session = next((window for window in windows if window["name"] == "session"), None)
+    if session is None:
+        return None
+    now = time.time() if now is None else now
+    try:
+        read_at = float(payload["at"])
+    except (KeyError, TypeError, ValueError):
+        return None
+    found = []
+    for raw in payload.get("samples") or []:
+        if not isinstance(raw, dict):
+            continue
+        try:
+            stamp = float(raw["at"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        left = _session_level(raw)
+        if left is None or not _PACE_MIN <= now - stamp <= _SAMPLE_KEEP:
+            continue
+        found.append((stamp, left))
+    pace = {"left_pct": session["left_pct"], "read_at": read_at,
+            "resets_at": session.get("resets_at"), "known": False, "falling": False}
+    if not found:
+        return pace
+    old_at, old_left = min(found, key=lambda row: abs((now - row[0]) - 3600))
+    hours = (read_at - old_at) / 3600
+    if hours <= 0:
+        return pace
+    burn = (old_left - session["left_pct"]) / hours
+    pace["known"] = True
+    pace["burn_pct_per_h"] = burn
+    if burn <= 0:
+        return pace
+    dry_h = session["left_pct"] / burn
+    dry_at = read_at + dry_h * 3600
+    reset = _reset(session)
+    pace.update(falling=True, dry_h=dry_h, dry_at=dry_at,
+                about_h=0 if dry_h < 0.5 else max(1, round(dry_h)),
+                before_reset=bool(reset) and dry_at < reset)
+    return pace
+
+
+def session_pace_line(pace) -> str:
+    """The sentence the board and the body's boundary both say."""
+    if not pace:
+        return ""
+    if not pace.get("known"):
+        return "session pace: one reading, burn not known yet"
+    if not pace.get("falling"):
+        return "session pace: not falling"
+    when = "under 1h" if pace.get("about_h") == 0 else f"about {pace['about_h']}h"
+    which = "before" if pace.get("before_reset") else "after"
+    return f"session pace: dry in {when}, {which} the reset"
+
+
+def pace_line_for(home, shell: str) -> str:
+    """The seated shell's pace sentence, from the file the collector last wrote.
+
+    Reads the file and does not start a collector: the boundary must not pay a probe.
+    """
+    if not shell or not _SHELL_NAME.fullmatch(shell):
+        return ""
+    path = home.root / "loom" / "usage" / f"{shell}.json"
+    try:
+        payload = json.loads(path.read_text())
+    except (OSError, ValueError):
+        return ""
+    return session_pace_line(session_pace(payload))
 
 
 def _past_reset(payload, now: float) -> bool:

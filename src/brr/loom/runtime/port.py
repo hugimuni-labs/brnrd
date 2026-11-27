@@ -318,7 +318,7 @@ def render_boundary(strand: str, gen: int, thread: str, letters: list[Fact],
                     done: str = "", room: str = "", cited: str = "", idle: str = "",
                     park_reminder: str = "", next_wake: str = "",
                     waits: tuple[str, ...] | list[str] = (), held_next: str = "",
-                    rest_price: str = "") -> str:
+                    rest_price: str = "", pace: str = "") -> str:
     """Shown letters keep their first line, reply context and attachments when compacted.
 
     ``budget`` sits before the plan: the jack compares what follows `` · plan ``,
@@ -405,6 +405,10 @@ def render_boundary(strand: str, gen: int, thread: str, letters: list[Fact],
         reply = replies.get(letter.id, "-") if replies is not None else _reply(letter, sender_threads, thread, channels or {})
         lines.extend(_letter_lines(letter, reply, compact, (attachments or {}).get(letter.id, ()),
                                    (reply_context or {}).get(letter.id, "")))
+    if pace:
+        # Its own line, not the status line: the jack shows the status line only when the plan moves,
+        # and fuel written there reaches the body at a wake, not at the step where the burn changed.
+        lines.insert(2, pace)
     if rest_price:
         lines.append(f"<!-- rest price: {rest_price} -->")
     if next_wake:

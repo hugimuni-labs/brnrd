@@ -22,7 +22,7 @@
 		STATE_LABEL,
 		wanted
 	} from '../order.ts';
-	import { headerFuel, leadName, machinesTitle } from '../parts.ts';
+	import { headerFuel, leadName, machinesTitle, residentText } from '../parts.ts';
 	import { barGauge } from '../../loomSnapshot.ts';
 	import FuelMarks from '../../FuelMarks.svelte';
 	import { INBOX } from '../sides.ts';
@@ -118,6 +118,7 @@
 		void tick;
 		return Date.now();
 	});
+	const resident = $derived(residentText(b.model?.presence, b.model?.fuel));
 	$effect(() => {
 		const threads = b.model?.threads;
 		// A cold paint is not a first look: threads still arriving did not move. The first whole model is the baseline.
@@ -251,6 +252,11 @@
 			><input type="checkbox" bind:checked={b.showAll} onchange={() => b.persist()} /> show internal</label
 		>
 	</header>
+	{#if view === 'board' && resident.length}
+		<div id="resident" aria-label="resident">
+			{#each resident as line, i (i)}<span>{line}</span>{/each}
+		</div>
+	{/if}
 	{#if view === 'board'}
 		<WorkViews bind:view={workView} />
 		<div hidden={!!workView} class="board-columns">

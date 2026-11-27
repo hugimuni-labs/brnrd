@@ -65,6 +65,38 @@ def _signed_in(client, session_token):
         client.cookies.set("brnrd_session", session_token)
 
 
+def test_put_keeps_resident_row_keys_the_schema_names(client):
+    """A key the schema names survives put then get, and so does a key the model does not list.
+
+    The put stores the blob. A dump of the presence model would drop ``kept``.
+    """
+    headers, session = _account(client)
+    relay = _relay_token(client, headers, _repo(client, headers))
+    _signed_in(client, session)
+    doc = {
+        **SNAPSHOT,
+        "presence": {
+            "strand": "s-ae66-6vf7ze", "thread": "inbox", "state": "empty",
+            "since": "2026-11-27T17:24:08Z", "last_body": "codex", "doing": "plan",
+            "now": "Build the row", "wait": "starts on your next message",
+            "letters": [{"id": "p-test/one", "filed": "open"}], "letters_more": 1,
+            "kept": "still here",
+        },
+        "fuel": [{
+            "shell": "claude", "state": "ok", "read_at": "2026-11-27T19:42:00Z",
+            "pace": "session pace: dry in about 3h, before the reset",
+            "gauges": [{"window": "session", "left_pct": 33, "resets_at": "2026-11-27T22:20:00Z"}],
+        }],
+    }
+    assert client.put("/v1/daemons/loom", json=doc, headers=relay).status_code == 200
+    got = client.get("/v1/dashboard/loom").json()
+    assert got["presence"]["wait"] == "starts on your next message"
+    assert got["presence"]["letters"][0]["filed"] == "open"
+    assert got["presence"]["kept"] == "still here"
+    assert got["fuel"][0]["pace"].startswith("session pace:")
+    assert got["fuel"][0]["read_at"] == "2026-11-27T19:42:00Z"
+
+
 def test_put_creates_loom_daemon_and_dashboard_reads_it(client):
     headers, session = _account(client)
     relay = _relay_token(client, headers, _repo(client, headers))

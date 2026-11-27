@@ -538,6 +538,65 @@ class NewsOut(BaseModel):
     news_updated_at: datetime | None = None
 
 
+class LoomPresenceLetter(BaseModel):
+    """One letter the resident row says this seat has read, and how it was filed."""
+
+    model_config = {"extra": "allow"}
+
+    id: str
+    filed: Literal["wish", "chatter", "open"]
+    wish: str | None = None
+    state: str | None = None
+
+
+class LoomPresenceIn(BaseModel):
+    """The inbox seat on snapshot v1. Extra keys stay: the put stores the blob, not this dump.
+
+    ``doing`` is ``plan`` when ``now`` is the plan's next wish line. ``wait`` is the
+    sentence the row shows, and it says the next message only when nothing else will wake the seat.
+    ``pace`` is not here: it rides on the fuel row of the seated shell.
+    """
+
+    model_config = {"extra": "allow"}
+
+    strand: str | None = None
+    thread: str | None = None
+    state: str | None = None
+    since: str | None = None
+    now: str | None = None
+    doing: Literal["plan"] | None = None
+    step: str | None = None
+    owed: int | None = None
+    body: str | None = None
+    last_body: str | None = None
+    shell: str | None = None
+    letters: list[LoomPresenceLetter] = Field(default_factory=list)
+    letters_more: int | None = None
+    wait: str | None = None
+
+
+class LoomFuelGaugeIn(BaseModel):
+    model_config = {"extra": "allow"}
+
+    window: str
+    left_pct: float
+    resets_at: str | None = None
+
+
+class LoomFuelIn(BaseModel):
+    """One engine's fuel. ``read_at`` is when the reading was taken. ``pace`` is the short-window sentence."""
+
+    model_config = {"extra": "allow"}
+
+    shell: str
+    state: str | None = None
+    gauges: list[LoomFuelGaugeIn] = Field(default_factory=list)
+    read_at: str | None = None
+    pace: str | None = None
+    error: str | None = None
+    initiative_share: int | None = None
+
+
 class LoomOut(BaseModel):
     loom_updated_at: datetime
 

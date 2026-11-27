@@ -17,6 +17,7 @@ from typing import Any, Callable
 import anyio
 import httpx
 from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request, Response, status
+from pydantic import ValidationError
 
 from brr.gates.cloud_publisher import PUBLISH_WITHHELD_STATUS
 from sqlalchemy import delete, select
@@ -812,6 +813,17 @@ def put_loom(doc: dict[str, Any] = Body(...), principal: Principal = Depends(adm
     """Store the loom snapshot v1 verbatim (threads/inbox/loom-snapshot.md)."""
     if doc.get("v") != 1:
         raise HTTPException(status_code=422, detail="loom snapshot must carry v: 1")
+    # Name the resident-row keys. Validation does not replace the blob: a dump of a
+    # partial model is how a key the model forgot gets dropped on the way to the board.
+    try:
+        if isinstance(doc.get("presence"), dict):
+            schemas.LoomPresenceIn.model_validate(doc["presence"])
+        fuel = doc.get("fuel")
+        if isinstance(fuel, list):
+            for row in fuel:
+                schemas.LoomFuelIn.model_validate(row)
+    except ValidationError as exc:
+        raise HTTPException(status_code=422, detail=exc.errors()) from exc
     blob = json.dumps(doc, separators=(",", ":"))
     if len(blob.encode("utf-8")) > _MAX_LOOM_BYTES:
         raise HTTPException(status_code=413, detail="loom snapshot exceeds 1 MB")

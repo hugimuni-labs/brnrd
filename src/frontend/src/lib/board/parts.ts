@@ -9,6 +9,7 @@ import type {
 	Letter,
 	Machine,
 	Model,
+	Presence,
 	Thread,
 	ThreadPart,
 	Topic,
@@ -111,6 +112,72 @@ export function headerFuel(fuel: Fuel[] | undefined): string {
 		.join('   ');
 }
 
+function hm(iso: string | undefined): string {
+	return iso && iso.length >= 16 ? iso.slice(11, 16) + 'Z' : '';
+}
+
+function gaugeBit(
+	name: string,
+	gauge: { left_pct: number; resets_at?: string } | undefined
+): string {
+	if (!gauge) return '';
+	const reset = hm(gauge.resets_at);
+	return `${name} ${gauge.left_pct}% left${reset ? `, resets ${reset}` : ''}.`;
+}
+
+// The resident row, as sentences. Empty when the index has no presence yet.
+export function residentText(p: Presence | undefined, fuel: Fuel[] | undefined): string[] {
+	if (!p) return [];
+	const lines: string[] = [];
+	const since = hm(p.since);
+	if (p.state === 'working' || p.state === 'holding') {
+		const who = p.body || 'a body';
+		lines.push(
+			`${who} in the seat${since ? ` since ${since}` : ''}${p.wait ? `, ${p.wait}` : ''}.`
+		);
+	} else {
+		const last = (p.last_body || p.body || 'unknown').split('/')[0];
+		const wait = p.wait ? p.wait.charAt(0).toUpperCase() + p.wait.slice(1) : '';
+		lines.push(
+			`Seat empty${since ? ` since ${since}` : ''}. Last engine ${last}.${wait ? ` ${wait}.` : ''}`
+		);
+	}
+	if (p.now) {
+		const step = p.step ? ` The step still on that wish: ${p.step}.` : '';
+		lines.push(`Doing the plan's next line, not live work: ${p.now}.${step}`);
+	}
+	if (p.letters?.length) {
+		const bits = p.letters.map((letter) => {
+			if (letter.filed === 'wish')
+				return `${letter.id} filed as ${letter.wish || 'a wish'} ${letter.state || ''}`.trim();
+			if (letter.filed === 'chatter') return `${letter.id} chatter`;
+			return `${letter.id} not filed`;
+		});
+		const more = p.letters_more ? ` ${p.letters_more} more not shown.` : '';
+		lines.push(`Letters it has read: ${bits.join('; ')}.${more}`);
+	}
+	const shell = p.shell || (p.body || p.last_body || '').split('/')[0];
+	const row = (fuel ?? []).find((item) => item.shell === shell);
+	if (row) {
+		const session = row.gauges?.find((gauge) => gauge.window === 'session');
+		const week = row.gauges?.find((gauge) => gauge.window === 'week');
+		const read = hm(row.read_at);
+		const pace = row.pace ? ` ${row.pace}.` : '';
+		const taken = read ? ` Reading taken ${read}.` : '';
+		if (!session)
+			lines.push(
+				`No short window. ${gaugeBit('Week', week)}${taken}${pace}`.replace(/\s+/g, ' ').trim()
+			);
+		else
+			lines.push(
+				`${gaugeBit('Session', session)} ${gaugeBit('Week', week)}${taken}${pace}`
+					.replace(/\s+/g, ' ')
+					.trim()
+			);
+	}
+	return lines;
+}
+
 // The leading machine, and on hover every machine this install has heard of. `seen` is the newest router beat
 // that reached this install, not liveness: a peer's facts come through the shuttle a couple of minutes late.
 export function leadName(machines: Machine[] | undefined): string {
@@ -172,6 +239,7 @@ export function assemble(index: Index, threads: Map<string, ThreadPart>, loose?:
 		tools,
 		live,
 		fuel: [...new Map((index.fuel || []).map((s) => [s.shell, s])).values()],
+		presence: index.presence,
 		machines: index.machines || [],
 		faces: index.faces,
 		person: index.person,

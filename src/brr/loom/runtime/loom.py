@@ -2293,6 +2293,12 @@ def _held_boundary(home, facts, main, thread):
     return {"held_next": held_next, "rest_price": rest_price if free else ""}
 
 
+def _pace_line(home, context) -> str:
+    """The seated shell's short-window pace, the same sentence the resident row shows."""
+    from .usage import pace_line_for
+    return pace_line_for(home, getattr(context, "shell", "") or "")
+
+
 def _render_boundary(home, facts, strand, gen, context):
     from .threads import thread_table
     main, state = main_snapshot(home), fold(facts)
@@ -2320,6 +2326,7 @@ def _render_boundary(home, facts, strand, gen, context):
         face=proposal_line(proposal),
         idle=_idle_acts(home, facts, strand, context, proposal, opened),
         left=_left(facts, context.thread, strand),
+        pace=_pace_line(home, context),
         **_pull(home, facts, context.thread, strand, home.room(strand)),
         **_budget(home, context.thread, facts, strand),
     )
