@@ -40,12 +40,13 @@ def _freeze(data: dict) -> dict:
 # The loom's own file, not a strand's. One writer: the router, except a
 # strand's loom still records that strand's exit and a person asks for a machine.
 _LOOM_KINDS = {
-    "connector.declared",
+    "connector.declared", "loom.github-credential",
     "letter.presence", "lease", "released", "attention", "router", "router.renewed",
     "speech", "speech.part", "thread.closed", "attempt.ended", "port.drained", "letter.disposed", "letter.due",
     "loom.started", "home.migrated", "loom.degraded", "loom.recovered", "loom.moved", "loom.pruned", "lease.fenced", "lease.handed", "machines.prefer", "machines.pin", "machines.name", "self.healed",
     "update.offered", "update.decided", "update.checked",
     "library.problem", "library.cleared", "place.offered", "interview.offer", "interview.offered",
+    "board.post",
 }
 
 
@@ -78,12 +79,13 @@ def fact_filename(fact: Fact) -> str:
 
 
 #: A ledger row written before a rename, in today's words (10052: molt became reincarnate).
-_FRESH = ("Fresh molt: start from main.", "Fresh reincarnation: start from main.")
+FRESH_MOLT = "Fresh molt: start from main."
+LEGACY_FRESH_MOLT = "Fresh reincarnation: start from main."
 
 
 def renamed(row: dict) -> dict:
     """The one place an old name is read: kind ``molt``, a letter's ``molt`` marker, the
-    ``molted`` ending and the fresh control text come back as ``reincarnate``'s."""
+    ``molted`` ending map to the existing schema. Fresh control letters use molt wording."""
     kind, data = row.get("kind"), row.get("data")
     if kind == "molt":
         row = {**row, "kind": "reincarnate"}
@@ -92,14 +94,14 @@ def renamed(row: dict) -> dict:
             data = {("reincarnate" if key == "molt" else key): value for key, value in data.items()}
         if kind == "attempt.ended" and data.get("cause") == "molted":
             data = {**data, "cause": "reincarnated"}
-        if kind == "letter" and data.get("body") == _FRESH[0]:
-            data = {**data, "body": _FRESH[1]}
+        if kind == "letter" and data.get("reincarnate") and data.get("body") == LEGACY_FRESH_MOLT:
+            data = {**data, "body": FRESH_MOLT}
         if data is not row.get("data"):
             row = {**row, "data": data}
     return row
 
 
-def read_file(path: Path) -> list[Fact]:
+def read_file(path: Path, select=None) -> list[Fact]:
     """Parse one jsonl file, skipping a trailing line the process didn't finish."""
     raw = path.read_bytes()
     if not raw:
@@ -107,11 +109,15 @@ def read_file(path: Path) -> list[Fact]:
     if not raw.endswith(b"\n"):
         cut = raw.rfind(b"\n")
         raw = raw[:cut + 1] if cut >= 0 else b""
-    facts = []
-    for line in raw.decode().splitlines():
-        if line.strip():
-            facts.append(Fact.from_row(renamed(json.loads(line))))
-    return facts
+    return _parse_lines(raw, select)
+
+
+def _parse_lines(raw: bytes, select=None) -> list[Fact]:
+    if select is None:
+        lines = raw.decode().splitlines()
+    else:
+        lines = (line for line in raw.split(b"\n") if select(line))
+    return [Fact.from_row(renamed(json.loads(line))) for line in lines if line.strip()]
 
 
 def read_facts(home: Home) -> list[Fact]:
@@ -399,7 +405,9 @@ class LedgerReader:
     new view, so a walker on another thread never sees one half-rebuilt.
     """
 
-    def __init__(self):
+    def __init__(self, *, select=None):
+        # A read-only projection can discard unrelated JSONL rows before decoding.
+        self.select = select
         self.streams = {}
         self.listing = (None, [])
         self.ordered = LedgerView()
@@ -482,15 +490,14 @@ class LedgerReader:
                     handle.seek(0)
                     raw = handle.read()
                 complete = raw[:raw.rfind(b"\n") + 1]
-                added = [Fact.from_row(renamed(json.loads(line)))
-                         for line in complete.decode().splitlines() if line.strip()]
+                added = _parse_lines(complete, self.select)
                 tail = ((prior[3] if prior is not None and offset else b"") + complete)[-TAIL:]
                 streams[path] = (stamp, offset + len(complete), str(path), tail)
                 additions.extend(added)
         if changed:
             if repair:
                 duplicates = []
-                self.ordered = LedgerView(union(*(read_file(path) for path in paths),
+                self.ordered = LedgerView(union(*(read_file(path, self.select) for path in paths),
                                                 duplicates=duplicates))
                 self.ordered.duplicates = duplicates
             else:

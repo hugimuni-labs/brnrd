@@ -348,3 +348,12 @@ def test_member_logins_read_the_new_env_and_fall_back_to_the_old(monkeypatch):
     # Set, even empty, wins: the old name does not leak back in.
     monkeypatch.setenv("BRNRD_MEMBER_GITHUB_LOGINS", "")
     assert Settings().home_gate_member_github_logins == ()
+
+
+def test_the_subscription_read_names_a_member_apart_from_its_tier():
+    # Letter 11758: comped access read "free" with a subscribe pitch; tier and access are two answers.
+    client, *_ = _setup(home_gate_member_github_logins=("octocat",))
+    sub = client.get("/v1/accounts/subscription").json()
+    assert (sub["tier"], sub["access"]) == ("free", "member")
+    client, *_ = _setup(home_gate_member_github_logins=("someone-else",))
+    assert client.get("/v1/accounts/subscription").json()["access"] == "home_subscription_required"

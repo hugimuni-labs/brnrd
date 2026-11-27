@@ -7,7 +7,7 @@ import { quotaLevel } from './quota.ts';
 // it omits, so every optional field here renders as absent, never as 0.
 
 export type StrandState =
-	'working' | 'holding' | 'idle' | 'parked' | 'failed' | 'reincarnated' | 'settled' | 'stopped';
+	'working' | 'holding' | 'idle' | 'parked' | 'failed' | 'molted' | 'settled' | 'stopped';
 
 export type Turn = 'yours' | 'mine' | 'blocked' | 'none';
 
@@ -33,6 +33,8 @@ export interface LoomShell {
 	state?: string;
 	gauges?: LoomGauge[];
 	cores?: string[];
+	// Present only when this engine's initiative share is not 100.
+	initiative_share?: number;
 }
 
 export interface LoomBodies {
@@ -155,6 +157,12 @@ export async function fetchLoom(
 	if (!res.ok) throw new Error(`loom fetch failed: ${res.status}`);
 	const body = (await res.json().catch(() => null)) as Partial<LoomSnapshot> | null;
 	if (!body || body.v !== 1) return 'none';
+	if (body.presence?.state === 'reincarnated') body.presence.state = 'molted';
+	for (const thread of body.threads ?? []) {
+		for (const strand of thread.strands ?? []) {
+			if (strand.state === 'reincarnated') strand.state = 'molted';
+		}
+	}
 	return body as LoomSnapshot;
 }
 

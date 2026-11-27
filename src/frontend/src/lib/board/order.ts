@@ -50,10 +50,13 @@ export function byThread(letters: Letter[]): Map<string, Letter[]> {
 	return by;
 }
 
-// Freshness is the newest letter; last_at (any fact a strand writes) only for a thread with none.
+// Freshness is the newest letter; last_at (any fact a strand writes) only for a thread with none. The index row's
+// letter_at gives it before the thread part brings the letters, so a cold load sorts as the whole board will.
 export const lastAt = (t: Thread, by: Map<string, Letter[]>): string => {
 	const ls = by.get(t.id) || [];
-	return ls.length ? ls[ls.length - 1].at : t.last_at || '';
+	const loaded = ls.length ? ls[ls.length - 1].at : '';
+	const newest = (t.letter_at || '') > loaded ? t.letter_at || '' : loaded;
+	return newest || t.last_at || '';
 };
 
 export function sortThreads(threads: Thread[], by: Map<string, Letter[]>): Thread[] {
@@ -94,14 +97,16 @@ export const REORDER = 10000;
 // Column order moves at most once per REORDER ms; a new thread takes its sorted place at once. While the bead sheet is
 // open, or a thread column is under the pointer (5095), nothing moves: a new thread joins at the end. `have` is the
 // order on screen; holding to creation order snapped a column that had just moved back to where it was made (4942).
-export type Hold = { first: boolean; held: boolean; now: number; last: number };
+// `partial`: a cold load still bringing its parts. Its first paint places at once; later paints hold that order (a
+// column's freshness waits on its letters, so each arriving part would move it) until the whole model places.
+export type Hold = { first: boolean; held: boolean; now: number; last: number; partial?: boolean };
 export function arrange(
 	want: string[],
 	have: string[],
 	h: Hold
 ): { ids: string[]; last: number; wait: number | null } {
 	have = have.filter((id) => want.includes(id));
-	if (!h.first && h.held)
+	if ((!h.first && h.held) || (h.partial && have.length))
 		return { ids: [...have, ...want.filter((id) => !have.includes(id))], last: h.last, wait: null };
 	if (h.first || h.now - h.last >= REORDER)
 		return { ids: want, last: want.join() !== have.join() ? h.now : h.last, wait: null };

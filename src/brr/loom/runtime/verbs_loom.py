@@ -1,4 +1,4 @@
-"""``python -m brr.loom.runtime <loom|send|reincarnate|hold|jack|attention>``."""
+"""``python -m brr.loom.runtime <loom|send|molt|hold|jack|attention>``."""
 
 from __future__ import annotations
 
@@ -138,7 +138,7 @@ def _send(argv: list[str]) -> int:
     parser.add_argument("--chatter", action="store_true", help="cites the --re letter as no wish")
     parser.add_argument("--correction", metavar="PATH", help="the --re letter changes this page, scar or README")
     parser.add_argument("--silent", metavar="KIND", help="joke, test or mistake: one word or a --note")
-    parser.add_argument("--hold", metavar="WHY", help="out-of-pattern or not-him: this send is the check")
+    parser.add_argument("--hold", metavar="WHY", help="out-of-pattern or sender-mismatch: this send is the check")
     parser.add_argument("--for", dest="ask_for", metavar="W-ID",
                         help="a question to a person files an ask under this wish")
     parser.add_argument("--chatter-of", dest="chatter_of", default=None, help=argparse.SUPPRESS)
@@ -146,7 +146,9 @@ def _send(argv: list[str]) -> int:
     parser.add_argument("--at", help="YYYY-MM-DDTHH:MM:SSZ, +<n>m, +<n>h, or +<n>d")
     parser.add_argument("--body", dest="body_choice", metavar="SHELL[/CORE]")
     parser.add_argument("--spend", action="store_true",
-                        help="open the thread on the first spend.burn shell above the floor")
+                        help="when there is a choice, open on the first eligible engine in spend order")
+    parser.add_argument("--may-deliver", action="store_true",
+                        help="allow a new thread to deliver its opening wishes to the person")
     parser.add_argument("--repo", action="append", default=[])
     parser.add_argument("--budget", metavar="TOKENS",
                         help="weighted tokens, e.g. 2m: a new thread's allocation, or the opener's raise")
@@ -174,14 +176,14 @@ def _send(argv: list[str]) -> int:
             from .home import thread_of
             from .lifecycle import land_status
             if (args.body is not None or args.note is not None or args.body_choice is not None
-                    or args.repo or args.spend):
-                raise PortError("send: --reopen supplies the letter text; drop the body, --note and --spend")
+                    or args.repo or args.spend or args.may_deliver):
+                raise PortError("send: --reopen supplies the letter text; drop the body, --note, --spend and --may-deliver")
             land_status(room, thread_of(args.to), "open", f"reopen {thread_of(args.to)}")
         letter_id = write_send(
             room, to=args.to, sender=strand_of_room(room), body=args.reopen if args.reopen is not None else args.body or "",
             re=args.re, note=args.note, clean=args.clean, kind=args.kind,
             refs=tuple(args.ref or ()), body_choice=args.body_choice, spend=args.spend,
-            repo_sources=args.repo, at=args.at,
+            repo_sources=args.repo, at=args.at, may_deliver=args.may_deliver,
             wish=args.wish, budget=None if args.budget is None else parse_tokens(args.budget),
             chatter=chatter, ask_for=args.ask_for, triage=branches[0] if branches else None,
             echo=echo, reopen=args.reopen is not None,
@@ -194,28 +196,43 @@ def _send(argv: list[str]) -> int:
     return 0
 
 
-def _reincarnate(argv: list[str]) -> int:
-    """``reincarnate``: hand the seat on. The stakes and the README's facts come
-    first, on stderr, so the choice is an informed one."""
-    parser = Parser(verb="reincarnate", prog="python -m brr.loom.runtime reincarnate")
+def _molt(argv: list[str]) -> int:
+    """End the context with a carry, accepting the legacy why and fresh start."""
+    parser = Parser(verb="molt", prog="brnrd runtime molt")
     parser.add_argument("--room")
-    parser.add_argument("--why", required=True)
-    parser.add_argument("--fresh", action="store_true")
+    handover = parser.add_mutually_exclusive_group(required=True)
+    handover.add_argument("--carry", type=Path, metavar="FILE")
+    handover.add_argument("--why", help="leave a text note instead of a carry file")
+    parser.add_argument("--fresh", action="store_true", help="start from main (requires --why)")
     parser.add_argument("--cites", metavar="LETTER_ID", help="the letter on this thread it answers: its receipt")
     args = parser.parse_args(argv)
-    room = _room(args.room)
     try:
-        if not args.fresh:
-            sys.stderr.write(_stakes(room))
-        fact_id = write_reincarnate(room, args.why, fresh=args.fresh, cites=args.cites)
+        room = _room(args.room)
+        fresh = args.fresh
+        carry = None
+        if args.carry is not None:
+            if fresh:
+                raise PortError("--fresh requires --why")
+            carry = args.carry.read_bytes().decode("utf-8")
+            if not carry.strip():
+                raise PortError("--carry file is empty")
+            why = "Carried across the molt."
+        else:
+            why = args.why
+            if not fresh:
+                sys.stderr.write(_stakes(room))
+        fact_id = write_reincarnate(room, why, fresh=fresh, carry=carry, cites=args.cites)
     except (PortError, SelfError, ValueError, OSError) as exc:
-        return refuse("reincarnate", exc)
+        return refuse("molt", exc)
+    if not fresh:
+        from .reincarnate import wake_preview
+        sys.stderr.write(wake_preview(room, why, carry, args.carry))
     sys.stdout.write(fact_id + "\n")
     return 0
 
 
 def _stakes(room) -> str:
-    """What the successor boots into, said once more before the seat goes."""
+    """What the next context starts from, said once more before the seat goes."""
     from .jack import _state
     from .ledger import read_facts
     from .project import sender_threads
@@ -242,6 +259,29 @@ def bare(why: str) -> bool:
     return sum(1 for w in words if w and w not in _GENERIC and len(w) > 1) < 3
 
 
+def _rest(argv: list[str]) -> int:
+    from .jack import _boundary_text, _set_state
+    from .port import parse_boundary
+
+    parser = Parser(verb="rest", prog="python -m brr.loom.runtime rest")
+    parser.add_argument("--room")
+    parser.add_argument("--why", required=True)
+    args = parser.parse_args(argv)
+    why = " ".join(args.why.split())
+    if bare(why):
+        return refuse("rest", "rest: name why the runnable work can wait; a generic why is no reason.")
+    try:
+        room = _room(args.room)
+        boundary = parse_boundary(_boundary_text(room))
+        if not boundary.gen or boundary.strand != strand_of_room(room):
+            return refuse("rest", "rest: no active boundary for this room")
+        _set_state(room, rest_pending={"gen": boundary.gen, "why": why, "id": "rest.why:" + mint(12)})
+    except (PortError, OSError, ValueError) as exc:
+        return refuse("rest", str(exc))
+    print(f"resting because {why}")
+    return 0
+
+
 def _hold(argv: list[str]) -> int:
     """``hold``: keep the seat past the context mark, naming what would die if it went.
     A bare why is refused; the hold is a fact, so the whys can be read back later."""
@@ -257,7 +297,7 @@ def _hold(argv: list[str]) -> int:
     if bare(why):
         return refuse("hold", "hold: name what would die, by name (a decision mid-way, a person's "
                               "conversation, a reasoning not yet written); a generic why is no hold. "
-                              "If nothing would, reincarnate --why \"<what the successor picks up>\".")
+                              "If nothing would, molt --carry <file>.")
     try:
         room = _room(args.room)
         state = _state(room)

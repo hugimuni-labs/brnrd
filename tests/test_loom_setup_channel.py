@@ -403,7 +403,7 @@ def test_setup_seeds_a_self_so_a_letter_has_a_thread_to_land_on(tmp_path, monkey
 
 def test_setup_turns_the_onboarding_list_into_asks_the_first_wake_shows(tmp_path, monkeypatch):
     from brr.loom.runtime.ledger import read_facts
-    from brr.loom.runtime.wishes import waits_on, wake_wishes, wishes
+    from brr.loom.runtime.wishes import ONBOARDING_WISH, waits_on, wake_wishes, wishes
     from brr.loom.runtime.lifecycle import main_snapshot
     monkeypatch.setattr(setup_channel, 'pair', lambda *a, **kw: None)
     argv = ['--home', str(tmp_path), '--kind', 'fake', '--name', 'desk', '--person', 'ada']
@@ -411,7 +411,7 @@ def test_setup_turns_the_onboarding_list_into_asks_the_first_wake_shows(tmp_path
     home = Home(tmp_path)
     found = wishes(read_facts(home))
     # The resident's own wish, written by the loom: the person said nothing yet.
-    [own] = [w for w in found.values() if w.line == setup_channel.ONBOARDING_WISH]
+    [own] = [w for w in found.values() if w.line == ONBOARDING_WISH]
     assert own.sender == 'resident' and not own.says and not own.parent
     asks = [w for w in found.values() if w.parent == own.id]
     assert [w.line for w in sorted(asks, key=lambda w: w.born)][0] == 'What should I call you?'
@@ -421,7 +421,7 @@ def test_setup_turns_the_onboarding_list_into_asks_the_first_wake_shows(tmp_path
     assert not [f for f in read_facts(home) if f.kind == 'wish' and not f.by.startswith('loom:')]
     # They wait on the person, and the home thread's next body wakes with them.
     heads = waits_on(found, main_snapshot(home))
-    assert {heads[w.id] for w in asks} == {'operator'}
+    assert heads == {w.id: 'operator' for w in asks}
     wake = wake_wishes(read_facts(home), home.main_thread())
     assert 'What should I call you?' in wake and 'What do you want help with first?' in wake
     # The list is the self's: a line added later is asked, none twice.
@@ -695,6 +695,53 @@ def test_the_offers_start_on_and_enter_keeps_them(capsys):
     assert setup_channel.checklist(rows, keys=iter(['\x1b[B', ' ', '\r'])) == {'repo', 'board'}
     assert setup_channel.checklist(rows, keys=iter(['\x1b[A', ' ', '\n'])) == {'repo', 'app'}
     assert 'Enter confirms' in capsys.readouterr().out
+
+
+def _screen(out, width):
+    """The lines a terminal ``width`` wide shows after ``out``: wraps, cursor up, clear down."""
+    lines, row, col = [[]], 0, 0
+    i = 0
+    while i < len(out):
+        esc = re.match(r'\x1b\[([0-9;?]*)([A-Za-z])', out[i:])
+        if esc:
+            arg, op = esc.groups()
+            if op == 'A':
+                row = max(0, row - int(arg or 1))
+            elif op == 'J':
+                del lines[row + 1:]
+                lines[row] = lines[row][:col]
+            elif op == 'K' and arg == '2':
+                lines[row] = []
+            i += esc.end()
+            continue
+        ch = out[i]
+        i += 1
+        if ch == '\r':
+            col = 0
+        elif ch == '\n':
+            row, col = row + 1, 0
+            while len(lines) <= row:
+                lines.append([])
+        else:
+            if col == width:
+                row, col = row + 1, 0
+                while len(lines) <= row:
+                    lines.append([])
+            line = lines[row]
+            line[col:col + 1] = [ch]
+            col += 1
+    return [''.join(line) for line in lines if line]
+
+
+def test_a_narrow_window_redraws_the_picker_in_place(capsys, monkeypatch):
+    # Letter 11752: rows wider than the window wrapped, and each arrow left copies.
+    monkeypatch.setattr(setup_channel.shutil, 'get_terminal_size', lambda *a: shutil.os.terminal_size((24, 20)))
+    rows = [('cloud', 'brnrd cloud: chat on brnrd.dev from any browser', ''),
+            ('web', 'The page on this computer · connected', ''), ('tg', 'Telegram', '')]
+    setup_channel.checklist(rows, keys=iter(['\x1b[B', '\x1b[B', ' ', '\x1b[A', '\r']))
+    shown = ''.join(_screen(capsys.readouterr().out, 24))
+    assert shown.count('Telegram') == 1 and shown.count('brnrd cloud') == 1
+    assert shown.count('[') == 3
 
 
 def test_an_offer_that_cannot_be_had_shows_off_with_its_reason_and_cannot_be_switched_on(capsys):

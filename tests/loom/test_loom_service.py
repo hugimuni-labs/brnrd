@@ -1185,3 +1185,17 @@ def test_reinstall_rewrites_old_prefix_path_before_current_moves(tmp_path, monke
     path = service._path_env(f'{old}/bin:/kept/tools')
     assert path.split(':') == [str(entry.shim().parent), str(entry.current() / 'bin'),
                                '/kept/tools', '/new/tools', '/usr/bin']
+
+
+def test_status_board_line_names_the_setup_when_off_and_a_silent_port(tmp_path):
+    import socket
+    home = tmp_path / "home"
+    _body(home)
+    assert service._board_line(home) == f"board: off (turn on: {service.WEB_SETUP})"
+    with socket.socket() as probe:
+        probe.bind(("127.0.0.1", 0))
+        port = probe.getsockname()[1]
+    path = home / "loom" / "config.toml"
+    path.write_text(path.read_text() + f'board_port = "{port}"\n')
+    assert service._board_line(home) == f"board: http://127.0.0.1:{port} (not answering)"
+    assert service._board_line(None) == "board: -"

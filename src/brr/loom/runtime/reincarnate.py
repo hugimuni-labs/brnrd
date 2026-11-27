@@ -3,7 +3,7 @@
 The design is the self's threads/boot-review/design.md (v2, on the person's
 5557 and 5565) and threads/reincarnate (10048). Nothing here says one is due. The value of what sits in a
 context can't be measured from outside it, so the jack only states facts: what
-the README gained and lost since this gen booted, the ids it cites that have
+the README gained and lost since waking, the ids it cites that have
 since closed, and, where a judgement is due (the reincarnation verb, a long park), the
 stakes and the context's size as plain cost.
 """
@@ -16,6 +16,7 @@ import re
 import subprocess
 import time
 from datetime import datetime, timezone
+from io import StringIO
 from pathlib import Path
 
 from .home import home_of_room
@@ -24,17 +25,55 @@ from .ledger import renamed
 #: Facts that settle a turn rather than act in it.
 SETTLING = {"shown", "note", "wish.read", "left.asked", "reincarnate", "hold"}
 
-STAKES = ("What isn't in the README is lost on any end, a reincarnation or a crash, and the body that "
-          "picks up after a careless handover pays for it.")
+CARRY_BUDGET_SHARE = 0.10
+
+STAKES = "Carried across a molt: only what is written. Kept in the ledger: everything else."
 
 #: Past this context a park asks what would die: when to ask, never what to do.
 MARK = 150_000
 #: A hold, or an ask left unanswered, covers the context until it grows this much more.
 REARM = 50_000
 
-DIE = "What in it would die if you reincarnated now?"
-ANSWER = ('Answer with `brnrd runtime reincarnate --why "<what the successor picks up>"` '
+DIE = "What would be lost in a molt now?"
+ANSWER = ('Answer with `brnrd runtime molt --carry <file>` '
           'or `brnrd runtime hold --why "<what would die, by name>"`.')
+
+
+def wake_preview(room: Path, why: str, carry: str | None, carry_path: Path | None) -> str:
+    """Read the current wake inputs with the new handover and an empty occasion."""
+    from .jack import _state
+    from .ledger import read_facts
+    from .home import strand_of_room
+    from .project import sender_threads
+    from .selfrepo import run_wake, wake_budget
+
+    lines = []
+    try:
+        cap = int(wake_budget() * CARRY_BUDGET_SHARE)
+    except ValueError:
+        return ""
+    if carry is not None:
+        size = len(carry.encode("utf-8"))
+        if size > cap:
+            lines.append(f"Wake preview: carry {carry_path} is {size - cap} bytes over its "
+                         f"{CARRY_BUDGET_SHARE:.0%} share ({size} of {cap} bytes).")
+    try:
+        thread = sender_threads(read_facts(home_of_room(room)))[strand_of_room(room)]
+        port = room / "port"
+        part, repos = port / "loom.md", port / "repos"
+        now = datetime.now(timezone.utc)
+        context = int(_state(room).get("context") or 0)
+        count = f", at {context // 1000}k" if context else ""
+        handover = f"Molted at {now:%H:%M}Z{count}. Carried across:\n"
+        handover += (carry if carry is not None else why).removesuffix("\n") + "\n"
+        output = StringIO()
+        if run_wake(room, thread, loom_part=part if part.is_file() else None,
+                    repos=repos if repos.is_file() else None, stdout=output,
+                    stderr=subprocess.DEVNULL, preview_handover=handover) == 0:
+            lines.extend(output.getvalue().splitlines())
+    except Exception:  # noqa: BLE001 - a reading never prevents a molt
+        pass
+    return "".join(line + "\n" for line in lines)
 
 
 def contexts(stdin_text: str, boot: int | None = None) -> tuple[int, int]:
@@ -107,7 +146,7 @@ def _acted(fact: dict) -> bool:
 def _readme_act(fact: dict) -> str:
     """What a fact changes in the README, or ``""``: a result, a merge, a new
     wish, a park. A left, a stamp, a note or a read changes nothing it says
-    (prompts-remake, his 10095); a settle lands the README itself."""
+    (prompts-remake, letter 10095); a settle lands the README itself."""
     kind, data = fact.get("kind"), fact.get("data") or {}
     if kind == "wish":
         return "a new wish" if str(fact.get("id", "")).startswith("w-") else ""
@@ -180,7 +219,7 @@ def readme_facts(room: Path, thread: str, facts, since: str = "") -> str:
         count = subprocess.run(["git", "-C", str(clone), "rev-list", "--count", f"{since}..HEAD", "--", rel],
                                capture_output=True, text=True).stdout.strip() or "0"
         if len(stat) >= 2 and stat[0].isdigit():
-            parts.append(f"+{stat[0]} −{stat[1]} lines in {count} landing{'s' * (count != '1')} since this gen booted")
+            parts.append(f"+{stat[0]} −{stat[1]} lines in {count} landing{'s' * (count != '1')} since waking")
     shut, prs = closed(facts)
     gone = [f"{ident} {shut[ident]}" for ident in dict.fromkeys(_WISH.findall(text)) if ident in shut]
     gone += [f"#{n} {prs[n]}" for n in dict.fromkeys(_PR.findall(text)) if n in prs]
@@ -352,9 +391,9 @@ def census(room: Path, thread: str, state: dict, facts, now: float | None = None
     landed = landed_at(room, thread, base) if thread else None
     lines = []
     readme = readme_facts(room, thread, facts, base) if thread else ""
-    head = f"since this gen booted{f' ({_ago(now - booted)} ago)' if booted else ''}"
+    head = f"since waking{f' ({_ago(now - booted)} ago)' if booted else ''}"
     if landed is not None:
-        lines.append(f"{head}, landed in the README (the successor gets it for free): {readme}")
+        lines.append(f"{head}, landed in the README: {readme}")
     else:
         lines.append(f"{head}: nothing landed in the README" + (f" ({readme})" if readme else ""))
     mine = _mine(room, landed if landed is not None else booted)

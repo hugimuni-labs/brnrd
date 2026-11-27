@@ -60,10 +60,10 @@ def _schedule(root, at, *, cancel=False, fail=False, opener=False):
     write_thread(root, 'work', readme, 'timer', wait='0')
     bodies(root, f'''import json, subprocess, sys
 from pathlib import Path
-from brr.loom.runtime.fakebody import Ctx, _own_thread
+from brr.loom.runtime.fakebody import Ctx
 from brr.loom.runtime.home import atomic_write
 ctx = Ctx(Path(sys.argv[1]))
-own = _own_thread(ctx.wake())
+own = ctx.thread
 letters = ctx.owed()
 if any(l.body == "begin" for l in letters):
     for letter in letters:

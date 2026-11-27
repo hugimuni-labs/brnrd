@@ -374,6 +374,7 @@ def thread_axes(facts, main, ownership=None):
         elif held and (not end or (end.data['strand'], end.data['gen']) != held):
             cause, restart, control = 'body', 'current body', '—'
         elif cause == 'reincarnated':
+            cause = 'molted'
             restart, control = 'loom: now', '—'
         elif cause == 'paced':
             restart, control = 'loom: start waiting for gauge', f'{override}: threads --force {thread}'

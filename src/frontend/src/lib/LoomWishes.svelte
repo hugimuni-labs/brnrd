@@ -288,9 +288,9 @@
 		{#if wishes.length}
 			<p class="font-mono text-[10px] tracking-wide" data-testid="wishes-owed">
 				{#if owed}
-					<span class="text-amber-300">{owed} wait{owed === 1 ? 's' : ''} on you</span>
+					<span class="text-amber-300">{owed} for your word</span>
 				{:else}
-					<span class="text-ink-mute">nothing waits on you</span>
+					<span class="text-ink-mute">nothing for your word</span>
 				{/if}
 			</p>
 		{/if}

@@ -38,6 +38,7 @@ def test_the_delivery_letter_names_the_file_and_stamps_it(monkeypatch, tmp_path)
     import brr.loom.runtime.project as project
     import brr.loom.runtime.verbs_loom as verbs_loom
     from brr.loom.runtime import verbs_wishes
+    from brr.loom.runtime.home import Home
     from brr.loom.runtime.wishes import Say
     sent = []
     monkeypatch.setattr(verbs_wishes, "read_facts", lambda home: [])
@@ -47,8 +48,8 @@ def test_the_delivery_letter_names_the_file_and_stamps_it(monkeypatch, tmp_path)
     monkeypatch.setattr(verbs_wishes, "strand_of_room", lambda room: "s-aaaa-work")
     wish = SimpleNamespace(id="w-want", line="A report", sender="person", says=[Say("L1")])
     sha = "ab" * 32
-    verbs_wishes._tell_delivered(None, SimpleNamespace(room=None), wish, dict(
-        kind="host", ref="/h/report.pdf", line="The report", sha256=sha, size=1258291, name="report.pdf"))
+    verbs_wishes._tell_delivered(Home(tmp_path), SimpleNamespace(room=None), wish, dict(
+        kind="host", ref="/h/report.pdf", line="The report", sha256=sha, size=1258291, name="report.pdf"), "inbox")
     assert sent[0]["body"] == ("delivered &w-want: A report\nThe report: /h/report.pdf\n"
                                f"file: report.pdf · 1.2 MB · sha256 {sha}\n"
                                "Reply ok to accept, or say what is off.\n")

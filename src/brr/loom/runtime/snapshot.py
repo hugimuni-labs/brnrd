@@ -19,9 +19,9 @@ from pathlib import Path
 from .adapters import body_label
 from .home import Home, thread_of
 from .project import cached_projection, fold, is_notice, projection_cache, sender_threads
-from .wishes import progress
+from .wishes import progress, wish_plans
 
-STATES = {"working", "holding", "idle", "parked", "failed", "reincarnated", "settled", "stopped"}
+STATES = {"working", "holding", "idle", "parked", "failed", "molted", "settled", "stopped"}
 # The threads table's words for a start waiting on fuel; the board says parked.
 _PARKED = {"paced", "pending"}
 _PR = re.compile(r"https://github\.com/[^\s/]+/[^\s/]+/pull/\d+")
@@ -94,6 +94,7 @@ def _done(text: str) -> list[dict]:
 def _state(now: str) -> str | None:
     word = now.split(" ", 1)[0]
     word = "parked" if word in _PARKED else word
+    word = "molted" if word == "reincarnated" else word
     return word if word in STATES else None
 
 
@@ -103,9 +104,10 @@ def _fuel(home: Home, cores: dict[str, list[str]], floor: float) -> list[dict]:
     The status line pulls the seated shell forward; the board has no seat, so
     the order is the status line's with that pull left out. A collector error
     with no window is ``fails``, the same word the line uses, and the error
-    text stays in the file.
+    text stays in the file. ``unmetered`` is that word with no error key.
     """
-    from .usage import FAILS, _SHELL_NAME, _past_reset, collector_failed, gauge_windows
+    from .config import initiative_share
+    from .usage import FAILS, UNMETERED, _SHELL_NAME, _past_reset, collector_failed, gauge_windows, known_unmetered
     found = []
     for path in sorted((home.root / "loom/usage").glob("*.json")):
         shell = path.name.removesuffix(".json")
@@ -115,9 +117,11 @@ def _fuel(home: Home, cores: dict[str, list[str]], floor: float) -> list[dict]:
             payload = json.loads(path.read_text())
             windows = gauge_windows(payload)
             if not windows:
+                extra = {"cores": cores[shell]} if cores.get(shell) else {}
                 if windows is not None and collector_failed(payload):
-                    found.append({"shell": shell, "state": "error", "error": FAILS, "gauges": [],
-                                  **({"cores": cores[shell]} if cores.get(shell) else {})})
+                    found.append({"shell": shell, "state": "error", "error": FAILS, "gauges": [], **extra})
+                elif windows is not None and known_unmetered(payload):
+                    found.append({"shell": shell, "state": UNMETERED, "gauges": [], **extra})
                 continue
             gauges = [{"window": w["name"], "left_pct": w["left_pct"],
                        **({"resets_at": _iso(w["resets_at"])} if w.get("resets_at") else {})}
@@ -126,7 +130,9 @@ def _fuel(home: Home, cores: dict[str, list[str]], floor: float) -> list[dict]:
             continue
         state = ("dry" if any(g["left_pct"] <= floor for g in gauges)
                  else "stale" if _past_reset(payload, time.time()) else "ok")
+        share = initiative_share(home.root, shell)
         found.append({"shell": shell, "state": state, "gauges": gauges,
+                      **({"initiative_share": share} if share != 100 else {}),
                       **({"cores": cores[shell]} if cores.get(shell) else {})})
     return found
 
@@ -174,8 +180,7 @@ def _wish_rows(told, facts) -> list[dict]:
 
     def last(wish):
         return max((_when(r["at"]) for r in wish.results), default=_when(wish.at))
-    from .waits import live
-    parked = {wish.id: read for wish, read in live(told)}
+    plans = wish_plans(told)
     rows = []
     for w in sorted(told.values(), key=lambda w: (not w.open, -last(w).timestamp(), w.id))[:WISHES]:
         says = []
@@ -187,20 +192,19 @@ def _wish_rows(told, facts) -> list[dict]:
             says.append(_bare({"id": say.letter, "from": letter.data.get("from"),
                                "at": _iso(letter.at), "head": text[:HEAD]}))
         answer = answers.get(w.id)
+        left, since, parked = plans[w.id]
         rows.append(_bare({
             "id": w.id, "thread": w.thread, "from": w.sender, "line": w.line, "state": w.state,
             "origin": w.origin, "at": _iso(w.at), "says": says, "reading": w.reading, "rec": w.rec,
             # What the loom watches for this park, while it stands.
-            "wait": _bare({"on": parked[w.id]["wait"].get("on"), "since": _iso(parked[w.id]["at"]),
-                           "until": parked[w.id]["wait"].get("until")}) if w.id in parked else None,
+            "wait": _bare({"on": parked["wait"].get("on"), "since": _iso(parked["at"]),
+                           "until": parked["wait"].get("until")}) if parked is not None else None,
             "results": [_bare({"kind": r.get("kind"), "ref": r.get("ref"), "line": r.get("line"),
                                "delivered": bool(r.get("delivered")), "at": _iso(r["at"])})
                         for r in w.results],
-            "left": _bare({"steps": w.left["steps"], "gen": w.left["gen"], "by": w.left["by"],
-                           "at": _iso(w.left["at"])}) if w.left else None,
-            # Steers after the latest left: what the left has not taken in yet.
-            "steered": [i for x in w.stamps if x["letters"] and x["at"] > (w.left["at"] if w.left else w.born)
-                        for i in x["letters"]],
+            "left": _bare({"steps": left["steps"], "gen": left["gen"], "by": left["by"],
+                           "at": _iso(left["at"])}) if left else None,
+            "steered": [i for letters in since for i in letters],
             "verdict": _bare({"as": w.verdict["as"], "evidence": w.verdict.get("evidence"),
                               "at": _iso(w.verdict["at"])}) if w.verdict else None,
             "answer": {"verdict": answer.data["verdict"], "at": _iso(answer.at),
@@ -275,7 +279,7 @@ def thread(v: View, row: dict) -> dict:
     last = v.activity.get(thread)
     told = v.told
     entry = {"id": thread, "title": _SENTENCE.split(data.get("headline", ""), 1)[0],
-             "status": data.get("status"), "turn": turn,
+             "status": data.get("status"), "turn": turn, "rest": row.get("rest"),
              "blocked_on": row["restart"] if turn == "blocked" else None,
              "opened_by": data.get("opened-by"),
              "waits_on": v.waits.get(thread),

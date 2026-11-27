@@ -42,7 +42,7 @@
 		oninput={() => {
 			b.force = false;
 			b.keep();
-			if (!b.beads) b.store.loadBeads().then((x) => (b.beads = x));
+			if (!b.beads) void b.wantBeads();
 		}}
 		onkeydown={(e) => {
 			if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {

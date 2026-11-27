@@ -19,9 +19,33 @@ import type { Held } from './cache.ts';
 
 export const BASE = '/v1/loom';
 
+// A page being dismissed starts no reads and ends the ones in flight as cancellations. WebKit logs a console error for
+// a fetch it refuses during dismissal, even a caught one, and Playwright's WebKit raises that line as a pageerror
+// (webkit-ci, 2026-11-25). pageshow gives a page restored from the back-forward cache a fresh signal.
+let page = new AbortController();
+if (typeof window !== 'undefined') {
+	// WebKit can refuse an in-flight read before pagehide. Cancel in beforeunload as well.
+	addEventListener('beforeunload', () => {
+		page.abort();
+		// If another listener cancels navigation, the still-active page can resume its reads.
+		setTimeout(() => {
+			if (!document.hidden && page.signal.aborted) page = new AbortController();
+		}, 0);
+	});
+	addEventListener('pagehide', () => page.abort());
+	addEventListener('pageshow', () => {
+		if (page.signal.aborted) page = new AbortController();
+	});
+}
+export const leaving = (signal?: AbortSignal | null) =>
+	signal ? AbortSignal.any([signal, page.signal]) : page.signal;
+
+// A read the page cancelled as it left: no error to show or raise.
+export const cancelled = (e: unknown) => (e as Error | null)?.name === 'AbortError';
+
 export async function probeBoard(signal?: AbortSignal) {
 	try {
-		const response = await fetch(`${BASE}/index`, { cache: 'no-store', signal });
+		const response = await fetch(`${BASE}/index`, { cache: 'no-store', signal: leaving(signal) });
 		if (response.status === 401) return { kind: 'anon' } as const;
 		if (response.status === 402) return { kind: 'refused' } as const;
 		if (response.status === 404) return { kind: 'missing' } as const;
@@ -60,7 +84,7 @@ export function patchBeads(held: Beads, delta: BeadsDelta): Beads {
 }
 
 export async function getJSON(path: string): Promise<unknown> {
-	const r = await fetch(path, { cache: 'no-store' });
+	const r = await fetch(path, { cache: 'no-store', signal: leaving() });
 	if (!r.ok) throw new Error(`${path}: HTTP ${r.status}`);
 	return r.json();
 }
@@ -70,12 +94,18 @@ const PART_ONLY = new Set(['letters', 'wishes', 'tools', 'live', 'chain', 'more'
 
 // The header line. One shell per provider, in the index's order (name order, the status line's without a seat
 // pulled forward). A collector error with no window is the word the index carries (`fails`); the error text stays off.
+// `unmetered` is that word when the collector named the state and wrote no error.
 export function headerFuel(fuel: Fuel[] | undefined): string {
 	return (fuel ?? [])
 		.map((f) => {
 			const gauges = (f.gauges ?? []).map((g) => `${g.window} ${g.left_pct}%`).join(' ');
-			const word = gauges || f.error || '';
-			return word ? `${f.shell} ${word}` : '';
+			const word =
+				gauges || (f.state === 'unmetered' && !f.error ? 'unmetered' : '') || f.error || '';
+			const share =
+				typeof f.initiative_share === 'number' && f.initiative_share !== 100
+					? ` share ${f.initiative_share}%`
+					: '';
+			return word ? `${f.shell} ${word}${share}` : '';
 		})
 		.filter((line) => line)
 		.join('   ');
@@ -134,6 +164,7 @@ export function assemble(index: Index, threads: Map<string, ThreadPart>, loose?:
 			};
 	}
 	return {
+		goals: index.goals,
 		threads: index.threads.map((t) => join(t, threads.get(t.id))),
 		letters: [...byId.values()].sort(byAt),
 		byId,
@@ -174,8 +205,57 @@ export function keep(was: ThreadPart | undefined, got: ThreadPart): ThreadPart {
 	return prior.length ? { ...got, letters: [...prior, ...got.letters], more: was.more } : got;
 }
 
+// Thread parts in flight at once. A fresh tab moves every part; unbounded, two hundred reads each held a
+// database session on brnrd.dev and starved its pool (500s to the reader, timeouts on the loom's own PUTs).
+export const PARTS_AT_ONCE = 4;
+
+// `f` over `items` with at most `n` calls in flight, the results in `items`' order.
+export async function inTurns<T, R>(
+	items: T[],
+	n: number,
+	f: (item: T) => Promise<R>
+): Promise<R[]> {
+	const out: R[] = new Array(items.length);
+	let next = 0;
+	const lane = async () => {
+		while (next < items.length) {
+			const i = next++;
+			out[i] = await f(items[i]);
+		}
+	};
+	await Promise.all(Array.from({ length: Math.min(n, items.length) }, lane));
+	return out;
+}
+
+// `run` one call at a time: a call made while one runs is folded into a single rerun after it, and both callers
+// await the same settling. The board's load is asked by mount, by every index event and by the poll; unfolded,
+// each overlapping sync fetched every part not held yet.
+export function oneAtATime(run: () => Promise<void>): () => Promise<void> {
+	let running: Promise<void> | null = null;
+	let again = false;
+	return () => {
+		if (running) {
+			again = true;
+			return running;
+		}
+		running = (async () => {
+			try {
+				do {
+					again = false;
+					await run();
+				} while (again);
+			} finally {
+				running = null;
+			}
+		})();
+		return running;
+	};
+}
+
 export class Store {
 	index: Index | null = null;
+	// A cold sync's index while its parts still arrive: model() paints from it, so the board shows before the last part.
+	cold: Index | null = null;
 	threads = new Map<string, ThreadPart>();
 	beads: Beads | null = null;
 	topics: Topic[] = [];
@@ -208,14 +288,21 @@ export class Store {
 		}
 	}
 
-	// Bring every part to the index's hashes; true when anything changed. Thread parts load in parallel.
-	async sync(): Promise<boolean> {
+	// Bring every part to the index's hashes; true when anything changed. Thread parts load PARTS_AT_ONCE at a time;
+	// on a cold sync (nothing held yet) each arriving part is kept at once and `arrived` is told, so the board paints early.
+	async sync(arrived?: () => void): Promise<boolean> {
 		const index = (await this.get(`${BASE}/index`)) as Index;
 		if (this.index && JSON.stringify(this.index) === JSON.stringify(index)) return false;
 		const { fetch, drop } = moved(index, this.held);
-		const got = await Promise.all(
-			fetch.map((n) => this.get(`${BASE}/${n}`) as Promise<ThreadPart>)
-		);
+		if (!this.index) this.cold = index;
+		const got = await inTurns(fetch, PARTS_AT_ONCE, async (n) => {
+			const p = (await this.get(`${BASE}/${n}`)) as ThreadPart;
+			if (this.cold) {
+				this.threads.set(n.slice(7), p);
+				arrived?.();
+			}
+			return p;
+		});
 		fetch.forEach((n, i) => {
 			this.threads.set(n.slice(7), keep(this.threads.get(n.slice(7)), got[i]));
 			this.held.set(n, index.parts[n]);
@@ -242,6 +329,7 @@ export class Store {
 			this.held.delete('unthreaded');
 		}
 		this.index = index;
+		this.cold = null;
 		return true;
 	}
 
@@ -303,11 +391,13 @@ export class Store {
 	}
 
 	model(): Model | null {
-		if (!this.index) return null;
+		const index = this.index ?? this.cold;
+		if (!index) return null;
 		const loose =
-			this.held.has('unthreaded') || this.index.parts.unthreaded ? this.unthreaded : undefined;
-		const m = assemble(this.index, this.threads, loose);
+			this.held.has('unthreaded') || index.parts.unthreaded ? this.unthreaded : undefined;
+		const m = assemble(index, this.threads, loose);
 		m.topics = this.topics;
+		if (!this.index) m.partial = true;
 		return m;
 	}
 }

@@ -41,6 +41,9 @@ if "Next step: inherited" in ctx.wake():
     for letter in letters:
         ctx.send("thread:work", note="finished inherited work", re=letter.id)
 else:
+    opening = (ctx.room / "port/occasion.md").read_text()
+    assert opening.startswith("## Letters\\n")
+    assert opening.index("second ask") < opening.index("## threads/work/README.md")
     assert {{l.body for l in letters}} == {{"first ask", "second ask"}}
     ctx.send("channel:fake", "first answer", re={first!r})
     path = ctx.room / "self/threads/work/README.md"
@@ -62,6 +65,8 @@ assert not (ctx.room / "port/reincarnate-pending").exists()
         wait_until(received.exists, 30, loom.dump)
         result = json.loads(received.read_text())
         assert "Next step: inherited" in result["wake"]
+        assert result["wake"].index("## loom briefing") < result["wake"].index("Carried across:")
+        assert "What do you and the person need most now?" in result["wake"]
         # The ack settled the second ask; the successor carries its work from the README.
         assert "second ask" not in result["bodies"] and "first ask" not in result["bodies"]
         assert any(f.kind == "letter" and f.data.get("re") == second and f.data.get("to") == "channel:fake"
@@ -206,7 +211,7 @@ from brr.loom.runtime.fakebody import Ctx
 from brr.loom.runtime.home import atomic_write
 ctx = Ctx(Path(sys.argv[1]))
 letters = ctx.owed()
-if "predecessor" in ctx.wake():
+if "already read before the molt" in ctx.wake():
     atomic_write(Path({str(received)!r}), json.dumps({{"wake": ctx.wake()}}))
     for letter in letters:
         ctx.send("thread:work", note="settled", re=letter.id)
@@ -219,34 +224,43 @@ else:
     try:
         wait_until(received.exists, 30, loom.dump)
         wake = json.loads(received.read_text())["wake"]
-        assert f"already read by your predecessor, who reincarnated and left its handover: {ask}" in wake
-        assert wake.count("already read by your predecessor") == 1
+        assert f"already read before the molt: {ask}" in wake
+        assert wake.count("already read before the molt") == 1
     finally:
         loom.halt()
     assert not loom.errors
 
 
-def test_a_successor_wakes_with_its_predecessors_molt_why_and_the_notes_after_it(tmp_path):
-    """wake-vision: gen 221 of the inbox grepped the ledger for the reincarnation why and the
-    note its predecessor wrote after the reincarnation, which held the real state."""
+def test_molt_carries_the_file_first_and_keeps_the_notes_written_after_it(tmp_path):
+    """Run the real CLI, stop hook, and next wake with an opaque carry."""
     root = tmp_path / "home"
     init_self(root, person="test")
     write_thread(root, "work", "Work\n\n## Now\nNext step: original", "work", wait="0")
     inject_letter(root, to="thread:work", body="merge it once green")
     received = root / "successor.json"
-    bodies(root, f'''import json, sys
+    bodies(root, f'''import json, subprocess, sys
 from pathlib import Path
 from brr.loom.runtime.fakebody import Ctx
 from brr.loom.runtime.home import atomic_write
+from brr.loom.runtime.jack import _set_state
 ctx = Ctx(Path(sys.argv[1]))
 letters = ctx.owed()
-if "handover from" in ctx.wake():
+if "Carried across:" in ctx.wake():
     atomic_write(Path({str(received)!r}), json.dumps({{"wake": ctx.wake()}}))
     for letter in letters:
         ctx.send("thread:work", note="settled", re=letter.id)
 else:
-    ctx.reincarnate("NEXT: merge #7 when its re-run is green")
-    ctx.send("thread:work", note="done after the reincarnation: #7 merged as abc123", re=letters[0].id)
+    carry = ctx.room / "carry.md"
+    argv = [sys.executable, "-m", "brr.loom.runtime", "molt", "--room", str(ctx.room),
+            "--carry", str(carry)]
+    carry.write_text("  ")
+    empty = subprocess.run(argv, capture_output=True, text=True)
+    assert empty.returncode != 0 and "--carry file is empty" in empty.stderr
+    carry.write_text("NEXT: merge #7 when its re-run is green\\n\\nKeep this line too.\\n")
+    _set_state(ctx.room, context=172999)
+    subprocess.run(argv, check=True, capture_output=True, text=True)
+    carry.unlink()
+    ctx.send("thread:work", note="done after the molt: #7 merged as abc123", re=letters[0].id)
     assert ctx.jack("stop").raw == ""
 ''')
     loom = Loom(root)
@@ -254,10 +268,14 @@ else:
     try:
         wait_until(received.exists, 30, loom.dump)
         wake = json.loads(received.read_text())["wake"]
-        assert "(gen 1, reincarnated " in wake
+        assert "Molted at " in wake
+        assert "at 172k. Carried across:" in wake
         assert "NEXT: merge #7 when its re-run is green" in wake
-        assert "done after the reincarnation: #7 merged as abc123" in wake
-        assert wake.index("NEXT: merge #7") < wake.index("done after the reincarnation")
+        assert "done after the molt: #7 merged as abc123" in wake
+        assert wake.index("NEXT: merge #7") < wake.index("## Letters")
+        assert wake.index("NEXT: merge #7") < wake.index("done after the molt")
+        recorded = next(f for f in loom.facts() if f.kind == "reincarnate")
+        assert recorded.data["carry"] == "NEXT: merge #7 when its re-run is green\n\nKeep this line too.\n"
     finally:
         loom.halt()
     assert not loom.errors
@@ -294,7 +312,8 @@ else:
         wait_until(received.exists, 30, loom.dump)
         result = json.loads(received.read_text())
         assert "Decision: keep the room" in result["readme"]
-        assert "(gen 1): no reincarnation" in result["wake"]
+        assert "Last written" in result["wake"]
+        assert "See the thread README" in result["wake"]
         assert "README last landed" in result["wake"]
         assert "→ channel:fake: on it" in result["wake"]
         leases = [f for f in loom.facts() if f.kind == "lease" and f.data.get("thread") == "work"]
@@ -321,7 +340,7 @@ from brr.loom.runtime.fakebody import Ctx
 from brr.loom.runtime.home import atomic_write
 ctx = Ctx(Path(sys.argv[1]))
 letters = ctx.owed()
-if "handover from" in ctx.wake():
+if "Carried across:" in ctx.wake():
     atomic_write(Path({str(received)!r}), json.dumps([letter.id for letter in letters]))
 else:
     ctx.reincarnate("README Now says merge #7")

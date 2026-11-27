@@ -525,13 +525,15 @@ def reads(room: Path, since: float) -> dict | None:
     calls = [c for c in _calls(room)[0] if c["at"] >= since]
     if not calls:
         return None
-    first = next((i for i, c in enumerate(calls) if c["w"]), None)
+    first = next((i for i, c in enumerate(calls) if c["w"] and c["end"] is not None and not c["failed"]), None)
     before = calls if first is None else calls[:first]
     sized = any(c["out"] is not None for c in calls)
     return {"calls": len(calls), "before": len(before),
             "before_bytes": sum(c["out"] or 0 for c in before) if sized else None,
             "bytes": sum(c["out"] or 0 for c in calls) if sized else None,
-            "first_s": None if first is None else round(calls[first]["at"] - since)}
+            "first_s": None if first is None else round(calls[first]["at"] - since),
+            "first_at": None if first is None else calls[first]["at"],
+            "first_end": None if first is None else calls[first]["end"]}
 
 
 def live(room: Path) -> dict:
@@ -552,3 +554,44 @@ def first_words(facts, ids) -> dict:
     """The letter presence clock, shared with the board and connector lifecycle."""
     from .letter_presence import first_words as clock
     return clock(facts, ids)
+
+
+def tokens_through(room: Path, shell: str, since: float, first: float, end: float) -> int | None:
+    """Raw reported tokens for requests up to the first producing tool call."""
+    if shell == "codex":
+        path = _rollout(room)
+    elif shell == "claude":
+        from .jack import _state
+        transcript = _state(room).get("transcript")
+        path = Path(transcript) if transcript else None
+    else:
+        return None
+    if path is None:
+        return None
+    usages = {}
+    try:
+        with path.open() as rows:
+            for raw in rows:
+                if '"usage"' not in raw and '"token_count"' not in raw:
+                    continue
+                try:
+                    row = json.loads(raw)
+                except ValueError:
+                    continue
+                at = _stamp(row.get("timestamp"))
+                if at is None or at < since:
+                    continue
+                if shell == "codex" and at <= end:
+                    payload = row.get("payload") or {}
+                    info = payload.get("info") or {}
+                    if payload.get("type") == "token_count" and (usage := info.get("last_token_usage")):
+                        usages[at] = int(usage.get("total_tokens") or 0)
+                elif shell == "claude" and at <= first and row.get("type") == "assistant":
+                    message = row.get("message") or {}
+                    if usage := message.get("usage"):
+                        usages[message.get("id") or at] = sum(int(usage.get(key) or 0) for key in (
+                            "input_tokens", "output_tokens", "cache_read_input_tokens",
+                            "cache_creation_input_tokens"))
+    except OSError:
+        return None
+    return sum(usages.values()) if usages else None

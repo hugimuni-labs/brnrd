@@ -1,9 +1,10 @@
 """The loop reaps what nothing needs, with a fact each, and keeps every room with work only it holds."""
 
+import json
 from datetime import datetime, timedelta, timezone
 
 from brr.daemon2.facts import Fact
-from brr.loom.runtime import reap
+from brr.loom.runtime import reap, scar_log
 from brr.loom.runtime.home import Home
 from brr.loom.runtime.ledger import append, read_facts
 from brr.loom.runtime.selfrepo import _commit, git, init_self, room as clone_room
@@ -86,6 +87,23 @@ def test_the_loop_reaps_only_what_is_held_elsewhere(tmp_path, monkeypatch):
     assert "reap: 1 rooms reaped; kept 1 (leftovers in self), 1 (loose files), 1 (released less than 7 days ago)" in log.read_text()
 
 
+def test_reap_expires_scar_receipts_without_a_report(tmp_path):
+    home = Home(tmp_path / "home", install="0001")
+    path = home.root / "loom" / scar_log.LOG
+    path.parent.mkdir(parents=True)
+    expired = {"at": datetime.fromisoformat(_ago(8)).timestamp(), "call": "old", "paths": ["old"]}
+    recent = {"at": datetime.fromisoformat(_ago(1)).timestamp(), "call": "new", "paths": ["new"]}
+    path.write_text("".join(json.dumps(row) + "\n" for row in (expired, recent)))
+
+    reap.Reaper(home, lambda *_: None).reap()
+
+    assert not path.exists()
+    assert not path.with_suffix(".pending.jsonl").exists()
+    header, *receipts = map(json.loads, path.with_suffix(".archive.jsonl").read_text().splitlines())
+    assert header["since"] == expired["at"]
+    assert receipts == [recent]
+
+
 def test_a_fact_left_by_a_crash_mid_delete_is_finished(tmp_path):
     home = Home(tmp_path / "home", install="0001")
     init_self(home.root, person="test")
@@ -149,7 +167,7 @@ def test_a_stop_with_work_only_its_room_holds_is_blocked_and_says_how_to_clear_i
     held = _jack(room, "stop", "live")
     assert held["decision"] == "block"
     reason = held["reason"]
-    assert reason.partition(chr(10))[2].startswith("the stop holds on 1 thing") and "\n\nleft in room: " in reason
+    assert reason.partition(chr(10))[2].startswith("Rest held on 1 thing") and "\n\nleft in room: " in reason
     assert "pr2-body.md: a loose file" in reason and "self: 1 paths not committed (work.md)" in reason
     # Each item names the one command that clears it; run them as printed.
     for command in re.findall(r"or discard (?:it|them): `([^`]+)`", reason):

@@ -51,9 +51,11 @@
 							class="text-[10px] tracking-wider text-ink-mute uppercase"
 							title="read before its last reset">stale</span
 						>
+					{:else if shell.state === 'unmetered'}
+						<span class="text-[10px] tracking-wider text-ink-mute uppercase">unmetered</span>
 					{:else if shell.state === 'error'}
 						<span class="text-[10px] tracking-wider uppercase" style:color={STATUS_SPENT}
-							>fails</span
+							>quota unavailable</span
 						>
 					{:else if low}
 						<span class="text-[10px] tracking-wider uppercase" style:color={STATUS_BURNING}
@@ -61,7 +63,7 @@
 						>
 					{/if}
 				</span>
-				<FuelMarks gauges={shell.gauges} {now} />
+				<FuelMarks gauges={shell.gauges} {now} share={shell.initiative_share} />
 			</button>
 		{/each}
 	</div>

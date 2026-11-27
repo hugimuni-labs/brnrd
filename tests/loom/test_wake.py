@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -274,7 +275,7 @@ def test_the_loom_briefing_wakes_after_the_stance_within_the_budget(tmp_path: Pa
     with out.open("w", encoding="utf-8") as stdout:
         assert selfrepo.run_wake(clone, "w-1", owed, loom_part=part, stdout=stdout) == 0
     inline = out.read_text(encoding="utf-8")
-    assert f"## memory/stance.md\n{stance}{brief}## threads/w-1/README.md\n" in inline
+    assert f"## memory/stance.md\n{stance}{brief}## Held\nNo goals or queue rows recorded.\n## threads/w-1/README.md\n" in inline
 
 
 def test_the_self_decides(tmp_path: Path) -> None:
@@ -303,11 +304,31 @@ def test_the_self_decides(tmp_path: Path) -> None:
     custom = selfrepo.room(home, "custom")
     via_cli = cli(["wake", "--room", str(custom), "--thread", "w-1", "--owed", str(owed)])
     assert via_cli.returncode == 0, via_cli.stderr
-    # The self decides its wake; the loom's briefing is the one part it adds.
+    # The self decides its recipe. The loom adds its briefing and the held work.
     from brr.loom.runtime.briefing import section as briefing
-    assert via_cli.stdout == briefing(Home(home)) + "custom\n"
+    assert via_cli.stdout == briefing(Home(home)) + "## Held\nNo goals or queue rows recorded.\ncustom\n"
     seed_line = "I am a placeholder."
     assert seed_line not in via_cli.stdout
+
+
+def test_installed_wake_rewords_existing_recipe_receipts_without_changing_letters(tmp_path):
+    home = tmp_path / "home"
+    assert cli(["init", "--home", str(home)]).returncode == 0
+    self_dir = home / "self"
+    write_thread(self_dir, "w-1", "Headline")
+    recipe = self_dir / "core" / "loom" / "wake"
+    old = ("[the wake cut 1148 of this README's 2220 bytes from its end to fit the "
+           "20033-byte budget; the file is whole on disk: trim it]")
+    letter = f"## Letters\n{old}"
+    recipe.write_text(f"#!/bin/sh\ncat <<'EOF'\n## threads/w-1/README.md\n{old}\n"
+                      f"\n## Occasion\n{letter}\nEOF\n", encoding="utf-8")
+    commit(self_dir, "use legacy receipt")
+    clone = selfrepo.room(home, "legacy")
+    result = cli(["wake", "--room", str(clone), "--thread", "w-1"])
+    assert result.returncode == 0, result.stderr
+    before, letters = result.stdout.split("## Letters\n", 1)
+    assert "[Cut 1148 of 2220 README bytes (20033-byte budget). Whole on disk.]" in before
+    assert old not in before and letters.strip() == letter
 
 
 def test_budget_cuts_the_tree_and_refuses_a_fat_identity(tmp_path: Path) -> None:
@@ -380,7 +401,7 @@ def test_a_fat_thread_readme_is_cut_and_the_letter_still_wakes(tmp_path: Path) -
     assert cut.returncode == 0, cut.stderr
     assert len(cut.stdout.encode("utf-8")) <= limit
     # The Plan is a whole section: it folds to its title before anything is cut from the end.
-    assert "## Plan\n[the wake folded this section's" in cut.stdout and "row 0 " not in cut.stdout
+    assert "## Plan\n[Folded " in cut.stdout and "row 0 " not in cut.stdout
     assert "# Headline" in cut.stdout and cut.stdout.rstrip().endswith("the ask")
 
 
@@ -401,11 +422,11 @@ def test_the_wake_folds_sections_last_first_and_never_now(tmp_path: Path) -> Non
     one = wake(clone, "w-1", owed, LOOM_BUDGET_BYTES=str(len(full.stdout.encode("utf-8")) - 1000))
     assert one.returncode == 0, one.stderr
     assert "now 29 " in one.stdout and "plan 29 " in one.stdout and "decision 0 " not in one.stdout
-    assert "## Decisions\n[the wake folded this section's" in one.stdout
+    assert "## Decisions\n[Folded " in one.stdout
     both = wake(clone, "w-1", owed, LOOM_BUDGET_BYTES=str(len(full.stdout.encode("utf-8")) - 3000))
     assert both.returncode == 0, both.stderr
     assert "now 29 " in both.stdout and "plan 0 " not in both.stdout and "decision 0 " not in both.stdout
-    assert "the wake cut" not in both.stdout and both.stdout.rstrip().endswith("the ask")
+    assert "[Cut " not in both.stdout and both.stdout.rstrip().endswith("the ask")
 
 
 def test_room_is_a_clone_and_reused(tmp_path: Path) -> None:
@@ -598,7 +619,7 @@ def test_the_people_in_hand_wake_with_their_lists_and_latest_line(tmp_path: Path
     assert "between us, latest: 11-03: newest-line-77 [10176]" in people
     assert "older-line-55" not in people
     assert "whole page: people/arseni/page.md" in people
-    assert out.index("## People\n") < out.index("## Loom\n") < out.index("## Occasion\n")
+    assert out.index("## People\n") < out.index("## Loom\n") < out.index("## Letters\n")
 
     # A strand's letter: nobody in hand, so every page gives its latest line and nothing more.
     owed.write_text(json.dumps([{"id": "s-1/x", "from": "s-1", "body": "go\n"}]), encoding="utf-8")
@@ -623,7 +644,7 @@ def test_a_fat_page_is_capped_with_a_receipt_and_the_letter_still_wakes(tmp_path
     assert result.returncode == 0, result.stderr
     people = result.stdout.split("## People\n", 1)[1].split("## Loom\n", 1)[0]
     assert len(people.encode("utf-8")) <= 2400
-    assert people.endswith("people/arseni/page.md is whole on disk]\n")
+    assert people.endswith("Whole on disk: people/arseni/page.md.]\n")
     assert "letter-body-42" in result.stdout
 
 
@@ -679,7 +700,7 @@ def test_the_wake_shows_each_topic_pages_newest_entry_newest_first(tmp_path: Pat
         "topics/beta.md · 2026-11-02 · beta-tie-56",
     ]
     assert "older-alpha-12" not in out and "not-a-topic-31" not in out and "undated-78" not in out
-    assert out.index("## Topics\n") < out.index("## Loom\n") < out.index("## Occasion\n")
+    assert out.index("## Topics\n") < out.index("## Loom\n") < out.index("## Letters\n")
 
 
 def test_eleven_topic_pages_show_ten(tmp_path: Path) -> None:
@@ -694,7 +715,7 @@ def test_fat_topics_are_capped_with_a_receipt(tmp_path: Path) -> None:
     topics = _topics(_topics_wake(tmp_path, pages))
     assert len(topics.encode("utf-8")) <= 1200
     assert topics.startswith("topics/a-long-topic-page-name-09.md · 2026-10-10 · entry-09-")
-    assert topics.endswith("bytes; topics/ is whole on disk]\n")
+    assert topics.endswith("bytes. Whole on disk: topics/.]\n")
 
 
 def test_no_dated_topic_no_topics_section(tmp_path: Path) -> None:
@@ -744,7 +765,7 @@ def test_the_seed_wakes_a_fixture_home_with_the_live_selfs_tail(tmp_path: Path) 
         "topics/wake.md · 2026-11-02 · the-wake-entry-61\n"
         "## Loom\n"
         "loom part goes here verbatim\n"
-        "## Occasion\n"
+        "## Letters\n"
         "### p-arseni/ab12 from person:arseni · reply -\n"
         "letter-body-42\n"
     )
@@ -782,3 +803,71 @@ def test_runtime_wake_labels_from_main_even_when_room_has_another_name(tmp_path)
     out = io.StringIO()
     assert selfrepo.run_wake(clone, "w-1", owed, stdout=out) == 0
     assert "Arseni Human Name: 11-03: newest-line-77" in out.getvalue()
+
+
+def test_wake_opens_with_held_goals_and_queue(tmp_path):
+    from io import StringIO
+
+    from brr.daemon2.facts import Fact
+    from brr.loom.runtime.ledger import append
+
+    assert cli(["init", "--home", str(tmp_path)]).returncode == 0
+    home = Home(tmp_path)
+    repo = tmp_path / "self"
+    thread = home.main_thread()
+    write_thread(repo, thread, "The inbox")
+    goals = repo / "goals"
+    goals.mkdir()
+    (goals / "launch.md").write_text(
+        '---\nstatus: active\nstands: First draft\nnext: Get a read\n'
+        'now: Send to the team\nstake: Ship this week\n---\n# Launch\n')
+    commit(repo, "goal")
+    append(home, Fact(kind="letter", id="p-test/abcde", by="person:test",
+                      data={"id": "p-test/abcde", "from": "p-test", "to": f"thread:{thread}"}))
+    append(home, Fact(kind="wish", id="w-held", by="person:test",
+                      data={"wish": "w-held", "from": "person", "thread": thread,
+                            "line": "Send the draft", "says": [{"letter": "p-test/abcde"}]}))
+    clone = selfrepo.room(tmp_path, "seeded")
+    sizes = tmp_path / "wake.sizes"
+    out = StringIO()
+    assert selfrepo.run_wake(clone, thread, stdout=out, sizes=sizes) == 0
+    wake = out.getvalue()
+    beginning, held = wake.split("## Held\n", 1)
+    assert "## memory/stance.md" in beginning
+    assert held.index("goal launch: First draft") < held.index('held w-held')
+    assert wake.index("## Held\n") < wake.index(f"## threads/{thread}/README.md") < wake.index("## Letters\n")
+    assert json.loads(sizes.read_text())["parts"]["held"] > 0
+
+
+def test_the_seed_recipe_folds_topics_before_refusing_and_keeps_the_page_in_hand(tmp_path: Path) -> None:
+    # A new self gets the fold the inbox's own recipe landed after 2026-11-23 17:41Z.
+    home = tmp_path / "home"
+    assert cli(["init", "--home", str(home), "--person", "arseni"]).returncode == 0
+    self_dir = home / "self"
+    write_thread(self_dir, "w-1", "The w-1 headline")
+    (self_dir / "people" / "arseni" / "page.md").write_text(PAGE, encoding="utf-8")
+    (self_dir / "topics").mkdir(exist_ok=True)
+    for i in range(10):
+        (self_dir / "topics" / f"topic-{i:02}.md").write_text(
+            f"# t\n\n### 2026-10-{i + 1:02} · entry-{i:02}-" + "z" * 60 + "\n", encoding="utf-8")
+    commit(self_dir, "page and topics")
+    clone = selfrepo.room(home, "s1")
+    owed = tmp_path / "owed.json"
+    owed.write_text(json.dumps([{"id": "p-arseni/ab12", "from": "person:arseni", "body": "hi\n"}]),
+                    encoding="utf-8")
+    sizes = tmp_path / "sizes.json"
+    full = wake(clone, "w-1", owed, LOOM_BUDGET_BYTES="100000", LOOM_SIZES=str(sizes))
+    assert full.returncode == 0, full.stderr
+    parts = json.loads(sizes.read_text())
+    fixed = sum(size for name, size in parts.items() if name != "tree")
+    receipt = len("## Topics\n[the wake folded this section to fit; topics/ is whole on disk]\n")
+    assert parts["topics"] > parts["readme"] + receipt + 100
+    limit = fixed - parts["topics"] + receipt + 5
+    folded = wake(clone, "w-1", owed, LOOM_BUDGET_BYTES=str(limit))
+    assert folded.returncode == 0, folded.stderr
+    assert "## Topics\n[the wake folded this section to fit; topics/ is whole on disk]\n" in folded.stdout
+    assert "entry-09" not in folded.stdout
+    assert "### arseni\n" in folded.stdout and "hi\n" in folded.stdout
+    # The tree's omitted receipt is outside the budget by design (fit_tree).
+    receiptless = re.sub(r"^omitted \d+ entries; each is one read away\n", "", folded.stdout, flags=re.M)
+    assert len(receiptless.encode("utf-8")) <= limit

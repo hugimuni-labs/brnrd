@@ -107,15 +107,48 @@ anything; `--no-start` writes the service and leaves it for the next login.
 `uninstall` do what they say. `brnrd setup` pairs a channel such as Telegram,
 so letters reach you away from the terminal.
 
-To start the local loom board and get its URL:
+## Add a project
+
+From the project's folder, after `brnrd setup`:
+
+```bash
+brnrd add        # or: brnrd add .   or: brnrd add ~/code/app
+```
+
+It adds the project to the brnrd that setup made, in the same home, with no
+second pairing. A checkout with an `origin` is added by that URL, so brnrd
+works on it in its own copy and sends changes as pull requests; a folder
+without one is added by its path. Running it again changes nothing. Then ask
+brnrd for work in it by name.
+
+## Open the local board
+
+The board is the resident's page on this computer: its threads and what each
+one is for, the letters in them, and a box to write to it. The loom serves it
+on loopback only (`127.0.0.1`), so nothing outside this machine can reach it.
+A fresh install leaves it off. One command turns it on:
 
 ```bash
 brnrd setup channel --kind web --wait 0
 ```
 
-Setup enables the loopback page, prints its URL and starts or restarts the loom.
-It picks `--home`, then `BRNRD_HOME`, the installed service's home, the only
+Setup picks a free loopback port (4777 when it is free), prints the page's
+address, and starts or restarts the loom. Open that address in your browser:
+
+```text
+http://127.0.0.1:4777
+```
+
+The port stays the same across setups, so a bookmark keeps working. To find the
+address later, `brnrd loom status` prints it on its `board:` line, or says the
+board is off and gives the command above; the loom log also records
+`board: serving http://127.0.0.1:<port>` each time the board starts. A `board:`
+line that ends in `(not answering)` means the port is set but the loom is not
+serving it: `brnrd loom start`, then `brnrd loom logs`.
+
+Setup picks `--home`, then `BRNRD_HOME`, the installed service's home, the only
 home found or `~/brnrd`; several homes require `--home PATH`.
+
 The installer fetches the board for its upstream commit. Frontend edits rebuild
 in the background when npm is available; otherwise the last good board stays
 served and the loom says once that npm is needed. A missing published board

@@ -93,6 +93,52 @@ def _env_csv_lower(name: str) -> tuple[str, ...]:
     return tuple(p.strip().lower() for p in os.environ.get(name, "").split(",") if p.strip())
 
 
+# A campaign tag is a short path (/hi, /xpost), counted and redirected home.
+# It must not be an existing page: the backend route would win and the page
+# would stop answering. Dots are already refused by the shape check.
+CAMPAIGN_RESERVED_SEGMENTS = frozenset({
+    "account", "ascii", "auth", "beta-hosted-execution", "booth", "brand-bench",
+    "config-approve", "connect", "dashboard", "docs", "faq", "garage", "healthz",
+    "install", "learn", "legal-notice", "log", "login", "logo-bench", "logout",
+    "metrics", "new", "pricing", "privacy", "r", "redoc", "static",
+    "sub-processors", "terms", "topics", "v1", "websummit",
+})
+_CAMPAIGN_PATH = re.compile(r"^/[a-z0-9][a-z0-9-]{0,15}$")
+
+
+def campaign_paths_from(raw: str | None) -> tuple[str, ...]:
+    """Campaign paths from a comma-separated env value.
+
+    ``/hi`` (``page_views.PROMO_PATH``) is always first. A paid post already
+    uses that link, so naming other paths must not drop it. Invalid entries
+    are skipped.
+    """
+
+    from .page_views import PROMO_PATH
+
+    found: list[str] = [PROMO_PATH]
+    if raw is None or not raw.strip():
+        return (PROMO_PATH,)
+    for part in raw.split(","):
+        path = part.strip().lower()
+        if len(path) > 1:
+            path = path.rstrip("/")
+        if path and not path.startswith("/"):
+            path = "/" + path
+        if path == PROMO_PATH or path in found:
+            continue
+        if not _CAMPAIGN_PATH.match(path) or path.endswith("-"):
+            continue
+        if path[1:] in CAMPAIGN_RESERVED_SEGMENTS:
+            continue
+        found.append(path)
+    return tuple(found)
+
+
+def _campaign_paths() -> tuple[str, ...]:
+    return campaign_paths_from(os.environ.get("BRNRD_CAMPAIGN_PATHS"))
+
+
 def _member_github_logins() -> tuple[str, ...]:
     """Who the home gate admits with no subscription, read when ``Settings`` is built.
 
@@ -232,6 +278,17 @@ class Settings:
     # GitHub logins of the accounts that may open them. Comma-split,
     # lowercased. Unset or empty means nobody; nobody else learns they exist.
     admin_github_logins: tuple[str, ...] = _env_csv_lower("BRNRD_ADMIN_GITHUB_LOGINS")
+    # Campaign links. /hi is always first (a paid post already uses it);
+    # BRNRD_CAMPAIGN_PATHS adds more beside it and cannot remove it.
+    # Comma-separated. Read when Settings is built. Invalid entries are skipped.
+    campaign_paths: tuple[str, ...] = field(default_factory=_campaign_paths)
+    # Growth counts leave these GitHub logins out (team and test accounts).
+    # Comma-separated, lowercased, read when Settings is built. Empty names
+    # nobody by itself; the admin, member and first-subscriber lists are
+    # added at read time. Not emails, and not written in the repo.
+    funnel_exclude_github_logins: tuple[str, ...] = field(
+        default_factory=lambda: _env_csv_lower("BRNRD_FUNNEL_EXCLUDE_GITHUB_LOGINS")
+    )
 
     # Billing (#53, kb design-billing.md §"Launch defaults + tunable knobs").
     # Test mode until #52 (Stripe France KYB) flips the keys to live.
@@ -320,6 +377,7 @@ class Settings:
     oauth_state_ttl_s: int = _env_int("BRNRD_OAUTH_STATE_TTL_S", 600)
 
     def __post_init__(self) -> None:
+        object.__setattr__(self, "campaign_paths", campaign_paths_from(",".join(self.campaign_paths)))
         # #1242 — loud at construction (app startup calls `get_settings()`
         # exactly once; every `Settings(...)` call in tests re-checks its
         # own fixture value) rather than only at the pairing mint, so a

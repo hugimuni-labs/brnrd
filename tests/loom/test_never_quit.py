@@ -41,7 +41,7 @@ def test_a_thread_opened_body_owing_nothing_is_held_past_its_wait(worker, monkey
     monkeypatch.setattr(usage, "dry_until", lambda *args: None)
     result = json.loads(jack.execute("stop", room, "{}"))
     assert result["decision"] == "block"
-    assert result["reason"].partition(chr(10))[2].startswith("cache keepalive, nothing new arrived")
+    assert result["reason"].partition(chr(10))[2].startswith("wakes at: the next letter")
     assert now[0] == pytest.approx(3300)
 
 
@@ -52,7 +52,7 @@ def test_a_thread_opened_body_that_runs_dry_within_the_hook_sleeps_then_holds(wo
     monkeypatch.setattr(jack, "_refilling", lambda *args: False)
     result = json.loads(jack.execute("stop", room, "{}"))
     assert result["decision"] == "block"
-    assert result["reason"].partition(chr(10))[2].startswith("cache keepalive, nothing new arrived")
+    assert result["reason"].partition(chr(10))[2].startswith("wakes at: the next letter")
     # Parked past the cache: the next keepalive waits for the ceiling.
     assert now[0] == pytest.approx(6 * 3600 + 60 - jack.MARGIN)
 
@@ -76,7 +76,7 @@ def test_the_first_stop_with_wishes_open_is_refused_until_the_body_asks(ledger, 
     monkeypatch.setattr(jack.time, "sleep", lambda seconds: now.__setitem__(0, now[0] + seconds))
     refused = json.loads(jack.execute("stop", seat, "{}"))
     assert refused["decision"] == "block"
-    assert "has not said how it ends" in refused["reason"]
+    assert "with no disposition recorded" in refused["reason"]
     assert 'brnrd runtime ask "<question>" --for <w-id>' in refused["reason"]
     assert "settle work --why" in refused["reason"]
     assert now[0] == 0
@@ -84,7 +84,7 @@ def test_the_first_stop_with_wishes_open_is_refused_until_the_body_asks(ledger, 
     (seat / "port/jack-state.json").unlink()
     command(home, seat, "ask", "Which colour?", "--for", wish, "--rec", "grey")
     held = json.loads(jack.execute("stop", seat, "{}"))
-    assert held["reason"].partition(chr(10))[2].startswith("cache keepalive, nothing new arrived")
+    assert held["reason"].partition(chr(10))[2].startswith("wakes at: the next letter")
     assert now[0] > 0
 
 
@@ -94,7 +94,7 @@ def test_a_body_with_no_open_wish_is_not_asked_how_it_ends(worker, monkeypatch):
     (room / "port/in/boundary.md").write_text(
         render_boundary(STRAND, 1, "work", [], set(), {}, plan="plan 2/2"))
     result = json.loads(jack.execute("stop", room, "{}"))
-    assert result["reason"].partition(chr(10))[2].startswith("cache keepalive, nothing new arrived")
+    assert result["reason"].partition(chr(10))[2].startswith("wakes at: the next letter")
 
 
 def test_a_body_that_settles_with_wishes_open_is_not_asked_how_it_ends(ledger, monkeypatch):
@@ -118,7 +118,7 @@ def test_a_body_that_settles_with_wishes_open_is_not_asked_how_it_ends(ledger, m
     command(home, seat, "settle", "work", "--word", inject_letter(home.root, to="thread:work", body="done"),
             "--why", "Parked for good")
     out = jack.execute("stop", seat, "{}")
-    assert "has not said how it ends" not in out
+    assert "with no disposition recorded" not in out
 
 
 def test_only_a_reading_that_says_what_it_waits_on_is_a_park(ledger, monkeypatch):
@@ -137,7 +137,7 @@ def test_only_a_reading_that_says_what_it_waits_on_is_a_park(ledger, monkeypatch
     monkeypatch.setattr(jack.time, "monotonic", lambda: now[0])
     monkeypatch.setattr(jack.time, "sleep", lambda seconds: now.__setitem__(0, now[0] + seconds))
     command(home, seat, "wish", wish, "--read", "looks hard")
-    assert "has not said how it ends" in jack.execute("stop", seat, "{}")
+    assert "with no disposition recorded" in jack.execute("stop", seat, "{}")
     (seat / "port/jack-state.json").unlink()
     command(home, seat, "wish", wish, "--read", "waiting: his answer on the colour")
-    assert "has not said how it ends" not in jack.execute("stop", seat, "{}")
+    assert "with no disposition recorded" not in jack.execute("stop", seat, "{}")

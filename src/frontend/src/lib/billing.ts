@@ -31,6 +31,9 @@ export interface SubscriptionState {
 	 * where to book a free install session. The server decides who. */
 	install_session_url?: string | null;
 	first_subscribers_seats?: number | null;
+	/** The home gate's answer, apart from the tier: `member` is admitted
+	 * with no subscription (comped access), so `tier` alone reads "free". */
+	access?: string | null;
 }
 
 /** The first-subscriber offer, or null when this account has none. */

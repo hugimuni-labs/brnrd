@@ -87,7 +87,7 @@ def _hermetic_git_env(tmp_path_factory, monkeypatch):
 
 # Set by the suite itself, before or after the strip below: the repo-root
 # conftest.py at import, ``_isolate_account_state`` per test.
-SUITE_OWN_ENV = ("BRNRD_LIMIT_FREE_REPOS", "BRNRD_LOOM_SOURCE", "BRNRD_ROOT")
+SUITE_OWN_ENV = ("BRNRD_LIMIT_FREE_REPOS", "BRNRD_LOOM_PASS", "BRNRD_LOOM_SOURCE", "BRNRD_ROOT")
 
 
 def hosting_env(name: str) -> bool:
@@ -129,6 +129,18 @@ def _isolate_hosting_body(tmp_path_factory, monkeypatch):
             monkeypatch.delenv(name)
     monkeypatch.setenv("HOME", str(tmp_path_factory.mktemp("home")))
     yield
+
+
+@pytest.fixture(autouse=True)
+def _no_morning_pass(_isolate_hosting_body, monkeypatch):
+    """A live test loop does not wake the home thread after the local hour.
+
+    The morning pass defaults to 08:00 local. Without this, any test that
+    ticks a loom past that hour starts an inbox body, and the failure moves
+    with the clock. Tests that drive the pass delete ``BRNRD_LOOM_PASS``.
+    Production leaves the variable unset; ``pass_hour`` is the switch there.
+    """
+    monkeypatch.setenv("BRNRD_LOOM_PASS", "off")
 
 
 @pytest.fixture(autouse=True)

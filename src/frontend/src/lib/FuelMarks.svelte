@@ -16,7 +16,8 @@
 	import { DIAL_WEDGE_RADIUS, dialDasharray } from './railGauge.ts';
 	import { STATUS_BURNING, STATUS_COOLING, STATUS_SPENT, STATUS_UNKNOWN } from './statusPalette.ts';
 
-	let { gauges, now }: { gauges: LoomGauge[] | undefined; now: number } = $props();
+	let { gauges, now, share }: { gauges: LoomGauge[] | undefined; now: number; share?: number } =
+		$props();
 
 	const fill: Record<string, string> = {
 		burning: STATUS_BURNING,
@@ -69,6 +70,9 @@
 		<span class="fuel-when">{when ? `resets ${when}` : ''}</span>
 		{#if weekBeside && week}
 			<span class="fuel-side">week {formatPct(week.left_pct)}</span>
+		{/if}
+		{#if share != null && share !== 100}
+			<span class="fuel-share">share {formatPct(share)}</span>
 		{/if}
 	{/if}
 </span>
@@ -132,5 +136,9 @@
 	.fuel-side {
 		flex: none;
 		width: 11ch;
+	}
+	.fuel-share {
+		flex: none;
+		color: var(--fuel-dim, #666);
 	}
 </style>

@@ -9,7 +9,7 @@ returns the delta from that hash when the loopback still holds it, else the whol
 recomputes them on its own thread whenever the ledger or a room's trace moves; ``serve`` is the
 loopback shell over it on 127.0.0.1 (config ``board_port``), which also serves the SvelteKit build,
 so the board needs no cloud hop and no dev server.
-The cloud PUT of parts stays off until brnrd.dev stores them. The index carries the last beads
+The same parts are PUT to the cloud when a gate is configured. The index carries the last beads
 delta so a cloud reader patches without a second 1 MB GET.
 """
 
@@ -196,7 +196,7 @@ def steps_of(self_root: Path, thread: str) -> list[dict]:
 
 
 def verdict_letters(facts) -> tuple[dict, dict]:
-    """``(raised, said)``: when each wish was last raised (its last ``wish`` fact), and his latest verdict
+    """``(raised, said)``: when each wish was last raised (its last ``wish`` fact), and the person's latest verdict
     letter per wish (a person letter carrying ``wish`` and ``verdict`` agree|correct), both read from the ledger."""
     raised, said = {}, {}
     for f in facts:
@@ -205,19 +205,35 @@ def verdict_letters(facts) -> tuple[dict, dict]:
             raised[d.get("wish")] = f.at
         elif (f.kind == "letter" and d.get("wish") and d.get("verdict") in {"agree", "correct"}
               and _person_side(str(d.get("from", "")))):
-            said[str(d["wish"])] = {"verdict": d["verdict"], "letter": str(d.get("id") or f.id), "at": f.at}
+            said[(str(d["wish"]), d.get("delivery_id"))] = {"verdict": d["verdict"], "letter": str(d.get("id") or f.id), "at": f.at}
     return raised, said
 
 
+MEANWHILE = 3
+
+
+def meanwhile_of(parent, told: dict, held: set, limit: int = MEANWHILE) -> list[dict]:
+    """What keeps moving while an ask on ``parent`` waits: open wishes of the person under the same goal
+    (or, with no goal, on the same thread) that no person's answer holds up, most recently moved first."""
+    def kin(w):
+        return w.goal == parent.goal if parent.goal else w.thread == parent.thread
+    free = [w for w in told.values() if w.id != parent.id and w.sender == "person" and w.open
+            and w.state != "delivered" and w.id not in held and kin(w)]
+    free.sort(key=lambda w: w.at, reverse=True)
+    return [{"wish": w.id, "line": w.line, "state": w.state} for w in free[:limit]]
+
+
 def calls_of(threads: list[dict], told: dict, facts=()) -> dict[str, list[dict]]:
-    """Each thread's calls: the one action each wish waiting on him names (your-call.md, 4uwjt agreed in 4886).
+    """Each thread's calls: the one action each wish waiting on the person names (your-call.md, 4uwjt agreed in 4886).
 
     ask (red): an open ask whose wait reaches a person (waits_on, the loom's own rule); its line is
     the question. verdict: a delivered or expired wish with no verdict, on the open thread opened for it,
     else the open thread it was said on, else the inbox; its last delivered result is the link.
-    Either is ``closed`` once his verdict letter for the wish lands after it was raised (your-call.md, 4907):
+    Either is ``closed`` once the person's verdict letter for the wish lands after it was raised (your-call.md, 4907):
     the card collapses, and the loom's own verdict stays the resident's to stamp.
     """
+    from .queues import held_move
+
     raised, said = verdict_letters(facts)
     main = {t["id"]: {"opened-by": t.get("opened_by"), "status": t.get("status")} for t in threads}
     live = {t["id"] for t in threads if t.get("status") not in CLOSED}
@@ -226,20 +242,33 @@ def calls_of(threads: list[dict], told: dict, facts=()) -> dict[str, list[dict]]
         for o in t.get("opened_for") or []:
             opened.setdefault(o["wish"], t["id"])
     calls: dict[str, list[dict]] = {}
-    for ident, head in waits_on(told, main).items():
+    waits = waits_on(told, main)
+    # Wishes a person's answer holds up; everything else under the same goal or thread still moves.
+    held = {told[i].parent for i, head in waits.items() if not head.startswith("thread:") and told[i].parent}
+    for ident, head in waits.items():
         w = told[ident]
         if not head.startswith("thread:") and w.state != "delivered":
-            calls.setdefault(w.thread, []).append({"kind": "ask", "wish": ident, "line": w.line, "waits": head,
-                                                   "at": _iso(raised.get(ident, w.at)), "raised": raised.get(ident, w.at)})
+            call = {"kind": "ask", "wish": ident, "line": w.line, "waits": head,
+                    "at": _iso(raised.get(ident, w.at)), "raised": raised.get(ident, w.at)}
+            if parent := told.get(w.parent):
+                call["parent"] = parent.id
+                call["blocks"] = parent.line
+                if parent.left and parent.left["steps"]:
+                    call["next"] = held_move(parent, [w])
+                if meanwhile := meanwhile_of(parent, told, held):
+                    call["meanwhile"] = meanwhile
+            calls.setdefault(w.thread, []).append(call)
     for w in told.values():
         if w.verdict or w.state not in {"delivered", "expired"}:
             continue
         home = next((t for t in (opened.get(w.id), w.thread) if t in live), "inbox")
         result = [r for r in w.results if r.get("delivered")][-1]
         calls.setdefault(home, []).append({"kind": "verdict", "wish": w.id, "line": w.line, "ref": result.get("ref"),
-                                           "result": result.get("line"), "at": _iso(result["at"]), "raised": result["at"]})
+                                           "result": result.get("line"), "delivery_id": result.get("delivery_id"), "at": _iso(result["at"]), "raised": result["at"]})
     for c in (c for cs in calls.values() for c in cs):
-        v, at = said.get(c["wish"]), c.pop("raised")
+        at = c.pop("raised")
+        v = max((v for scope in {None, c.get("delivery_id")}
+                 if (v := said.get((c["wish"], scope)))), key=lambda v: v["at"], default=None)
         if v and v["at"] > at:
             c["closed"] = {"verdict": v["verdict"], "letter": v["letter"], "at": _iso(v["at"])}
     return calls
@@ -259,7 +288,7 @@ def board_state(t: dict, calls: list[dict], left: int = 0, end: tuple | None = N
     settled: status is closed. seated: a held strand works or holds, or the resident has the turn
     and an open wish still needs work, or an owed letter is from a person (``from_person``; a loom
     notice alone is not, and the column stays quiet until a body is held). your call: a call names
-    his action (red when one is an ask). Old verdicts
+    the person's action (red when one is an ask). Old verdicts
     stay on the card without making a call. mine: the resident owes a move the loom will not make
     (a parked or failed strand, a letter owed by the
     operator, or an open thread with work left and no body that declared its end: wake or settle).
@@ -268,7 +297,7 @@ def board_state(t: dict, calls: list[dict], left: int = 0, end: tuple | None = N
     ``since`` orders your call by when the thread entered it; ``why`` names the move a mine column waits on.
     ``left`` counts its open wishes not yet delivered; ``end`` is the last body's (cause, at); ``parked`` is the
     newest resident `waiting:` read on one of them, ``parked_at`` when it was written: a read that names
-    ``person`` waits on him, so the column is his call and reads so (9mswfh0474 4): an ask call on
+    ``person`` waits on the person, so the column is their call and reads so (9mswfh0474 4): an ask call on
     ``parked_wish`` with the read as its line, the one block every call renders as (5092).
     """
     if t.get("status") in CLOSED:
@@ -285,16 +314,17 @@ def board_state(t: dict, calls: list[dict], left: int = 0, end: tuple | None = N
     calling = {"open": len(calls), "red": any(c["kind"] == "ask" for c in calls)} if calls else {}
     if held or (t.get("turn") == "mine" and (left or from_person)):
         word = held["state"] if held else (t.get("strands") or [{}])[-1].get("state") or "starting"
-        return {"state": "seated", "strand": word, **shown, **calling}
+        rest = {"why": t["rest"]} if word == "holding" and t.get("rest") else {}
+        return {"state": "seated", "strand": word, **rest, **shown, **calling}
     if calls:
         return {"state": "your-call", **calling, **shown, "since": min(c["at"] for c in calls)}
     last = (t.get("strands") or [{}])[-1].get("state")
     if t.get("turn") == "blocked" or last in {"parked", "failed"}:
         return {"state": "mine", "why": f"{last or 'strand'}: {t.get('blocked_on') or 'restart'}", **shown}
     answered = [c["wish"] for c in shown.get("calls", []) if c["kind"] == "ask"]
-    if answered:  # his done is on record and the ask is still open: accepting it is the thread's move
-        return {"state": "mine", "why": f"his done is in: wish {answered[0]} --accept", **shown}
-    if t.get("turn") == "yours":  # no ask reaches him, so the operator owns a letter here
+    if answered:  # the person has said done and the ask is still open: accepting it is the thread's move
+        return {"state": "mine", "why": f"the person said done: wish {answered[0]} --accept", **shown}
+    if t.get("turn") == "yours":  # no ask reaches the person, so the operator owns a letter here
         return {"state": "mine", "why": f"{t.get('owed') or 'a'} letter(s) owed by the operator: retry or attention --note", **shown}
     if not left:
         return {"state": "quiet", **shown}
@@ -307,6 +337,7 @@ def board_state(t: dict, calls: list[dict], left: int = 0, end: tuple | None = N
     cause, at = end or (None, None)
     if cause in {"paced", "stopped"}:
         return {"state": "waiting", "why": f"{cause} {at[:16].replace('T', ' ')}", **shown}
+    cause = "molted" if cause == "reincarnated" else cause
     ended = f"ended {cause} {at[:16].replace('T', ' ')}" if cause else "no body yet"
     return {"state": "mine", "stall": True,
             "why": f"no body, {left} open wish{'es' if left > 1 else ''} ({ended}): wake or settle", **shown}
@@ -320,7 +351,7 @@ def thread_marks(threads: list[dict], told: dict, unanswered: dict[str, tuple[st
 
     ready: every wish on the thread or opened for it is delivered or past it (the settle candidate).
     unanswered: the loom's own list (owners.unanswered_by_thread, the one the wake and status line read):
-    his letters with no delivered reply on his channel, placed on each thread whose Plan cites them (8u0ru).
+    the person's letters with no delivered reply on their channel, placed on each thread whose Plan cites them (8u0ru).
     """
     marks: dict[str, dict] = {}
     for t in threads:
@@ -379,9 +410,9 @@ def letters_of(facts, typed: dict | None = None, told: dict | None = None) -> tu
                 says.append({"id": ident, "quote": body[offset:offset + size], "cites": "span"})
         every.append(dict(entry, at=_iso(heard.get(w.id, w.at)), says=says, sender=w.sender,
                           results=[{k: _iso(v) if k == "at" else v for k, v in r.items()
-                                    if k in {"kind", "ref", "line", "delivered", "at"}} for r in w.results],
+                                    if k in {"kind", "ref", "line", "delivered", "at", "delivery_id"}} for r in w.results],
                           verdict={k: _iso(v) if k == "at" else v for k, v in w.verdict.items()
-                                   if k in {"as", "evidence", "ref", "at"}} if w.verdict else None))
+                                   if k in {"as", "evidence", "ref", "at", "delivery_id"}} if w.verdict else None))
         for ident in dict.fromkeys(s["id"] for s in says):
             answered.setdefault(ident, []).append(entry)
     # Chatter: letters a reply or note cites as wanting nothing (send --chatter).
@@ -408,6 +439,7 @@ def letters_of(facts, typed: dict | None = None, told: dict | None = None) -> tu
         row = {"id": ident, "at": _iso(f.at), "from": sender, "to": d.get("to"), "threads": threads,
                "person": _person_side(sender), "notice": is_notice(f), "body": str(d.get("body") or ""),
                "re": d.get("re"), "wish": d.get("wish"), "shown": shown.get(ident),
+               "delivery_id": d.get("delivery_id"), "verdict": d.get("verdict"),
                "sent": sent.get(ident), "wishes": answered.get(ident), "chatter": chattered.get(ident),
                "open": _person_side(sender) and not (answered.get(ident) or chattered.get(ident)),
                "typed_by": (typed or {}).get(ident)}
@@ -617,16 +649,23 @@ def digest(part) -> str:
     return hashlib.sha256(json.dumps(part, sort_keys=True, separators=(",", ":")).encode()).hexdigest()[:16]
 
 
-# What a column header and the rail read off the index. The index is fetched whole on every letter.
-_INDEX_THREAD = ("id", "title", "status", "last_at")
+# What a column header, the rail and the column order read off the index. The index is fetched whole on every letter.
+_INDEX_THREAD = ("id", "title", "status", "last_at", "opened_at")
+# Every board key the column order sorts by (order.ts sortThreads, rank).
+_INDEX_BOARD = ("state", "since", "stall")
 
 
-def index_thread(thread: dict, counts: dict | None) -> dict:
-    """A thread row on the index: id, title, status, board state, wish counts, last_at."""
+def index_thread(thread: dict, counts: dict | None, letters: list | None = None) -> dict:
+    """A thread row on the index: id, title, status, the board's sort keys, wish counts, last_at, opened_at, letter_at.
+
+    The row carries every key the column order sorts by: the board state, ``since`` (Needs you), ``stall``
+    (Stuck), ``opened_at`` (Quiet) and ``letter_at``, the newest letter's time (everything else). A cold load
+    then sorts the columns before the thread parts arrive, and the order does not move when they land.
+    """
     row = {k: thread.get(k) for k in _INDEX_THREAD}
-    state = (thread.get("board") or {}).get("state")
-    if state:
-        row["board"] = {"state": state}
+    row["letter_at"] = max((r.get("at") or "" for r in letters or ()), default=None)
+    board = thread.get("board") or {}
+    row["board"] = {k: board[k] for k in _INDEX_BOARD if board.get(k) not in (None, "")}
     if counts:
         row["counts"] = counts
     return {k: v for k, v in row.items() if v not in (None, "", [], {})}
@@ -684,6 +723,59 @@ def machines_of(home: Home, facts) -> list[dict]:
     return sorted(rows, key=lambda r: (not r["lead"], r["id"]))
 
 
+GOAL_STALL = 24 * 3600
+
+
+def goal_progress(goals: list[dict], told: dict, waits: dict[str, str], now: float | None = None) -> list[dict]:
+    """Each active goal with what the ledger says about the work linked to it (``wish --goal``).
+
+    ``waits`` is ``waits_on``: who each open ask waits on. ``progress``: the linked wishes counted by
+    state; ``asks``: the open asks on them that wait on a person (not on another thread), each with
+    the wish it blocks; ``delivery``: the latest delivered result; ``moved``: the last fact on any of
+    them, and ``stalled`` once that is older than a day. ``blocked`` holds only when every open
+    linked wish waits on a person’s ask. The first runnable recorded step appears as ``move``.
+    """
+    now = time.time() if now is None else now
+    from .wishes import wish_plans
+
+    groups = {}
+    for wish in told.values():
+        if wish.goal:
+            groups.setdefault(wish.goal, []).append(wish)
+    plans = wish_plans({w.id: w for group in groups.values() for w in group if w.open})
+    held = {told[i].parent for i in waits if i in told and told[i].state != "delivered"}
+    out = []
+    for goal in goals:
+        linked = groups.get(goal["id"], [])
+        ids = {w.id for w in linked}
+        asks = [told[i] for i, head in waits.items()
+                if i in told and told[i].parent in ids and not head.startswith("thread:")
+                and told[i].state != "delivered"]
+        waiting = {a.parent for a in asks}
+        live = [w for w in linked if w.open]
+        delivered = [(r["at"], w, r) for w in linked for r in w.results if r.get("delivered")]
+        row = dict(goal, progress=dict(Counter(w.state for w in linked)),
+                   asks=[{"wish": a.id, "line": a.line, "blocks": a.parent, "waits": waits[a.id], "at": _iso(a.at)}
+                         for a in asks],
+                   blocked=bool(live) and all(w.id in waiting for w in live))
+        for w in sorted(live, key=lambda w: (w.at, w.id), reverse=True):
+            left, steered, parked = plans[w.id]
+            if w.id in held or w.state == "delivered" or parked or steered or not left or not left["steps"]:
+                continue
+            row["move"] = {"wish": w.id, "step": " ".join(left["steps"][0].split())[:240]}
+            break
+        if delivered:
+            at, w, r = max(delivered, key=lambda d: d[0])
+            row["delivery"] = {"wish": w.id, "line": r.get("line") or w.line, "ref": r.get("ref"),
+                               "delivery_id": r.get("delivery_id"), "at": _iso(at)}
+        if linked:
+            moved = max(w.at for w in linked)
+            row["moved"] = _iso(moved)
+            row["stalled"] = bool(live) and now - datetime.fromisoformat(moved).timestamp() > GOAL_STALL
+        out.append(row)
+    return out
+
+
 def compute(home: Home, facts, config, tools: dict, live: dict, person: str | None = None,
             typed: dict | None = None) -> dict[str, dict]:
     """Every part by name. The index is hashes, counts and short rows; fat rows ride in their own part.
@@ -693,6 +785,7 @@ def compute(home: Home, facts, config, tools: dict, live: dict, person: str | No
     on every letter.
     """
     from .asks import Beads
+    from .idle import active_goals
     snap, raw, letters, told = board_threads(home, facts, config, person, typed)
     threads = snap.get("threads") or []
     parts: dict[str, dict] = {}
@@ -727,10 +820,13 @@ def compute(home: Home, facts, config, tools: dict, live: dict, person: str | No
         parts["unthreaded"] = loose
     hashes = {name: digest(part) for name, part in parts.items()}
     index = {"v": 1, **{k: v for k, v in snap.items() if k not in {"at", "log"}},
-             "threads": [index_thread(t, counts.get(t["id"])) for t in threads],
+             "threads": [index_thread(t, counts.get(t["id"]), by_thread.get(t["id"])) for t in threads],
              "wishes": counts, **_as(home, person), "person_names": person_names(home.root / "self"), "parts": hashes, "faces": FACES}
     if machines := machines_of(home, facts):
         index["machines"] = machines
+    found = told_of(facts)
+    owners = {t["id"]: {"opened-by": t.get("opened_by"), "status": t.get("status")} for t in threads}
+    index["goals"] = goal_progress(active_goals(home), found, waits_on(found, owners))
     parts["index"] = index
     return parts
 
@@ -848,7 +944,7 @@ class Parts:
         self.typed_path, self.typed, self.typed_mtime = home.root / "loom/board/typed.json", {}, None
         self.changed = threading.Condition()
         self.stop = threading.Event()
-        self.said: dict[tuple[str, str], tuple[float, dict]] = {}  # (wish, verdict) -> (when, the answer sent)
+        self.said: dict[tuple[str, str, str | None], tuple[float, dict]] = {}  # (wish, verdict) -> (when, the answer sent)
 
     def step(self) -> bool:
         """One recompute when the ledger moved, one re-cut of the tapes when only they did, and a fuel splice when
@@ -970,7 +1066,7 @@ class Parts:
         return True
 
     def send(self, body: str, typed_by: str | None = None, wish: str | None = None,
-             verdict: str | None = None) -> dict:
+             verdict: str | None = None, delivery_id: str | None = None) -> dict:
         """One letter as the person into the main thread, dropped where the channel's own letters land.
 
         ``wish`` ties it to the wish a call names; ``verdict`` is agree or correct, as the relay writes
@@ -983,25 +1079,41 @@ class Parts:
             raise ValueError("wish is a wish id")
         if verdict not in (None, "agree", "correct"):
             raise ValueError("verdict is agree or correct")
+        if delivery_id and (not wish or not verdict or not re.fullmatch(r"wish\.result:[A-Za-z0-9_.:-]{1,128}", delivery_id)):
+            raise ValueError("invalid delivery id")
         if typed_by and not re.fullmatch(r"s-[a-z0-9]{2,8}-[a-z0-9]{4,12}", typed_by):
             raise ValueError("typed_by is a strand id")
         if wish and verdict:
             with self.changed:
-                again = self.said.get((wish, verdict))
+                again = self.said.get((wish, verdict, delivery_id))
                 if again and time.monotonic() - again[0] < VERDICT_REPEAT_S:
                     return again[1]
-                sent = self._send(body, typed_by, wish, verdict)
-                self.said[(wish, verdict)] = (time.monotonic(), sent)
+                sent = self._send(body, typed_by, wish, verdict, delivery_id)
+                self.said[(wish, verdict, delivery_id)] = (time.monotonic(), sent)
                 return sent
-        return self._send(body, typed_by, wish, verdict)
+        return self._send(body, typed_by, wish, verdict, delivery_id)
 
-    def _send(self, body: str, typed_by: str | None, wish: str | None, verdict: str | None) -> dict:
+    def note_post(self, origin: str, route: str, letter: str, wish: str | None, verdict: str | None) -> None:
+        """What this server saw on an accepted POST. Never the body: an overview joins on the letter id."""
+        from brr.daemon2.facts import Fact
+        from .ledger import append
+        data = {"origin": origin, "route": route, "letter": letter}
+        if wish:
+            data["wish"] = wish
+        if verdict:
+            data["verdict"] = verdict
+        append(self.home, Fact(kind="board.post", by=f"loom:{self.home.install_id()}",
+                               id="board.post:" + mint(12), data=data))
+
+    def _send(self, body: str, typed_by: str | None, wish: str | None, verdict: str | None,
+              delivery_id: str | None = None) -> dict:
         instance, user = person_channel(self.home, self.person)
         lands = self.home.main_thread()
         ident = f"{user}:board-{mint(10)}"  # a chat-scoped native id, as the connector writes
         drop = self.home.root / "loom/connectors" / instance / "state/in"
         drop.mkdir(parents=True, exist_ok=True)
         fields = {"kind": "letter", "id": ident, "to": user, "from": user, "thread": lands,
+                  **({"delivery_id": delivery_id} if delivery_id else {}),
                   **({"wish": wish} if wish else {}), **({"verdict": verdict} if wish and verdict else {})}
         if typed_by:
             with self.changed:
@@ -1277,9 +1389,14 @@ def handler(parts: Parts, port: int, spa=spa_root):
             self.wfile.write(raw)
 
         def do_POST(self):
-            # A write needs our own Host (DNS rebinding), our own Origin when a browser sends one, and a
-            # JSON body: a foreign page cannot send application/json without a preflight we never answer.
-            if self.headers.get("Host") not in hosts or self.headers.get("Origin", next(iter(origins))) not in origins:
+            # A write needs our own Host (DNS rebinding), an Origin from our set (a missing one is not
+            # ours) and Sec-Fetch-Site: same-origin. The page's fetch sets only Content-Type; a browser
+            # attaches the other two on a same-origin POST, and both are forbidden headers, so the page
+            # cannot set them. A client that omits either is not the page. A foreign page cannot send
+            # application/json without a preflight we never answer. Same gate for every POST on this server.
+            origin = self.headers.get("Origin")
+            if (self.headers.get("Host") not in hosts or origin not in origins
+                    or (self.headers.get("Sec-Fetch-Site") or "").strip() != "same-origin"):
                 self.send_error(HTTPStatus.FORBIDDEN, "origin")
                 return
             if (self.headers.get("Content-Type") or "").split(";")[0].strip() != "application/json":
@@ -1290,9 +1407,10 @@ def handler(parts: Parts, port: int, spa=spa_root):
                 return
             try:
                 data = json.loads(self.rfile.read(min(int(self.headers.get("Content-Length") or 0), 1 << 20)))
-                sent = parts.send(str(data["body"]), data.get("typed_by") or None,
-                                  data.get("wish") or None, data.get("verdict") or None)
-            except (ValueError, KeyError, TypeError, LookupError) as exc:
+                wish, verdict = data.get("wish") or None, data.get("verdict") or None
+                sent = parts.send(str(data["body"]), data.get("typed_by") or None, wish, verdict,
+                                  data.get("delivery_id") or None)
+            except (ValueError, KeyError, TypeError, AttributeError, LookupError) as exc:
                 raw = json.dumps({"error": str(exc)}).encode()
                 self.send_response(HTTPStatus.BAD_REQUEST)
                 self.send_header("Content-Type", "application/json")
@@ -1300,6 +1418,9 @@ def handler(parts: Parts, port: int, spa=spa_root):
                 self.end_headers()
                 self.wfile.write(raw)
                 return
+            parts.note_post(origin, urlsplit(self.path).path, sent["id"],
+                            wish if isinstance(wish, str) else None,
+                            verdict if isinstance(verdict, str) else None)
             self._json(sent)
 
         def _events(self):

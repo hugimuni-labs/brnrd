@@ -1,8 +1,11 @@
 """The wake gauge: what the boots of a window cost before they produced, in one line.
 
-Three facts feed it, all measured: ``wake.sizes`` (one per boot, bytes per
+Four facts feed it, all measured: ``wake.sizes`` (one per boot, bytes per
 part and the total), ``attempt.ended``'s ``evidence.reads`` (calls and bytes
-read before the body's first line) and ``wish.result`` (delivered wishes).
+read before the body's first line), ``wish.result`` (delivered wishes) and
+``molt.cost`` (what the last molt cost the wake it opened). The molt's read
+bytes are the same ``before_bytes`` already stored on the cost fact, copied
+from ``tooltrace.reads``; this module does not count that trace again.
 An unknown is said, never counted as zero.
 """
 
@@ -33,12 +36,23 @@ def gauge(facts, days=7, now=None, spent=None):
              if isinstance((f.data.get("evidence") or {}).get("reads"), dict)]
     sized = [r for r in reads if r.get("bytes") is not None]
     delivered = {f.data.get("wish") for f in _since(facts, "wish.result", cut) if f.data.get("delivered")}
+    from .moltcost import first_seconds
+
+    costs = _since(facts, "molt.cost", cut)
     out = {"days": days, "boots": len(sizes) or len(ends), "sized_boots": len(sizes),
            "wake_total": sum(int(f.data.get("total") or 0) for f in sizes), "parts": parts,
            "delivered": len(delivered), "traced": len(reads), "sized_reads": len(sized),
            "before_bytes": sum(r["before_bytes"] or 0 for r in sized),
            "read_bytes": sum(r["bytes"] or 0 for r in sized),
            "before_calls": sum(int(r.get("before") or 0) for r in reads),
+           "molts": len(costs),
+           "molt_seconds": [seconds for f in costs if (seconds := first_seconds(f.data)) is not None],
+           "molt_tokens": [int(f.data["tokens"]) for f in costs if isinstance(f.data.get("tokens"), int)],
+           "molt_parks": sum(len((f.data.get("reset") or {}).get("parks") or []) for f in costs),
+           "molt_asks": sum(len((f.data.get("reset") or {}).get("asks") or []) for f in costs),
+           "molt_scars": sum(len(f.data.get("repeated") or []) for f in costs),
+           "molt_carry": [int(f.data["carry_bytes"]) for f in costs if isinstance(f.data.get("carry_bytes"), int)],
+           "molt_read": [int(f.data["read_bytes"]) for f in costs if isinstance(f.data.get("read_bytes"), int)],
            "spent": None, "unknown_spend": 0}
     if spent is not None:
         values = {s: spent(s) for s in {str(f.data.get("strand")) for f in (sizes or ends)}}
@@ -72,6 +86,9 @@ def line(g):
         bits.append(f"{g['before_calls'] / g['traced']:.1f} calls before a first line, bytes unknown")
     else:
         bits.append("reads before a first line unknown (no trace yet)")
+    from .moltcost import clause
+    bits.append(clause(g["molts"], g["molt_seconds"], g["molt_tokens"], g["molt_parks"], g["molt_asks"], g["molt_scars"],
+                       g["molt_carry"], g["molt_read"]))
     return " · ".join(bits)
 
 

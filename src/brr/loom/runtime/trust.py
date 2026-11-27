@@ -14,7 +14,7 @@ Irreversible acts without a grant are the misses: lines under ``## Misses`` in
 the thread READMEs on the self's main, which the stop's receipt check (cites.py)
 makes a body write for an act that cited nothing. ``guard.granted`` and
 ``guard.refused`` (grants.py) stand beside it: the acts that ran on a grant and
-the ones the one rule stopped (an act marked final with no letter of his, mark.py). The number should read zero.
+the ones the one rule stopped (an act marked final with no letter from the person, mark.py). The number should read zero.
 """
 
 from __future__ import annotations
@@ -29,7 +29,7 @@ from pathlib import Path
 from .ledger import kind_facts
 
 # The verb and act an ask is for: a short list the loom keeps, so the table has rows.
-ASK_KINDS = ("merge", "settle", "publish", "delete", "spend", "send-outside", "reincarnate",
+ASK_KINDS = ("merge", "settle", "publish", "delete", "spend", "send-outside", "molt",
              "design-pick", "scope", "other")
 # What a body records; ``lapsed`` is the loom's, at the default-at park.
 ANSWERS = ("took", "changed", "never")

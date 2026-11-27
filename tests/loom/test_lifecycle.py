@@ -29,6 +29,39 @@ def bodies(root, program):
     run.chmod(0o755)
 
 
+def test_hand_body_rests_after_one_empty_stop(tmp_path):
+    root = tmp_path / "home"
+    init_self(root, person="test")
+    write_thread(root, "work", "Work", "work", wait="0")
+    bodies(root, '''import os, sys
+from pathlib import Path
+from brr.loom.runtime.fakebody import Ctx
+ctx = Ctx(Path(sys.argv[1]))
+assert os.environ["BRNRD_BODY_JACK"] == "hand"
+for letter in ctx.owed():
+    ctx.send("thread:work", note="settled", re=letter.id)
+assert "wakes at: " in (ctx.room / "port/in/boundary.md").read_text()
+assert ctx.jack("stop").raw == ""
+''')
+    inject_letter(root, to="thread:work", body="rest when settled")
+    loom = Loom(root)
+    loom.start()
+    try:
+        def ended():
+            return [f for f in loom.facts() if f.kind == "attempt.ended" and f.data["thread"] == "work"]
+
+        wait_until(ended, 30, loom.dump)
+        [end] = ended()
+        assert end.data["cause"] == "idle" and end.data["code"] == 0
+        room = root / "rooms" / end.data["strand"]
+        from brr.loom.runtime.jack import _state
+        assert _state(room)["stops"] == 1
+    finally:
+        loom.halt()
+        kill_bodies(loom)
+    assert not loom.errors
+
+
 def test_worker_bounces_once_and_authors_resend_is_answered(tmp_path):
     root = tmp_path / "home"
     write_thread(root, "author", "Author", "author", wait="0")
@@ -37,10 +70,10 @@ def test_worker_bounces_once_and_authors_resend_is_answered(tmp_path):
     starts = root / "worker-starts"
     bodies(root, f'''import json, sys, time
 from pathlib import Path
-from brr.loom.runtime.fakebody import Ctx, _own_thread
+from brr.loom.runtime.fakebody import Ctx
 from brr.loom.runtime.home import atomic_write
 ctx = Ctx(Path(sys.argv[1]))
-own = _own_thread(ctx.wake())
+own = ctx.thread
 if own == "worker":
     with Path({str(starts)!r}).open("a") as out:
         out.write("start\\n")

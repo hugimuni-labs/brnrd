@@ -209,7 +209,7 @@ test('the inbox stacks the calls as one counted line that opens on a tap', async
 	assert.equal(await calls.locator('.call').count(), 0);
 	assert.equal(
 		await calls.locator('.cfold').innerText(),
-		'▸ 1 asks you · 1 verdict waits on you · 1 answered'
+		'▸ 1 asks you · 1 verdict to give · 1 answered'
 	);
 	await calls.locator('.cfold').click();
 	assert.equal(await calls.locator('.call').count(), 3);
@@ -329,13 +329,15 @@ test('a signed-in cloud page without a board opens Account', async () => {
 		page = await ctx.newPage();
 	await page.route('**/v1/loom/index', (r) => r.fulfill({ status: 404, body: '{}' }));
 	await page.route('**/v1/loom/consent', (r) => r.fulfill({ json: { state: 'none' } }));
-	await page.route('**/v1/dashboard/repos', (r) =>
-		r.fulfill({
-			json: {
-				account: { github_login: 'ada' },
-				connected_repos: []
-			}
-		})
+	await page.route(
+		(url) => url.pathname === '/v1/dashboard/repos',
+		(r) =>
+			r.fulfill({
+				json: {
+					account: { github_login: 'ada' },
+					connected_repos: []
+				}
+			})
 	);
 	await page.goto(B.base);
 	await page.getByRole('heading', { name: 'Set up brnrd' }).waitFor();

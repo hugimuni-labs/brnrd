@@ -7,7 +7,9 @@ export type Answer = { verdict: string; at?: string; pending: boolean };
 
 export function answered(c: Call, pending: Letter[]): Answer | null {
 	if (c.closed) return { verdict: c.closed.verdict, at: c.closed.at, pending: false };
-	const p = pending.find((l) => l.wish === c.wish && l.verdict);
+	const p = pending.find(
+		(l) => l.wish === c.wish && l.verdict && (!l.delivery_id || l.delivery_id === c.delivery_id)
+	);
 	return p ? { verdict: p.verdict!, pending: true } : null;
 }
 

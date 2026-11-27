@@ -91,20 +91,30 @@ def test_an_ask_waits_on_the_opener_until_it_asks_onward(ledger):
     # mid was opened by work, and work has not asked anyone: work's turn, not the person's.
     assert turns(home)["mid"][0] != "yours"
     assert turns(home)["mid"][1] == ["thread:work"]
-    assert f"{ask} · heard · Which half first? · - · waits on thread:work" in command(home, seat, "asks")
-    assert "waits on thread:work" in command(home, seat, "wishes")
+    assert f"{ask} · heard · Which half first? · - · their word moves: thread:work" in command(home, seat, "asks")
+    assert "their word moves: thread:work" in command(home, seat, "wishes")
     onward = command(home, seat, "ask", "Which half first?", "--for", ask, "--rec", "the parser")
     assert mail(seat, onward) == []  # work's head is the operator: no thread to wake.
     # work asked onward for mid's ask; work has no opener on record, so both wait on the operator.
     assert turns(home)["mid"] == ("yours", ["operator"])
     assert turns(home)["work"] == ("yours", ["operator"])
     lines = command(home, seat, "asks").splitlines()
-    assert any(line.startswith(ask) and line.endswith("waits on operator") for line in lines)
-    assert any(line.startswith(onward) and line.endswith("waits on operator") for line in lines)
+    assert any(line.startswith(ask) and line.endswith("their word moves: operator") for line in lines)
+    assert any(line.startswith(onward) and line.endswith("their word moves: operator") for line in lines)
     # Once the person answers work's ask, the wait falls back to work.
     command(home, seat, "wish", onward, "--accept", "word", "--ref", "parser first", person=True)
     assert turns(home)["mid"][1] == ["thread:work"]
     assert "work" not in {t for t, (turn, _w) in turns(home).items() if turn == "yours"}
+
+
+@pytest.mark.parametrize("shape", ["merge:hugimuni-labs/brnrd#12", "press", "file:receipt.md", "date:+1h"])
+def test_a_shaped_ask_mails_the_opener(ledger, shape):
+    home, seat = ledger
+    wish, mid = child(home, seat, "mid", "s-aaaa-mid")
+    ask = command(home, mid, "ask", "Ready to proceed?", "--for", wish, "--answered-by", shape)
+    [letter] = mail(mid, ask)
+    assert "to: thread:work" in letter
+    assert f"ask {ask} from thread:mid: Ready to proceed?" in letter
 
 
 def test_an_ask_under_a_settled_opener_waits_on_the_operator_and_mails_nobody(ledger):
@@ -260,3 +270,110 @@ def test_a_retried_ask_finishes_the_one_that_half_happened(ledger):
     assert mail(mid, ask) == []
     asks = [w for w in wishes(read_facts(home)).values() if w.sender == "resident"]
     assert [w.id for w in asks] == [ask] and asks[0].reads == [] and asks[0].stamps == []
+
+
+def test_merge_answer_uses_the_forge_watch_and_closes_exactly_once(ledger):
+    from brr.loom.runtime import waits
+    from brr.loom.runtime.ledger import LedgerView
+    from test_wishes import heard
+
+    home, seat = ledger
+    (home.root / "loom/config.toml").write_text('connectors = ["mine=fake"]\n')
+    (home.root / "self/people/ada").mkdir(parents=True)
+    (home.root / "self/people/ada/channels.toml").write_text('channels = ["mine:42"]\n')
+    parent = heard(home, seat, "Ship both changes")
+    repo = "hugimuni-labs/brnrd"
+    ask = command(home, seat, "ask", "First change landed?", "--for", parent,
+                  "--answered-by", f"merge:{repo}#12")
+    assert turns(home)["work"] == ("yours", ["operator"])
+    pending = command(home, seat, "ask", "Second change landed?", "--for", parent,
+                      "--answered-by", f"merge:{repo}#13")
+    reply = command(home, seat, "ask", "Which change first?", "--for", parent, "--answered-by", "reply")
+    assert "to: channel:mine/42" in mail(seat, reply)[0]
+    assert "to: channel:mine/42" in mail(seat, ask)[0]
+    assert "to: channel:mine/42" in mail(seat, pending)[0]
+    heads = waits_on(wishes(read_facts(home)), main_snapshot(home))
+    assert heads[ask] == heads[reply] == "operator"
+    assert view(home, ask).answered_by == f"merge:{repo}#12"
+    inject_letter(home.root, to="thread:work", body="Start with the first", re=reply)
+    inject_letter(home.root, to="thread:work", body="Looks landed", re=ask)
+    assert view(home, reply).state == "answered"
+    assert view(home, ask).open
+
+    class Forge:
+        def pull(self, repo, number):
+            return {"state": "merged" if number == 12 else "closed", "at": "now",
+                    "url": f"https://github.com/{repo}/pull/{number}"}
+
+    facts = LedgerView(read_facts(home))
+    watcher = waits.Watcher()
+    wants = waits.forge_wants(wishes(facts), facts)
+    assert wants == {f"pr:{repo}#12", f"pr:{repo}#13"}
+    waits.observe_waits(home, facts, True, {f"pr:{repo}#12": {"state": "unreadable"}})
+    assert view(home, ask).open
+    watcher._poll(Forge(), wants)
+    waits.observe_waits(home, facts, False, watcher.states)
+    assert view(home, ask).open
+    waits.observe_waits(home, facts, True, watcher.states)
+    waits.observe_waits(home, LedgerView(read_facts(home)), True, watcher.states)
+    assert view(home, ask).state == "answered"
+    assert view(home, pending).open
+    [letter] = [fact for fact in read_facts(home) if fact.kind == "letter"
+                and fact.data.get("from") == "loom"]
+    assert letter.data["to"] == "thread:work"
+    assert letter.data["body"].startswith(f"closed &{ask}: pr:{repo}#12 merged")
+    assert f"https://github.com/{repo}/pull/12" in letter.data["body"]
+
+
+def test_file_answer_reads_self_main_and_date_answer_waits_for_its_instant(ledger):
+    from datetime import timedelta
+    from brr.loom.runtime import waits
+    from brr.loom.runtime.ledger import LedgerView
+    from test_wake import commit
+    from test_wishes import heard
+
+    home, seat = ledger
+    parent = heard(home, seat, "Gather receipts")
+    file_ask = command(home, seat, "ask", "Receipt present?", "--for", parent,
+                       "--answered-by", "file:receipt.md")
+    date_ask = command(home, seat, "ask", "Deadline passed?", "--for", parent,
+                       "--answered-by", "date:+1h")
+    assert command(home, seat, "ask", "Deadline passed?", "--for", parent,
+                   "--answered-by", "date:+1h") == date_ask
+    due = waits._instant(view(home, date_ask).answered_by.removeprefix("date:"))
+    repo = home.root / "self"
+    (repo / "receipt.md").touch()
+    facts = LedgerView(read_facts(home))
+    waits.observe_waits(home, facts, True, now=due - timedelta(seconds=1))
+    assert view(home, file_ask).open and view(home, date_ask).open
+    commit(repo, "land empty receipt")
+    waits.observe_waits(home, facts, True, now=due)
+    assert view(home, file_ask).state == view(home, date_ask).state == "answered"
+
+
+def test_press_answer_uses_the_board_verdict_letter(ledger):
+    from brr.loom.runtime import waits
+    from brr.loom.runtime.board import Parts
+    from brr.loom.runtime.connector import addressed, ingest
+    from brr.loom.runtime.port import parse_frontmatter
+    from test_wishes import heard
+
+    home, seat = ledger
+    (home.root / "loom/config.toml").write_text('connectors = ["mine=fake"]\n')
+    (home.root / "self/people/ada").mkdir(parents=True)
+    (home.root / "self/people/ada/channels.toml").write_text('channels = ["mine:42"]\n')
+    parent = heard(home, seat, "Get a board decision")
+    ask = command(home, seat, "ask", "Ready?", "--for", parent, "--answered-by", "press")
+    assert "to: channel:mine/42" in mail(seat, ask)[0]
+    inject_letter(home.root, to="thread:work", body="Yes", re=ask)
+    waits.observe_waits(home, read_facts(home), True)
+    assert view(home, ask).open
+    sent = Parts(home, lambda: load_config(home.root), person="ada").send(
+        f"done &{ask}", wish=ask, verdict="agree")
+    [drop] = (home.root / "loom/connectors/mine/state/in").glob("*.md")
+    ingest(home, "mine", addressed("mine", parse_frontmatter(drop.read_text())), [])
+    waits.observe_waits(home, read_facts(home), True)
+    assert view(home, ask).state == "answered"
+    [letter] = [f for f in read_facts(home) if f.kind == "letter" and f.data.get("from") == "loom"]
+    assert letter.data["to"] == "thread:work"
+    assert letter.data["body"].startswith(f"closed &{ask}: board press agree ({sent['id']})")

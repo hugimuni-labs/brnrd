@@ -18,11 +18,13 @@ filesystem is not state on this deployment (``deploy/runtime-contract.md``), so
 a daily file would be lost at the next rollout; a counter row survives it.
 
 Only a closed allowlist of public routes is counted (``/``, ``/pricing``,
-``/learn*``, ``/log*``, ``/install``), only ``GET``, and only a 200/304 — a
-scanner walking ``/learn/<junk>`` cannot mint rows. The /hi campaign redirect
-counts only its 302. ``/install`` and ``/install.sh`` serve the same installer
-script and fold into one ``/install`` row: a download of the script, which
-counts bots and people reading it as well as installs.
+``/learn*``, ``/log*``, ``/install``, and the configured campaign paths),
+only ``GET``, and only a 200/304 — a scanner walking ``/learn/<junk>`` cannot
+mint rows. A campaign path counts only its 302. ``/hi`` is always one;
+``BRNRD_CAMPAIGN_PATHS`` adds others and cannot remove it. ``/install`` and
+``/install.sh`` serve the same installer script and fold into one ``/install``
+row: a download of the
+script, which counts bots and people reading it as well as installs.
 Signed-in surfaces are never touched.
 
 Limit, stated: a CDN in front of the origin can answer a cacheable page
@@ -47,7 +49,7 @@ from .db import Base
 PROMO_PATH = "/hi"
 PROMO_STATUS = 302
 INSTALL_PATH = "/install"
-_EXACT = frozenset({"/", "/pricing", "/learn", "/log", PROMO_PATH, INSTALL_PATH})
+_EXACT = frozenset({"/", "/pricing", "/learn", "/log", INSTALL_PATH})
 # Other spellings of one counted page, folded into its row.
 _ALIASES = {"/install.sh": INSTALL_PATH}
 _PREFIXES = ("/learn/", "/log/")
@@ -81,7 +83,7 @@ class PageViewCount(Base):
     views = Column(Integer, nullable=False, default=0)
 
 
-def counted_path(raw_path: str) -> str | None:
+def counted_path(raw_path: str, campaigns: frozenset[str] = frozenset({PROMO_PATH})) -> str | None:
     """The normalised path if it is on the allowlist, else ``None``."""
 
     path = raw_path.split("?", 1)[0].split("#", 1)[0]
@@ -90,7 +92,7 @@ def counted_path(raw_path: str) -> str | None:
     if len(path) > _MAX_PATH or not path.startswith("/"):
         return None
     path = _ALIASES.get(path, path)
-    if path in _EXACT:
+    if path in _EXACT or path in campaigns:
         return path
     if path.startswith(_PREFIXES) and path.count("/") <= _MAX_SEGMENTS:
         if re.fullmatch(r"/[A-Za-z0-9._~/-]+", path):
@@ -148,15 +150,18 @@ class PageViewMiddleware:
     error — analytics must never be able to fail a page.
     """
 
-    def __init__(self, app: ASGIApp, *, factory: sessionmaker) -> None:
+    def __init__(
+        self, app: ASGIApp, *, factory: sessionmaker, campaigns: frozenset[str] = frozenset({PROMO_PATH}),
+    ) -> None:
         self.app = app
         self.factory = factory
+        self.campaigns = campaigns
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         if scope["type"] != "http" or scope.get("method") != "GET":
             await self.app(scope, receive, send)
             return
-        path = counted_path(scope.get("path") or "")
+        path = counted_path(scope.get("path") or "", self.campaigns)
         if path is None:
             await self.app(scope, receive, send)
             return
@@ -170,7 +175,7 @@ class PageViewMiddleware:
             await send(message)
 
         await self.app(scope, receive, capture)
-        counted_statuses = (PROMO_STATUS,) if path == PROMO_PATH else _COUNTED_STATUS
+        counted_statuses = (PROMO_STATUS,) if path in self.campaigns else _COUNTED_STATUS
         if status not in counted_statuses:
             return
         headers = {k: v for k, v in scope.get("headers") or ()}

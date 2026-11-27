@@ -86,6 +86,7 @@ class Wish:
     # An ask's answer: the first letter of whoever it waits on that replies to it,
     # cites it, replies to a letter that raised it, or is stamped on it.
     answer: str = ""
+    answered_by: str = "reply"
     # The last time a person's letter named the wish (a stamp, or a verdict letter):
     # one after the delivery means they looked, so it stays delivered and never expires.
     heard_at: str = ""
@@ -94,6 +95,8 @@ class Wish:
     said_at: str = ""
     tops: list[dict] = field(default_factory=list)
     pick: dict | None = None
+    # The goal this wish serves, by its file name under the self's goals/; empty: none named.
+    goal: str = ""
 
     @property
     def ranked_at(self) -> str:
@@ -157,7 +160,7 @@ def wishes(facts: Iterable[Fact]) -> dict[str, Wish]:
     found: dict[str, Wish] = {}
     for fact in ordered:
         if fact.kind not in {"wish", "wish.read", "wish.result", "wish.verdict", "wish.left",
-                             "wish.top", "wish.pick"}:
+                             "wish.top", "wish.pick", "wish.goal"}:
             continue
         d = fact.data
         ident = d["wish"]
@@ -172,7 +175,9 @@ def wishes(facts: Iterable[Fact]) -> dict[str, Wish]:
             wish.sender, wish.line, wish.thread = d["from"], d["line"], d["thread"]
             wish.parent = d.get("parent") or wish.parent
             wish.rec = d.get("rec") or wish.rec
-            wish.kind = d.get("kind") or wish.kind
+            kind = d.get("kind")
+            wish.kind = ("molt" if kind == "reincarnate" else kind) or wish.kind
+            wish.answered_by = d.get("answered_by") or wish.answered_by
             wish.verdict = None
         else:
             if ident not in found:
@@ -182,12 +187,16 @@ def wishes(facts: Iterable[Fact]) -> dict[str, Wish]:
                 wish.reading = d["reading"]
                 wish.reads.append(dict(d, at=fact.at, writer=fact.by))
             elif fact.kind == "wish.result":
-                wish.results.append(dict(d, at=fact.at, writer=fact.by))
+                wish.results.append(dict(d, at=fact.at, writer=fact.by, delivery_id=fact.id))
             elif fact.kind == "wish.top":
                 wish.tops.append({"at": fact.at, "ref": d.get("ref"), "by": fact.by})
                 continue
             elif fact.kind == "wish.pick":
                 wish.pick = {"at": fact.at, "why": d.get("why", ""), "by": fact.by}
+                continue
+            elif fact.kind == "wish.goal":
+                # Which goal the work serves: a link, not news on the wish.
+                wish.goal = str(d.get("goal") or "")
                 continue
             elif fact.kind == "wish.left":
                 steps = wish.left["steps"] if d.get("same") and wish.left else list(d.get("steps") or ())
@@ -213,6 +222,9 @@ def wishes(facts: Iterable[Fact]) -> dict[str, Wish]:
                 # Merged and in the code the loom runs: delivered, until a rollback.
                 if (merge := held_merge(result, start)):
                     result.update(delivered=True, held=merge)
+        scope = (wish.verdict or {}).get("delivery_id")
+        if scope and scope != delivery_id(wish):
+            wish.verdict = None
         wish.heard_at = max([named.get(wish.id, ""), *(s["at"] for s in wish.stamps
                              if any(i in letters and _person(letters[i]) for i in s["letters"]))])
         if wish.sender == "person":
@@ -246,7 +258,13 @@ def _answer(asked: list[Wish], letters: dict, ordered: list[Fact]) -> None:
     for ident, letter in letters.items():
         for link in letter.data.get("links") or ():
             raised.setdefault(ident, set()).add(str(link))
+    closed = {letter.data["closes_ask"]: ident for ident, letter in letters.items()
+              if letter.by.startswith("loom:") and letter.data.get("closes_ask")}
     for ask in asked:
+        if ask.answered_by != "reply":
+            ask.answer = closed.get(ask.id, "")
+            continue
+
         def answers(letter) -> bool:
             if letter.at < ask.born:
                 return False
@@ -263,7 +281,7 @@ def _answer(asked: list[Wish], letters: dict, ordered: list[Fact]) -> None:
         ask.answer = next(iter(stamped), None) or next((i for i, f in letters.items() if answers(f)), "")
 
 
-WISH_KINDS = ("wish", "wish.read", "wish.result", "wish.verdict", "wish.left", "wish.top", "wish.pick",
+WISH_KINDS = ("wish", "wish.read", "wish.result", "wish.verdict", "wish.left", "wish.top", "wish.pick", "wish.goal",
               # A merged result reads delivered only by the commit the loom runs: without
               # loom.started here, told() keeps a finished wish granting and Next build.
               "loom.started",
@@ -275,6 +293,9 @@ def told(facts) -> dict[str, Wish]:
     from .ledger import kind_facts
     from .project import cached_projection
     return cached_projection(facts, "wishes", (), lambda rows: wishes(kind_facts(rows, *WISH_KINDS)))
+
+
+ONBOARDING_WISH = 'brnrd knows the person it works for'
 
 
 def waits_on(found: dict[str, Wish], main: dict) -> dict[str, str]:
@@ -289,7 +310,10 @@ def waits_on(found: dict[str, Wish], main: dict) -> dict[str, str]:
     nobody else will wake for it.
     """
     from .lifecycle import CLOSED
-    asks = {w.id: w for w in found.values() if w.open and w.sender == "resident"}
+    asks = {
+        w.id: w for w in found.values()
+        if w.open and w.sender == "resident" and (w.parent or w.line != ONBOARDING_WISH)
+    }
     onward: dict[tuple[str, str], Wish] = {}
     for w in asks.values():
         onward.setdefault((w.thread, w.parent), w)
@@ -506,7 +530,7 @@ def pointed(found: dict[str, Wish], thread: str, body: str) -> list[Wish]:
 
 def untouched_line(found: dict[str, Wish], thread: str | None, letter: str, body: str) -> str:
     """Said at the act, once: a reply to a person letter that touched no wish,
-    and what the letter's words point at (prompts-remake, his 10095)."""
+    and what the letter's words point at (prompts-remake, letter 10095)."""
     rows = pointed(found, thread, body) if thread else []
     if not rows:
         return f"{letter} touched no wish"
@@ -529,7 +553,7 @@ def _short(value: str, size: int) -> str:
 
 
 def waits_word(head: str) -> str:
-    return f" · waits on {head}"
+    return f" · their word moves: {head}"
 
 
 def wish_line(wish: Wish) -> str:
@@ -542,7 +566,23 @@ def wish_line(wish: Wish) -> str:
     return f"{_short(wish.id, 48)} · {state} · {_short(wish.line, 160)} · {_short(ref, 120)}"
 
 
-def wish_tree(wish: Wish, bodies: dict[str, str] | None = None, rows=()) -> list[str]:
+def wish_plan(wish: Wish) -> tuple[dict | None, list[list[str]]]:
+    """Latest remaining steps and the letter groups that arrived after them."""
+    left = wish.left
+    after = max(wish.born, left["at"]) if left is not None else wish.born
+    return left, [stamp["letters"] for stamp in wish.stamps
+                  if stamp["letters"] and stamp["at"] > after]
+
+
+def wish_plans(told: dict) -> dict:
+    """Project the plan and active park of each folded wish for board and wake."""
+    from .waits import live
+
+    parked = {wish.id: read for wish, read in live(told)}
+    return {wish.id: (*wish_plan(wish), parked.get(wish.id)) for wish in told.values()}
+
+
+def wish_tree(wish: Wish, bodies: dict[str, str] | None = None, rows=(), *, plan=None) -> list[str]:
     """One open wish as the wake shows it: done from its results, the latest left,
     and the steers that came after it. ``rows`` are Plan rows, read only for a wish
     that has no left yet."""
@@ -553,7 +593,7 @@ def wish_tree(wish: Wish, bodies: dict[str, str] | None = None, rows=()) -> list
     if refs:
         more = f" · +{len(refs) - 5}" if len(refs) > 5 else ""
         lines.append("  done: " + " · ".join(_short(ref, 60) for ref in refs[-5:]) + more)
-    left = wish.left
+    left, since, parked = plan if plan is not None else wish_plans({wish.id: wish})[wish.id]
     if left is not None:
         steps = " · ".join(_short(step, 100) for step in left["steps"][:8]) or "(no step listed)"
         lines.append(f"  left (gen {left['gen']}, {left['at'][5:16].replace('T', ' ')}): {steps}")
@@ -562,18 +602,21 @@ def wish_tree(wish: Wish, bodies: dict[str, str] | None = None, rows=()) -> list
         cited = [_short(row.rpartition(" · re: ")[0] or row, 80) for box, row in rows
                  if box is not False and wish.id in plan_citations(row) and receipt(wish.thread, row) is None]
         lines.append("  left: none said yet" + ("; README rows citing it: " + " · ".join(cited[:3]) if cited else ""))
-    since = [x for x in wish.stamps if x["letters"] and (left is None or x["at"] > left["at"])
-             and x["at"] > wish.born]
+    if parked is not None:
+        condition = parked["wait"].get("on")
+        if condition:
+            lines.append("  waits on: " + _short(condition, 120))
     if since:
         said = [f'{_letter_word(i)} "{_short((bodies or {}).get(i, ""), 60)}"'
-                for x in since[-3:] for i in x["letters"][:1]]
+                for letters in since[-3:] for i in letters[:1]]
         lines.append("  steered since: " + " · ".join(said))
     return lines
 
 
 def wake_wishes(facts: Iterable[Fact], thread: str, plan_rows=(), told: dict | None = None) -> str:
     facts = list(facts)
-    rows = [w for w in (wishes(facts) if told is None else told).values() if w.thread == thread and w.open]
+    told = wishes(facts) if told is None else told
+    rows = [w for w in told.values() if w.thread == thread and w.open]
     if not rows:
         return ""
     rows.sort(key=lambda w: (w.sender != "resident", w.id))
@@ -590,8 +633,9 @@ def wake_wishes(facts: Iterable[Fact], thread: str, plan_rows=(), told: dict | N
                     + (f" as: {_short(d['why'], 120)}" if d.get("why") else "") + "\n")
     # A delivered wish waits only on its acceptance; its result is the receipt, so
     # it takes its one line, without the tree, instead of crowding the README out.
+    plans = wish_plans({w.id: w for w in rows[:20]})
     section += "".join(line + "\n" for w in rows[:20]
-                       for line in ([wish_line(w)] if w.state == "delivered" else wish_tree(w, bodies, plan_rows)))
+                       for line in ([wish_line(w)] if w.state == "delivered" else wish_tree(w, bodies, plan_rows, plan=plans[w.id])))
     if len(rows) > 20:
         section += f"+{len(rows) - 20} more · wishes --thread {thread}\n"
     return section
@@ -606,3 +650,8 @@ def insert_wishes(prompt: str, section: str) -> str:
     if end < 0:
         return prompt + "\n" + section
     return prompt[:end + 1] + section + prompt[end + 1:]
+
+
+def delivery_id(wish: Wish | None) -> str | None:
+    """The fact that offered the current delivery."""
+    return next((r.get("delivery_id") for r in reversed(wish.results) if r["delivered"]), None) if wish else None

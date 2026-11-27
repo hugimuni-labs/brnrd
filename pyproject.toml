@@ -4,7 +4,7 @@ name = "brnrd"
 dynamic = ["version"]
 description = "Structured guardrails for AI agent work, managed from a chat"
 authors = [ { name = "HugiMuni" } ]
-readme = "packaging/pypi/README.md"  # a pointer: PyPI gets one last release, then publish-pypi goes
+readme = "packaging/pypi/README.md"
 requires-python = ">=3.10"
 dependencies = [
   "requests>=2.31,<3",

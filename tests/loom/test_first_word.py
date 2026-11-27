@@ -37,7 +37,7 @@ def test_live_age_and_once(tmp_path, monkeypatch, age, warning, deny):
     records = []
     monkeypatch.setattr(grants, 'refused', lambda *a: records.append(a))
     out = pre(room)
-    assert ('one line to him first' in str(out)) == warning
+    assert ('one line to the person first' in str(out)) == warning
     assert (out.get('permissionDecision') == 'deny') == deny
     assert len(records) == int(deny)
     again = pre(room)

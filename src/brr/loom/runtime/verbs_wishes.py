@@ -6,12 +6,13 @@ import json
 import os
 import re
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 
 from brr.daemon2.facts import Fact
 from .home import Home, home_of_room, mint, resolve_home, strand_of_room
 from .ledger import append, read_facts
-from .waits import GRAMMAR
+from .waits import GRAMMAR, wish_waiters
 from .wishes import Say, waits_on, waits_word, wishes, wish_line
 from .refusals import Parser, refuse
 
@@ -93,16 +94,20 @@ def _wish_arguments(parser):
     parser.add_argument("--from", dest="sender", choices=("person", "resident"))
     action = parser.add_mutually_exclusive_group()
     action.add_argument("--read")
+    action.add_argument("--clear-wait", action="store_true", help="clear the wish's current wait")
     action.add_argument("--result")
     action.add_argument("--accept", choices=("word", "act", "implied"))
     action.add_argument("--drop")
+    parser.add_argument("--force", action="store_true", help="drop even while other wishes ride on it")
     parser.add_argument("--deliver", action="store_true")
     parser.add_argument("--ref")
-    parser.add_argument("--wait", help="what the park waits on: " + GRAMMAR)
+    parser.add_argument("--wait", help="the condition that reopens the park: " + GRAMMAR)
     parser.add_argument("--until", help="when the park re-asks its thread if nothing resolved")
     parser.add_argument("--top", metavar="LETTER",
                         help="the person's letter that puts this wish on top of their order")
     parser.add_argument("--pick", metavar="WHY", help="the resident works this wish next, and why")
+    parser.add_argument("--goal", metavar="GOAL",
+                        help="the active goal this wish serves (its file name under goals/), or none")
     from .trust import ANSWERS
     parser.add_argument("--answer", choices=ANSWERS,
                         help="how the person answered this ask: took the rec, changed it, or said never")
@@ -114,6 +119,12 @@ def cmd_wish(args):
     try:
         home, by, thread = _context(args)
         facts = read_facts(home)
+        if args.force and args.drop is None:
+            raise ValueError("--force requires --drop")
+        if args.goal is not None:
+            append(home, _goal_fact(home, args, facts, by))
+            print(args.id)
+            return 0
         if args.top is not None or args.pick is not None:
             append(home, _rank_fact(args, facts, by))
             print(args.id)
@@ -122,6 +133,10 @@ def cmd_wish(args):
             append(home, _answer_fact(args, facts, by))
             print(args.id)
             return 0
+        if args.clear_wait:
+            if args.wait is not None or args.until is not None:
+                raise ValueError("--clear-wait takes neither --wait nor --until")
+            args.read = "wait cleared"
         actions = any(x is not None for x in (args.read, args.result, args.accept, args.drop))
         left = _left_fact(args, facts, by) if args.left else None
         if left is not None and not actions:
@@ -147,7 +162,8 @@ def cmd_wish(args):
             print(wish_line(current))
             return 0
         if actions:
-            if args.id == "new" or args.id not in wishes(facts):
+            found = wishes(facts)
+            if args.id == "new" or args.id not in found:
                 raise ValueError(f"no wish {args.id}; create it with wish new first")
             if args.say or args.sender or args.thread or args.parent or (args.line is not None and args.result is None):
                 raise ValueError("touch flags cannot accompany a reading, result or verdict")
@@ -158,7 +174,7 @@ def cmd_wish(args):
                 if args.wait is not None and not args.read.startswith("waiting:"):
                     data["reading"] = "waiting: " + args.read
                 if data["reading"].startswith("waiting:"):
-                    data["wait"] = _wait(home, facts, args.id, args.wait, args.until)
+                    data["wait"] = _wait(home, facts, args.id, args.wait, args.until, thread=thread)
                     _guard_long_park(home, facts, args.id, data["wait"], args.read, thread, by)
             elif args.result is not None:
                 result_kind, sep, ref = args.result.partition(":")
@@ -173,6 +189,14 @@ def cmd_wish(args):
                     if held is not None:
                         left = _held_left(args, facts, by, held, left)
             else:
+                if args.drop is not None and not args.force:
+                    waiters = wish_waiters(home, facts, found, args.id, datetime.now(timezone.utc))
+                    if waiters:
+                        lines = [f"{wish.id} · thread:{thread} · {json.dumps(read['reading'], ensure_ascii=False)}"
+                                 for wish, read, thread in waiters]
+                        lines.append("Write to the waiting thread(s) first, or pass --force.")
+                        print("\n".join(lines), file=sys.stderr)
+                        return 1
                 kind = "wish.verdict"
                 data.update({"as": "accepted" if args.accept else "dropped",
                              "evidence": args.accept or "word",
@@ -211,7 +235,7 @@ def cmd_wish(args):
             return 1
         if actions and kind == "wish.result" and by.startswith("strand:"):
             if args.deliver:
-                _tell_delivered(home, args, wishes(facts)[args.id], data)
+                _tell_delivered(home, args, wishes(facts)[args.id], data, thread)
             _declare(args, "result")
         elif actions and kind == "wish.read" and by.startswith("strand:") and "wait" in data:
             _declare(args, "park")
@@ -265,6 +289,23 @@ def _rank_fact(args, facts, by):
     if ident is None or not _person(letters[ident]):
         raise ValueError(f"--top {args.top}: not a person's letter; their order is theirs alone")
     return Fact(kind="wish.top", by=by, id="wish.top:" + mint(12), data={"wish": args.id, "ref": ident})
+
+
+def _goal_fact(home, args, facts, by):
+    """``--goal``: link a wish to the active goal it serves, so the board counts it there; ``none`` unlinks."""
+    from .idle import active_goals
+    if any(x is not None for x in (args.top, args.pick, args.read, args.result, args.accept, args.drop,
+                                   args.answer)) or args.left or args.clear_wait:
+        raise ValueError("--goal goes alone")
+    if args.id not in wishes(facts):
+        raise ValueError(f"no wish {args.id}")
+    goal = args.goal.strip()
+    if goal == "none":
+        goal = ""
+    elif goal not in {g["id"] for g in active_goals(home)}:
+        names = ", ".join(sorted(g["id"] for g in active_goals(home))) or "none landed"
+        raise ValueError(f"--goal {goal}: not an active goal on the self's main (active: {names})")
+    return Fact(kind="wish.goal", by=by, id="wish.goal:" + mint(12), data={"wish": args.id, "goal": goal})
 
 
 HOST_FILE_MAX = 1 << 30
@@ -337,18 +378,36 @@ def _gen(facts, strand: str) -> int:
                default=0)
 
 
-def _tell_delivered(home, args, wish, result) -> None:
-    """A delivered person wish is a letter to that person on the chat they said it in:
-    the receipt, and how to give the verdict. Their reply ``ok`` to it accepts it."""
+def _tell_delivered(home, args, wish, result, thread) -> None:
+    """Send the receipt for a person's wish to the opener or to the original chat."""
+    from .home import is_channel
+    from .ledger import kind_facts
+    from .lifecycle import read_thread
+    from .port import write_send
+    from .project import reply_channels, sender_threads
+    from .spend import door
+    from .verbs_loom import _room
+
     if wish.sender != "person":
         return
-    from .port import write_send
-    from .project import reply_channels
-    from .verbs_loom import _room
-    chats = reply_channels(read_facts(home), home)
-    chat = next((chats[s.letter] for s in reversed(wish.says) if s.letter in chats), None)
-    if chat is None:
-        return
+    facts = read_facts(home)
+    target = None
+    if thread != home.main_thread():
+        opener = read_thread(home, thread).get("opened-by") or ""
+        writers = sender_threads(facts)
+        granted = opener.startswith("person:") or any(
+            grant.data["thread"] == thread and wish.id in grant.data["wishes"]
+            and f"thread:{writers.get(grant.by.removeprefix('strand:'))}" == opener
+            for grant in kind_facts(facts, "wish.delivery.grant")
+        )
+        if not granted:
+            target = f"thread:{door(home, opener)}"
+    if target is None:
+        chats = reply_channels(facts, home)
+        target = next((chats[s.letter] for s in reversed(wish.says) if s.letter in chats), None)
+        if target is None:
+            return
+    channel = is_channel(target)
     room = _room(args.room)
     body = f"delivered &{wish.id}: {wish.line}\n{result['line']}: {result['ref']}\n"
     for said in (result.get("verified"), result.get("word"), result.get("weakened")):
@@ -358,9 +417,13 @@ def _tell_delivered(home, args, wish, result) -> None:
     if result.get("kind") == "host":
         body += f"file: {result['name']} · {_size(result['size'])} · sha256 {result['sha256']}\n"
         attach = f"{result['sha256']} {result['name']}"
-    body += "Reply ok to accept, or say what is off.\n"
-    write_send(room, to=chat, sender=strand_of_room(room), body=body, receipt=True,
-               **({"attach": attach} if attach else {}))
+    if channel:
+        body += "Reply ok to accept, or say what is off.\n"
+    write_send(room, to=target, sender=strand_of_room(room), body=body, receipt=True,
+               **({"attach": attach} if channel and attach else {}))
+    if not channel:
+        print(f"delivered to {target.removeprefix('thread:')}, not to the person: "
+              "the opener did not grant delivery", file=sys.stderr)
 
 
 def _rest_line(args, data) -> None:
@@ -405,7 +468,7 @@ def _wakes(home, facts, by: str, data: dict) -> str:
     from .waits import parker
     wait = data.get("wait") or {}
     on, until = wait.get("on"), wait.get("until")
-    thread = parker(home, facts, wishes(facts)[data["wish"]], {"writer": by})
+    thread = parker(home, facts, wishes(facts)[data["wish"]], dict(data, writer=by))
     if on and on.startswith("cond:"):
         when = f"on each firing of {on}, until it is re-read" + (f" or {until}" if until else "")
     else:
@@ -438,7 +501,7 @@ def _recall(argv: list[str]) -> int:
     return 0
 
 
-def _wait(home, facts, ident, condition, until, default=None):
+def _wait(home, facts, ident, condition, until, default=None, *, thread=None):
     """A park's ``wait``: its condition with the repo filled in, its deadline and its turn."""
     from datetime import datetime, timezone
     from . import waits
@@ -449,8 +512,10 @@ def _wait(home, facts, ident, condition, until, default=None):
         condition = waits.canonical(condition, now, repo=lambda number: _repo(facts, number))
         if condition.startswith("wish:") and condition[5:] not in found:
             raise ValueError(f"--wait {condition}: no wish {condition[5:]}")
-    return waits.park(found[ident], condition, until, now, found=found, default=default,
+    wait = waits.park(found[ident], condition, until, now, found=found, default=default,
                       turn=float(load_config(home.root).turn or 0))
+    wait["thread"] = thread or found[ident].thread
+    return wait
 
 
 def _guard_long_park(home, facts, ident, park, reading, thread, by):
@@ -528,7 +593,7 @@ def _person_dm(home, facts, person: str | None) -> str | None:
 
     The chat their latest letter came from, as a reply would go: the first entry
     in channels.toml is only the fallback. An ask that went there reached an old
-    own bot for days while he wrote from the cloud one (11-03). The operator is
+    own bot for days while they wrote from the cloud one (11-03). The operator is
     the first person page with a channel, else whoever wrote last.
     """
     from .board import person_of
@@ -579,12 +644,14 @@ def cmd_ask(args):
         # (thread, parent, line) is reused, and mailed only if no mail for it left.
         same = next((w for w in wishes(facts).values() if w.open and w.sender == "resident"
                      and (w.thread, w.parent, w.line) == (thread, args.wish, args.what)), None)
+        from .waits import answer_shape
         if args.default_at is not None and args.rec is None:
             raise ValueError("ask --default-at needs --rec: the default is what you recommend")
         if same is None:
             # The rec rides on the ask itself: a wish.read would read as the person's answer.
             fact = wish_fact(facts, by=by, ident="new", line=args.what, thread=thread,
                              sender="resident", parent=args.wish, rec=args.rec, kind=args.kind)
+            fact.data["answered_by"] = answer_shape(args.answered_by, datetime.fromisoformat(fact.at))
             from .lifecycle import reopen_for
             from .verbs_loom import _room
             # A body that settled its own thread and asks again holds open work there.
@@ -597,6 +664,10 @@ def cmd_ask(args):
             ident = fact.data["wish"]
         else:
             ident = same.id
+            if args.answered_by is not None:
+                proposed = answer_shape(args.answered_by, datetime.fromisoformat(same.born.replace("Z", "+00:00")))
+                if proposed != same.answered_by:
+                    raise ValueError(f"ask: {ident} already waits for {same.answered_by}")
             print(f"ask: reused {ident}, the open ask with this line for {args.wish}", file=sys.stderr)
         if same is not None and ((args.rec is not None and same.rec != args.rec)
                                  or (args.kind is not None and same.kind != args.kind)):
@@ -619,10 +690,10 @@ def cmd_ask(args):
             _say([f"mailed {head}: a body there wakes on it"])
         elif head == "operator" or head.startswith("person:"):
             # Typing an ask is sending it (requests R3): any thread may write the
-            # person, and the &ref binds his reply-to on this message to the ask.
+            # person, and the &ref binds their reply-to on this message to the ask.
             to = _person_dm(home, facts, head.removeprefix("person:") if head != "operator" else None)
             if to is None:
-                print(f"ask: {ident} waits on the person, but no person has a direct channel: "
+                print(f"ask: their word moves {ident}. No person has a direct channel: "
                       "it is on the board only; raise it from the inbox", file=sys.stderr)
             elif not _mailed(facts, room, to, marker):
                 body = marker + args.what + "\n"
@@ -637,7 +708,8 @@ def cmd_ask(args):
             # The asking wish parks on the ask; at its deadline the body is woken with its own rec.
             append(home, Fact(kind="wish.read", by=by, id="wish.read:" + mint(12), data={
                 "wish": args.wish, "reading": f"waiting: ask {ident}: {args.what}", "by": "resident",
-                "wait": _wait(home, facts, args.wish, "wish:" + ident, args.default_at, default=args.rec)}))
+                "wait": _wait(home, facts, args.wish, "wish:" + ident, args.default_at,
+                              default=args.rec, thread=thread)}))
         _declare(args, "ask")
         if args.kind is None and (same is None or not same.kind):
             print("ask: no --kind; its answer counts under (no kind) in asks --calibrate", file=sys.stderr)
@@ -654,11 +726,13 @@ def _ask_arguments(parser):
     parser.add_argument("--home")
     parser.add_argument("what")
     parser.add_argument("--for", dest="wish", required=True, help="the wish this ask unblocks")
+    parser.add_argument("--answered-by", metavar="SHAPE",
+                        help="reply (default), press, merge:<owner/repo>#N, file:<self path>, or date:<when>")
     parser.add_argument("--rec", help="what you recommend; kept on the ask as its rec, apart from the answer")
     parser.add_argument("--default-at", dest="default_at",
                         help="if nobody answers by then, you are woken to carry out your rec")
     from .trust import ASK_KINDS
-    parser.add_argument("--kind", choices=ASK_KINDS,
+    parser.add_argument("--kind", type=lambda kind: "molt" if kind == "reincarnate" else kind, choices=ASK_KINDS,
                         help="the act the ask is for: the row its answer counts in (asks --calibrate)")
 
 

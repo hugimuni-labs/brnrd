@@ -66,6 +66,40 @@ def _row(w: Wish) -> str:
     return f'{w.id} · {w.thread} · "{_short(w.line, 70)}"'
 
 
+def held_move(wish: Wish, asks: list[Wish]) -> str:
+    steps = (wish.left or {}).get("steps") or ()
+    if steps:
+        return _short(steps[0], 100)
+    if asks:
+        return "record a step that can move, or propose a default and a date"
+    return _short(wish.line, 100)
+
+
+def held_row(wish: Wish, asks: list[Wish]) -> str:
+    words = "".join(f" · their word moves: {_short(ask.line, 70)}" for ask in asks)
+    move = f" · next: {held_move(wish, asks)}" if asks or wish.left else ""
+    return f"held {_row(wish)}{words}{move}"
+
+
+def held_rows_for(found: dict[str, Wish], heads: dict[str, str], thread: str, home_thread: str) -> list[str]:
+    q = queues(found, heads)
+    return [held_row(wish, q.blocked.get(wish.id, []))
+            for wish in (*q.mine, *q.idle)
+            if thread == home_thread or wish.thread == thread]
+
+
+def movable(q: Queues, thread: str, parked: set[str]) -> list[Wish]:
+    """Queue order, including rows below the cap and unranked work with a stated step."""
+    free = []
+    for wish in (*q.mine, *q.idle):
+        if wish.thread != thread or wish.id in parked:
+            continue
+        steps = (wish.left or {}).get("steps")
+        if steps or wish.ranked_at and wish.id not in q.blocked:
+            free.append(wish)
+    return free
+
+
 def render(q: Queues) -> str:
     """The section the main thread wakes with, and ``wishes --queues`` prints."""
     lines = ["## Queues"]
@@ -73,15 +107,9 @@ def render(q: Queues) -> str:
         lines.append(f"Next build: {_row(q.next)} · {q.why}")
     else:
         lines.append("Next build: none (nothing ranked is free of an ask to the person)")
-    for w in q.mine[:1]:
-        if w.id in q.blocked and w is not q.next:
-            ask = q.blocked[w.id][0]
-            lines.append(f'  top {w.id} waits on the person: {ask.id} "{_short(ask.line, 60)}"')
-    lines.append("mine, in their order (move to top only):")
+    lines.append("held, in their order (move to top only):")
     for n, w in enumerate(q.mine, 1):
-        marks = [*(["mine: " + _short(w.pick["why"], 40)] if w.pick else []),
-                 *(["waits on them"] if w.id in q.blocked else [])]
-        lines.append(f"{n}. {_row(w)}" + "".join(" · " + m for m in marks))
+        lines.append(f"{n}. {held_row(w, q.blocked.get(w.id, []))}")
     if q.idle:
         lines.append(f"+{len(q.idle)} idle · wishes --queues --all")
     if q.yours:

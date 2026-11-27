@@ -15,6 +15,8 @@ import {
 	leadName,
 	machinesTitle,
 	moved,
+	oneAtATime,
+	PARTS_AT_ONCE,
 	patchBeads,
 	Store,
 	type Beads
@@ -59,6 +61,14 @@ test('the header names every provider, and a collector error is the word it was 
 			{ shell: 'vibe', gauges: [], error: 'fails' }
 		]),
 		'claude session 15% week 48%   codex session 95% week 99%   grok week 58%   vibe fails'
+	);
+	equal(headerFuel([{ shell: 'vibe', gauges: [], state: 'unmetered' }]), 'vibe unmetered');
+	equal(
+		headerFuel([
+			{ shell: 'codex', gauges: [{ window: 'week', left_pct: 40 }], initiative_share: 50 },
+			{ shell: 'grok', gauges: [{ window: 'week', left_pct: 90 }], initiative_share: 100 }
+		]),
+		'codex week 40% share 50%   grok week 90%'
 	);
 	equal(headerFuel(undefined), '');
 });
@@ -147,6 +157,44 @@ test('order: seated by freshest letter, your-call by since, quiet by opened newe
 	]);
 	deepEqual(readFilters('["quiet","quiet","retired","waiting"]'), ['waiting', 'quiet']);
 	deepEqual(readFilters('{'), ['seated', 'your-call', 'waiting', 'mine']);
+});
+
+test("the index row's letter_at sorts a cold load as its letters will", () => {
+	const ts = [
+		T('a', { board: { state: 'seated' }, letter_at: '3', last_at: '9' }),
+		T('b', { board: { state: 'seated' }, letter_at: '5', last_at: '1' })
+	];
+	const whole = new Map([
+		['a', [L('x', '3')]],
+		['b', [L('y', '5')]]
+	]);
+	const ids = (by: Map<string, Letter[]>) => sortThreads(ts, by).map((t) => t.id);
+	// no parts, one part, both parts: one order, and last_at never outranks a letter time
+	deepEqual(ids(new Map()), ['b', 'a']);
+	deepEqual(ids(new Map([['a', [L('x', '3')]]])), ['b', 'a']);
+	deepEqual(ids(whole), ['b', 'a']);
+	// a letter newer than the index row's wins
+	deepEqual(ids(new Map([['a', [L('z', '7')]]])), ['a', 'b']);
+});
+
+test('a cold load places its first paint, holds that order while parts arrive, then places the whole', () => {
+	const h = { first: true, held: false, now: 1000, last: 0 };
+	// first partial paint: nothing on screen yet, so it places straight away
+	deepEqual(arrange(['inbox', 'a', 'b'], [], { ...h, partial: true }).ids, ['inbox', 'a', 'b']);
+	// a later partial paint whose letters moved b ahead holds the screen; a column new to the index joins the end
+	deepEqual(arrange(['inbox', 'b', 'c', 'a'], ['inbox', 'a', 'b'], { ...h, partial: true }).ids, [
+		'inbox',
+		'a',
+		'b',
+		'c'
+	]);
+	// the whole model places at once, with no REORDER wait
+	deepEqual(arrange(['inbox', 'b', 'c', 'a'], ['inbox', 'a', 'b', 'c'], h).ids, [
+		'inbox',
+		'b',
+		'c',
+		'a'
+	]);
 });
 
 test('order moves at most once per REORDER; a new column lands at once; a hold keeps the screen', () => {
@@ -362,6 +410,78 @@ const part = (id: string, letters: Letter[], more = false): ThreadPart => ({
 	tools: {},
 	live: {},
 	more
+});
+
+test('parts: a fresh tab fetches every thread part, never more than PARTS_AT_ONCE at a time', async () => {
+	const names = Array.from({ length: 40 }, (_, i) => `t${i}`);
+	const idx = index(Object.fromEntries(names.map((n) => [`thread/${n}`, `h-${n}`])));
+	let flight = 0;
+	let most = 0;
+	const asked: string[] = [];
+	const store = new Store(async (p) => {
+		if (p === '/v1/loom/index') return idx;
+		asked.push(p);
+		flight++;
+		most = Math.max(most, flight);
+		await new Promise((r) => setTimeout(r, 1));
+		flight--;
+		return part(p.slice('/v1/loom/thread/'.length), []);
+	});
+	ok(await store.sync());
+	equal(asked.length, names.length);
+	equal(most, PARTS_AT_ONCE);
+	deepEqual([...store.threads.keys()].sort(), [...names].sort());
+	for (const n of names) equal(store.threads.get(n)!.id, n);
+});
+
+test('parts: a cold sync paints from its parts as they arrive, before the last one', async () => {
+	const idx = index({ 'thread/a': 'ha', 'thread/b': 'hb' }, [T('a'), T('b')]);
+	let release!: () => void;
+	const gate = new Promise<void>((r) => (release = r));
+	const store = new Store(async (p) => {
+		if (p === '/v1/loom/index') return idx;
+		if (p.endsWith('/b')) await gate;
+		return part(p.slice('/v1/loom/thread/'.length), []);
+	});
+	const seen: (string | undefined)[][] = [];
+	const partial: (boolean | undefined)[] = [];
+	const done = store.sync(() => {
+		seen.push(store.model()!.threads.map((t) => (store.threads.has(t.id) ? t.id : undefined)));
+		partial.push(store.model()!.partial);
+	});
+	await new Promise((r) => setTimeout(r, 5));
+	deepEqual(seen, [['a', undefined]]);
+	// marked partial, so the board does not hold its column order (Board.svelte place)
+	deepEqual(partial, [true]);
+	release();
+	ok(await done);
+	equal(store.cold, null);
+	equal(store.model()!.partial, undefined);
+	deepEqual([...store.threads.keys()].sort(), ['a', 'b']);
+	// warm: a moved part is not painted early
+	seen.length = 0;
+	const warm = new Store(async (p) => (p === '/v1/loom/index' ? idx : part(p.slice(16), [])));
+	await warm.sync();
+	await warm.sync(() => seen.push([]));
+	deepEqual(seen, []);
+});
+
+test('oneAtATime: calls made while one runs fold into a single rerun', async () => {
+	let runs = 0;
+	let flight = 0;
+	let most = 0;
+	const load = oneAtATime(async () => {
+		runs++;
+		flight++;
+		most = Math.max(most, flight);
+		await new Promise((r) => setTimeout(r, 2));
+		flight--;
+	});
+	await Promise.all([load(), load(), load(), load()]);
+	equal(most, 1);
+	equal(runs, 2);
+	await load();
+	equal(runs, 3);
 });
 
 test('parts: only a moved hash is fetched again; a letter in two parts is held once', async () => {

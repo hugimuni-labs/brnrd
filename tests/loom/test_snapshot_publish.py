@@ -132,9 +132,9 @@ def reporting_body(root):
     run.write_text(f"""#!{sys.executable}
 import sys
 from pathlib import Path
-from brr.loom.runtime.fakebody import Ctx, _own_thread
+from brr.loom.runtime.fakebody import Ctx
 ctx = Ctx(Path(sys.argv[1]))
-own = _own_thread(ctx.wake())
+own = ctx.thread
 for letter in ctx.owed():
     ctx.send("thread:" + own, note="ok", re=letter.id)
     if own == "web" and letter.sender == "p-test":

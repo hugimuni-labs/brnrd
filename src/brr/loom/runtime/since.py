@@ -22,7 +22,7 @@ from .update import moved_text
 CAP = 1500
 SILENT = 600
 ROOM_KINDS = ("room.repaired", "room.unseeded", "room.seeded", "room.fallback", "wake.fallback")
-HEADER = "since your predecessor's last boundary (each line names its fact):"
+HEADER = "since the last boundary:"
 
 
 def _brief(value, size: int = 160) -> str:
@@ -58,7 +58,7 @@ def _wrote(fact, install: str) -> bool:
     return fact.hlc is None or fact.hlc[2] == install
 
 
-def _ended(rows, pred, install: str) -> tuple[int, str] | None:
+def _ended(rows, pred, install: str) -> tuple[str, str] | None:
     """How the predecessor ended, naming a restart of its own install's loom."""
     from .router import install_of
     home = install_of(pred[0]) or install
@@ -72,31 +72,48 @@ def _ended(rows, pred, install: str) -> tuple[int, str] | None:
             cause, code = f.data.get("cause"), f.data.get("code")
             restart = began is not None and any(r.kind == "loom.started" and r.data.get("install") == home
                                                 for r in rows[began:i])
-            how = (f"was lost to a loom restart (recorded {cause}, code {code})"
-                   if restart and cause == "failed" else f"ended {cause}, code {code}")
-            return i, f"your predecessor {pred[0]} gen {pred[1]} {how} ({f.id})"
+            if cause == "reincarnated":
+                molt = next((row for row in reversed(rows[:i]) if row.kind == "reincarnate"
+                             and (row.data.get("strand"), row.data.get("gen")) == pred), None)
+                count = molt.data.get("context") if molt else None
+                size = f", at {count // 1000}k" if isinstance(count, int) and count > 0 else ""
+                return cause, f"Molted at {f.at[11:16]}Z{size}. Carried across:"
+            if cause in ("idle", "settled"):
+                return cause, f"Rested at {f.at[11:16]}Z."
+            why = ("the machine restarted" if restart and cause == "failed" else
+                   f"failed, code {code}" if cause == "failed" else cause)
+            return cause, f"Cut off at {f.at[11:16]}Z ({why})."
     return None
 
 
 def since_gone(facts, strand: str, gen: int, thread: str, threads: dict[str, str],
-               install: str) -> str:
+               install: str, *, note: str = "", carry: str = "", last_written: str = "") -> str:
     rows = list(facts)
     cut, pred = _cut(rows, strand, gen, thread)
+    ended = _ended(rows, pred, install) if pred is not None else None
+    context = note
+    if ended:
+        cause, line = ended
+        if cause == "reincarnated":
+            context = line + "\n" + (carry if not carry or carry.endswith("\n") else carry + "\n") + note
+        elif note:
+            stamp = f" at {last_written}" if last_written and cause not in ("idle", "settled") else ""
+            context = f"{line} Last written{stamp}:\n" + note
+        else:
+            context = line + "\n"
     if cut < 0:
-        return ""
+        return context
     lines: list[tuple[int, str]] = []
-    if pred is not None and (ended := _ended(rows, pred, install)) is not None:
-        lines.append(ended)
     after = list(enumerate(rows))[cut + 1:]
     starts = [(i, f) for i, f in after if f.kind == "loom.started" and f.data.get("install") == install]
     if starts:
         i, first = starts[0]
         commits = list(dict.fromkeys(str(f.data.get("commit") or "?")[:8] for _, f in starts))
-        text = f"the loom started {len(starts)} time{'s' * (len(starts) > 1)} (at {', '.join(commits)})"
+        text = f"loom starts: {len(starts)} time{'s' * (len(starts) > 1)} (at {', '.join(commits)})"
         last = next((r for r in reversed(rows[:i]) if _wrote(r, install)), None)
         gap = _seconds(first.at) - _seconds(last.at) if last is not None else 0
         if gap > SILENT:
-            text += f"; the ledger was silent {_span(gap)} before the first (a power-off or a stopped loop)"
+            text += f" · {_span(gap)} of ledger silence before the first (a power-off or a stopped loop)"
         lines.append((i, f"{text} ({first.id})"))
     letters = {str(f.data.get("id") or f.id): f for f in rows if f.kind == "letter"}
     recovered = {f.id.replace("loom.recovered:", "loom.degraded:", 1): f
@@ -117,7 +134,7 @@ def since_gone(facts, strand: str, gen: int, thread: str, threads: dict[str, str
                 letter = letters.get(str(d.get("id")))
                 if ("bounced" in (d.get("outcome"), d.get("reason")) and letter is not None
                         and threads.get(str(letter.data.get("from"))) == thread):
-                    lines.append((i, f"bounced: your letter {d.get('id')} ({f.id})"))
+                    lines.append((i, f"bounced: letter {d.get('id')} ({f.id})"))
         elif f.kind == "loom.moved" and data.get("install") == install:
             lines.append((i, f"{moved_text(f)} ({f.id})"))
         elif f.kind == "loom.degraded" and f.id in recovered:
@@ -135,11 +152,11 @@ def since_gone(facts, strand: str, gen: int, thread: str, threads: dict[str, str
         lines.append((len(rows), f"degraded now: {data.get('step')} since {data.get('since')}: "
                                  f"{_brief(data.get('error'), 120)} at {data.get('where')} ({f.id})"))
     if not lines:
-        return ""
+        return context
     body = [text for _, text in sorted(lines, key=lambda row: row[0])]
     dropped = 0
     while body and len("\n".join([HEADER, f"({dropped} earlier lines dropped)", *body]).encode()) > CAP:
         body.pop(0)
         dropped += 1
     head = [HEADER] + ([f"({dropped} earlier lines dropped)"] if dropped else [])
-    return "\n".join(head + [f"- {text}" for text in body]) + "\n"
+    return context + "\n".join(head + [f"- {text}" for text in body]) + "\n"

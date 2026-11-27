@@ -84,7 +84,7 @@ def tally(self_dir: Path, parsed: Boundary, kept: dict, *, names_repo: Path | No
         if (dates.get(person) or [None])[0] != moved:
             dates[person] = [moved, page_date(self_dir, person) if mtime else "never"]
         count = len(seen[person])
-        lines.append(f"people: {count} letter{'s' * (count != 1)} from {label('person:' + person, resolved)} this gen; "
+        lines.append(f"people: {count} letter{'s' * (count != 1)} from {label('person:' + person, resolved)} since waking · "
                      f"people/{person}/page.md last changed {dates[person][1]}")
         key.append(f"{person} {dates[person][1]}" + (f" {resolved[person]}" if person in resolved else ""))
         size = between_us_bytes(page.read_text(encoding="utf-8")) if mtime else 0

@@ -297,6 +297,7 @@ async function postRepoAction(
 }
 
 export interface FetchReposParams {
+	accountOnly?: boolean;
 	// The GitHub Setup URL's own query params (`routers/github_app.py`'s
 	// `github_app_setup`), forwarded so the backend can echo the mapped
 	// notice text back (`_notice_text` — the same table `/v1/repos/*`
@@ -313,6 +314,7 @@ export async function fetchRepos(
 	const qs = new URLSearchParams();
 	if (params?.notice) qs.set('notice', params.notice);
 	if (params?.installationId) qs.set('installation_id', params.installationId);
+	if (params?.accountOnly) qs.set('view', 'account');
 	const suffix = qs.toString();
 	const res = await fetchImpl(`/v1/dashboard/repos${suffix ? `?${suffix}` : ''}`, {
 		credentials: 'include'

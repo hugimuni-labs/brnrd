@@ -41,9 +41,9 @@ print("finished", flush=True)
     # task file it unlinks when the call ends, the end reported as a failure.
     bodies(root, f'''import json, subprocess, sys, time
 from pathlib import Path
-from brr.loom.runtime.fakebody import Ctx, _own_thread
+from brr.loom.runtime.fakebody import Ctx
 ctx = Ctx(Path(sys.argv[1]))
-own = _own_thread(ctx.wake())
+own = ctx.thread
 for letter in ctx.owed():
     ctx.send(f"thread:{{own}}", note="on it", re=letter.id)
 while ctx.jack("post").letters:
@@ -114,9 +114,9 @@ def test_a_paused_sleep_loop_is_told_to_re_park_as_a_typed_wait(tmp_path, monkey
     seen, started, finish = (root / name for name in ("seen.json", "started", "finish"))
     bodies(root, f'''import json, subprocess, sys, time
 from pathlib import Path
-from brr.loom.runtime.fakebody import Ctx, _own_thread
+from brr.loom.runtime.fakebody import Ctx
 ctx = Ctx(Path(sys.argv[1]))
-own = _own_thread(ctx.wake())
+own = ctx.thread
 for letter in ctx.owed():
     ctx.send(f"thread:{{own}}", note="on it", re=letter.id)
 while ctx.jack("post").letters:
@@ -158,9 +158,9 @@ def test_call_begun_before_the_last_boundary_is_left_running(tmp_path, monkeypat
     seen, started = root / "seen.json", root / "started"
     bodies(root, f'''import json, subprocess, sys, time
 from pathlib import Path
-from brr.loom.runtime.fakebody import Ctx, _own_thread
+from brr.loom.runtime.fakebody import Ctx
 ctx = Ctx(Path(sys.argv[1]))
-own = _own_thread(ctx.wake())
+own = ctx.thread
 for letter in ctx.owed():
     ctx.send(f"thread:{{own}}", note="on it", re=letter.id)
 call = subprocess.Popen(["/bin/sh", "-c", ": fake-tool-wrapper; sleep 30; echo done"])
@@ -199,9 +199,9 @@ def test_call_while_a_delegate_works_is_left_running(tmp_path, monkeypatch):
     seen, started = root / "seen.json", root / "started"
     bodies(root, f'''import json, subprocess, sys, time
 from pathlib import Path
-from brr.loom.runtime.fakebody import Ctx, _own_thread
+from brr.loom.runtime.fakebody import Ctx
 ctx = Ctx(Path(sys.argv[1]))
-own = _own_thread(ctx.wake())
+own = ctx.thread
 for letter in ctx.owed():
     ctx.send(f"thread:{{own}}", note="delegated", re=letter.id)
 while ctx.jack("post").letters:
@@ -244,9 +244,9 @@ def test_call_running_a_brnrd_verb_is_left_running(tmp_path, monkeypatch):
     verb.chmod(0o755)
     bodies(root, f'''import json, subprocess, sys, time
 from pathlib import Path
-from brr.loom.runtime.fakebody import Ctx, _own_thread
+from brr.loom.runtime.fakebody import Ctx
 ctx = Ctx(Path(sys.argv[1]))
-own = _own_thread(ctx.wake())
+own = ctx.thread
 for letter in ctx.owed():
     ctx.send(f"thread:{{own}}", note="on it", re=letter.id)
 while ctx.jack("post").letters:

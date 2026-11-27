@@ -340,6 +340,11 @@ def judge(payload: dict, room: Path, owed: tuple[str, ...] = (), walled: bool | 
             return Decision("lift" if walled else "pass")
         if walled and args.get("dangerouslyDisableSandbox"):
             return Decision("refuse", None, "this call asks to leave the wall without a mark. " + FORM)
+        # The sandbox block cannot shut the board's port and leave the audit socket: allowLocalBinding
+        # is the whole of localhost, and both are ports on 127.0.0.1. A call that names the board is
+        # outside, read from the command, and a mark is what lets it run.
+        if walled and _addresses_board(command, room):
+            return Decision("refuse", None, HIT)
         return Decision("pass")
     if not walled:
         return Decision("pass")
@@ -409,7 +414,7 @@ def door_refusal(room: Path | str | None = None, look: bool = False) -> str | No
             return None
         room = room or os.environ.get("BRNRD_ROOM")
         if not room:
-            return "refused at the door: a final act needs its room to find his letter (BRNRD_ROOM is unset)"
+            return "refused at the door: a final act needs its room to find the person's letter (BRNRD_ROOM is unset)"
         from .grants import final
         granted, line = final(Path(room), mark.what, mark.for_)
         return None if granted else "refused at the door: " + line
@@ -440,10 +445,42 @@ def wall_available() -> bool:
     return False
 
 
+_LOOPBACK_PORT = re.compile(r"(?:127\.0\.0\.1|localhost|\[::1\]):(\d+)\b")
+# A write, not a mention: curl -d/--data/--json, or a method name beside the route.
+_LOOM_WRITE = re.compile(
+    r"\b(?:POST|PUT|PATCH|DELETE)\b|(?:^|[\s\"'])(?:-d|--data(?:-raw|-binary|-urlencode)?|--json|-F|--form)(?:\s|=|$)")
+
+
+def _board_port(room: Path) -> str | None:
+    """The configured loopback port, or None when the board is off or the home cannot be read."""
+    try:
+        from .config import load_config
+        from .home import home_of_room
+        port = load_config(home_of_room(Path(room)).root).board_port
+    except Exception:  # noqa: BLE001 - a port we cannot read is not a port we refuse on
+        return None
+    return str(port) if port else None
+
+
+def _addresses_board(command: str, room: Path) -> bool:
+    """A call at the board: the configured port on loopback, or a write that names ``/v1/loom/``.
+
+    The heredoc body is a letter's words, not the call. A GET of the route is a read and stays in."""
+    head = command.split("<<", 1)[0]
+    port = _board_port(room)
+    if port and port in _LOOPBACK_PORT.findall(head):
+        return True
+    return "/v1/loom/" in head and _LOOM_WRITE.search(head) is not None
+
+
 def sandbox(room: Path) -> dict:
     """Claude Code's sandbox block for a body in ``room``: the room, its scratch and caches are
     writable, every read is allowed, no host is reachable, localhost is (the audit socket).
-    A cache is a copy by definition: writing one changes nothing a person holds."""
+    A cache is a copy by definition: writing one changes nothing a person holds.
+
+    This block cannot deny one loopback port. ``allowLocalBinding`` is every port on localhost,
+    and the audit writer is another port on 127.0.0.1, so the board is judged from the command
+    (:func:`_addresses_board`) rather than by a rule the sandbox settings cannot say."""
     home = Path.home()
     return {"enabled": True, "failIfUnavailable": False, "allowUnsandboxedCommands": True,
             "filesystem": {"allowWrite": [str(room), str(home / ".cache"), str(home / "Library" / "Caches"),

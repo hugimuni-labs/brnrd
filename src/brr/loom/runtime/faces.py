@@ -1,6 +1,6 @@
 """The face on a thread: the loom proposes one when a fact changes, the body decides.
 
-A fact the body has just met (his letter, a merged PR, a delivered wish, 40
+A fact the body has just met (a person letter, a merged PR, a delivered wish, 40
 minutes without a letter out, a wake after a failed attempt) proposes a face
 at the next boundary. The body takes it (``runtime face take``), wears
 another (``runtime face <face>``), or lets it lapse by writing its next

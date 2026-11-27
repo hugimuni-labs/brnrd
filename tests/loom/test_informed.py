@@ -1,6 +1,7 @@
 """The loop tells: degraded steps become facts, and a wake opens with what happened since."""
 
 import dataclasses
+import re
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -159,16 +160,17 @@ def test_the_wake_opens_with_what_happened_since_the_predecessor(gone):
     room = _prepare(gone, NEXT, "inbox", 1, mail(gone.root, facts, "inbox"),
                     sender_threads(facts), facts, "hold")
     part = (room / "port/loom.md").read_text()
-    section = part[:part.index("you are strand")]
-    assert section.startswith(HEADER + "\n")
+    section = part[:part.index(f"strand {NEXT} · thread")]
+    assert HEADER + "\n" in section
     assert len(section.encode()) <= 1500
-    assert (f"your predecessor {PREV} gen 1 was lost to a loom restart (recorded failed, code -9) "
-            f"(attempt.ended:{PREV}:1)") in section
+    ended = next(f for f in facts if f.id == f"attempt.ended:{PREV}:1")
+    assert f"Cut off at {ended.at[11:16]}Z (the machine restarted)." in section
+    assert ended.id not in section
     assert "note by person:test: moved the host to 585f1321 by hand (hand-1)" in section
     assert ("degraded now: publisher since 2026-10-23T09:00:00Z: ValueError: too many values "
             "at loom/runtime/snapshot.py:166 (loom.degraded:aaaa:publisher:2026-10-23T09:00:00Z)") in section
     boundary = (room / "port/in/boundary.md").read_text()
-    assert "degraded: publisher since 09:00Z (ValueError at snapshot.py:166)" in boundary
+    assert "body: publisher ValueError at snapshot.py:166 for " in boundary
     assert parse_boundary(boundary).strand == NEXT
 
 
@@ -178,7 +180,7 @@ def test_a_silent_ledger_before_a_start_is_named(gone):
     facts = read_facts(gone)
     room = _prepare(gone, NEXT, "inbox", 1, [], sender_threads(facts), facts, "hold")
     part = (room / "port/loom.md").read_text()
-    assert "the loom started 1 time (at 9b1254f5); the ledger was silent 2h" in part
+    assert re.search(r"loom starts: 1 time \(at 9b1254f5\) · 2h\d{2}m of ledger silence", part)
     assert "(a power-off or a stopped loop) (start-late)" in part
 
 
@@ -190,7 +192,7 @@ def test_a_first_body_has_no_section(tmp_path):
                       data={"thread": "inbox", "strand": NEXT, "gen": 1}))
     facts = read_facts(home)
     room = _prepare(home, NEXT, "inbox", 1, [], sender_threads(facts), facts, "hold")
-    assert (room / "port/loom.md").read_text().startswith("you are strand")
+    assert (room / "port/loom.md").read_text().startswith(f"strand {NEXT} · thread")
 
 
 def test_another_installs_loom_facts_stay_off_this_wake(tmp_path):
@@ -234,8 +236,21 @@ def test_another_installs_loom_facts_stay_off_this_wake(tmp_path):
     facts = read_facts(here)
     room = _prepare(here, NEXT, "inbox", 1, [], sender_threads(facts), facts, "hold")
     part = (room / "port/loom.md").read_text()
-    section = part[:part.index("you are strand")]
-    assert f"your predecessor {PREV} gen 1 ended failed, code -9 (attempt.ended:{PREV}:1)" in section
-    assert "the loom started 1 time (at 9b1254f5); the ledger was silent 2h" in section
+    section = part[:part.index(f"strand {NEXT} · thread")]
+    ended = next(f for f in facts if f.id == f"attempt.ended:{PREV}:1")
+    assert f"Cut off at {ended.at[11:16]}Z (failed, code -9)." in section
+    assert re.search(r"loom starts: 1 time \(at 9b1254f5\) · 2h\d{2}m of ledger silence", section)
     assert "bbbb" not in section
     assert "degraded" not in (room / "port/in/boundary.md").read_text()
+
+
+def test_wake_uses_one_timeline_without_ledger_labels(gone):
+    facts = read_facts(gone)
+    room = _prepare(gone, NEXT, "inbox", 1, [], sender_threads(facts), facts, "hold")
+    wake = (room / "port/wake.md").read_text()
+    assert "Cut off at" in wake and "## loom briefing" in wake
+    assert not re.search(
+        r"\b(?:predecessors?|successors?|handover|reincarnat\w*|picks up|"
+        r"your continuity|next context|last context|gen \d+|attempt\.ended)\b",
+        wake, re.IGNORECASE,
+    )

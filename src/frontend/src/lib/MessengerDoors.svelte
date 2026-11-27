@@ -431,9 +431,7 @@
 							     description above already says what a link is and how long
 							     it lives; what belongs in the tile is only what is true of
 							     this door. -->
-							<p class="mt-1.5 text-sm text-stone-300">
-								Opens {doorLabel(door.platform)} directly.
-							</p>
+							<p class="mt-1.5 text-sm text-stone-300">Not connected</p>
 							<button
 								type="button"
 								data-testid={`connect-${door.platform}`}

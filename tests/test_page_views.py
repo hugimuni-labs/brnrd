@@ -146,6 +146,56 @@ def test_funnel_script_table(tmp_path, capsys):
     assert " 14 " in capsys.readouterr().out
 
 
+def test_campaign_paths_drop_real_pages_and_keep_hi():
+    from brnrd.config import Settings, campaign_paths_from
+
+    assert campaign_paths_from(None) == ("/hi",)
+    assert campaign_paths_from(" /XPost, /pricing, /new, /a-, /nope/two, /hi ") == ("/hi", "/xpost")
+    assert campaign_paths_from("/pricing") == ("/hi",)
+    assert campaign_paths_from("/x") == ("/hi", "/x")
+    assert Settings(campaign_paths=("/pricing", "/xpost")).campaign_paths == ("/hi", "/xpost")
+
+
+def test_hi_stays_when_campaign_paths_names_another(tmp_path, monkeypatch):
+    monkeypatch.setenv("BRNRD_CAMPAIGN_PATHS", "/x")
+    build = tmp_path / "build"
+    build.mkdir()
+    (build / "index.html").write_text("<!doctype html><title>brnrd</title>")
+    app = create_app(Settings(
+        database_url=f"sqlite:///{tmp_path}/pv.db",
+        frontend_dir=str(build),
+    ))
+    assert app.state.settings.campaign_paths == ("/hi", "/x")
+    with TestClient(app) as c:
+        response = c.get("/hi", follow_redirects=False)
+        assert response.status_code == 302
+        assert response.headers["location"] == "/"
+        assert c.get("/x", follow_redirects=False).status_code == 302
+
+
+def test_a_configured_campaign_path_counts_and_sets_no_cookie(tmp_path):
+    build = tmp_path / "build"
+    build.mkdir()
+    (build / "index.html").write_text("<!doctype html><title>brnrd</title>")
+    app = create_app(Settings(
+        database_url=f"sqlite:///{tmp_path}/pv.db",
+        frontend_dir=str(build),
+        campaign_paths=("/hi", "/xpost"),
+    ))
+    with TestClient(app) as c:
+        headers = {"referer": "https://t.co/secret?q=1", "user-agent": CHROME}
+        response = c.get("/xpost?from=x", headers=headers, follow_redirects=False)
+        assert response.status_code == 302
+        assert response.headers["location"] == "/"
+        assert response.headers["cache-control"] == "no-store"
+        assert "set-cookie" not in response.headers
+    rows = _rows(app)
+    assert [(r.path, r.referer_host, r.ua_family, r.status, r.views) for r in rows] == [
+        ("/xpost", "t.co", "chrome", 302, 1),
+    ]
+    assert "from=x" not in repr([vars(r) for r in rows])
+
+
 def test_promo_redirect_counts_get_once_and_keeps_only_referrer_host(tmp_path):
     app = _app(tmp_path)
     with TestClient(app) as c:

@@ -19,7 +19,7 @@ from .ledger import append, read_facts
 from .port import clean_accepts, parse_frontmatter
 from .project import fold, sender_threads
 from .refs import link, miss_words
-from .wishes import wishes
+from .wishes import delivery_id, wishes
 
 
 def instances(home):
@@ -173,7 +173,7 @@ def ingest(home, name, fm, attachments, authorize=None):
                                is_stranger(sender, home.root / 'self')), audience=['self']))
         if fm.get('re'):
             data['re'] = fm['re']
-        for key in ('wake', 'wish', 'verdict'):
+        for key in ('wake', 'wish', 'verdict', 'delivery_id'):
             if fm.get(key):
                 data[key] = fm[key]
         if fm.get('missing'):
@@ -184,7 +184,7 @@ def ingest(home, name, fm, attachments, authorize=None):
                                    for i, _, b in (item.partition(':') for item in fm['large'].split())]
         if clean:
             data.update(clean=fm['kind'], refs=fm['refs'].split())
-        # A ref that names nothing never refuses his letter: it lands without that link.
+        # A ref that names nothing never refuses the person's letter: it lands without that link.
         from .lifecycle import main_snapshot
         links, misses = link(facts, main_snapshot(home), fm['body'])
         if links:
@@ -200,9 +200,13 @@ def ingest(home, name, fm, attachments, authorize=None):
         sender = data['from']
         fields = dict(id=letter_id, **{'from': sender}, to=data['to'], body=data['text'],
                       cites=source.id, label=data['label'])
+        scope = data.get('delivery_id')
+        if scope and delivery_id(wishes(facts).get(data.get('wish'))) != scope:
+            # Preserve the person's words when the delivery changed in transit.
+            data = {k: v for k, v in data.items() if k != 'verdict'}
         if binding:
             fields['re'] = str(binding[0].data.get('id') or binding[0].id)
-        for key in ('clean', 'refs', 'links', 'wake', 'wish', 'verdict'):
+        for key in ('clean', 'refs', 'links', 'wake', 'wish', 'verdict', 'delivery_id'):
             if key in data:
                 fields[key] = data[key]
         require(home, name, authorize)
@@ -222,13 +226,16 @@ def ingest(home, name, fm, attachments, authorize=None):
                    about=letter, channel=source.data['channel'], passive=True)
     # A person's agree on a delivered wish is its acceptance; a correct is the letter.
     verdict_id = f'wish.verdict:{letter_id}'
-    if (source.data.get('verdict') == 'agree' and source.data['from'].startswith('person:')
+    scope = source.data.get('delivery_id')
+    current_delivery = not scope or delivery_id(wishes(facts).get(source.data.get('wish'))) == scope
+    if (current_delivery and source.data.get('verdict') == 'agree' and source.data['from'].startswith('person:')
             and not any(f.id == verdict_id for f in facts)):
         wish = wishes(facts).get(source.data.get('wish'))
         if wish is not None and wish.state in {'delivered', 'expired'}:
             append(home, Fact(kind='wish.verdict', by=source.data['from'], id=verdict_id,
-                              data={'wish': wish.id, 'as': 'accepted', 'evidence': 'word', 'ref': letter_id}))
-    if source.data.get('verdict') and source.data['from'].startswith('person:'):
+                              data={'wish': wish.id, 'as': 'accepted', 'evidence': 'word', 'ref': letter_id,
+                                    **({'delivery_id': scope} if scope else {})}))
+    if current_delivery and source.data.get('verdict') and source.data['from'].startswith('person:'):
         heard(home, letter_id, source.data)
     if source.data.get('blobs_missing'):
         from .loom import notice
@@ -248,6 +255,12 @@ def heard(home, letter_id, data):
     from .loom import notice
     facts = read_facts(home)
     found = wishes(facts).get(data.get('wish'))
+    from .waits import board_press
+    if found is not None and found.answered_by == 'press' and board_press(letter_id, data):
+        if not any(f.kind == 'note' and f.data.get('re') == letter_id for f in facts):
+            append(home, Fact(kind='note', by=f'loom:{home.install_id()}', id=f'note:verdict:{letter_id}',
+                              data={'re': letter_id, 'body': 'the ask closure carries this board press'}))
+        return
     line = f' "{found.line}"' if found is not None and found.line else ''
     thread = data['to'].removeprefix('thread:')
     words = f"verdict: {data['verdict']} on {data['wish']}{line} from {data['from']} ({letter_id})"
@@ -416,8 +429,8 @@ def thread_for_message(facts, channel, message_id):
 def route_bare(facts, chat, reply_thread=None, fallback='inbox'):
     """A reply's thread, else the home thread: never the last thread that spoke.
 
-    His rule (5474, 5482): any thread may write him, but only a reply-to carries
-    his answer back there; every other letter of his is the inbox's to place.
+    The person's rule (5474, 5482): any thread may write to them, but only a reply-to carries
+    their answer back there; the inbox places their other letters.
     """
     try:
         _platform, chat_id = channel_parts(f'channel:{chat}')

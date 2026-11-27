@@ -11,6 +11,7 @@ import time
 from pathlib import Path
 
 from brr.loom.runtime import notes
+from brr.loom.runtime.__main__ import main as runtime_main
 from brr.loom.runtime.home import Home
 from brr.loom.runtime.jack import execute
 from brr.loom.runtime.ledger import read_facts
@@ -33,18 +34,18 @@ trigger: ada, ada@example.com
 """
 
 
-def _call(command: str, session: str = "s1", event: str = "PreToolUse", **more) -> str:
+def _call(command: str, session: str = "s1", event: str = "PreToolUse", ident: str = "t", **more) -> str:
     return json.dumps({"tool_name": "Bash", "tool_input": {"command": command}, "cwd": "/w",
-                       "tool_use_id": "t", "session_id": session, "hook_event_name": event, **more})
+                       "tool_use_id": ident, "session_id": session, "hook_event_name": event, **more})
 
 
 def _context(out: str) -> str:
     return json.loads(out)["hookSpecificOutput"].get("additionalContext", "") if out else ""
 
 
-def _body(tmp_path, monkeypatch):
+def _body(tmp_path, monkeypatch, extra_notes=None):
     root = _home(tmp_path)
-    land_files(root, {"memory/scars/git/a-merge-gated.md": SCAR, "people/ada/page.md": PAGE}, "notes\n\n")
+    land_files(root, {"memory/scars/git/a-merge-gated.md": SCAR, "people/ada/page.md": PAGE, **(extra_notes or {})}, "notes\n\n")
     _seat(root, "work", [])
     home = Home(root)
     _tick(home, {}, Router(home))
@@ -128,3 +129,50 @@ def test_a_phrase_ending_in_a_colon_or_slash_is_a_prefix():
     assert notes.touched([note], "send --to telegram:155783668 hi")
     assert notes.touched([note], "ls rooms/s-ab")
     assert not notes.touched([notes.Note("m.md", "m", ("telegram",))], "telegramx")
+
+
+def test_scar_report_counts_displays_and_only_their_own_failures(tmp_path, monkeypatch, capsys):
+    from brr.loom.runtime import scar_log
+
+    failing = "memory/scars/git/a-merge-gated.md"
+    working = "memory/scars/git/a-fetch.md"
+    home, room = _body(tmp_path, monkeypatch, {
+        working: "# Fetch first\ntrigger: git fetch\ndate: 2026-11-01\n",
+    })
+    now = time.time()
+    try:
+        monkeypatch.setattr(notes.time, "time", lambda: now)
+
+        def call(command, ident, session, error=None):
+            execute("pre", room, _call(command, session=session, ident=ident))
+            event = "PostToolUseFailure" if error else "PostToolUse"
+            execute("post", room, _call(command, session=session, ident=ident, event=event, error=error))
+
+        now -= scar_log.WINDOW + 1
+        call("gh pr checks 12", "old", "old-body", "outside the window")
+        now += scar_log.WINDOW + 1
+        # The later failure in the same body does not show the scar again.
+        call("gh pr checks 12", "first", "s1", "Exit code 1\nfirst failure")
+        call("gh pr checks 13", "repeat", "s1", "no scar shown")
+        now += 1
+        call("gh pr checks 14", "second", "s2", "Exit code 1\nlatest failure")
+        now += 1
+        call("gh pr checks 15", "third", "s3")
+        call("git fetch", "fetch", "s3")
+        call("echo ada", "page", "s3", "not a scar")
+
+        record = home.root / "loom" / notes.HANDS
+        assert not record.exists()
+        assert runtime_main(["scars", "--home", str(home.root)]) == 0
+        text = capsys.readouterr().out
+        failures, noise = text.split("Most-fired scars (up to 20)")
+        assert f"{failing}: 3 fired, 2 failed" in failures
+        assert "latest failure" in failures
+        assert "first failure" not in text and "outside the window" not in text
+        assert "no scar shown" not in text and "people/ada" not in text
+        assert working not in failures
+        assert f"{failing}: 3 fired" in noise
+        assert f"{working}: 1 fired" in noise
+        assert not record.exists()
+    finally:
+        _kill(read_facts(home))

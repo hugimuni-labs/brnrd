@@ -99,8 +99,10 @@ def test_the_env_list_is_read_comma_separated_and_lowercased(monkeypatch):
 def test_metrics_uses_operator_gate_and_renders_fourteen_utc_days(tmp_path):
     client = _client(tmp_path, ("gurio",))
     assert client.get("/metrics").status_code == 404
+    assert client.get("/v1/admin/metrics").status_code == 404
     _sign_in(client, "stranger", github_id="3")
     assert client.get("/metrics").status_code == 404
+    assert client.get("/v1/admin/metrics").status_code == 404
 
     _sign_in(client, "Gurio")
     today = dt.datetime.now(dt.timezone.utc).date()
@@ -118,10 +120,23 @@ def test_metrics_uses_operator_gate_and_renders_fourteen_utc_days(tmp_path):
     response = client.get("/metrics")
     assert response.status_code == 200
     assert response.headers["cache-control"] == "private, no-store"
-    assert response.text.count("<th scope='row'>") == 14
-    assert f"<th scope='row'>{today}</th><td>1</td><td>2</td><td>0</td><td>0</td><td>0</td>" in response.text
-    assert f"<th scope='row'>{oldest}</th><td>0</td><td>0</td><td>0</td><td>0</td><td>0</td>" in response.text
+    # 14 days and 8 ISO weeks.
+    assert response.text.count("<th scope='row'>") == 22
+    year, week, _ = today.isocalendar()
+    assert f"{year}-W{week:02d}" in response.text
+    # Landing 8 (bots left out), /hi 1, signups 1 (the operator's login is left out).
+    assert f"<th scope='row'>{today}</th><td>8</td><td>1</td><td>1</td><td>0</td><td>0</td><td>0</td><td>0</td>" in response.text
+    assert f"<th scope='row'>{oldest}</th><td>0</td><td>0</td><td>0</td><td>0</td><td>0</td><td>0</td><td>0</td>" in response.text
     assert "<td>/hi</td><td>t.co</td><td>1</td><td>1</td>" in response.text
+    body = client.get("/v1/admin/metrics")
+    assert body.status_code == 200
+    assert body.headers["cache-control"] == "private, no-store"
+    payload = body.json()
+    assert payload["tag_on_account"] is False
+    assert payload["campaigns"] == ["/hi"]
+    assert len(payload["days"]) == 14 and len(payload["weeks"]) == 8
+    today_row = next(row for row in payload["days"] if row["period"] == today.isoformat())
+    assert today_row["landing"] == 8 and today_row["campaigns"]["/hi"] == 1 and today_row["signups"] == 1
     assert "<td>/learn/oldest</td><td>(direct)</td>" in response.text
     assert "/learn/outside" not in response.text
 
@@ -158,9 +173,84 @@ def test_metrics_counts_script_downloads_and_first_connected_computers(tmp_path)
     response = client.get("/metrics")
     assert response.status_code == 200
     assert "<th scope=\"col\">Script downloads</th><th scope=\"col\">Computers connected</th>" in response.text
-    # Day | /hi visits | signups (octocat, early, idle, gurio) | downloads (bot excluded) | connected | paid
-    assert f"<th scope='row'>{today}</th><td>0</td><td>4</td><td>2</td><td>1</td><td>0</td>" in response.text
-    assert f"<th scope='row'>{yesterday}</th><td>0</td><td>0</td><td>0</td><td>1</td><td>0</td>" in response.text
+    # Landing | /hi | signups (octocat, early, idle; gurio is the operator and is left out) | downloads | connected | day 3 | paid
+    assert f"<th scope='row'>{today}</th><td>0</td><td>0</td><td>3</td><td>2</td><td>1</td><td>0</td><td>0</td>" in response.text
+    assert f"<th scope='row'>{yesterday}</th><td>0</td><td>0</td><td>0</td><td>0</td><td>1</td><td>0</td><td>0</td>" in response.text
+
+
+def test_day3_counts_a_later_sighting_or_letter_and_leaves_out_marked_logins(tmp_path):
+    from brnrd.funnel import week_label
+    from brnrd.models import BillingLedgerEntry, Daemon, Event, Repo, Token
+
+    app = create_app(Settings(
+        database_url=f"sqlite:///{tmp_path}/a.db",
+        admin_github_logins=("gurio",),
+        home_gate_member_github_logins=("quiet",),
+        first_subscribers_exclude=("lettered",),
+        funnel_exclude_github_logins=("team",),
+    ))
+    client = TestClient(app)
+    today = dt.datetime.now(dt.timezone.utc).date()
+    connected = dt.datetime.combine(today - dt.timedelta(days=4), dt.time(12, 0))
+    with app.state.SessionLocal() as db:
+        def person(github_id: str, login: str):
+            return account_for_github_identity(db, GitHubIdentity(github_id=github_id, login=login, email=None))
+
+        returned = person("1", "returned")
+        noted = person("2", "noted")
+        quiet = person("3", "quiet")
+        team = person("4", "Team")
+        lettered = person("5", "lettered")
+        for account in (returned, noted, quiet, team, lettered):
+            account.home_trial_started_at = connected
+        db.add(Repo(id="repo-noted", account_id=noted.id, repo_full_name="n/n", repo_owner="n", repo_name="n"))
+        db.add(Repo(id="repo-lettered", account_id=lettered.id, repo_full_name="l/l", repo_owner="l", repo_name="l"))
+        db.flush()
+        # Exactly 72h later counts. An hour later does not. Marked logins would pass and must not.
+        db.add(Token(id="tok-r", account_id=returned.id, kind=Token.KIND_DAEMON, token_hash="hr"))
+        db.add(Token(id="tok-n", account_id=noted.id, kind=Token.KIND_DAEMON, token_hash="hn"))
+        db.add(Token(id="tok-q", account_id=quiet.id, kind=Token.KIND_DAEMON, token_hash="hq"))
+        db.add(Token(id="tok-t", account_id=team.id, kind=Token.KIND_DAEMON, token_hash="ht"))
+        db.add(Daemon(id="d-r", account_id=returned.id, token_id="tok-r", daemon_name="r",
+                      last_seen_at=connected + dt.timedelta(days=3)))
+        db.add(Daemon(id="d-n", account_id=noted.id, token_id="tok-n", daemon_name="n",
+                      last_seen_at=connected + dt.timedelta(hours=1)))
+        db.add(Daemon(id="d-q", account_id=quiet.id, token_id="tok-q", daemon_name="q",
+                      last_seen_at=connected + dt.timedelta(days=5)))
+        db.add(Daemon(id="d-t", account_id=team.id, token_id="tok-t", daemon_name="t",
+                      last_seen_at=connected + dt.timedelta(days=5)))
+        db.add(Event(event_id="e-noted", repo_id="repo-noted", created_at=connected + dt.timedelta(days=3)))
+        db.add(Event(event_id="e-lettered", repo_id="repo-lettered", created_at=connected + dt.timedelta(days=4)))
+        db.add(BillingLedgerEntry(id="led-r", account_id=returned.id, op="grant_subscriber_monthly", created_at=connected))
+        db.add(BillingLedgerEntry(id="led-t", account_id=team.id, op="grant_subscriber_monthly", created_at=connected))
+        db.commit()
+
+    assert client.get("/v1/admin/metrics").status_code == 404
+    _sign_in(client, "Gurio", github_id="9")
+    payload = client.get("/v1/admin/metrics").json()
+    assert payload["excluded_logins"] == 4
+    day = (today - dt.timedelta(days=4)).isoformat()
+    row = next(item for item in payload["days"] if item["period"] == day)
+    # returned (sighting) and noted (letter). quiet, Team and lettered are marked.
+    assert row == {
+        "period": day, "landing": 0, "campaigns": {"/hi": 0}, "signups": 0,
+        "installs_started": 0, "installs_finished": 2, "active_day3": 2, "paid": 1,
+    }
+    today_row = next(item for item in payload["days"] if item["period"] == today.isoformat())
+    assert today_row["signups"] == 2
+    week = next(item for item in payload["weeks"] if item["period"] == week_label(today - dt.timedelta(days=4)))
+    assert week["installs_finished"] >= 2 and week["active_day3"] >= 2 and week["paid"] >= 1
+
+
+def test_week_window_is_eight_mondays_ending_this_week():
+    from brnrd.funnel import week_mondays
+
+    today = dt.date(2026, 11, 21)
+    mondays = week_mondays(today)
+    assert len(mondays) == 8
+    assert all(day.weekday() == 0 for day in mondays)
+    assert mondays[0] == today - dt.timedelta(days=today.weekday())
+    assert mondays[0] - mondays[-1] == dt.timedelta(weeks=7)
 
 
 def test_metrics_is_closed_when_operator_list_is_empty(tmp_path):

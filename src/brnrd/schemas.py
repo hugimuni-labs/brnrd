@@ -551,6 +551,7 @@ class LoomLetterPost(BaseModel):
     # The board's verdict on a delivered wish; the text is the person's word.
     wish: str | None = Field(default=None, pattern=r"^w-[A-Za-z0-9]{1,32}$")
     verdict: Literal["agree", "correct"] | None = None
+    delivery_id: str | None = Field(default=None, pattern=r"^wish\.result:[A-Za-z0-9_.:-]{1,128}$")
 
     @field_validator("text")
     @classmethod
@@ -563,6 +564,8 @@ class LoomLetterPost(BaseModel):
     def _verdict_names_its_wish(self) -> "LoomLetterPost":
         if (self.wish is None) != (self.verdict is None):
             raise ValueError("wish and verdict come together")
+        if self.delivery_id and not self.verdict:
+            raise ValueError("a delivery id needs a verdict")
         return self
 
 
@@ -1584,6 +1587,9 @@ class SubscriptionOut(BaseModel):
     # How many first seats there are, for the copy ("one of our first 20");
     # set exactly when install_session_url is.
     first_subscribers_seats: int | None = None
+    # The home gate's answer (home_access.decide), apart from the tier: a
+    # member is admitted with no subscription, so ``tier`` alone reads "free".
+    access: str | None = None
 
 
 class SubscriptionCheckoutIn(BaseModel):

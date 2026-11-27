@@ -30,11 +30,11 @@ def test_the_self_decides_the_live_bodys_wake(tmp_path, monkeypatch):
     loom.start()
     try:
         wait_until(lambda: sent, 8, loom.dump)
-        # The self decides its wake; the loom's briefing is the one part it adds.
+        # The self decides its recipe. The loom adds its briefing and the held work.
         from brr.loom.runtime.briefing import section as briefing
         # Its home decides the handoff sentence: a host with two harnesses gains one.
         from brr.loom.runtime.home import Home
-        assert sent == [briefing(Home(root)) + "custom"]
+        assert sent == [briefing(Home(root)) + "## Held\nNo goals or queue rows recorded.\ncustom"]
         assert not mail(root, loom.facts(), "custom")
     finally:
         loom.halt()
@@ -77,7 +77,8 @@ def test_a_live_body_sees_identity_and_lands_a_labeled_commit(tmp_path, sender):
         assert not loom.errors
 
 
-def test_a_home_wake_over_budget_keeps_original_owed_and_recovers_without_resend(tmp_path, monkeypatch):
+def test_a_home_wake_over_budget_boots_on_the_minimal_wake_at_once(tmp_path, monkeypatch):
+    """His 11737: a start is never refused for size; the original letter is answered, no resend."""
     root = tmp_path / "home"
     write_thread(root, "fat", "A fat wake", "answer-fast", wait="0")
     monkeypatch.setenv("LOOM_BUDGET_BYTES", "1")
@@ -85,27 +86,13 @@ def test_a_home_wake_over_budget_keeps_original_owed_and_recovers_without_resend
     loom = Loom(root)
     loom.start()
     try:
-        wait_until(lambda: len([f for f in loom.facts() if f.kind == "attempt.ended"
-                               and f.data["thread"] == "fat"]) >= 1, 8, loom.dump)
-        facts = loom.facts()
-        fate = letter_owners(facts, main_snapshot(loom.home))[original]
-        assert not fate.done and fate.reason == "home-caused failure"
-        assert not [f for f in facts if f.kind == "body.started"]
-        assert original in {f.id for f in mail(root, facts, "fat")}
-        notices = [f for f in facts if f.id.startswith("loom/self-refusal-")]
-        assert len(notices) == 1 and notices[0].data["to"] == "thread:inbox"
-        monkeypatch.delenv("LOOM_BUDGET_BYTES")
-        # A repair outside self recovers at the ten-minute fallback.
-        from datetime import datetime, timedelta
-        from brr.loom.runtime import router
-        class AfterFallback(datetime):
-            @classmethod
-            def now(cls, tz=None):
-                return datetime.now(tz) + timedelta(seconds=601)
-        monkeypatch.setattr(router, "datetime", AfterFallback)
         wait_until(lambda: letter_owners(loom.facts(), main_snapshot(loom.home))[original].done,
-                   8, loom.dump)
-        assert any(f.kind == "note" and f.data.get("re") == original for f in loom.facts())
+                   15, loom.dump)
+        facts = loom.facts()
+        assert any(f.kind == "note" and f.data.get("re") == original for f in facts)
+        assert any(f.kind == "wake.fallback" and f.data.get("want") == "minimal" for f in facts)
+        assert not any(f.id.startswith("loom/self-refusal-") for f in facts)
+        assert not any(f.kind == "attempt.ended" and f.data["evidence"].get("home_failure") for f in facts)
     finally:
         loom.halt()
     assert not loom.errors

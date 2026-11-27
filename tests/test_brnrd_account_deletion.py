@@ -492,3 +492,131 @@ def test_delete_account_core_respects_fk_order_under_enforcement(monkeypatch):
     assert db.query(CreditBucket).count() == 0
     assert db.query(BillingLedgerEntry).one().bucket_id is None
     db.close()
+
+
+def _enforce_foreign_keys(client: TestClient) -> None:
+    """Turn sqlite's FK enforcement on for the app's single shared
+    ``:memory:`` connection, so the endpoint fails the way Postgres does."""
+    from sqlalchemy import text
+
+    with client.app.state.engine.connect() as conn:
+        conn.execute(text("PRAGMA foreign_keys=ON"))
+        assert conn.execute(text("PRAGMA foreign_keys")).scalar() == 1
+
+
+def test_delete_endpoint_with_a_loom_connected_succeeds_under_fk_enforcement(monkeypatch):
+    """The reported self-delete 500: a connected loom leaves ``loom_parts`` and
+    ``daemon_repos`` rows pointing at its daemon, and the sweep deleted the
+    daemon under them. Postgres refuses (ForeignKeyViolation) and the request
+    500s. Run through the endpoint with FKs enforced, every store seeded."""
+    from brnrd.models import (
+        BoardConsent,
+        DaemonRepo,
+        LoomPart,
+        RunReleaseRequest,
+        RunRespawnRequest,
+    )
+
+    monkeypatch.setattr(stripe_api, "cancel_subscription_now", lambda *a, **k: None)
+    client = _client()
+    _enforce_foreign_keys(client)
+    account_id, _ = _login(client)
+    repo_id = _seed_everything(client, account_id)
+    expires = datetime.now(timezone.utc) + timedelta(hours=1)
+    with client.app.state.SessionLocal() as db:
+        daemon = db.query(Daemon).filter(Daemon.account_id == account_id).one()
+        db.add(LoomPart(daemon_id=daemon.id, key="index", account_id=account_id, repo_id=repo_id, hash="h", body=b"x"))
+        db.add(LoomPart(daemon_id=daemon.id, key="beads", account_id=account_id, repo_id=None, hash="h", body=b"x"))
+        db.add(DaemonRepo(id=ids.daemon_repo_id(), daemon_id=daemon.id, repo_id=repo_id))
+        db.add(BoardConsent(repo_id=repo_id))
+        db.add(RunReleaseRequest(id=ids.run_release_request_id(), account_id=account_id, run_id="r", expires_at=expires))
+        db.add(RunRespawnRequest(id=ids.run_respawn_request_id(), account_id=account_id, run_id="r", expires_at=expires))
+        db.commit()
+
+    r = client.post("/v1/accounts/delete", json={"confirm_login": "octocat"})
+    assert r.status_code == 200, r.text
+
+    with client.app.state.SessionLocal() as db:
+        counts = _counts(db, account_id, repo_id)
+        assert counts.pop("BillingLedgerEntry") == 1
+        assert all(n == 0 for n in counts.values()), counts
+        assert db.query(LoomPart).count() == 0
+        assert db.query(DaemonRepo).count() == 0
+        assert db.query(BoardConsent).count() == 0
+        assert db.query(RunReleaseRequest).count() == 0
+        assert db.query(RunRespawnRequest).count() == 0
+        assert db.get(Account, account_id).deleted_at is not None
+
+
+# Every table whose foreign keys reach the account's graph, and how the sweep
+# answers for it. A new table with such a key fails the test below until it is
+# placed here *and* in ``account_deletion.delete_account``: the 500 this file
+# pins came from two tables (loom_parts, daemon_repos) added after the sweep.
+_SWEEP_ANSWERS = {
+    "terms_acceptances": "deleted",
+    "repos": "deleted",
+    "tokens": "deleted",
+    "daemons": "deleted",
+    "loom_parts": "deleted",
+    "daemon_repos": "deleted",
+    "activity_records": "deleted",
+    "events": "deleted",
+    "channel_routes": "deleted",
+    "github_installations": "deleted",
+    "github_installed_repos": "deleted",
+    "tg_pair_codes": "deleted",
+    "config_change_requests": "deleted",
+    "runner_wake_requests": "deleted",
+    "run_stop_requests": "deleted",
+    "run_release_requests": "deleted",
+    "run_respawn_requests": "deleted",
+    "subscriptions": "deleted",
+    "credit_buckets": "deleted",
+    "billing_ledger": "retained",
+}
+
+
+def test_every_table_keyed_into_the_account_graph_is_answered_by_the_sweep():
+    from brnrd.models import Base
+
+    graph = {"accounts"}
+    reached: set[str] = set()
+    changed = True
+    while changed:
+        changed = False
+        for table in Base.metadata.sorted_tables:
+            targets = {fk.column.table.name for fk in table.foreign_keys}
+            if targets & graph and table.name not in reached and table.name != "accounts":
+                reached.add(table.name)
+                if table.name not in ("billing_ledger",):
+                    graph.add(table.name)
+                changed = True
+    assert {"repos", "tokens", "daemons", "loom_parts", "daemon_repos"} <= reached  # sanity: the walk works
+    assert reached == set(_SWEEP_ANSWERS), (
+        f"unanswered: {sorted(reached - set(_SWEEP_ANSWERS))}; "
+        f"stale: {sorted(set(_SWEEP_ANSWERS) - reached)}"
+    )
+
+
+def test_delete_clears_another_accounts_daemon_pointer_without_deleting_it(monkeypatch):
+    """A daemon owned elsewhere whose default routing repo is one of ours
+    loses the pointer, keeps its row, and the delete still answers 200."""
+    monkeypatch.setattr(stripe_api, "cancel_subscription_now", lambda *a, **k: None)
+    client = _client()
+    _enforce_foreign_keys(client)
+    other_id, _ = _login(client, github_id="2", login="hubot")
+    account_id, _ = _login(client)
+    repo_id = _seed_everything(client, account_id)
+    with client.app.state.SessionLocal() as db:
+        tok = Token(id=ids.token_id(), account_id=other_id, kind=Token.KIND_DAEMON, token_hash="hash-other")
+        db.add(tok)
+        db.flush()
+        db.add(Daemon(id="dmn_other", account_id=other_id, repo_id=repo_id, token_id=tok.id, daemon_name="other"))
+        db.commit()
+
+    r = client.post("/v1/accounts/delete", json={"confirm_login": "octocat"})
+    assert r.status_code == 200, r.text
+    with client.app.state.SessionLocal() as db:
+        other = db.get(Daemon, "dmn_other")
+        assert other is not None and other.repo_id is None
+        assert db.query(Token).filter(Token.account_id == other_id).count() >= 1

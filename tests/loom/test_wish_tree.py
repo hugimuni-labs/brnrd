@@ -12,7 +12,7 @@ from brr.loom.runtime.loom import _boundary, _ingest, tick_once
 from brr.loom.runtime.port import PortError, write_reincarnate
 from brr.loom.runtime.selfrepo import run_wake
 from brr.loom.runtime.wishes import wishes
-from test_wishes import command, heard, ledger  # noqa: F401  (fixture)
+from test_wishes import cli, command, heard, ledger  # noqa: F401  (fixture)
 
 STRAND = "s-aaaa-test"
 
@@ -172,6 +172,41 @@ def test_molt_refuses_while_a_left_is_owed(body):
     assert write_reincarnate(seat, "context is heavy").startswith(STRAND + "/")
 
 
+@pytest.mark.parametrize("oversized_readme, oversized_carry", [(True, False), (False, False), (False, True)])
+def test_molt_previews_wake_pressure(body, monkeypatch, oversized_readme, oversized_carry):
+    _, seat = body
+    monkeypatch.setenv("LOOM_BUDGET_BYTES", "24000")
+    if oversized_readme:
+        readme = seat / "self/threads/work/README.md"
+        sections = [
+            "## Small\nx\n",
+            "## Third\n" + "c" * 4000 + "\n",
+            "## Largest\n" + "é" * 4000 + "\n",
+            "## Second\n" + "b" * 6000 + "\n",
+        ]
+        readme.write_text(readme.read_text() + "\n\n" + "".join(sections), encoding="utf-8")
+        assert readme.stat().st_size < 24000
+    carry = seat / "carry.md"
+    carry.write_text("é" * 1201 if oversized_carry else "next step", encoding="utf-8")
+    result = cli(["molt", "--room", str(seat), "--carry", str(carry)])
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.startswith(STRAND + "/")
+    assert jack._state(seat)["reincarnated"]
+    if oversized_readme:
+        report, *ranked = result.stderr.splitlines()
+        assert report.startswith("Wake preview: threads/work/README.md would be trimmed")
+        assert "bytes over budget" in report
+        assert ranked == [
+            f"  ## {section.splitlines()[0][3:]} · {len(section.encode('utf-8'))} bytes"
+            for section in (sections[2], sections[3], sections[1])
+        ]
+    elif oversized_carry:
+        assert f"carry {carry} is 2 bytes over its 10% share (2402 of 2400 bytes)" in result.stderr
+        assert "README.md" not in result.stderr
+    else:
+        assert result.stderr == ""
+
+
 def test_a_pr_opened_on_a_one_wish_thread_is_its_result(body):
     home, seat = body
     wish = heard(home, seat, "Hold the board still")
@@ -202,17 +237,17 @@ def test_one_stop_shows_every_miss_at_once_until_each_is_cleared(body):
     first = json.loads(stop(seat))["reason"]
     # The left and the ending in one block, each with its command: no maze of stops.
     assert f"{wish} (no left yet)" in first and 'wish <w-id> --left "<step>"' in first
-    assert "has not said how it ends" in first and "settle work --why" in first
+    assert "with no disposition recorded" in first and "settle work --why" in first
     jack.execute("post", seat, "{}")
     again = json.loads(stop(seat))["reason"]
-    assert f"{wish} (no left yet)" in again and "has not said how it ends" in again
+    assert f"{wish} (no left yet)" in again and "with no disposition recorded" in again
     command(home, seat, "wish", wish, "--left", "freeze hover")
     jack.execute("post", seat, "{}")
     render(home)
     third = json.loads(stop(seat))["reason"]
     # A left answers both (it says how the body ends); the letter still owed stays on the list.
-    assert "what is left" not in third and "has not said how it ends" not in third
-    assert third.partition(chr(10))[2].startswith("the stop holds on 1 thing") and "--note" in third
+    assert "what is left" not in third and "with no disposition recorded" not in third
+    assert third.partition(chr(10))[2].startswith("Rest held on 1 thing") and "--note" in third
     assert not list((seat / "port/out").glob("asked-*.md"))
 
 
@@ -228,3 +263,50 @@ def test_a_delivered_wish_takes_one_line_in_the_wake(body):
     assert f"{done} · delivered · Ship the switch · https://example.com/9" in shown
     assert "wait for CI" not in shown and "pick a palette" in shown
     assert sum(done in line for line in shown.splitlines()) == 1
+
+
+FIT_RECIPE = """\
+import os, sys
+budget = int(os.environ["LOOM_BUDGET_BYTES"])
+with open(os.environ["FIT_LOG"], "a") as log:
+    log.write(f"{budget}\\n")
+if budget < int(os.environ["FIT_NEED"]):
+    print(f"over budget: the wake is {os.environ['FIT_NEED']}B over its {budget}B budget", file=sys.stderr)
+    sys.exit(3)
+print("## threads/work/README.md\\nWish work\\n## Letters\\n")
+"""
+
+
+def test_an_over_budget_wake_folds_the_looms_own_parts_before_refusing(ledger, tmp_path, monkeypatch):
+    # Inbox 2026-11-23 17:41Z: the recipe's fixed parts fit only once the loom's
+    # own reserve (held rows, the thread's wishes) gave way.
+    home, seat = ledger
+    for index in range(6):
+        heard(home, seat, f"Wish number {index} with a line long enough to weigh")
+    recipe = tmp_path / "recipe.py"
+    recipe.write_text(FIT_RECIPE)
+    log = tmp_path / "budgets"
+    monkeypatch.setenv("FIT_LOG", str(log))
+    monkeypatch.setenv("FIT_NEED", "0")
+    out, err, sizes = StringIO(), StringIO(), tmp_path / "sizes.json"
+    assert run_wake(seat, "work", recipe=recipe, stdout=out, stderr=err, sizes=sizes) == 0
+    first = int(log.read_text().split()[0])
+    assert "Wish number 5" in out.getvalue() and "folded" not in json.loads(sizes.read_text())
+
+    log.unlink()
+    monkeypatch.setenv("FIT_NEED", str(first + 1))
+    out, err = StringIO(), StringIO()
+    assert run_wake(seat, "work", recipe=recipe, stdout=out, stderr=err, sizes=sizes) == 0, err.getvalue()
+    budgets = [int(b) for b in log.read_text().split()]
+    assert budgets[0] == first and budgets[1] > first and len(budgets) == 2
+    wake = out.getvalue()
+    assert "Wish number" not in wake
+    assert "Whole in brnrd runtime wishes --thread work.]" in wake
+    assert err.getvalue() == ""  # the first refusal is not the wake's word
+    assert json.loads(sizes.read_text())["folded"] == ["held", "wishes"]
+
+    # Past the fold, the wake is still refused, with the second run's reason once.
+    monkeypatch.setenv("FIT_NEED", "10000000")
+    err = StringIO()
+    assert run_wake(seat, "work", recipe=recipe, stdout=StringIO(), stderr=err, sizes=sizes) == 3
+    assert err.getvalue().count("over budget") == 1

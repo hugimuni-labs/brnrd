@@ -192,7 +192,7 @@ def occasion(path: Path) -> str:
         die(f"owed.json: not utf-8: {exc}")
     if not isinstance(data, list):
         die("owed.json: expected a list")
-    chunks = ["## Occasion\n"]
+    chunks = ["## Letters\n"]
     for item in data:
         if not isinstance(item, dict) or any(key not in item for key in ("id", "from", "body")):
             die("owed.json: each letter needs id, from, body")
@@ -226,7 +226,7 @@ def fold(readme: str, excess: int) -> str:
             break
         body = "".join(lines[start + 1:end])
         size = len(body.encode("utf-8"))
-        note = f"[the wake folded this section's {size} bytes to its title; it is whole on disk]\n"
+        note = f"[Folded {size} bytes to the section title. Whole on disk.]\n"
         if size <= len(note.encode("utf-8")):
             continue
         folded[start] = note
@@ -246,8 +246,7 @@ def fold(readme: str, excess: int) -> str:
 def clip(readme: str, excess: int, limit: int) -> str:
     """The README less ``excess`` bytes from its end, cut at a line, with a receipt."""
     data = readme.encode("utf-8")
-    note = (f"[the wake cut {{}} of this README's {len(data)} bytes from its end to fit the "
-            f"{limit}-byte budget; the file is whole on disk: trim it]\n")
+    note = f"[Cut {{}} of {len(data)} README bytes ({limit}-byte budget). Whole on disk.]\n"
     keep = len(data) - excess - len(note.format(len(data)).encode("utf-8"))
     kept = data[:max(0, keep)].decode("utf-8", "ignore")
     kept = kept[: kept.rfind("\n") + 1] if "\n" in kept else ""
@@ -319,7 +318,7 @@ def people_block(root: Path, owed: Path) -> str:
             block = "".join(ensure_nl(line) for line in lines)
             size = len(block.encode("utf-8"))
             if size > PAGE_CAP:
-                note = f"[the wake cut this page's render at {PAGE_CAP} of {size} bytes; {rel} is whole on disk]\n"
+                note = f"[Clipped at {PAGE_CAP} of {size} bytes. Whole on disk: {rel}.]\n"
                 kept = block.encode("utf-8")[: PAGE_CAP - len(note.encode("utf-8"))].decode("utf-8", "ignore")
                 block = kept[: kept.rfind("\n") + 1] + note
             chunks.append(block)
@@ -377,7 +376,7 @@ def topics_block(root: Path) -> str:
         return ""
     size = len(block.encode("utf-8"))
     if size > TOPICS_CAP:
-        note = f"[the wake cut this section's render at {TOPICS_CAP} of {size} bytes; topics/ is whole on disk]\n"
+        note = f"[Clipped at {TOPICS_CAP} of {size} bytes. Whole on disk: topics/.]\n"
         kept = block.encode("utf-8")[: TOPICS_CAP - len(note.encode("utf-8"))].decode("utf-8", "ignore")
         block = kept[: kept.rfind("\n") + 1] + note
     return section("Topics", block)
@@ -428,14 +427,14 @@ def write_sizes(parts: dict[str, str], tree: str) -> None:
     Path(target).write_text(json.dumps(sizes), encoding="utf-8")
 
 
-def piece_sizes(text: str) -> list[tuple[str, int]]:
+def piece_sizes(text: str, *, headings_only: bool = False) -> list[tuple[str, int]]:
     """Name the uncullable sections by their headings, for the exit-3 line."""
     sizes: list[tuple[str, int]] = []
-    current = "preamble"
+    current = None if headings_only else "preamble"
     buf: list[str] = []
 
     def flush() -> None:
-        if buf:
+        if buf and current is not None:
             sizes.append((current, len("".join(buf).encode("utf-8"))))
 
     for line in text.splitlines(keepends=True):
@@ -467,6 +466,12 @@ def fit_tree(fixed: str, lines: list[str], limit: int) -> str:
     if omitted:
         block += f"omitted {omitted} entries; each is one read away\n"
     return block
+
+
+SQUEEZE = (
+    ("topics", "## Topics\n[the wake folded this section to fit; topics/ is whole on disk]\n"),
+    ("people", "## People\n[the wake folded the pages in hand to fit; people/<name>/page.md is whole on disk]\n"),
+)
 
 
 def main() -> None:
@@ -501,8 +506,24 @@ def main() -> None:
     root = Path.cwd()
     parts = fixed_parts(root, thread, loom, owed)
     total = sum(len(text.encode("utf-8")) for text in parts.values())
+    if os.environ.get("LOOM_PREVIEW"):
+        if total > limit:
+            path = f"threads/{thread}/README.md"
+            print(f"Wake preview: {path} would be trimmed ({total - limit} bytes over budget).")
+            readme = read_exact(root / path, path)
+            sizes = piece_sizes(readme, headings_only=True)
+            for heading, size in sorted(sizes, key=lambda item: -item[1])[:3]:
+                print(f"  ## {heading} · {size} bytes")
+        return
     if total > limit:
         parts = fixed_parts(root, thread, loom, owed, total - limit, limit)
+    # Past the README, the topics and then the person pages fold to a receipt:
+    # both are one read away on disk, and a wake that refuses costs a letter.
+    for name, receipt in SQUEEZE:
+        if sum(len(text.encode("utf-8")) for text in parts.values()) <= limit:
+            break
+        if parts[name]:
+            parts[name] = receipt
     head, tail = split(parts)
     fixed = head + tail
     total = len(fixed.encode("utf-8"))

@@ -69,6 +69,13 @@ def _app_namespaces() -> set[str]:
     return set(app.state.backend_namespaces) - set(builtin)
 
 
+def test_campaign_paths_stay_off_existing_pages():
+    from brnrd.config import CAMPAIGN_RESERVED_SEGMENTS
+
+    missing = _spa_top_level_routes() - CAMPAIGN_RESERVED_SEGMENTS
+    assert not missing, f"a campaign path could replace these pages: {sorted(missing)}"
+
+
 def test_backend_namespaces_are_disjoint_from_spa_routes():
     """A backend route inside an SPA namespace silently breaks that deep link.
 

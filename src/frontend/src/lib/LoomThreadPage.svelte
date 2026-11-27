@@ -7,6 +7,7 @@
 	import LoomFuelStrip from './LoomFuelStrip.svelte';
 	import LoomLog from './LoomLog.svelte';
 	import LoomStrandBadge from './LoomStrandBadge.svelte';
+	import WishOpen from './WishOpen.svelte';
 	import { startVisiblePoll } from './visiblePoll.ts';
 	import {
 		BODY_KEY,
@@ -19,12 +20,25 @@
 		planFraction,
 		store,
 		stored,
-		type LoomRead
+		type LoomRead,
+		type LoomThread
 	} from './loomSnapshot.ts';
+	import {
+		pickWish,
+		signInHref,
+		wishesFromBoard,
+		wishesFromSnapshot,
+		type ShownWish
+	} from './wishLink.ts';
 
-	let { id }: { id: string } = $props();
+	let {
+		id,
+		wish = null,
+		next = '/dashboard'
+	}: { id: string; wish?: string | null; next?: string } = $props();
 
 	let read = $state<LoomRead | 'error' | null>(null);
+	let wishes = $state<ShownWish[]>([]);
 	let seenAt = $state<string | null>(null);
 	let body = $state<string | null>(null);
 	let now = $state(Date.now());
@@ -33,22 +47,66 @@
 	let thread = $derived(snapshot?.threads?.find((t) => t.id === id) ?? null);
 	let fraction = $derived(thread ? planFraction(thread) : null);
 	let turn = $derived(thread?.turn ?? 'none');
+	let picked = $derived(
+		thread ? pickWish(wishes, wish ?? null) : { selected: null, missing: null }
+	);
+
+	async function load(signal: AbortSignal): Promise<void> {
+		const nextRead = await fetchLoom(fetch, signal).catch(() => 'error' as const);
+		if (signal.aborted) return;
+		// Signed out, or a snapshot: this is the cloud account. Do not fall through
+		// to the loopback board, which would be another machine's letters.
+		if (nextRead === 'anon' || typeof nextRead === 'object') {
+			read = nextRead;
+			wishes = typeof nextRead === 'object' ? wishesFromSnapshot(nextRead.wishes ?? [], id) : [];
+			if (typeof nextRead === 'object') body ??= keptBody(nextRead);
+			return;
+		}
+		try {
+			const res = await fetch(`/v1/loom/thread/${encodeURIComponent(id)}`, {
+				cache: 'no-store',
+				signal
+			});
+			if (signal.aborted) return;
+			if (res.ok) {
+				const part = (await res.json()) as {
+					id?: string;
+					title?: string;
+					status?: string;
+					plan?: LoomThread['plan'];
+					strands?: LoomThread['strands'];
+					last_at?: string;
+					wishes?: { wish: string; line?: string; state?: string }[];
+					chain?: Record<
+						string,
+						readonly [string | null, string | null, string | null, string | null, string]
+					>;
+					letters?: { id: string; body?: string; from?: string; at?: string }[];
+				};
+				const row: LoomThread = {
+					id: part.id ?? id,
+					title: part.title,
+					status: part.status,
+					plan: part.plan,
+					strands: part.strands,
+					last_at: part.last_at
+				};
+				read = { v: 1, threads: [row], log: [] };
+				wishes = wishesFromBoard(part);
+				return;
+			}
+		} catch {
+			if (signal.aborted) return;
+		}
+		if (snapshot) return;
+		read = nextRead;
+		wishes = [];
+	}
 
 	onMount(() => {
 		seenAt = stored(SEEN_KEY);
 		const clock = setInterval(() => (now = Date.now()), 30_000);
-		const stop = startVisiblePoll(
-			async (signal) => {
-				const next = await fetchLoom(fetch, signal).catch(() => 'error' as const);
-				if (signal.aborted) return;
-				// Keep the last good snapshot through a failed refresh.
-				if (next === 'error' && snapshot) return;
-				read = next;
-				if (typeof next === 'object') body ??= keptBody(next);
-			},
-			document,
-			30_000
-		);
+		const stop = startVisiblePoll((signal) => load(signal), document, 30_000);
 		return () => {
 			clearInterval(clock);
 			stop();
@@ -73,8 +131,14 @@
 		<p class="eyebrow py-10 text-center">reaching brnrd&hellip;</p>
 	{:else if read === 'anon'}
 		<p class="subpanel p-4 font-mono text-sm text-stone-300">
-			signed out. <a href={resolve('/login')} class="text-amber-200 underline">sign in</a> to see this
-			thread.
+			signed out.
+			<!-- eslint-disable svelte/no-navigation-without-resolve -- resolve() takes no query; its path is resolved -->
+			<a
+				href={`${resolve('/login')}${signInHref(next).replace(/^\/login/, '')}`}
+				class="text-amber-200 underline">sign in</a
+			>
+			<!-- eslint-enable svelte/no-navigation-without-resolve -->
+			to see this thread.
 		</p>
 	{:else if read === 'none' || read === 'error'}
 		<p class="subpanel p-4 font-mono text-sm text-stone-300">
@@ -104,7 +168,7 @@
 					<span class="text-sky-300/80 uppercase">mine</span>
 				{:else if turn === 'blocked'}
 					<span class="uppercase"
-						>blocked{thread.blocked_on ? ` · waits on ${thread.blocked_on}` : ''}</span
+						>blocked{thread.blocked_on ? ` · resumes on ${thread.blocked_on}` : ''}</span
 					>
 				{/if}
 				{#if thread.status}<span>{thread.status}</span>{/if}
@@ -113,6 +177,8 @@
 				{#if ago(thread.last_at, now)}<span>{ago(thread.last_at, now)}</span>{/if}
 			</p>
 		</section>
+
+		<WishOpen {wishes} selected={picked.selected?.id ?? null} missing={picked.missing} />
 
 		{#if (snapshot?.fuel ?? []).length}
 			<div class="mt-3"><LoomFuelStrip fuel={snapshot?.fuel ?? []} bind:body {now} /></div>

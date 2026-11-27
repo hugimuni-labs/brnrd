@@ -44,18 +44,30 @@ def shells(home):
             yield name
 
 
-def print_windows(rows, *, error: str | None = None) -> None:
+def print_windows(rows, *, error: str | None = None, state: str | None = None,
+                  reason: str | None = None) -> None:
     windows = [{"name": name, "left_pct": left,
                 "resets_at": datetime.fromtimestamp(reset, timezone.utc).isoformat() if reset else None}
                for name, left, reset in rows if left is not None]
-    if not windows and not error:
+    # An error wins over a named state. Unmetered with no windows is a reading.
+    known = state == "unmetered" and not error
+    if not windows and not error and not known:
         raise SystemExit(1)
-    print(json.dumps({"windows": windows, **({"error": error} if error else {})}))
+    payload = {"windows": windows}
+    if error:
+        payload["error"] = error
+    elif known:
+        payload["state"] = "unmetered"
+        if isinstance(reason, str) and reason.strip():
+            payload["reason"] = reason
+    print(json.dumps(payload))
 
 
 def _refresh(path, script, after=0) -> None:
     at, windows = time.time(), []
     error = None
+    state = None
+    reason = None
     proc = None
     claim = None
     attempted = False
@@ -85,8 +97,12 @@ def _refresh(path, script, after=0) -> None:
         out, _ = proc.communicate(timeout=15)
         if proc.returncode == 0:
             payload = json.loads(out)
-            if isinstance(payload.get("error"), str):
+            if isinstance(payload.get("error"), str) and payload["error"].strip():
                 error = payload["error"]
+            elif payload.get("state") == "unmetered":
+                state = "unmetered"
+                if isinstance(payload.get("reason"), str) and payload["reason"].strip():
+                    reason = payload["reason"]
             for window in payload["windows"]:
                 left = window["left_pct"]
                 if (isinstance(left, (int, float)) and math.isfinite(left) and left <= 100
@@ -94,6 +110,8 @@ def _refresh(path, script, after=0) -> None:
                     windows.append(window)
     except (OSError, ValueError, KeyError, TypeError, subprocess.TimeoutExpired):
         windows = []
+        state = None
+        reason = None
     finally:
         try:
             if proc is not None and proc.poll() is None:
@@ -105,7 +123,14 @@ def _refresh(path, script, after=0) -> None:
             pass
         try:
             if attempted:
-                atomic_write(path, json.dumps({"at": at, "windows": windows, **({"error": error} if error else {})}) + "\n")
+                body = {"at": at, "windows": windows}
+                if error:
+                    body["error"] = error
+                elif state == "unmetered":
+                    body["state"] = state
+                    if reason:
+                        body["reason"] = reason
+                atomic_write(path, json.dumps(body) + "\n")
         finally:
             if claim is not None:
                 claim.close()
@@ -192,8 +217,11 @@ def fuel(home, shell: str) -> str:
 
 
 _SHELL_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*")
-#: What the status line and the board header say when a collector wrote an error and no window.
+#: Board error code for an unsuccessful quota reading.
 FAILS = "fails"
+QUOTA_UNAVAILABLE = "quota unavailable"
+#: A known steady state: the plan exposes no quota, so the line does not say ``fails``.
+UNMETERED = "unmetered"
 
 
 def gauge_windows(payload) -> list[dict] | None:
@@ -230,11 +258,20 @@ def gauge_windows(payload) -> list[dict] | None:
 
 
 def collector_failed(payload) -> bool:
-    """True when the collector wrote an error string. The text stays in the file; the line says ``fails``."""
+    """True when the collector wrote an error string. The text stays in the file."""
     if not isinstance(payload, dict):
         return False
     error = payload.get("error")
     return isinstance(error, str) and bool(error.strip())
+
+
+def known_unmetered(payload) -> bool:
+    """True when the collector named ``unmetered`` and wrote no error.
+
+    An error string wins, so a failed probe is never read as this state.
+    Windows, when the reading has any, still draw ahead of the word.
+    """
+    return isinstance(payload, dict) and payload.get("state") == UNMETERED and not collector_failed(payload)
 
 
 def week_pace(window, now=None):
@@ -257,14 +294,6 @@ def window_text(window):
     return text
 
 
-def _shown_windows(payload) -> list[str] | None:
-    """Window text for one on-disk reading, or None when it shows nothing."""
-    windows = gauge_windows(payload)
-    if not windows:
-        return None
-    return [window_text(w) for w in windows]
-
-
 def _past_reset(payload, now: float) -> bool:
     """True when ``at`` is older than the newest reset that has already passed.
 
@@ -276,71 +305,66 @@ def _past_reset(payload, now: float) -> bool:
     return bool(passed) and float(payload["at"]) < max(passed)
 
 
-def shell_fuels(home) -> dict[str, str]:
-    """Window text per shell with a reading in ``loom/usage``.
-
-    A shell with no file, or a file that yields no windows and no error, is
-    omitted. A collector error with no window is the word ``fails`` (the ask
-    says the same word, and the error text stays in the file). A reading older
-    than its newest reset that has already passed is kept and marked with ``?``
-    (``grok week 45%?``): dropping it is how a full tank was read as dry.
-    """
-    directory = home.root / "loom" / "usage"
-    if not directory.is_dir():
-        return {}
-    now, found = time.time(), {}
-    for path in sorted(directory.glob("*.json")):
-        name = path.name.removesuffix(".json")
+def _shell_readings(home):
+    for path in sorted((home.root / "loom" / "usage").glob("*.json")):
+        name = path.stem
         if not _SHELL_NAME.fullmatch(name):
             continue
         try:
             payload = json.loads(path.read_text())
         except (OSError, ValueError):
             continue
-        parts = _shown_windows(payload)
+        if (windows := gauge_windows(payload)) is not None:
+            yield name, payload, windows
+
+
+def lapsing_fuel(home) -> str:
+    """Report each live window separately because quotas can overlap."""
+    now = time.time()
+    readings = []
+    for name, payload, windows in _shell_readings(home):
+        live = [f"{w['name']} {max(0, w['left_pct']):g}% at "
+                f"{datetime.fromtimestamp(_reset(w), timezone.utc):%Y-%m-%d %H:%MZ}"
+                for w in windows if _reset(w) > now]
+        if live:
+            readings.append(f"{name} " + ", ".join(live))
+        elif known_unmetered(payload):
+            readings.append(f"{name} unmetered")
+        else:
+            readings.append(f"{name} lapse unknown")
+    return "fuel lapsing if unspent: " + (" · ".join(readings) or "no readings")
+
+
+def shell_fuels(home) -> dict[str, str]:
+    """Window text per shell with a reading in ``loom/usage``.
+
+    A shell with no file, or a file that yields no windows and no error, is
+    omitted. A collector error with no window is shown as quota unavailable.
+    A reading whose
+    state is ``unmetered``, with no window and no error, is that word: a known
+    gap, not a failure. A reading older than its newest reset that has already
+    passed is kept and marked with ``?``
+    (``grok week 45%?``): dropping it is how a full tank was read as dry.
+    """
+    now, found = time.time(), {}
+    for name, payload, windows in _shell_readings(home):
+        parts = [window_text(window) for window in windows]
         if parts:
             found[name] = " ".join(parts) + ("?" if _past_reset(payload, now) else "")
+        elif gauge_windows(payload) is not None and known_unmetered(payload):
+            found[name] = UNMETERED
         elif gauge_windows(payload) is not None and collector_failed(payload):
-            found[name] = FAILS
+            found[name] = QUOTA_UNAVAILABLE
     return found
 
 
 def fuels(home, shell: str) -> str:
-    """Every shell with a reading in ``loom/usage``, for the boundary line.
-
-    The seated shell is first, then the rest by name. With a non-empty
-    ``spend.burn`` and two or more installed harnesses, the other burn shells
-    follow the seat in list order and the words ``burn`` and ``keep`` appear.
-    One harness, or no burn list, stays the unmarked line. Hold and park do
-    not call this.
-    """
+    """Every shell with a reading, with the seated shell first."""
     found = shell_fuels(home)
     if not found:
         return ""
-    from .adapters import burn_marks
-    marks = burn_marks(home)
-    if marks is None:
-        order = ([shell] if shell in found else []) + sorted(n for n in found if n != shell)
-        return "fuel " + " · ".join(f"{name} {found[name]}" for name in order)
-    burn, keep = marks
-    order = [shell] if shell in found else []
-    for name in burn:
-        if name in found and name not in order:
-            order.append(name)
-    if keep and keep in found and keep not in order:
-        order.append(keep)
-    order.extend(name for name in sorted(found) if name not in order)
-
-    def shown(name: str) -> str:
-        if name in burn:
-            role = " burn"
-        elif name == keep:
-            role = " keep"
-        else:
-            role = ""
-        return f"{name} {found[name]}{role}"
-
-    return "fuel " + " · ".join(shown(name) for name in order)
+    order = sorted(found, key=lambda name: (name != shell, name))
+    return "fuel " + " · ".join(f"{name} {found[name]}" for name in order)
 
 
 def below_floor(home, shell: str, after: float = 0) -> bool:

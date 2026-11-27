@@ -54,7 +54,7 @@ def test_a_wake_reports_each_part_and_the_parts_sum_to_what_was_delivered(tmp_pa
     assert got["total"] == len(delivered)
     assert sum(got["parts"].values()) == got["total"]
     # The headings inside the README and the letter do not move bytes between parts.
-    assert {"core", "briefing", "readme", "tree", "people", "occasion"} <= set(got["parts"])
+    assert {"core", "briefing", "held", "readme", "tree", "people", "occasion"} <= set(got["parts"])
     assert "recipe" not in got["parts"]
     assert got["parts"]["occasion"] > len("a letter with a heading")
 
@@ -112,10 +112,24 @@ def test_the_line_says_boots_spend_wake_and_reads_and_names_its_unknowns() -> No
     ]
     text = gauge.line(gauge.gauge(facts, 7, now=now, spent=lambda s: 500_000))
     assert text == ("7d: 2 boots · spent 500k · wake 20.0 KB avg (core 40%, readme 60%) · "
-                    "2.0 boots per delivered wish · 30% of read bytes before a first line (1 bodies traced)")
+                    "2.0 boots per delivered wish · 30% of read bytes before a first line (1 bodies traced) · "
+                    "molt cost unknown (no molt.cost yet)")
     bare = gauge.line(gauge.gauge(facts[2:3], 7, now=now, spent=lambda s: None))
     assert bare == ("7d: 1 boots · spent unknown · wake size unknown (no wake.sizes yet) · "
-                    "1 boots, 0 delivered · 30% of read bytes before a first line (1 bodies traced)")
+                    "1 boots, 0 delivered · 30% of read bytes before a first line (1 bodies traced) · "
+                    "molt cost unknown (no molt.cost yet)")
+    facts.append(fact("molt.cost", {
+        "thread": "t", "strand": "s1", "gen": 2, "opened": "s0/a", "first_s": 180, "tokens": 40000,
+        "reset": {"parks": ["w-9"], "asks": []}, "repeated": ["memory/scars/loom/x.md"],
+        "carry_bytes": 120, "read_bytes": 50,
+    }, "molt.cost:s1:2"))
+    measured = gauge.gauge(facts, 7, now=now, spent=lambda s: 500_000)
+    # The molt's 50 read bytes are its own reading. They do not move the trace's 30%.
+    assert measured["before_bytes"] == 300 and measured["molt_read"] == [50]
+    got = gauge.line(measured)
+    assert "30% of read bytes before a first line (1 bodies traced)" in got
+    assert ("back at work after 3 min total from waking across 1 molt · 1 park set again · "
+            "1 scar again · 40k tokens · carried 120 B of 50 B read") in got
 
 
 def test_gauge_and_attention_find_the_home_from_the_room_like_every_body_verb(tmp_path: Path) -> None:

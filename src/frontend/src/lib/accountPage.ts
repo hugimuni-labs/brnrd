@@ -6,19 +6,55 @@
 // It learns the session the way the dashboard does: `GET /v1/dashboard/repos`
 // answers 401 to an anonymous visitor and otherwise carries the GitHub login
 // that AccountDeletion's confirmation needs. One read, both answers.
-import { ReposAuthError, fetchRepos } from './repos.ts';
+import { ReposAuthError, fetchRepos, type MessengerDoor } from './repos.ts';
 
 export const ACCOUNT_PATH = '/account';
 
+/** What the GitHub App reaches, and the outcome of the install or sync that
+ * sent the person here (`/api/github/setup` and `/sync` land on
+ * `/account?notice=…#github`, letter 11758; before, they landed on the old
+ * dashboard's /repos). */
+export interface GitHubRead {
+	notice: string | null;
+	repos: string[];
+	installUrl: string;
+}
+
 export type AccountRead =
-	| { kind: 'authed'; githubLogin: string | null }
+	| {
+			kind: 'authed';
+			githubLogin: string | null;
+			github: GitHubRead;
+			messengerDoors: MessengerDoor[];
+	  }
 	| { kind: 'anon' }
 	| { kind: 'error'; message: string };
 
-export async function readAccount(fetchImpl: typeof fetch = fetch): Promise<AccountRead> {
+/** The GitHub return's params on this page's URL, forwarded to the read. */
+export function githubReturn(search: string): { notice?: string; installationId?: string } {
+	const q = new URLSearchParams(search);
+	return {
+		...(q.get('notice') ? { notice: q.get('notice')! } : {}),
+		...(q.get('installation_id') ? { installationId: q.get('installation_id')! } : {})
+	};
+}
+
+export async function readAccount(
+	fetchImpl: typeof fetch = fetch,
+	params: { notice?: string; installationId?: string } = {}
+): Promise<AccountRead> {
 	try {
-		const repos = await fetchRepos(fetchImpl);
-		return { kind: 'authed', githubLogin: repos.account?.github_login ?? null };
+		const repos = await fetchRepos(fetchImpl, { ...params, accountOnly: true });
+		return {
+			kind: 'authed',
+			githubLogin: repos.account?.github_login ?? null,
+			messengerDoors: repos.messenger_doors ?? [],
+			github: {
+				notice: params.notice ? (repos.notice ?? null) : null,
+				repos: (repos.installed_repos ?? []).map((r) => r.repo_full_name),
+				installUrl: repos.install_url ?? ''
+			}
+		};
 	} catch (e) {
 		if (e instanceof ReposAuthError) return { kind: 'anon' };
 		return { kind: 'error', message: e instanceof Error ? e.message : 'account read failed' };

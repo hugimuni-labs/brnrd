@@ -315,114 +315,66 @@ def installed_shells(home) -> list[str]:
     return [shell for shell in body_order(home) if shutil.which(shell)]
 
 
-def keep_shell(home, found: dict | None = None) -> str | None:
-    """``spend.keep``, or the default body's shell when a burn list leaves it out."""
-    if found is None:
-        found = _preferences(home)[1]
-    named = found.get("spend.keep")
-    if isinstance(named, str) and named:
-        return named
-    burn = found.get("spend.burn")
-    if not isinstance(burn, list) or not burn:
-        return None
-    body = default_body(home)
-    if not body:
-        return None
-    shell = parse_body(body)[0]
-    if shell in burn:
-        return None
-    return shell
-
-
-def burn_marks(home) -> tuple[list[str], str | None] | None:
-    """``(burn shells, keep shell)`` when the fuel line should say so, else None.
-
-    None when one harness is installed, or ``spend.burn`` is missing or empty.
-    The count is what is installed here, not what the file names.
-    """
-    if len(installed_shells(home)) < 2:
-        return None
-    found = _preferences(home)[1]
-    burn = found.get("spend.burn")
-    if not isinstance(burn, list) or not burn:
-        return None
-    return list(burn), keep_shell(home, found)
-
-
-def spend_mode(home) -> str:
-    """``burn``, ``headroom``, or ``""`` for the briefing sentence.
-
-    One harness, or ``spend.burn = []``: nothing. A non-empty list: burn.
-    The key absent, with two or more harnesses: headroom.
-    """
-    if len(installed_shells(home)) < 2:
-        return ""
-    found = _preferences(home)[1]
-    if "spend.burn" not in found:
-        return "headroom"
-    burn = found["spend.burn"]
-    if isinstance(burn, list) and burn:
-        return "burn"
-    return ""
-
-
-def spend_usable(home, shell: str) -> bool:
-    """A handoff target: windows, no error, every window above the floor.
-
-    ``_can_run`` treats unknown fuel as runnable so a seat can still start.
-    A handoff skips a missing file, an empty gauge, and ``fails``.
-    """
+def _spend_readings(home, installed, candidates, reserved, now):
+    """Yield the current displayed windows for candidate engines above the floor."""
     import json
+
     from .config import load_config
-    from .usage import collector_failed, gauge_windows
-    path = home.root / "loom" / "usage" / f"{shell}.json"
-    try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return False
-    if collector_failed(payload):
-        return False
-    windows = gauge_windows(payload)
-    if not windows:
-        return False
+    from .usage import _past_reset, collector_failed, gauge_windows, week_pace
+
     floor = load_config(home.root).hold_floor_pct
-    return all(window["left_pct"] > floor for window in windows)
+    for shell in candidates:
+        if shell == reserved or shell not in installed:
+            continue
+        path = home.root / "loom" / "usage" / f"{shell}.json"
+        try:
+            value = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        windows = gauge_windows(value)
+        if not windows or collector_failed(value) or _past_reset(value, now):
+            continue
+        week = next((window for window in windows if window["name"] == "week"), None)
+        if week is None or week_pace(week, now) is None:
+            continue
+        if all(window["left_pct"] > floor for window in windows):
+            yield shell, windows
 
 
-def spend_choice(home, usable=None) -> str | None:
-    """The shell ``send --spend`` pins, or None when one harness is installed.
+def burn_fuel(home) -> tuple[str, float] | None:
+    """The first explicitly configured burn engine above its fuel floor."""
+    import time
 
-    ``usable(shell)`` defaults to :func:`spend_usable`. Missing or empty
-    ``spend.burn``, or no shell above the floor, raises ``ValueError``. The
-    refusal names the fuel line, and the thread is not opened. The core is
-    empty: the harness's own model.
-    """
+    preferences = _preferences(home)[1]
+    candidates = preferences.get("spend.burn", [])
+    if candidates:
+        for shell, windows in _spend_readings(
+            home, installed_shells(home), candidates, preferences.get("spend.keep"), time.time()
+        ):
+            return shell, min(window["left_pct"] for window in windows)
+    return None
+
+
+def spend_choice(home) -> str | None:
+    """Pin an eligible engine in spend order when there is a choice of engines."""
+    import time
+
+    from .idle import ahead, share_for
+    from .usage import fuels
+
     installed = installed_shells(home)
     if len(installed) < 2:
         return None
-    found = _preferences(home)[1]
-    if "spend.burn" not in found:
-        raise ValueError("send: --spend needs spend.burn in loom/preferences.toml")
-    burn = found["spend.burn"]
-    if not isinstance(burn, list) or not burn:
-        raise ValueError("send: spend.burn is empty, so --spend does not route")
-    keep = keep_shell(home, found)
-    have = set(installed)
-
-    def can(shell: str) -> bool:
-        if usable is None:
-            return spend_usable(home, shell)
-        return bool(usable(shell))
-
-    for shell in burn:
-        if shell == keep or shell not in have:
-            continue
-        if can(shell):
+    preferences = _preferences(home)[1]
+    candidates = preferences.get("spend.burn", installed)
+    now = time.time()
+    for shell, windows in _spend_readings(home, installed, candidates, preferences.get("spend.keep"), now):
+        if ahead({"windows": windows}, now, share=share_for(home, shell)):
             return shell
-    from .usage import fuels
-    line = fuels(home, burn[0])
+    line = fuels(home, installed[0])
     where = f" ({line})" if line else ""
-    raise ValueError(f"send: --spend found no burn shell installed and above the floor{where}")
+    raise ValueError(f"send: --spend found no eligible engine above the fuel floor "
+                     f"and ahead of its initiative pace{where}")
 
 
 def prefer(home, role: str, body: str | None) -> None:
@@ -454,13 +406,13 @@ def prefer(home, role: str, body: str | None) -> None:
 def resolve_body(home, facts, thread: str, default=("fake", "haiku"), text=None):
     """One precedence rule, with a readable receipt of the winning setting."""
     from .config import load_config
-    from .loom import _wake_choice
-    woken = _wake_choice(facts, thread)
+    from .loom import _continuation_choice, _wake_selection
+    woken = _wake_selection(facts, thread)
     if woken:
-        last = max((i for i, f in enumerate(facts) if f.kind == "lease" and f.data.get("thread") == thread), default=-1)
-        manual = any(f.kind == "letter.disposed" and any(d.get("thread") == thread and d.get("body")
-                     for d in f.data.get("dispositions", ())) for f in facts[last + 1:])
-        return *woken, "wake word" if manual else "quota recovery"
+        return woken
+    continued = _continuation_choice(facts, thread)
+    if continued:
+        return *continued, "continue command"
     if text is None:
         text = seat_text(home, thread)
     pinned = next((value for key, value in reversed(list(_entries(text))) if key == "body"), None)

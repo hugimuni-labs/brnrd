@@ -31,6 +31,8 @@
 	import { face, LIVE, LOG, moves, seen, waitOf, type Seen } from '../rail.ts';
 	import Column from './Column.svelte';
 	import Topics from './Topics.svelte';
+	import WorkViews from './WorkViews.svelte';
+	let workView = $state<'goals' | 'needs' | 'ready' | null>(null);
 	import Stack from './Stack.svelte';
 	import BeadSheet from './BeadSheet.svelte';
 	import Links from './Links.svelte';
@@ -83,9 +85,11 @@
 			first,
 			held: !!b.beadId || !!b.hovered,
 			now: Date.now(),
-			last
+			last,
+			partial: !!b.model?.partial
 		});
-		first = false;
+		// A cold paint's order is not the board's yet: the first whole model still places without waiting.
+		if (!b.model?.partial) first = false;
 		last = r.last;
 		if (r.ids.join() !== order.join()) order = r.ids;
 		if (r.wait != null && !timer) timer = setTimeout(() => ((timer = null), place()), r.wait);
@@ -116,7 +120,8 @@
 	});
 	$effect(() => {
 		const threads = b.model?.threads;
-		if (!threads) return;
+		// A cold paint is not a first look: threads still arriving did not move. The first whole model is the baseline.
+		if (!threads || b.model?.partial) return;
 		untrack(() => {
 			const now = seen(threads),
 				m = moves(prev, now, new Date().toISOString());
@@ -206,7 +211,9 @@
 				<span class="shell" data-shell={shell.shell} data-bar={bar?.window ?? ''}>
 					<span class="name">{shell.shell}</span>
 					{#if shell.gauges?.length}
-						<FuelMarks gauges={shell.gauges} now={fuelNow} />
+						<FuelMarks gauges={shell.gauges} now={fuelNow} share={shell.initiative_share} />
+					{:else if shell.state === 'unmetered' && !shell.error}
+						<span class="dim">unmetered</span>
 					{:else if shell.error}
 						<span class="fail">{shell.error}</span>
 					{/if}
@@ -245,64 +252,67 @@
 		>
 	</header>
 	{#if view === 'board'}
-		<div id="filters" role="group" aria-labelledby="filter-label">
-			<span id="filter-label">Show threads</span>
-			{#each BOARD_STATES as state (state)}
-				<button
-					type="button"
-					aria-label={`${STATE_LABEL[state]} ${counts[state]}`}
-					aria-describedby={`filter-description-${state}`}
-					title={stateDescription[state]}
-					aria-pressed={b.filters.has(state)}
-					onclick={() => b.filter(state)}
-				>
-					{STATE_LABEL[state]} <span>{counts[state]}</span>
-					<small id={`filter-description-${state}`}>{stateDescription[state]}</small>
-				</button>
-			{/each}
+		<WorkViews bind:view={workView} />
+		<div hidden={!!workView} class="board-columns">
+			<div id="filters" role="group" aria-labelledby="filter-label">
+				<span id="filter-label">Show threads</span>
+				{#each BOARD_STATES as state (state)}
+					<button
+						type="button"
+						aria-label={`${STATE_LABEL[state]} ${counts[state]}`}
+						aria-describedby={`filter-description-${state}`}
+						title={stateDescription[state]}
+						aria-pressed={b.filters.has(state)}
+						onclick={() => b.filter(state)}
+					>
+						{STATE_LABEL[state]} <span>{counts[state]}</span>
+						<small id={`filter-description-${state}`}>{stateDescription[state]}</small>
+					</button>
+				{/each}
+			</div>
+			<nav id="rail" aria-label="strands">
+				{#each rail as r (r.s.id)}<!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
+					<span
+						data-thread={r.t.id}
+						data-strand={r.s.id}
+						class:flash={flash.has(r.s.id)}
+						style:--h={hue(r.t.id)}
+						onclick={() => b.openBead(r.s.id)}
+						>{#if r.t.board?.state === 'seated'}<b class="pulse"></b>{/if}<i data-state={r.s.state}
+							>{face(b.model?.faces, r.s.state, tick)}</i
+						>
+						{r.t.id} · {r.s.id.slice(-6)} · {waitOf(r.t, r.s.state)}{#if r.lv}<em
+								data-since={r.lv.since}
+								>{` · ${r.lv.verb}${r.lv.since ? ' ' + dur(secs(r.lv.since, new Date(b.now).toISOString())) : ''}`}</em
+							>{#if r.lv.open[0]}{` · ${what(r.lv.open[0]).slice(0, 40)}`}{/if}{/if}</span
+					>{/each}{#each railLog as x, i (i)}<span class="log">{x}</span>{/each}
+			</nav>
+			<nav id="tabs" aria-label="columns">
+				{#each order as id (id)}<a
+						href="#{id}"
+						style:--h={hue(id)}
+						onclick={(e) => (
+							e.preventDefault(),
+							document
+								.querySelector(`[data-column="${CSS.escape(id)}"]`)
+								?.scrollIntoView({ inline: 'start', behavior: 'smooth' })
+						)}>{id === SETTLED ? STATE_LABEL.settled : id}</a
+					>{/each}
+			</nav>
+			<main id="board" bind:this={main} onscrollcapture={save}>
+				{#if !b.model}<div class="empty">{b.error || 'loading the board'}</div>{/if}
+				{#each order as id (id)}
+					{#if id === INBOX}<RenderScope name="Column"
+							><Column t={inbox} inbox letters={b.letters} /></RenderScope
+						>
+					{:else if id === SETTLED}<RenderScope name="Stack"><Stack {settled} {by} /></RenderScope>
+					{:else if byId.get(id)}<RenderScope name="Column"
+							><Column t={byId.get(id)!} letters={by.get(id) || []} /></RenderScope
+						>{/if}
+				{/each}
+			</main>
+			<RenderScope name="Links"><Links /></RenderScope>
 		</div>
-		<nav id="rail" aria-label="strands">
-			{#each rail as r (r.s.id)}<!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
-				<span
-					data-thread={r.t.id}
-					data-strand={r.s.id}
-					class:flash={flash.has(r.s.id)}
-					style:--h={hue(r.t.id)}
-					onclick={() => b.openBead(r.s.id)}
-					>{#if r.t.board?.state === 'seated'}<b class="pulse"></b>{/if}<i data-state={r.s.state}
-						>{face(b.model?.faces, r.s.state, tick)}</i
-					>
-					{r.t.id} · {r.s.id.slice(-6)} · {waitOf(r.t, r.s.state)}{#if r.lv}<em
-							data-since={r.lv.since}
-							>{` · ${r.lv.verb}${r.lv.since ? ' ' + dur(secs(r.lv.since, new Date(b.now).toISOString())) : ''}`}</em
-						>{#if r.lv.open[0]}{` · ${what(r.lv.open[0]).slice(0, 40)}`}{/if}{/if}</span
-				>{/each}{#each railLog as x, i (i)}<span class="log">{x}</span>{/each}
-		</nav>
-		<nav id="tabs" aria-label="columns">
-			{#each order as id (id)}<a
-					href="#{id}"
-					style:--h={hue(id)}
-					onclick={(e) => (
-						e.preventDefault(),
-						document
-							.querySelector(`[data-column="${CSS.escape(id)}"]`)
-							?.scrollIntoView({ inline: 'start', behavior: 'smooth' })
-					)}>{id === SETTLED ? STATE_LABEL.settled : id}</a
-				>{/each}
-		</nav>
-		<main id="board" bind:this={main} onscrollcapture={save}>
-			{#if !b.model}<div class="empty">{b.error || 'loading the board'}</div>{/if}
-			{#each order as id (id)}
-				{#if id === INBOX}<RenderScope name="Column"
-						><Column t={inbox} inbox letters={b.letters} /></RenderScope
-					>
-				{:else if id === SETTLED}<RenderScope name="Stack"><Stack {settled} {by} /></RenderScope>
-				{:else if byId.get(id)}<RenderScope name="Column"
-						><Column t={byId.get(id)!} letters={by.get(id) || []} /></RenderScope
-					>{/if}
-			{/each}
-		</main>
-		<RenderScope name="Links"><Links /></RenderScope>
 	{:else}
 		<main class="topics-page"><RenderScope name="Topics"><Topics /></RenderScope></main>
 	{/if}
@@ -328,3 +338,9 @@
 		{/if}
 	</footer>
 </div>
+
+<style>
+	.board-columns:not([hidden]) {
+		display: contents;
+	}
+</style>

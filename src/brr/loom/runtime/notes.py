@@ -1,6 +1,6 @@
 """Notes that open themselves: any note with a ``trigger:`` line is shown at the call that touches it.
 
-One mechanism for all memory (threads/judged-acts, his 11339): a scar, a
+One mechanism for all memory (threads/judged-acts, letter 11339): a scar, a
 library page, a person's page and a service note are all notes. A note is a
 markdown file on the self's main under ``memory/``, ``people/`` or
 ``library/``, or a product note in brnrd's ``limbs/``, with a ``trigger:``
@@ -28,17 +28,17 @@ time: a path one read away is the reflex that failed (the empty sends of
 A phrase that ends in ``:`` or ``/`` is a prefix: ``telegram:`` opens at
 ``telegram:155783668``.
 
-``hands.json`` is read, changed and replaced by every room with no lock: two
-rooms ending a call in the same instant can lose one line, which costs a
-stamp, never a call.
+Scar displays and their outcomes go to the separate append-only scar log.
 """
 
 from __future__ import annotations
 
+import fcntl
 import json
 import re
 import subprocess
 import time
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -46,6 +46,7 @@ ROOTS = ("memory/", "people/", "library/")
 PRODUCT = Path(__file__).resolve().parent / "hand_notes"
 CACHE = "notes.json"
 HANDS = "hands.json"
+SCAR_PREFIX = "memory/scars/"
 STALE = 30 * 86400
 # At most this many notes at one call: the rest open at a later call that names them.
 AT_ONCE = 5
@@ -178,42 +179,64 @@ def _hands_path(room: Path) -> Path:
     return home_of_room(Path(room)).root / "loom" / HANDS
 
 
-def hands(room: Path) -> dict:
+def _read_hands(path: Path) -> dict:
     try:
-        value = json.loads(_hands_path(room).read_text())
+        value = json.loads(path.read_text())
         return value if isinstance(value, dict) else {}
     except (OSError, ValueError):
         return {}
 
 
-def saw(room: Path, payload: dict, failed: bool, why: str = "") -> str | None:
-    """At a marked call's end: when it worked or blocked, per program or host. Returns the key."""
+def hands(room: Path) -> dict:
+    return _read_hands(_hands_path(room))
+
+
+@contextmanager
+def _edit_hands(path: Path):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.with_suffix(".lock").open("a") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        record = _read_hands(path)
+        yield record
+        tmp = path.with_suffix(".tmp")
+        tmp.write_text(json.dumps(record, sort_keys=True) + "\n")
+        tmp.replace(path)
+
+
+def _hand_key(payload: dict) -> str | None:
     from . import mark
     if payload.get("tool_name") == "Bash":
         command = str((payload.get("tool_input") or {}).get("command") or "")
         if mark.shell_mark(command) is None:
             return None
         found = mark._ASSIGN.search(command.split("<<", 1)[0])
-        key = mark.program(command[found.end():] if found else command)
-    elif payload.get("tool_name") == "WebFetch":
-        key = mark.host(str((payload.get("tool_input") or {}).get("url") or ""))
-    else:
-        return None
+        return mark.program(command[found.end():] if found else command)
+    if payload.get("tool_name") == "WebFetch":
+        return mark.host(str((payload.get("tool_input") or {}).get("url") or ""))
+    return None
+
+
+def saw(room: Path, payload: dict, failed: bool, why: str = "") -> str | None:
+    """Record a marked hand's stamp and the outcome of any scars shown for this call."""
+    from .scar_log import record_outcome
+
+    try:
+        record_outcome(room, payload, failed, why)
+    except OSError:
+        pass  # A missed scar outcome still leaves the hand stamp.
+
+    key = _hand_key(payload)
     if not key:
         return None
-    path = _hands_path(room)
-    record = hands(room)
-    entry = record.setdefault(key, {})
-    now = time.time()
-    if failed:
-        entry.update(blocked=now, why=why[:200], by=Path(room).name)
-    else:
-        entry["worked"] = now
     try:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        tmp = path.with_name(path.name + ".tmp")
-        tmp.write_text(json.dumps(record, sort_keys=True) + "\n")
-        tmp.replace(path)
+        with _edit_hands(_hands_path(room)) as record:
+            record.pop("/scar-displays", None)  # Discard history from the earlier writer.
+            entry = record.setdefault(key, {})
+            now = time.time()
+            if failed:
+                entry.update(blocked=now, why=why[:200], by=room.name)
+            else:
+                entry["worked"] = now
     except OSError:
         return None
     return key
@@ -253,7 +276,7 @@ def shown_at(room: Path, payload: dict, already: set[str]) -> tuple[str, list[st
         where = note.path if note.path.startswith("brnrd:") else f"self/{note.path}"
         said = stamp(note, record)
         lines.append(f"note ({phrase}): {where}: {note.head}" + (f" [{said}]" if said else ""))
-        if note.path.startswith("memory/scars/"):
+        if note.path.startswith(SCAR_PREFIX):
             lines.extend("  " + ln for ln in scar_text(room, note.path))
     return "\n".join(lines), [n.path for n, _ in found]
 

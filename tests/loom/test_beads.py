@@ -149,7 +149,7 @@ def test_every_root_kind_through_its_writer_and_nothing_dangles(ledger):
     commit(home.root / "self", "opened for")
     reincarnate = land(write_send(seat, to="thread:work", sender="s-aaaa-test", body="handover",
                            reincarnate="s-aaaa-test/abcde"))
-    up = [("s-aaaa-test", "reincarnate"), ("thread:work", "thread"), (wish, "opened-for")]
+    up = [("s-aaaa-test", "molt"), ("thread:work", "thread"), (wish, "opened-for")]
     assert walk(reincarnate) == (up, "unconfirmed")
     agreed = cli(["wish", wish, "--room", str(seat), "--accept", "word", "--ref", said])
     assert agreed.returncode == 0, agreed.stderr

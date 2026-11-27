@@ -5,7 +5,6 @@ from __future__ import annotations
 import argparse
 import json
 import os
-import re
 import subprocess
 import sys
 import time
@@ -16,7 +15,6 @@ from .port import _HEADER, LetterView, parse_boundary
 
 CALLS = 15
 TOOL_S = 0.2
-_THREAD = re.compile(r"on thread ([A-Za-z0-9._-]+)")
 
 
 def _letters(text: str) -> list[LetterView]:
@@ -55,6 +53,10 @@ class Ctx:
     def __init__(self, room: Path):
         self.room = Path(room)
         self.env = os.environ.copy()
+
+    @property
+    def thread(self) -> str:
+        return self.env["BRNRD_THREAD"]
 
     def wake(self) -> str:
         return (self.room / "port" / "wake.md").read_text()
@@ -114,13 +116,6 @@ class Ctx:
             handle.write(json.dumps(payload, sort_keys=True) + "\n")
 
 
-def _own_thread(wake: str) -> str:
-    match = _THREAD.search(wake)
-    if match is None:
-        raise RuntimeError("wake does not name the thread")
-    return match.group(1)
-
-
 def _target(wake: str) -> str:
     for line in wake.splitlines():
         if line.startswith("target:"):
@@ -131,7 +126,7 @@ def _target(wake: str) -> str:
 def answer_pings(ctx: Ctx) -> None:
     """Fifteen tool calls. A ping seen on one beat is answered on the next, so a kill can land between."""
     answered: set[str] = set()
-    own = _own_thread(ctx.wake())
+    own = ctx.thread
 
     def consume(letters: list[LetterView]) -> None:
         for letter in letters:
@@ -163,7 +158,7 @@ def answer_pings(ctx: Ctx) -> None:
 def ping_two(ctx: Ctx) -> None:
     wake = ctx.wake()
     target = _target(wake)
-    own = _own_thread(wake)
+    own = ctx.thread
     openers = [letter for letter in ctx.owed()
                if not letter.body.strip().startswith("ping-")]
     for letter in openers:
@@ -221,7 +216,7 @@ def hold(ctx: Ctx) -> None:
 
 def answer_fast(ctx: Ctx) -> None:
     """Answer every owed letter once, then stop."""
-    own = _own_thread(ctx.wake())
+    own = ctx.thread
     seen: set[str] = set()
     letters = ctx.owed()
     for letter in letters:
@@ -234,7 +229,7 @@ def answer_fast(ctx: Ctx) -> None:
 
 def emit_channel(ctx: Ctx) -> None:
     """Ten letters to the fake channel, then hold. A kill can land in the middle."""
-    own = _own_thread(ctx.wake())
+    own = ctx.thread
     for letter in ctx.owed():
         ctx.send(f"thread:{own}", note="opener", re=letter.id)
     for n in range(10):
@@ -246,7 +241,7 @@ def emit_channel(ctx: Ctx) -> None:
 
 def die_on_unrunnable(ctx: Ctx) -> None:
     """Die after being shown a letter whose body is ``unrunnable``. Answer the rest."""
-    own = _own_thread(ctx.wake())
+    own = ctx.thread
     letters = ctx.jack("start").letters
     if any(letter.body.strip() == "unrunnable" for letter in letters):
         raise SystemExit(1)

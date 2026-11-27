@@ -2,8 +2,15 @@
 // thread, and beads. Shapes follow board.py; fields the board does not read are left out.
 
 export type Stamp = { stamp: string; at: string; ref?: string; line?: string; by?: string };
-export type Verdict = { as: string; at: string; evidence?: string; ref?: string };
+export type Verdict = {
+	as: string;
+	at: string;
+	evidence?: string;
+	ref?: string;
+	delivery_id?: string;
+};
 export type Result = {
+	delivery_id?: string;
 	ref?: string;
 	kind?: string;
 	line?: string;
@@ -48,14 +55,21 @@ export type Letter = {
 	pendingNote?: boolean;
 	wish?: string;
 	verdict?: string;
+	delivery_id?: string;
 };
 
 export type Call = {
 	kind: 'ask' | 'verdict';
+	delivery_id?: string;
 	wish: string;
 	line: string;
 	at: string;
 	waits?: string;
+	parent?: string;
+	// What the answer holds up, and the work that keeps moving meanwhile (board.py calls_of).
+	blocks?: string;
+	meanwhile?: { wish: string; line: string; state: string }[];
+	next?: string;
 	ref?: string;
 	result?: string;
 	stale?: boolean;
@@ -74,6 +88,8 @@ export type Thread = {
 	url?: string;
 	opened_at?: string;
 	last_at?: string;
+	// the newest letter's time, on the index row, so the column order needs no thread part
+	letter_at?: string;
 	opened_for?: { wish: string }[];
 	strands?: Strand[];
 	steps?: Step[];
@@ -115,7 +131,13 @@ export type Live = {
 };
 
 export type Gauge = { window: string; left_pct: number; resets_at?: string };
-export type Fuel = { shell: string; gauges: Gauge[]; error?: string };
+export type Fuel = {
+	shell: string;
+	gauges: Gauge[];
+	state?: string;
+	error?: string;
+	initiative_share?: number;
+};
 
 export type Machine = {
 	id: string;
@@ -126,7 +148,32 @@ export type Machine = {
 	seen?: string;
 };
 
+export type GoalAsk = { wish: string; line: string; blocks: string; waits: string; at: string };
+export type GoalDelivery = {
+	wish: string;
+	line: string;
+	ref?: string;
+	delivery_id?: string;
+	at: string;
+};
+// Prose from the goal file; the rest is read from the wishes linked to it (wish --goal).
+export type Goal = {
+	id: string;
+	stands: string;
+	next: string;
+	now: string;
+	stake: string;
+	progress?: Record<string, number>;
+	asks?: GoalAsk[];
+	move?: { wish: string; step: string };
+	blocked?: boolean;
+	delivery?: GoalDelivery;
+	moved?: string;
+	stalled?: boolean;
+};
+
 export type Index = {
+	goals?: Goal[];
 	v: number;
 	threads: Thread[];
 	fuel?: Fuel[];
@@ -167,6 +214,9 @@ export type ThreadPart = Partial<Thread> & {
 
 // What the board reads at once, assembled from the parts (parts.ts).
 export type Model = {
+	// Painted from a cold sync before its last part arrived: some threads are still missing.
+	partial?: boolean;
+	goals?: Goal[];
 	threads: Thread[];
 	letters: Letter[];
 	byId: Map<string, Letter>;

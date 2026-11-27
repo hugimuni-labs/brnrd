@@ -534,11 +534,33 @@ def _body_line(home: Path | None) -> str:
     return f"body: {choice}" if choice else "body: unset"
 
 
+def _board_line(home: Path | None) -> str:
+    """The local board's URL, or how to turn it on; a configured port that does not answer says so."""
+    if home is None:
+        return "board: -"
+    from .config import ConfigError
+    from .connectors.web.common import link
+    try:
+        port = load_config(home).board_port
+    except ConfigError:
+        return "board: unavailable (invalid config)"
+    if not port or not str(port).isdigit():
+        return f"board: off (turn on: {WEB_SETUP})"
+    import socket
+    url = link(int(port))
+    try:
+        socket.create_connection(("127.0.0.1", int(port)), timeout=0.5).close()
+    except OSError:
+        return f"board: {url} (not answering)"
+    return f"board: {url}"
+
+
 def _print_status(*, state: str, pid: int | None, home: Path | None) -> None:
     print(f"state: {state}")
     print(f"pid: {pid if pid else '-'}")
     print(f"home: {home if home else '-'}")
     print(_body_line(home))
+    print(_board_line(home))
     from .memory import held
     hold = held(home)
     if hold:
@@ -842,17 +864,36 @@ def cmd_config(argv: list[str]) -> int:
 
 
 def _config(argv: list[str]) -> int:
-    """``brnrd loom config [--home H]``: every key, its effective value, source, help."""
-    from .config import ConfigError, _render_value, describe_config
+    """``brnrd runtime config [--home H]``: every key, or ``set KEY VALUE``, or ``edit``."""
+    from .config import ConfigError, _literal, _render_value, describe_config, set_value
 
-    parser = argparse.ArgumentParser(prog="brnrd loom config")
+    parser = argparse.ArgumentParser(prog="brnrd runtime config")
     parser.add_argument("--home", default=None)
-    parser.add_argument("action", nargs="?", choices=("edit",), help="edit and validate the config")
-    args = parser.parse_args(argv)
+    parser.add_argument("action", nargs="?", choices=("edit", "set"),
+                        help="edit the file, or set one key")
+    parser.add_argument("key", nargs="?")
+    parser.add_argument("value", nargs="?")
+    # A negative share is a value, not a flag: ``set initiative_share -1``.
+    args, extra = parser.parse_known_args(argv)
+    if extra and args.action == "set" and args.value is None and len(extra) == 1:
+        args.value = extra[0]
+        extra = []
+    if extra:
+        parser.error("unrecognized arguments: " + " ".join(extra))
     home, _ = _service_home(args.home)
     if args.action == "edit":
         from .config_edit import edit_config
         return edit_config(home)
+    if args.action == "set":
+        if args.key is None or args.value is None:
+            parser.error("set needs a key and a value")
+        try:
+            set_value(home, args.key, _literal(args.value))
+        except ConfigError as exc:
+            print(str(exc), file=sys.stderr)
+            return 1
+        print(f"{args.key} = {_render_value(_literal(args.value))}")
+        return 0
     try:
         rows = describe_config(home)
     except ConfigError as exc:
@@ -909,10 +950,12 @@ def _uninstall(*, run, agents_home, system) -> int:
     return 0
 
 
+WEB_SETUP = "brnrd setup channel --kind web --wait 0"
+
 LOOM_USAGE = (
-    "usage: brnrd loom install [--home PATH] [--no-start] [--dry-run] [--dev] | uninstall | start | stop | restart | status | logs | where | config [edit] | check\n"
+    "usage: brnrd loom install [--home PATH] [--no-start] [--dry-run] [--dev] | uninstall | start | stop | restart | status | logs | where | config [edit | set KEY VALUE] | check\n"
     "\n"
-    "Local board: brnrd setup channel --kind web --wait 0\n"
+    f"Local board: {WEB_SETUP}\n"
     "Enables the loopback page, prints its URL and starts the loom.\n\n"
     "The loom is the service brnrd's resident runs on. A body's own verbs\n"
     "(send, wish, ask, settle, send-self, ...) are `brnrd runtime --help`."

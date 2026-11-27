@@ -154,6 +154,7 @@ def thread_table(home: Home, facts: list, opened_by: str | None = None) -> list[
             shell = latest.data['shell']
             seat = body_label(shell, latest.data.get('core', ''))
         last = activity.get(thread, created)
+        rest = ''
         if data['status'] in CLOSED:
             count = len(axes[thread]['letters'])
             if axes[thread]['cause'] == 'stopped':
@@ -173,6 +174,9 @@ def thread_table(home: Home, facts: list, opened_by: str | None = None) -> list[
                 jack, recent = {}, boundary.get(strand, 0)
             if not count or jack.get('stop_blocks'):
                 value = 'holding'
+                if jack.get('held_at'):
+                    from .jack import rest_reason
+                    rest = rest_reason(jack, state.holder[thread][1])
                 from .usage import fuel
                 if shell not in tanks:
                     tanks[shell] = fuel(home, shell) if shell else ''
@@ -189,7 +193,7 @@ def thread_table(home: Home, facts: list, opened_by: str | None = None) -> list[
             value = 'idle ' + _age(now - last) if cause == 'idle' else cause
         rows.append({'thread': thread, 'seat': seat, 'now': value, 'owed': count, 'unanswered': len(unanswered.get(thread, ())),
                      'opened-by': data.get('opened-by') or '—', 'opened-for': why, 'plan': plan_word(told, thread),
-                     'status': data['status'], **{k: axes[thread][k] for k in ('owed-by', 'restart', 'control')},
+                     'status': data['status'], 'rest': rest, **{k: axes[thread][k] for k in ('owed-by', 'restart', 'control')},
                      'receipts': '; '.join(r.line() for r in shipped.get(thread, ())) or '—',
                      'prs': [card for r in shipped.get(thread, ()) if not r.merge_commit
                              and (card := pr_word(r.number, cards.get(f'{r.repo}#{r.number}'), now))],

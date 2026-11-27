@@ -28,11 +28,11 @@ def test_killed_body_bounce_reaches_author_and_recovers_room(tmp_path, commits, 
     received = root / 'author-received.json'
     bodies(root, f'''import json, os, re, shlex, subprocess, sys, time
 from pathlib import Path
-from brr.loom.runtime.fakebody import Ctx, _own_thread
+from brr.loom.runtime.fakebody import Ctx
 from brr.loom.runtime.home import atomic_write
 from brr.loom.runtime.selfrepo import git
 ctx = Ctx(Path(sys.argv[1]))
-own = _own_thread(ctx.wake())
+own = ctx.thread
 letters = ctx.owed()
 if own == 'worker' and any(l.body.startswith('Keep this work') for l in letters):
     clone = ctx.room / 'self'

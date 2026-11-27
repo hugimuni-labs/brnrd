@@ -2510,14 +2510,14 @@ def test_github_sync_refuses_an_expired_session_cookie(monkeypatch):
     # about expiry and not about the cookie never having been accepted.
     r = client.post("/api/github/sync", follow_redirects=False)
     assert r.status_code == 303
-    assert r.headers["location"] == "/repos?notice=github-synced"
+    assert r.headers["location"] == "/account?notice=github-synced#github"
     assert len(synced) == 1
 
     _expire_sessions(app, account_id)
 
     r = client.post("/api/github/sync", follow_redirects=False)
     assert r.status_code == 303
-    assert r.headers["location"] == "/login?next=/repos", "expired cookie still authenticated"
+    assert r.headers["location"] == "/login?next=/account", "expired cookie still authenticated"
     assert len(synced) == 1, "sync ran for an expired session"
 
 
@@ -2684,7 +2684,7 @@ def test_github_sync_notice_refuses_all_skipped_installations(monkeypatch):
     response = client.post("/api/github/sync", follow_redirects=False)
 
     assert response.status_code == 303
-    assert response.headers["location"] == "/repos?notice=github-sync-refused"
+    assert response.headers["location"] == "/account?notice=github-sync-refused#github"
 
 
 def test_github_setup_does_not_attribute_an_install_to_an_expired_session(monkeypatch):
@@ -2726,7 +2726,7 @@ def test_github_setup_lands_on_repos_not_the_bare_dashboard(monkeypatch):
 
     assert r.status_code == 303
     location = r.headers["location"]
-    assert location.startswith("/repos?"), location
+    assert location.startswith("/account?") and location.endswith("#github"), location
     assert "notice=github-synced" in location
     assert "installation_id=42" in location
     # setup_action is read by nobody downstream (grep -rn setup_action over
@@ -2766,7 +2766,7 @@ def test_github_setup_classifies_a_pending_admin_approval(monkeypatch):
 
     assert r.status_code == 303
     location = r.headers["location"]
-    assert location.startswith("/repos?"), location
+    assert location.startswith("/account?") and location.endswith("#github"), location
     assert "notice=github-install-requested" in location
     assert synced == [], "a pending-approval request must not run a sync"
 
@@ -2824,7 +2824,7 @@ def test_github_setup_refuses_an_unproven_installation(
     )
 
     assert response.status_code == 303
-    assert response.headers["location"].endswith("notice=github-sync-refused")
+    assert response.headers["location"].endswith("notice=github-sync-refused#github")
     assert attached == []
 
 

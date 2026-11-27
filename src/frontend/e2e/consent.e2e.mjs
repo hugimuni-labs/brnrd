@@ -19,6 +19,12 @@ test('a loom never asked: the prompt names what is sent, and a yes waits for the
 		assert.match(text, /Show your board here\?/);
 		assert.match(text, /letter text/);
 		assert.match(text, /head of a command up to 120 characters, secrets masked/);
+		// The act reads as one on /account: a labelled button with a visible border (letter 11758).
+		const yes = B.page.getByRole('button', { name: 'Turn on board sharing' });
+		assert.notEqual(
+			await yes.evaluate((b) => getComputedStyle(b).borderTopColor),
+			'rgba(0, 0, 0, 0)'
+		);
 		assert.equal(new URL(B.page.url()).pathname, '/account');
 		await B.page.locator('button.yes').click();
 		await B.page.waitForSelector('[data-consent="waiting"]');
@@ -41,7 +47,7 @@ test('not now: a plain page with a way back, and nothing of the old app', async 
 		assert.match(await B.page.locator('[data-consent]').innerText(), /nothing is sent now/);
 		await B.page.reload();
 		await B.page.waitForSelector('[data-consent="declined"]');
-		assert.equal(await B.page.locator('button.yes').innerText(), 'Send my board after all');
+		assert.equal(await B.page.locator('button.yes').innerText(), 'Turn on board sharing');
 		assert.equal(new URL(B.page.url()).pathname, '/account');
 		assert.deepEqual(oldApp(B), []);
 		assert.deepEqual(B.errors, []);

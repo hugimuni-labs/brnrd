@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import json
 import os
+import shlex
 import sys
 from brr.loom.runtime.adapters import codex_model
 from brr.loom.runtime.port import wake_parts
@@ -14,7 +15,25 @@ system = ["-c", "developer_instructions=" + json.dumps(core_text, ensure_ascii=F
 # carries it over from their codex config, or leaves codex its default.
 core = core or codex_model()
 model = ["--model", core] if core else []
+
+
+def hook(event, timeout):
+    # Same jack line Claude writes. Codex parses the value as TOML, so a
+    # path with a quote or a backslash is escaped inside the command string.
+    command = shlex.quote(os.environ["BRNRD_JACK"]) + " --event " + event
+    escaped = command.replace("\\", "\\\\").replace('"', '\\"')
+    name = {"start": "SessionStart", "pre": "PreToolUse", "post": "PostToolUse", "stop": "Stop"}[event]
+    value = (
+        '[{hooks=[{type="command",command="' + escaped
+        + '",timeout=' + str(int(timeout)) + '}]}]'
+    )
+    return ["-c", f"hooks.{name}=" + value]
+
+
+stop = int(os.environ.get("BRNRD_STOP_TIMEOUT") or float(os.environ["BRNRD_WAIT"]) + 60)
+hooks = [*hook("start", 60), *hook("pre", 60), *hook("post", 60), *hook("stop", stop)]
 os.execvp("codex", ["codex", "exec", "--ignore-user-config", *model,
-                    "--dangerously-bypass-approvals-and-sandbox", "--json",
-                    "-c", 'shell_environment_policy.inherit="all"', *system, "--",
+                    "--dangerously-bypass-approvals-and-sandbox",
+                    "--dangerously-bypass-hook-trust", "--json",
+                    "-c", 'shell_environment_policy.inherit="all"', *system, *hooks, "--",
                     occasion])

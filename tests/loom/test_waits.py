@@ -13,6 +13,18 @@ from test_wishes import command, heard, ledger, view  # noqa: F401  (ledger is a
 REPO = "hugimuni-labs/brnrd"
 
 
+def test_rest_names_only_the_two_nearest_parks():
+    parks = [(None, {"wait": wait}) for wait in (
+        {"on": f"pr:{REPO}#7", "until": "2026-11-23T10:00:00Z"},
+        {"on": "cond:memory"},
+        {"on": "at:2026-11-23T09:00:00Z"},
+        {"on": "file:/room/tmp/check", "until": "2026-11-23T09:30:00Z"},
+    )]
+    assert waits.rest_parks(parks) == [
+        "2026-11-23 09:00Z", "the result in check (2 more parks)",
+    ]
+
+
 def test_indexed_observer_skips_unchanged_and_resolved_parks(ledger, monkeypatch):
     from brr.loom.runtime.ledger import LedgerView
     home, seat = ledger
@@ -209,7 +221,7 @@ def test_a_wish_wait_resolves_on_a_settled_state_or_a_citing_letter(ledger):
                                        "--wait", "wish:w-nope", ok=False)
     command(home, seat, "wish", target, "--read", "Reading it")
     assert told(home) == [], "a reading is not an outcome"
-    command(home, seat, "wish", target, "--drop", "not needed")
+    command(home, seat, "wish", target, "--drop", "not needed", "--force")
     [letter] = told(home)
     assert f"{target} is dropped" in letter.data["body"]
     # The second park on a fresh target resolves when a letter cites it.
@@ -228,6 +240,40 @@ def test_a_wish_wait_resolves_on_a_settled_state_or_a_citing_letter(ledger):
         "id": "s-aaaa-test/progress", "to": "thread:inbox", "from": "s-aaaa-test",
         "body": f"&{third} halfway there", "links": [third]}))
     assert told(home) == []
+
+
+@pytest.mark.parametrize("case", ["refused", "force", "no_waiter", "resolved"])
+def test_drop_checks_open_waits_on_the_target(ledger, case):
+    home, seat = ledger
+    waiter = heard(home, seat, "Waiter")
+    target = heard(home, seat, "Target")
+    park(home, seat, waiter, "--wait", f"wish:{target}")
+
+    # Establish the open dependency before exercising each allowed drop.
+    message = command(home, seat, "wish", target, "--drop", "stop", ok=False)
+    assert message.splitlines() == [
+        f'{waiter} · thread:work · "waiting: the merge"',
+        "Write to the waiting thread(s) first, or pass --force.",
+    ]
+    assert view(home, target).open
+
+    if case == "refused":
+        return
+    flags = ()
+    if case == "force":
+        flags = ("--force",)
+    elif case == "no_waiter":
+        target = heard(home, seat, "Unrelated wish")
+    else:
+        append(home, Fact(kind="letter", by="person:p-test", id="p-test/drop-answer", data={
+            "id": "p-test/drop-answer", "to": "thread:work", "from": "p-test",
+            "body": "Answered", "links": [target],
+        }))
+        [notice] = told(home)
+        assert f"{target} was answered by" in notice.data["body"]
+
+    command(home, seat, "wish", target, "--drop", "stop", *flags)
+    assert view(home, target).state == "dropped"
 
 
 def test_letter_and_at_waits(ledger):
@@ -284,6 +330,10 @@ def test_a_result_or_a_new_reading_ends_the_wait(ledger):
     command(home, seat, "wish", ident, "--result", "pr:https://example.com/1", "--line", "Done")
     assert told(home, now=later(hours=2)) == []
 
+    park(home, seat, ident, "--wait", "at:+1h")
+    command(home, seat, "wish", ident, "--clear-wait")
+    assert told(home, now=later(hours=2)) == []
+
 
 def test_wait_flags_need_a_park_and_a_known_grammar(ledger):
     home, seat = ledger
@@ -309,8 +359,8 @@ def test_ask_default_at_parks_the_parent_and_wakes_it_with_the_rec(ledger):
     assert "nobody answered" in letter.data["body"] and "Your rec was: Call it loom" in letter.data["body"]
 
 
-def test_the_loop_polls_the_forge_and_its_notice_wakes_the_parked_thread(tmp_path, monkeypatch):
-    """A body parks on a PR; the Watcher reads it merged; the loom's letter starts a body again."""
+def test_a_pr_wait_outlives_reincarnation_and_wakes_the_thread(tmp_path, monkeypatch):
+    """Drive the CLI, jack, and loom across reincarnation and a forge resolution."""
     import json
     from brr.loom.runtime.project import holder
     from brr.loom.runtime.selfrepo import init_self
@@ -343,27 +393,42 @@ def verb(*args):
                           capture_output=True, text=True)
     assert proc.returncode == 0, proc.stderr
     return proc.stdout.strip()
+wake = ctx.wake() + (ctx.room / "port/in/boundary.md").read_text()
+if "carry the PR wait" in wake:
+    atomic_write(Path({str(root / "successor")!r}), wake)
 for letter in ctx.owed():
     if letter.body == "begin":
         wish = verb("wish", "new", "--line", "Ship it", "--say", letter.id)
         verb("wish", wish, "--read", "waiting: the merge", "--wait", "pr:{REPO}#5")
         atomic_write(Path({str(root / "parked")!r}), wish)
-    else:
-        atomic_write(Path({str(root / "woken")!r}), json.dumps({{"id": letter.id, "body": letter.body}}))
+        ctx.send("thread:work", note="waiting for the merge", re=letter.id)
+        ctx.reincarnate("carry the PR wait")
+        assert ctx.jack("stop").raw == ""
+        break
+    if letter.id.startswith("loom/wait-"):
+        atomic_write(Path({str(root / "woken")!r}), json.dumps({{"id": letter.id, "body": letter.body, "wake": wake}}))
     ctx.send("thread:work", note="read", re=letter.id)
 ''')
     inject_letter(root, to="thread:work", body="begin")
     loom = Loom(root)
     loom.start()
     try:
-        wait_until((root / "parked").exists, 20, loom.dump)
-        wait_until(lambda: holder(loom.facts(), "work") is None, 20, loom.dump)
+        wait_until((root / "successor").exists, 60, loom.dump)
+        wish = (root / "parked").read_text()
+        waiting = f"waiting: {wish} on pr:{REPO}#5 since "
+        successor = (root / "successor").read_text()
+        assert waiting in successor
+        next_wake = f"wakes at: pull request {REPO}#5"
+        assert next_wake in successor
+        assert any(f.kind == "attempt.ended" and f.data["cause"] == "reincarnated" for f in loom.facts())
+        wait_until(lambda: holder(loom.facts(), "work") is None, 60, loom.dump)
         wait_until(lambda: polled, 10, loom.dump)
         assert not (root / "woken").exists(), "an open PR wakes nobody"
         state.update(state="merged", at="2026-10-27T12:00:00Z")
-        wait_until((root / "woken").exists, 20, loom.dump)
+        wait_until((root / "woken").exists, 60, loom.dump)
         woken = json.loads((root / "woken").read_text())
-        wish = (root / "parked").read_text()
+        assert waiting not in woken["wake"]
+        assert next_wake not in woken["wake"]
         assert woken["id"].startswith("loom/wait-")
         assert f"wait on {wish} resolved: pr:{REPO}#5 merged" in woken["body"]
     finally:
@@ -573,6 +638,7 @@ def test_a_wait_wakes_the_thread_that_parked_not_the_wishs(ledger):
     ident = command(home, seat, "wish", "new", "--line", "Ship other", "--say", letter, "--thread", "other")
     parked = cli(["wish", ident, "--room", str(seat), "--read", "waiting: the merge", "--wait", f"pr:{REPO}#12"])
     assert parked.returncode == 0, parked.stderr
+    assert view(home, ident).reads[-1]["wait"]["thread"] == "work"
     assert f"parked: wakes thread:work when pr:{REPO}#12 resolves" in parked.stderr
     append(home, Fact(kind="pr.opened", by="strand:s-aaaa-test", data={
         "thread": "work", "repo": "brnrd", "number": 12, "head": "loom/x",

@@ -773,21 +773,24 @@ def test_metrics_counts_first_paid_invoice_and_excludes_renewals():
     from brnrd.models import Account, BillingLedgerEntry
     from brnrd.routers.accounts import issue_session_token
 
-    client = _client(admin_github_logins=("octocat",))
-    account_id = _account_id(client, _account(client))
+    client = _client(admin_github_logins=("reader",))
+    _account(client, github_id="1", login="reader")
+    _account(client, github_id="2", login="payer")
+    account_id = _account_id_for(client, "2")
     with client.app.state.SessionLocal() as db:
-        token = issue_session_token(db, db.get(Account, account_id))
+        token = issue_session_token(db, db.get(Account, _account_id_for(client, "1")))
     client.cookies.set("brnrd_session", token)
 
     today = dt.datetime.now(dt.timezone.utc).date()
     assert _post_event(client, _subscription_event(account_id)).json()["disposition"] == "subscription-created"
-    unpaid_row = f"<th scope='row'>{today}</th><td>0</td><td>1</td><td>0</td><td>0</td><td>0</td>"
+    # Landing | /hi | signups (payer; the operator is left out) | downloads | connected | day 3 | paid
+    unpaid_row = f"<th scope='row'>{today}</th><td>0</td><td>0</td><td>1</td><td>0</td><td>0</td><td>0</td><td>0</td>"
     assert unpaid_row in client.get("/metrics").text
 
     first_invoice = _invoice_paid_event(account_id)
     assert _post_event(client, first_invoice).json()["disposition"] == "grant-issued"
     assert _post_event(client, first_invoice).json()["disposition"] == "duplicate"
-    paid_row = f"<th scope='row'>{today}</th><td>0</td><td>1</td><td>0</td><td>0</td><td>1</td>"
+    paid_row = f"<th scope='row'>{today}</th><td>0</td><td>0</td><td>1</td><td>0</td><td>0</td><td>0</td><td>1</td>"
     assert paid_row in client.get("/metrics").text
 
     # A first payment outside the window still disqualifies an in-window renewal.

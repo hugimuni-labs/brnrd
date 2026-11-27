@@ -7,14 +7,18 @@ import sys
 
 VERBS = {
     "audit": ("audit", "main"),
+    "scars": ("scars", "main"),
     "where": ("service", "cmd_where"),
     "config": ("service", "cmd_config"),
     "loom": ("verbs_loom", "_loom"),
     "send": ("verbs_loom", "_send"),
     "settle": ("verbs_loom", "_settle"),
-    "reincarnate": ("verbs_loom", "_reincarnate"),
+    "molt": ("verbs_loom", "_molt"),
     "hold": ("verbs_loom", "_hold"),
+    "rest": ("verbs_loom", "_rest"),
     "jack": ("verbs_loom", "_jack"),
+    "attend": ("attend", "main"),
+    "letter-wait": ("letter_wait", "main"),
     "resume": ("verbs_loom", "_resume"),
     "drop": ("verbs_loom", "_drop"),
     "wish": ("verbs_wishes", "_wish"),
@@ -44,13 +48,15 @@ VERBS = {
 # One line per verb for ``brnrd runtime --help``; a verb's own ``--help`` has the rest.
 SUMMARY = {
     "audit": "verify the local record-only tool journal",
+    "scars": "scar displays and failures over the last seven days",
     "send": "send a letter: a reply (--re), a note, a new thread, a timer (--at)",
     "wish": "what is left on a wish (--left), its result, a park (--wait)",
     "ask": "ask a person for a decision or an act, --for the wish it unblocks",
     "recall": "the topic pages (with heads) and threads closest to some words",
     "settle": "close a thread whose work is done",
-    "reincarnate": "hand the seat to a successor",
+    "molt": "end the context and carry a file across",
     "hold": "keep the seat past the context mark, naming what would die",
+    "rest": "give a reason to rest with runnable work",
     "send-self": "land this room's self commits on main",
     "publish": "push a project branch and record its pull request",
     "update": "take an offered code update, or hold it with --why",
@@ -63,18 +69,20 @@ SUMMARY = {
     "face": "wear, change or drop a face",
     "machines": "the machines this home runs on",
     "where": "where the home, rooms and self are",
-    "config": "show or edit the home config",
+    "config": "show, set or edit the home config",
     "resume": "resume a paused tool child",
     "drop": "give up on a paused tool child",
     "init": "create a home and its self",
     "wake": "print the wake a room's body would get",
-    "gauge": "the wake gauge: boots, spend, wake size, reads before a first line (--days 7)",
+    "gauge": "the wake gauge: boots, spend, wake size, reads before a first line, molt cost (--days 7)",
     "trust": "the two trust numbers: irreversible acts without a grant, took-rec per ask kind (--days 14)",
     "forge-token": "print the forge token bodies use",
     "mark": 'a one-shot mark for the next MCP call: mark "change · what · for · back"',
     "reap": "remove a finished strand's room",
     "loom": "the loom process itself (loom machinery)",
     "jack": "a body's hook (loom machinery)",
+    "attend": "wait warm on letters or the board",
+    "letter-wait": "read how long letters waited for a thread’s boundaries",
     "merge-driver": "git merge driver for the self (loom machinery)",
 }
 
@@ -90,7 +98,7 @@ def main(argv: list[str] | None = None) -> int:
     if argv[:1] in (["-h"], ["--help"], ["help"]):
         sys.stdout.write(usage())
         return 0
-    target = VERBS.get(argv[0]) if argv else None
+    target = VERBS.get("molt" if argv[0] == "reincarnate" else argv[0]) if argv else None
     if target is None:
         if argv:
             sys.stderr.write(f"brnrd runtime: no verb {argv[0]!r}\n")

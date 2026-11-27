@@ -202,6 +202,7 @@ async def loom_letter(request: Request, db: Session = Depends(get_db)) -> JSONRe
         payload = schemas.LoomLetterPost(
             thread=MAIN_THREAD, text=str(data.get("body") or ""),
             wish=data.get("wish") or None, verdict=data.get("verdict") or None,
+            delivery_id=data.get("delivery_id") or None,
         )
     except ValidationError as exc:
         return JSONResponse({"error": exc.errors(include_url=False, include_context=False)[0]["msg"]}, status_code=400)

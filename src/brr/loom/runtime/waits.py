@@ -3,7 +3,8 @@
 A park is a ``wish.read`` whose reading starts ``waiting:``. Its ``wait``
 field is ``{"on": <condition>, "until": <instant>}``, ``on`` absent for a
 prose park. The live wait is the latest read of an open wish with no result
-after it: a result or another read ends it, and a closed wish has none. Every tick
+after it: a result or another read ends it, and a closed wish has none.
+New parks store the destination thread alongside the condition. Every tick
 ``observe_waits`` checks the live waits against facts already held and the
 forge states the ``Watcher`` polled off the loop; when one comes true, or its
 ``until`` passes, the loom writes one notice to the wish's thread, and that
@@ -47,6 +48,8 @@ import time
 import urllib.error
 import urllib.request
 from datetime import datetime, timedelta, timezone
+from functools import lru_cache
+from pathlib import PurePosixPath
 
 from .timers import parse_instant, stored_when
 
@@ -121,6 +124,49 @@ def canonical(text: str, now: datetime, repo=None) -> str:
     raise ValueError(f"--wait {text}: expected one of {GRAMMAR}")
 
 
+def answer_shape(text: str | None, now: datetime) -> str:
+    """Keep the answer's vocabulary while normalizing refs with the wait parser."""
+    if text is None:
+        return "reply"
+    if text in ("reply", "press"):
+        return text
+    kind, _, ref = text.partition(":")
+    if kind == "merge" and _PR.fullmatch("pr:" + ref) and "/" in ref:
+        return "merge:" + canonical("pr:" + ref, now)[3:]
+    if kind == "date":
+        return "date:" + when(ref, now, "--answered-by date:")
+    if kind == "file" and ref.strip() and "\x00" not in ref:
+        path = PurePosixPath(ref.strip())
+        if path.parts and not path.is_absolute() and ".." not in path.parts:
+            return f"file:{path}"
+    raise ValueError("--answered-by: expected reply, press, merge:<owner/repo>#N, file:<self path>, or date:<when>")
+
+
+def answer_waits(found):
+    """Open non-reply asks enter the same observer as parked wishes."""
+    for ask in found.values():
+        if not ask.open or ask.sender != "resident" or ask.answered_by == "reply":
+            continue
+        kind, sep, ref = ask.answered_by.partition(":")
+        on = {"merge": "pr", "date": "at"}.get(kind, kind) + sep + ref
+        yield ask, {"at": ask.born, "wait": {"on": on}, "closes_ask": True}
+
+
+def board_press(ident: str, data: dict) -> bool:
+    """Board verdicts arrive from either the loopback board or the relay's loom channel."""
+    native = ident.split(":", 2)[-1]
+    return (data.get("verdict") in ("agree", "correct")
+            and str(data.get("from", "")).startswith("person:")
+            and (native.startswith("loom:") or re.search(r":board-[a-z0-9]+$", native) is not None))
+
+
+@lru_cache(maxsize=256)
+def _main_has_file(repo, tip, path) -> bool:
+    from .selfrepo import git
+    result = git(repo, "cat-file", "-t", f"{tip}:{path}", check=False)
+    return result.returncode == 0 and result.stdout.strip() == "blob"
+
+
 def park(wish, condition: str | None, until: str | None, now: datetime, *, found=None,
          default: str | None = None, turn: float = 0) -> dict:
     """The ``wait`` a new park stores; a prose park backs off over its re-parks.
@@ -166,6 +212,20 @@ def live(found: dict) -> list[tuple]:
     return rows
 
 
+def wish_waiters(home, facts, found: dict, target: str, now: datetime) -> list[tuple]:
+    """Open, unresolved parks on a wish, with the thread each would wake."""
+    from .home import notice_id
+    from .ledger import kind_facts
+    rows = [(wish, read) for wish, read in live(found)
+            if read["wait"].get("on") == f"wish:{target}"]
+    if not rows:
+        return []
+    notices = {fact.id for fact in kind_facts(facts, "letter")}
+    return [(wish, read, parker(home, facts, wish, read)) for wish, read in rows
+            if notice_id("wait", subject(wish, read)) not in notices
+            and outcome(wish, read, facts, found, {}, now) is None]
+
+
 def pr_repo(data: dict) -> str | None:
     """``owner/repo`` of a ``pr.opened`` fact, read off its url; its ``repo`` is the library name."""
     match = re.match(r"https://github\.com/([\w.-]+/[\w.-]+)/pull/\d+", str(data.get("url") or ""))
@@ -191,8 +251,30 @@ def want(read) -> str:
     return f"{on} since {read['at']}" if on.startswith("ci:") else on
 
 
-def forge_wants(found: dict) -> set[str]:
-    return {want(read) for _wish, read in live(found)
+def unresolved(found, facts):
+    """Live waits that have yet to produce their terminal notice."""
+    from .home import notice_id
+    from .ledger import LedgerView, kind_facts
+    ids = facts.by_id if isinstance(facts, LedgerView) else {f.id for f in kind_facts(facts, "letter")}
+    return [(wish, read) for wish, read in live(found)
+            if notice_id("wait", subject(wish, read)) not in ids]
+
+
+def thread_lines(home, facts, thread):
+    """The waits the current context inherits on this thread."""
+    from .wishes import told
+    lines = []
+    for wish, read in unresolved(told(facts), facts):
+        if parker(home, facts, wish, read) != thread:
+            continue
+        on = read["wait"].get("on") or read["reading"].removeprefix("waiting:").strip()
+        lines.append(f"waiting: {wish.id} on {on} since {read['at']}")
+    return lines
+
+
+def forge_wants(found: dict, facts=None) -> set[str]:
+    rows = live(found) if facts is None else unresolved(found, facts)
+    return {want(read) for _wish, read in [*rows, *answer_waits(found)]
             if str(read["wait"].get("on", "")).startswith(("pr:", "ci:"))}
 
 
@@ -218,10 +300,11 @@ def _answers(facts, target: str, since: str, replied: str | None = None,
     return None
 
 
-def outcome(wish, read, facts, found: dict, forge: dict, now: datetime) -> str | None:
+def outcome(wish, read, facts, found: dict, forge: dict, now: datetime, *, self_repo=None) -> str | None:
     """What came true for this park, in words, or None while it still waits."""
     wait = read["wait"]
     on = wait.get("on")
+    closing = read.get("closes_ask", False)
     if on is None:
         pass
     elif on.startswith("pr:"):
@@ -234,9 +317,9 @@ def outcome(wish, read, facts, found: dict, forge: dict, now: datetime) -> str |
             if merged.data.get("repo") in names and int(merged.data.get("number") or 0) == number:
                 return f"{on} merged ({merged.data.get('merge_commit', '')[:8]})"
         state = forge.get(on)
-        if state and state.get("state") in ("merged", "closed"):
+        if state and (state.get("state") == "merged" or (not closing and state.get("state") == "closed")):
             return f"{on} {state['state']} at {state.get('at')}: {state.get('url')}"
-        if state and state.get("state") == "unreadable":
+        if not closing and state and state.get("state") == "unreadable":
             return f"{on} cannot be read: {state.get('error')}"
     elif on.startswith("ci:"):
         state = forge.get(want(read))
@@ -246,10 +329,11 @@ def outcome(wish, read, facts, found: dict, forge: dict, now: datetime) -> str |
         target = found.get(on[5:])
         if target is not None and target.state in SETTLED and target.state != wait.get("was"):
             return f"{target.id} is {target.state}"
-        from .wishes import _person
-        answer = _answers(facts, on[5:], read["at"], citer=_person)
-        if answer is not None:
-            return f"{on[5:]} was answered by {answer}"
+        if target is None or target.answered_by == "reply":
+            from .wishes import _person
+            answer = _answers(facts, on[5:], read["at"], citer=_person)
+            if answer is not None:
+                return f"{on[5:]} was answered by {answer}"
     elif on.startswith("letter:"):
         answer = _answers(facts, on[7:], read["at"], replied="")
         if answer is not None:
@@ -258,7 +342,19 @@ def outcome(wish, read, facts, found: dict, forge: dict, now: datetime) -> str |
         due = parse_instant(on[3:])
         if due is not None and due <= now:
             return f"{on[3:]} has passed"
+    elif on == "press":
+        from .ledger import kind_facts
+        for letter in reversed(kind_facts(facts, "letter")):
+            if letter.at < wish.born:
+                break
+            if letter.data.get("wish") == wish.id and board_press(letter.id, letter.data):
+                return f"board press {letter.data['verdict']} ({letter.id})"
     elif on.startswith("file:"):
+        if closing:
+            from .lifecycle import main_tip
+            tip = main_tip(self_repo)
+            path = on[5:]
+            return f"{on} exists on self main ({tip})" if tip and _main_has_file(self_repo, tip, path) else None
         try:
             with open(on[5:], "rb") as handle:
                 head = handle.read(200).decode("utf-8", "replace").strip()
@@ -282,9 +378,9 @@ def _advice(wish, read, resolved: bool, said: str = "") -> str:
                 "budget or an outward act is never defaulted: re-ask")
     if wait.get("on") is None:
         nxt = PROSE[min(int(wait.get("step") or 1), len(PROSE) - 1)]
-        return (f"re-check {wait.get('step', 1)} of a prose park. If it waits on something the loom can "
-                f"watch, re-park with wish {wish.id} --read \"waiting: …\" --wait <{GRAMMAR}>; "
-                f"if it still waits on words, re-park in prose (next re-check in {_span(nxt)}), "
+        return (f"re-check {wait.get('step', 1)} of a prose park. If the loom can watch the "
+                f"condition, re-park with wish {wish.id} --read \"waiting: …\" --wait <{GRAMMAR}>; "
+                f"if their word moves the work, re-park in prose (next re-check in {_span(nxt)}), "
                 "or deliver, ask or settle")
     if resolved and str(wait.get("on", "")).startswith("pr:") and "cannot be read" in said:
         return f"the forge has no such pull request: re-park {wish.id} with the repo and number corrected"
@@ -370,7 +466,6 @@ class _Pending:
     """
 
     def __init__(self, found, facts, now):
-        from .home import notice_id
         self.found = found
         self.rows = {}
         self.files = set()
@@ -381,10 +476,8 @@ class _Pending:
         self.due = []
         self.first = True
         self.retry = set()
-        for wish, read in live(found):
-            key = subject(wish, read)
-            if notice_id("wait", key) in facts.by_id:
-                continue
+        for wish, read in [*unresolved(found, facts), *answer_waits(found)]:
+            key = wish.id if read.get("closes_ask") else subject(wish, read)
             self.rows[key] = (wish, read)
             on = str(read["wait"].get("on") or "")
             if on.startswith("file:"):
@@ -454,8 +547,7 @@ def observe_waits(home, facts, armed: bool, forge: dict | None = None, now: date
         rows = pending.candidates(facts, forge or {}, now)
     else:
         pending = None
-        rows = [(wish, read) for wish, read in live(found)
-                if not any(f.id == notice_id("wait", subject(wish, read)) for f in facts)]
+        rows = [*unresolved(found, facts), *answer_waits(found)]
     if not rows:
         return facts
     from functools import cache
@@ -465,6 +557,12 @@ def observe_waits(home, facts, armed: bool, forge: dict | None = None, now: date
         from .project import fold
         return frozenset(fold(facts).holder)
     for wish, read in rows:
+        if read.get("closes_ask"):
+            said = outcome(wish, read, facts, found, forge or {}, now, self_repo=home.root / "self")
+            if said is not None:
+                notice(home, facts, "ask-closed", wish.id, f"closed &{wish.id}: {said}",
+                       "The ask is answered.", thread=wish.thread, closes_ask=wish.id)
+            continue
         said = outcome(wish, read, facts, found, forge or {}, now)
         if said is None:
             if pace is not None and read["wait"].get("turn"):
@@ -491,12 +589,13 @@ def observe_waits(home, facts, armed: bool, forge: dict | None = None, now: date
 
 
 def parker(home, facts, wish, read) -> str:
-    """The thread a wait's notice wakes: the one whose strand parked, not the
-    wish's, which may be settled or another's (w-fu0i49mzlfa3). A person's park,
-    or a parker whose thread is gone, falls back to the wish's thread."""
-    from .project import sender_threads
-    writer = str(read.get("writer") or "")
-    thread = sender_threads(facts).get(writer.removeprefix("strand:")) if writer.startswith("strand:") else None
+    """The recorded destination, with lease lookup for parks written by older installs."""
+    thread = (read.get("wait") or {}).get("thread")
+    if thread is None:
+        from .project import sender_threads
+        writer = str(read.get("writer") or "")
+        if writer.startswith("strand:"):
+            thread = sender_threads(facts).get(writer.removeprefix("strand:"))
     return thread if thread and home.routable(thread) else wish.thread
 
 
@@ -671,3 +770,39 @@ class Watcher:
         self.states = {on: state for on, state in states.items() if on in wants} if wants else self.states
         self.errors = errors
         self.failing = (missed, missed.__traceback__) if missed is not None and not read else None
+
+
+def rest_parks(parks):
+    """Name the nearest known deadlines first, then undated parks in ledger order."""
+    def deadline(row):
+        wait = row[1]["wait"]
+        on = wait.get("on", "")
+        times = [_instant(value) for value in (on[3:] if on.startswith("at:") else "", wait.get("until"))]
+        return min((at for at in times if at is not None), default=datetime.max.replace(tzinfo=timezone.utc))
+
+    def label(row):
+        wish, read = row
+        kind, _, target = read["wait"].get("on", "").partition(":")
+        if kind == "at" and (at := _instant(target)) is not None:
+            return f"{at:%Y-%m-%d %H:%MZ}"
+        if kind == "pr":
+            return f"pull request {target}"
+        if kind == "ci":
+            repo, _, sha = target.partition("@")
+            return f"checks for {repo} {sha[:8]}"
+        if kind == "file":
+            return f"the result in {os.path.basename(target)}"
+        if kind == "letter":
+            return f"a reply to {target}"
+        if kind == "wish":
+            return f"an answer on {target}"
+        if kind == "cond":
+            return "a change in " + target.replace(",", ", ").replace("-", " ").replace("_", " ")
+        reading = read["reading"].removeprefix("waiting:").strip().partition("\n")[0]
+        return reading[:100] or wish.line[:100]
+
+    shown = [label(row) for row in sorted(parks, key=deadline)[:2]]
+    if len(parks) > len(shown):
+        more = len(parks) - len(shown)
+        shown[-1] += f" ({more} more {'park' if more == 1 else 'parks'})"
+    return shown

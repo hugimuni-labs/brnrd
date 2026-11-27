@@ -258,6 +258,12 @@ def post(port, payload, host=None, **headers):
     return resp.status, body
 
 
+def page(port, host=None):
+    """The headers the served page's own fetch carries: Origin and Sec-Fetch-Site, which a browser attaches."""
+    host = host or f"127.0.0.1:{port}"
+    return {"Origin": f"http://{host}", "Sec-Fetch-Site": "same-origin"}
+
+
 def test_a_board_letter_lands_as_the_persons_own_and_foreign_pages_cannot_send(parts):
     """POST /v1/loom/letters drops where the channel's letters land; the intake reads it as the person's."""
     from brr.loom.runtime.connector import drain
@@ -274,13 +280,13 @@ def test_a_board_letter_lands_as_the_persons_own_and_foreign_pages_cannot_send(p
     try:
         assert post(port, {"body": "x"}, Origin="https://evil.test")[0] == 403
         assert post(port, {"body": "x"}, host="evil.test")[0] == 403
-        assert post(port, {"body": "x"}, **{"Content-Type": "text/plain"})[0] == 415
-        assert post(port, {"body": "  "})[0] == 400
-        assert post(port, {"body": "x", "wish": "nope"})[0] == 400
+        own = page(port)
+        assert post(port, {"body": "x"}, **{"Content-Type": "text/plain", **own})[0] == 415
+        assert post(port, {"body": "  "}, **own)[0] == 400
+        assert post(port, {"body": "x", "wish": "nope"}, **own)[0] == 400
         assert not list(root.glob("loom/connectors/mine/state/in/*"))
 
-        status, body = post(port, {"body": "from the board", "typed_by": "s-ae66-abcdef"},
-                            Origin=f"http://127.0.0.1:{port}")
+        status, body = post(port, {"body": "from the board", "typed_by": "s-ae66-abcdef"}, **own)
         assert status == 200, body
         sent = json.loads(body)
         drop = root / "loom/connectors/mine/state/in"
@@ -291,6 +297,48 @@ def test_a_board_letter_lands_as_the_persons_own_and_foreign_pages_cannot_send(p
         typed = [r for p, part in parts.parts.items() if p.startswith("thread/") for r in part["letters"]
                  if r["id"] == sent["id"]]
         assert [r["typed_by"] for r in typed] == ["s-ae66-abcdef"]
+    finally:
+        parts.stop.set()
+        server.shutdown()
+        server.server_close()
+
+
+def test_a_board_post_needs_the_pages_origin_and_records_what_it_saw(parts):
+    """No Origin, a wrong Origin, and a cross-site fetch are refused. The page's own POST is accepted,
+    and the fact is origin, route, wish and verdict: never the body."""
+    root = parts.home.root
+    (root / "loom/config.toml").write_text('connectors = ["mine=fake"]\n')
+    (root / "self/people/ada").mkdir(parents=True)
+    (root / "self/people/ada/channels.toml").write_text('channels = ["mine:42"]\n')
+    parts.step()
+    server = serve(parts, 0)
+    port = server.server_address[1]
+    try:
+        assert post(port, {"body": "no origin"})[0] == 403
+        assert post(port, {"body": "evil", "wish": "w-abcdef"},
+                    Origin="https://evil.test", **{"Sec-Fetch-Site": "same-origin"})[0] == 403
+        assert post(port, {"body": "cross"}, Origin=f"http://127.0.0.1:{port}",
+                    **{"Sec-Fetch-Site": "cross-site"})[0] == 403
+        assert post(port, {"body": "none"}, **page(port) | {"Sec-Fetch-Site": "none"})[0] == 403
+        assert not list(root.glob("loom/connectors/mine/state/in/*"))
+        assert [f for f in read_facts(parts.home) if f.kind == "board.post"] == []
+
+        status, body = post(port, {"body": "from the page", "wish": "w-abcdef12", "verdict": "agree"},
+                            **page(port))
+        assert status == 200, body
+        sent = json.loads(body)
+        wrote = [f for f in read_facts(parts.home) if f.kind == "board.post"]
+        assert len(wrote) == 1
+        assert wrote[0].data == {"origin": f"http://127.0.0.1:{port}", "route": "/v1/loom/letters",
+                                 "letter": sent["id"], "wish": "w-abcdef12", "verdict": "agree"}
+        assert wrote[0].by.startswith("loom:")
+        assert "from the page" not in json.dumps(wrote[0].data)
+
+        status, body = post(port, {"body": "on localhost"}, host=f"localhost:{port}", **page(port, f"localhost:{port}"))
+        assert status == 200, body
+        plain = [f for f in read_facts(parts.home) if f.kind == "board.post" and "wish" not in f.data]
+        assert [f.data["origin"] for f in plain] == [f"http://localhost:{port}"]
+        assert "verdict" not in plain[0].data and plain[0].data["route"] == "/v1/loom/letters"
     finally:
         parts.stop.set()
         server.shutdown()
@@ -531,10 +579,17 @@ def test_the_index_is_hashes_counts_and_short_rows(parts, monkeypatch):
     assert b"step step" not in raw and b"quote quote" not in raw
     assert b"w-loose" not in raw and b"w-web" not in raw
     for row in index["threads"]:
-        assert set(row) <= {"id", "title", "status", "last_at", "board", "counts"}
-        assert set(row.get("board") or {}) <= {"state"}
+        assert set(row) <= {"id", "title", "status", "last_at", "opened_at", "letter_at", "board", "counts"}
+        assert set(row.get("board") or {}) <= {"state", "since", "stall"}
+        # every key the column order sorts by rides on the row, so a cold load sorts as the whole board will
+        part = parts.parts[f"thread/{row['id']}"]
+        assert row.get("opened_at") == part.get("opened_at")
+        assert row.get("board") == {k: v for k, v in (part.get("board") or {}).items()
+                                    if k in ("state", "since", "stall") and v not in (None, "")}
     web = next(row for row in index["threads"] if row["id"] == "web")
     assert web["board"]["state"] and web["counts"]
+    # the column's freshness rides on the row, so a cold load sorts before the thread part arrives
+    assert web["letter_at"] == max(row["at"] for row in parts.parts["thread/web"]["letters"])
     assert parts.parts["thread/web"]["steps"][0]["text"] == fat
     assert [w["wish"] for w in parts.parts["thread/web"]["wishes"]] == ["w-web"]
     assert parts.parts["unthreaded"][0]["wish"] == "w-loose"
@@ -614,7 +669,7 @@ def _reading(directory: Path, shell: str, windows: list, error: str | None = Non
 
 def test_usage_moves_the_header_fuel_without_a_recompute(parts, monkeypatch):
     """The header reads the files the status line reads. A usage write is not a ledger move, and a collector
-    error with no window is the word ``fails``, not an absent shell and not the error text."""
+    error with no window remains visible without exposing the error text."""
     from brr.loom.runtime import board
     from brr.loom.runtime.usage import shell_fuels
     root = parts.home.root
@@ -633,6 +688,7 @@ def test_usage_moves_the_header_fuel_without_a_recompute(parts, monkeypatch):
     assert computed == []
     fuel = parts.parts["index"]["fuel"]
     assert [row["shell"] for row in fuel] == ["claude", "grok", "vibe"]
+    assert "initiative_share" not in fuel[0]
     assert fuel[0]["gauges"] == [
         {"window": "session", "left_pct": 15}, {"window": "week", "left_pct": 48}]
     assert fuel[1]["gauges"] == [{"window": "week", "left_pct": 58}]
@@ -641,7 +697,7 @@ def test_usage_moves_the_header_fuel_without_a_recompute(parts, monkeypatch):
     words = shell_fuels(parts.home)
     assert words["claude"] == "session 15% week 48%"
     assert words["grok"] == "week 58%"
-    assert words["vibe"] == "fails"
+    assert words["vibe"] == "quota unavailable"
     assert [row["shell"] for row in fuel] == sorted(words)
     held = parts.hashes["thread/web"]
     assert not parts.step()
@@ -651,6 +707,19 @@ def test_usage_moves_the_header_fuel_without_a_recompute(parts, monkeypatch):
     assert [row["shell"] for row in parts.parts["index"]["fuel"]] == ["claude", "vibe"]
     assert "grok" not in shell_fuels(parts.home)
     assert parts.hashes["thread/web"] == held
+
+
+def test_a_share_below_100_is_on_the_fuel_row(parts):
+    from brr.loom.runtime.config import set_value
+    root = parts.home.root
+    set_value(root, "initiative_share_grok", 40)
+    inject_letter(root, to="thread:web", body="first")
+    assert parts.step()
+    _reading(root / "loom/usage", "grok", [{"name": "week", "left_pct": 58}])
+    assert parts.step()
+    row = parts.parts["index"]["fuel"][0]
+    assert row["shell"] == "grok" and row["initiative_share"] == 40
+    assert "initiative_share" not in row["gauges"][0]
 
 
 def test_the_index_names_the_leading_machine_and_the_others(parts):
@@ -697,7 +766,7 @@ def test_loopback_site_reports_the_build_even_before_parts(parts, tmp_path):
 def test_board_port_failure_is_a_degraded_condition(parts, port):
     import socket
     from brr.loom.runtime.loom import _serve_board
-    from brr.loom.runtime.health import Health, degraded_line
+    from brr.loom.runtime.health import Health, body_line
 
     with socket.socket() as taken:
         taken.bind(("127.0.0.1", 0))
@@ -709,8 +778,8 @@ def test_board_port_failure_is_a_degraded_condition(parts, port):
         failed = next(f for f in facts if f.kind == "loom.degraded")
         assert failed.data["step"] == "board"
         assert f"board port {chosen}:" in failed.data["error"]
-        assert "board since" in degraded_line(facts)
-        assert failed.data["error"] in degraded_line(facts)
+        assert "body: board " in body_line(facts, parts.home.install_id())
+        assert failed.data["error"] in body_line(facts, parts.home.install_id())
         server = None
         def retry():
             nonlocal server
@@ -802,6 +871,9 @@ def test_verdicts_age_on_an_idle_board_but_asks_stay_open(parts, monkeypatch):
     web = parts.parts["thread/web"]["board"]
     assert web["state"] == "your-call"
     assert web["open"] == 1
+    # Needs you sorts by since: the index row carries it, so a cold load needs no thread part to place the column
+    row = next(r for r in parts.parts["index"]["threads"] if r["id"] == "web")
+    assert row["board"] == {"state": "your-call", "since": web["since"]} and web["since"]
     docs = parts.parts["thread/docs"]["board"]
     assert docs["state"] != "your-call"
     assert docs["calls"][0]["stale"] is True
@@ -825,3 +897,14 @@ def test_verdicts_age_on_an_idle_board_but_asks_stay_open(parts, monkeypatch):
     assert web["open"] == 1
     assert web["red"] is True
     assert web["since"] == board._iso(asked_at)
+
+
+def test_holding_strand_shows_its_rest_reason():
+    from brr.loom.runtime.board import board_state
+
+    thread = {"strands": [{"state": "holding"}], "rest": "resting because CI is saturated"}
+    assert board_state(thread, []) == {
+        "state": "seated", "strand": "holding", "why": "resting because CI is saturated",
+    }
+    thread["strands"][0]["state"] = "working"
+    assert board_state(thread, []) == {"state": "seated", "strand": "working"}

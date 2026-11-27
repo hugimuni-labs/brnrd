@@ -17,7 +17,7 @@ A resource in ``CLOSED`` is declared in full: ``admit`` refuses, at the
 ledger's one write path, a kind under its name that has no row here, a writer
 the row does not name, and fields the row does not list. The body's table
 folds ``body`` rows by strand and generation; the other closed resources
-(wishes, pull request receipts, loom starts) are declared for that check
+(wishes, pull request receipts, loom starts, a board post) are declared for that check
 alone. Rows of any other resource document observations, including inputs the body's
 table reads; their writers are not checked and kinds beside them stay undeclared.
 """
@@ -53,7 +53,7 @@ def _kind(kind: str, resource: str, fields: str, writer: str, scope: str, once: 
     return Kind(kind, resource, tuple(fields.split()), tuple(writer.split()), scope, once)
 
 
-CLOSED = ("body", "wish", "pr", "loom")
+CLOSED = ("body", "wish", "pr", "loom", "board", "rest")
 ROLES = ("loom", "strand", "person")
 SCOPES = ("global", "machine")
 
@@ -69,14 +69,16 @@ REGISTRY = (
     _kind("body.stopped",      "body",    "strand gen pid why",                               "loom",        "machine", once=True),
     _kind("body.unidentified", "body",    "strand gen pid why",                               "loom",        "machine"),
     _kind("body.exited",       "body",    "strand gen code why? failure_origin? failure_letters?",                             "loom",        "global",  once=True),
-    _kind("wish",              "wish",    "wish says from line thread parent? rec? kind?",     "strand person loom", "global"),
+    _kind("wish",              "wish",    "wish says from line thread parent? rec? kind? answered_by?",     "strand person loom", "global"),
     _kind("ask.answer",        "wish",    "wish as ref",                                      "strand person loom", "global"),
     _kind("wish.read",         "wish",    "wish reading by wait?",                             "strand person", "global"),
     _kind("wish.result",       "wish",    "wish kind ref line delivered cmd? sha256? size? name? mime? verified? word? unverified? weakened?", "strand loom", "global"),
-    _kind("wish.verdict",      "wish",    "wish as evidence ref",                              "strand person loom", "global"),
+    _kind("wish.delivery.grant", "wish",  "thread wishes",                                    "strand",        "global"),
+    _kind("wish.verdict",      "wish",    "wish as evidence ref delivery_id?",                              "strand person loom", "global"),
     _kind("wish.left",         "wish",    "wish steps gen same?",                              "strand",        "global"),
     _kind("wish.top",          "wish",    "wish ref",                                          "strand person", "global"),
     _kind("wish.pick",         "wish",    "wish why",                                          "strand",        "global"),
+    _kind("wish.goal",         "wish",    "wish goal",                                         "strand person", "global"),
     _kind("left.asked",        "wish",    "strand gen wishes letters?",                        "strand",        "global"),
     _kind("thread.reopened",   "wish",    "thread wish was closed? why?",                      "strand",        "global"),
     _kind("pr.opened",         "pr",      "thread repo number url head",                       "strand",        "global"),
@@ -84,19 +86,23 @@ REGISTRY = (
     # Read by the body's table, owned elsewhere, not enforced here.
     _kind("lease",             "thread",  "thread strand gen install router_gen shell core repos parent? pin? body_source?", "loom", "global", once=True),
     _kind("released",          "thread",  "thread strand gen why install router_gen?",        "loom",        "global",  once=True),
-    _kind("shown",             "letter",  "strand gen ids",                                   "loom strand", "global"),
-    _kind("reincarnate",              "letter",  "strand gen why fresh? cites?",                     "strand",      "global"),
+    _kind("shown",             "letter",  "strand gen ids wait?",                                   "loom strand", "global"),
+    _kind("reincarnate",              "letter",  "strand gen why fresh? cites? carry?",              "strand",      "global"),
     _kind("hold",              "letter",  "strand gen why context",                           "strand",      "global"),
+    _kind("rest.why",          "rest",    "strand gen why wishes",                            "strand",      "global"),
     _kind("guard.granted",     "letter",  "strand gen thread class target letter wish",       "strand",      "global"),
     _kind("guard.refused",     "letter",  "strand gen thread class target",                   "strand",      "global"),
     _kind("attempt.ended",     "attempt", "thread strand gen ids cause code dispositions evidence", "loom",  "global",  once=True),
-    _kind("wake.sizes",        "wake",    "thread strand gen budget total parts",             "loom",        "global",  once=True),
+    _kind("wake.sizes",        "wake",    "thread strand gen budget total parts folded?",     "loom",        "global",  once=True),
+    # Measured on the wake a molt opened, at its first act that moved something.
+    _kind("molt.cost",         "molt",    "thread strand gen opened first_s? tokens reset repeated carry_bytes read_bytes", "loom", "global", once=True),
     _kind("port.drained",      "port",    "thread strand gen",                                "loom",        "global",  once=True),
     _kind("update.offered", "update", "install root offer subject old new own dirty pulls omitted?", "loom", "machine"),
     _kind("update.decided", "update", "install root offer tip action why", "loom", "machine"),
     _kind("update.checked", "update", "install root offer old new tip base mode own ok", "loom", "machine"),
     _kind("loom.started",      "loom",    "install pid commit? loaded merges?",               "loom",        "global"),
     _kind("loom.degraded",     "loom",    "install step error where since episode? dips? seconds? bodies?","loom",        "machine"),
+    _kind("loom.github-credential", "loom", "install refused", "loom", "machine"),
     _kind("loom.recovered",    "loom",    "install step since count last episode? told? grade? up? seconds? bodies?", "loom",        "machine"),
     _kind("loom.moved",        "loom",    "install from to merges started mode? own?",                   "loom",        "global"),
     _kind("loom.pruned",       "loom",    "install ran bytes",                                "loom",        "machine"),
@@ -112,6 +118,8 @@ REGISTRY = (
     _kind("place.touched",     "place",   "place kind act shown thread strand letters wishes root?", "strand",      "global"),
     _kind("place.offered",     "place",   "place",                                            "loom",        "global"),
     _kind("place.dismissed",   "place",   "place",                                            "strand",      "global"),
+    # What the loopback saw on an accepted POST. Never the body; an overview joins on letter.
+    _kind("board.post",        "board",   "origin route letter wish? verdict?",           "loom",        "machine"),
 )
 
 KINDS = {row.kind: row for row in REGISTRY}
@@ -175,5 +183,7 @@ def admit(fact: Fact) -> None:
             found.append("a wish fact is a birth (id = the wish) or a touch (id wish:…)")
         if "rec" in fact.data and fact.data["from"] != "resident":
             found.append("only an ask carries a rec")
+        if "answered_by" in fact.data and fact.data["from"] != "resident":
+            found.append("only an ask carries an answer shape")
     if found:
         raise UndeclaredFact(f"registry refused {fact.id}: " + "; ".join(found))
