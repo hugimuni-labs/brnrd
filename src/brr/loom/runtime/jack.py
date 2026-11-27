@@ -190,9 +190,11 @@ def _news(text: str, state: dict, plan_changed: bool, *,
 
 def attend_letters(room: Path) -> str:
     """The letter portion of a post, with the same shown receipt and state."""
+    state = _state(room)
+    if state.get("reincarnated"):
+        return ""
     text = _boundary_text(room)
     parsed = parse_boundary(text)
-    state = _state(room)
     known = set(state.get("told", []))
     unshown = {letter.id for letter in parsed.letters if not letter.compact} - known
     if not unshown:
@@ -245,6 +247,10 @@ def _boundary_reading(room: Path, event: str, **updates) -> dict:
 
 
 def _shown(room: Path, parsed: Boundary, boundary: dict, displayed: list[str]) -> None:
+    # A molted body receipts nothing: its carry letter is the successor's wake, and a
+    # shown fact from the author leaves the thread with no debt to start a body on.
+    if _state(room).get("reincarnated"):
+        return
     if not parsed.strand:
         raise ValueError("boundary names owed letters and no strand")
     stem = mint(5)
@@ -1028,6 +1034,10 @@ def execute(event: str, room: Path, stdin_text: str) -> str:
         # a background call returns at once, so a boundary always follows it.
         _set_state(room, stop_blocks=0, boundary_at=time.time(), held_at=None, turn_open=True, rest_reason=None)
         (room / "port" / DISPLACED).unlink(missing_ok=True)
+        if _state(room).get("reincarnated"):
+            # A call made after the molt is still guarded and traced; the letters wait for the successor.
+            return _json({"hookSpecificOutput": {"hookEventName": _hook_event(stdin_text),
+                                                 "additionalContext": guarded}}) if guarded else ""
     elif event == "start":
         from .reincarnate import base, heads, readme_hash
         _set_state(room, boundary_at=time.time(), turn_open=True, turn_at=time.time(),

@@ -13,7 +13,7 @@ import sys
 import pytest
 from brr.loom.runtime.adapters import resolve
 from brr.loom.runtime.home import Home
-from brr.loom.runtime.jack import execute, run
+from brr.loom.runtime.jack import attend_letters, execute, run
 from brr.loom.runtime.port import parse_boundary, render_boundary
 
 STRAND = "s-ab12-aaaaaa"
@@ -206,6 +206,16 @@ def test_molted_body_can_stop_while_letters_are_owed(tmp_path):
     _write(room, [_letter()])
     (room / "port" / "jack-state.json").write_text('{"reincarnated": true}\n')
     assert execute("stop", room, "{}") == ""
+    assert list((room / "port" / "out").glob("*.md")) == []
+
+
+def test_molted_body_receipts_no_letter_on_a_later_call(tmp_path):
+    """The carry letter is the successor's wake: shown to its author, nothing starts the next body."""
+    room = _room(tmp_path)
+    _write(room, [_letter()])
+    (room / "port" / "jack-state.json").write_text('{"reincarnated": true}\n')
+    assert execute("post", room, "{}") == ""
+    assert attend_letters(room) == ""
     assert list((room / "port" / "out").glob("*.md")) == []
 
 
