@@ -740,8 +740,9 @@ def _prepare(home: Home, strand: str, thread: str, gen: int,
     repo_text, failures = prepare_repos(home, strand, thread, repos, parent)
     if any((room / name / ".git").exists() for name, _ in repos):
         repo_text += PUBLISH_HINT
-    from . import library
+    from . import kits, library
     repo_text += library.wake_text(home, room)
+    repo_text += kits.wake_text(home.root)
     shelf = library.entries(home)[0]
     if thread == home.main_thread():
         # The seat that talks to the person hears, once, where work landed outside the library.
