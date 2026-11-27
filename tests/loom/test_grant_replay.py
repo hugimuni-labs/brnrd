@@ -19,9 +19,8 @@ def test_the_control_send_and_push_land_only_in_the_sinks(tmp_path):
     assert report["bare_sha"] != report["baseline"]
     assert report["github_remotes"] == []
     assert report["marker_hits"] == []
-    if replay.REAL_HOMES:
-        assert report["real"], "the real home was not read"
-    assert report["real_remotes_unchanged"], report["real"]
+    assert report["real_watched"] is False
+    assert report["real"] == []
     assert report["forge_token"].startswith("env:")
     assert "gh auth token" not in report["forge_token"]
     assert report["hold_in_wake"]

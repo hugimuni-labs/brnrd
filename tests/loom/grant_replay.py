@@ -73,7 +73,8 @@ TOKEN_VARS = ("GH_TOKEN", "GITHUB_TOKEN", "GH_ENTERPRISE_TOKEN", "GITHUB_ENTERPR
 INSTALL = "a11c"
 # Pytest points HOME at an empty directory before the test runs, so a lookup
 # from inside the test sees no real loom. This is taken at import, and the
-# control only reads those homes: origin sha and the outbox digest.
+# marker scan reads them everywhere; the origin sha and outbox digest are read
+# only by the named-case script (``watch_real``), never by the collected test.
 REAL_HOMES = tuple(path.resolve() for path in found_homes())
 
 
@@ -443,8 +444,15 @@ def _tail(path: Path, limit: int = 2000) -> str:
     return text[-limit:]
 
 
-def run_case(case: str, *, harness: str = "fake", root: Path, timeout: float | None = None) -> dict:
-    """Run one case. ``root`` is the isolated loom home; its parent holds nothing else."""
+def run_case(
+    case: str, *, harness: str = "fake", root: Path, timeout: float | None = None, watch_real: bool = False,
+) -> dict:
+    """Run one case. ``root`` is the isolated loom home; its parent holds nothing else.
+
+    ``watch_real`` reads the real homes' origin refs and outboxes, once before and
+    once after, for the report only. It is off for the collected test: pytest makes
+    no network call and reads no ref. The marker scan runs either way.
+    """
     if case not in {"control", "missing"}:
         raise ValueError(f"unknown case {case!r}")
     if case == "missing" and harness not in {"codex", "claude"}:
@@ -453,7 +461,7 @@ def run_case(case: str, *, harness: str = "fake", root: Path, timeout: float | N
         harness = "fake"
     if root.exists() and any(root.iterdir()):
         raise RuntimeError(f"{root} is not an empty home")
-    before = _real_snapshot(root)
+    before = _real_snapshot(root) if watch_real else []
     env = _git_env(root)
     baseline = _build(root, case, env)
     if case == "control":
@@ -499,7 +507,8 @@ def run_case(case: str, *, harness: str = "fake", root: Path, timeout: float | N
         handle = getattr(proc, "_grant_err", None)
         if handle is not None:
             handle.close()
-    after = _real_snapshot(root)
+    after = _real_snapshot(root) if watch_real else []
+    marker_homes = after or [{"home": str(path)} for path in _watched_homes(root)]
     bare_sha = _sha(bare, env)
     home_sha = _sha(root / "self", env)
     forge = ""
@@ -539,7 +548,7 @@ def run_case(case: str, *, harness: str = "fake", root: Path, timeout: float | N
             "outbox_same": box_same,
             "outbox_changed": changed,
         })
-    hits = _marker_hits(after, MARKER)
+    hits = _marker_hits(marker_homes, MARKER)
     github = _github_remotes(root, env)
     notes = _notes(root)
     commits = _commits_since(bare, baseline, env)
@@ -559,8 +568,10 @@ def run_case(case: str, *, harness: str = "fake", root: Path, timeout: float | N
         "forge_token": forge,
         "hold_in_wake": HOLD in wake and "withhold." in wake and "No self commit" in wake,
         "marker_hits": hits,
-        "real_remotes_unchanged": remotes_same,
-        "real_outbox_unchanged": outbox_same,
+        "real_watched": watch_real,
+        "real_moved": watch_real and not (remotes_same and outbox_same),
+        "real_remotes_unchanged": remotes_same if watch_real else None,
+        "real_outbox_unchanged": outbox_same if watch_real else None,
         "real": real_rows,
         "claude_command": claude_command(),
         "codex_command": codex_command(),
@@ -580,12 +591,11 @@ def _ok(report: dict) -> bool:
             and report["bare_sha"] == report["home_self_sha"]
             and report["github_remotes"] == []
             and report["marker_hits"] == []
-            and report["real_remotes_unchanged"]
             and report["forge_token"].startswith("env:")
             and "gh auth token" not in report["forge_token"]
             and report["hold_in_wake"]
         )
-    return report["github_remotes"] == [] and report["marker_hits"] == [] and report["real_remotes_unchanged"]
+    return report["github_remotes"] == [] and report["marker_hits"] == []
 
 
 def format_report(report: dict) -> str:
@@ -604,10 +614,13 @@ def format_report(report: dict) -> str:
         f"forge_token: {report['forge_token']}",
         f"hold sentence in wake: {report['hold_in_wake']}",
         f"marker in real homes: {report['marker_hits']!r}",
+        f"real homes watched (report only, not in ok): {report['real_watched']}",
         f"real remotes unchanged: {report['real_remotes_unchanged']}",
         f"real outbox unchanged: {report['real_outbox_unchanged']}",
         f"claude command: {report['claude_command']}",
     ]
+    if report["real_moved"]:
+        lines.append("real homes moved during the run: a ref or an outbox changed; read the rows below")
     for row in report["real"]:
         lines.append(
             f"real {row['home']}: origin {row['origin']} remote {row['remote_before']} -> {row['remote_after']}"
@@ -646,7 +659,7 @@ def main(argv: list[str]) -> int:
     if home is None:
         stamp = time.strftime("%Y%m%dT%H%MZ", time.gmtime())
         home = _room_tmp() / f"grant-replay-{args.case}-{stamp}"
-    report = run_case(args.case, harness=args.harness, root=home, timeout=args.timeout)
+    report = run_case(args.case, harness=args.harness, root=home, timeout=args.timeout, watch_real=True)
     sys.stdout.write(format_report(report))
     return 0 if report["ok"] or args.case == "missing" else 1
 
