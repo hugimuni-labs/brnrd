@@ -112,7 +112,7 @@ def _ageless(line: str) -> str:
 
 
 def _slot(key: str) -> str:
-    """The place a line holds: a line that changed in place (``degraded:``, ``asks:``,
+    """The place a line holds: a line that changed in place (``body:``, ``asks:``,
     one ``opened:`` thread) is said anew, never also as gone."""
     if key.startswith(("opened: ", "waiting: ")):
         return " ".join(key.split()[:2])
@@ -819,7 +819,7 @@ def _receipt_miss(room: Path) -> str:
 
 def _notes_at(room: Path, stdin_text: str) -> str:
     """Notes this call touches, once per body (notes.py). A note that cannot be read never costs the call."""
-    from . import notes
+    from . import notes, scar_log
     try:
         payload = json.loads(stdin_text)
         if not isinstance(payload, dict) or not payload.get("tool_name"):
@@ -834,6 +834,10 @@ def _notes_at(room: Path, stdin_text: str) -> str:
         text, paths = notes.shown_at(room, payload, shown)
         if paths:
             seen_path.write_text(json.dumps({"body": body, "shown": sorted(shown | set(paths))}) + "\n")
+        try:
+            scar_log.record_displays(room, payload, paths)
+        except OSError:
+            pass  # The note still opens when its count cannot be written.
         return text
     except Exception:  # noqa: BLE001
         return ""

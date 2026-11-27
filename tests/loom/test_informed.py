@@ -170,7 +170,7 @@ def test_the_wake_opens_with_what_happened_since_the_predecessor(gone):
     assert ("degraded now: publisher since 2026-10-23T09:00:00Z: ValueError: too many values "
             "at loom/runtime/snapshot.py:166 (loom.degraded:aaaa:publisher:2026-10-23T09:00:00Z)") in section
     boundary = (room / "port/in/boundary.md").read_text()
-    assert "degraded: publisher since 09:00Z (ValueError at snapshot.py:166)" in boundary
+    assert "body: publisher ValueError at snapshot.py:166 for " in boundary
     assert parse_boundary(boundary).strand == NEXT
 
 

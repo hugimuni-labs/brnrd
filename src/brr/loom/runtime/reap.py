@@ -19,7 +19,8 @@ each, ``CLONE_AGE`` after release; self and port stay until the room goes.
 A strand whose thread is settled (closed on main, no open wish) skips both
 ages and the latest-strand keep: its room goes once released and drained, and
 a wish that reopens the thread wakes it into a fresh room.
-``loom.log`` rotates at ``LOG_MAX`` to three generations. Free space counts
+``loom.log`` rotates at ``LOG_MAX`` to three generations. Scar receipts are
+compacted to their rolling window at most daily. Free space counts
 what macOS purges on demand (``important``); below the disk floor
 ``disk`` raises, so the guard opens a degradation, and the pass runs at once;
 a pass that ends still under the floor prunes the package caches (``PRUNE``)
@@ -435,6 +436,7 @@ class Reaper:
         self.home = home
         self.log = log
         self.next = 0.0
+        self.scar_due = 0.0
         self.below = False
         self.disk_due, self.floor_error = 0.0, None
         self.worker: threading.Thread | None = None
@@ -510,14 +512,18 @@ class Reaper:
         self.log(self.home, f"prune: {', '.join(ran)} freed {freed / 1024 ** 3:.2f} GB")
 
     def reap(self) -> None:
+        from . import scar_log
         from .ledger import read_facts
         from .selfrepo import _pid_alive
         home = self.home
+        now = time.time()
+        if time.monotonic() >= self.scar_due:
+            scar_log.history(home.root / "loom" / scar_log.LOG, now)
+            self.scar_due = time.monotonic() + scar_log.DAY
         rooms = home.root / "rooms"
         if not rooms.is_dir():
             return
         facts = read_facts(home)
-        now = time.time()
         # A room.reaped fact finishes its path only until the strand is leased again:
         # a reopened thread wakes its latest strand into a fresh room at that path.
         leased = {str(f.data.get("strand")): i for i, f in enumerate(facts) if f.kind == "lease"}

@@ -109,7 +109,7 @@ def test_the_git_lease_lasts_at_least_180_seconds_under_the_default_router_ttl(t
 
 
 def test_a_fence_opens_a_lease_streak_and_taking_the_lease_back_closes_it(tmp_path):
-    from brr.loom.runtime.health import degraded_line, open_streaks
+    from brr.loom.runtime.health import body_line, open_streaks
     remote = tmp_path / "self.git"
     subprocess.run(["git", "init", "--bare", "-q", str(remote)], check=True)
     a_home, b_home = _home(tmp_path, "aaaa", remote), _home(tmp_path, "bbbb", remote)
@@ -124,7 +124,7 @@ def test_a_fence_opens_a_lease_streak_and_taking_the_lease_back_closes_it(tmp_pa
     a.begin_tick(read_facts(a_home))
     [streak] = open_streaks(read_facts(a_home), "aaaa")
     assert streak.data["step"] == "lease"
-    assert degraded_line(read_facts(a_home), "aaaa").startswith("degraded: lease since")
+    assert body_line(read_facts(a_home), "aaaa").startswith("body: lease ")
     # A second fenced tick does not open a second streak.
     a.begin_tick(read_facts(a_home))
     assert len(open_streaks(read_facts(a_home), "aaaa")) == 1

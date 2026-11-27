@@ -102,6 +102,7 @@ REGISTRY = (
     _kind("update.checked", "update", "install root offer old new tip base mode own ok", "loom", "machine"),
     _kind("loom.started",      "loom",    "install pid commit? loaded merges?",               "loom",        "global"),
     _kind("loom.degraded",     "loom",    "install step error where since episode? dips? seconds? bodies?","loom",        "machine"),
+    _kind("loom.github-credential", "loom", "install refused", "loom", "machine"),
     _kind("loom.recovered",    "loom",    "install step since count last episode? told? grade? up? seconds? bodies?", "loom",        "machine"),
     _kind("loom.moved",        "loom",    "install from to merges started mode? own?",                   "loom",        "global"),
     _kind("loom.pruned",       "loom",    "install ran bytes",                                "loom",        "machine"),

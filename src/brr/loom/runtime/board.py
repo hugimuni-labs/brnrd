@@ -649,21 +649,23 @@ def digest(part) -> str:
     return hashlib.sha256(json.dumps(part, sort_keys=True, separators=(",", ":")).encode()).hexdigest()[:16]
 
 
-# What a column header and the rail read off the index. The index is fetched whole on every letter.
-_INDEX_THREAD = ("id", "title", "status", "last_at")
+# What a column header, the rail and the column order read off the index. The index is fetched whole on every letter.
+_INDEX_THREAD = ("id", "title", "status", "last_at", "opened_at")
+# Every board key the column order sorts by (order.ts sortThreads, rank).
+_INDEX_BOARD = ("state", "since", "stall")
 
 
 def index_thread(thread: dict, counts: dict | None, letters: list | None = None) -> dict:
-    """A thread row on the index: id, title, status, board state, wish counts, last_at, letter_at.
+    """A thread row on the index: id, title, status, the board's sort keys, wish counts, last_at, opened_at, letter_at.
 
-    ``letter_at`` is the newest letter's time, the board's column freshness. It rides here so a cold load
-    sorts the columns before the thread parts bring their letters, and the order does not move when they land.
+    The row carries every key the column order sorts by: the board state, ``since`` (Needs you), ``stall``
+    (Stuck), ``opened_at`` (Quiet) and ``letter_at``, the newest letter's time (everything else). A cold load
+    then sorts the columns before the thread parts arrive, and the order does not move when they land.
     """
     row = {k: thread.get(k) for k in _INDEX_THREAD}
     row["letter_at"] = max((r.get("at") or "" for r in letters or ()), default=None)
-    state = (thread.get("board") or {}).get("state")
-    if state:
-        row["board"] = {"state": state}
+    board = thread.get("board") or {}
+    row["board"] = {k: board[k] for k in _INDEX_BOARD if board.get(k) not in (None, "")}
     if counts:
         row["counts"] = counts
     return {k: v for k, v in row.items() if v not in (None, "", [], {})}

@@ -579,8 +579,13 @@ def test_the_index_is_hashes_counts_and_short_rows(parts, monkeypatch):
     assert b"step step" not in raw and b"quote quote" not in raw
     assert b"w-loose" not in raw and b"w-web" not in raw
     for row in index["threads"]:
-        assert set(row) <= {"id", "title", "status", "last_at", "letter_at", "board", "counts"}
-        assert set(row.get("board") or {}) <= {"state"}
+        assert set(row) <= {"id", "title", "status", "last_at", "opened_at", "letter_at", "board", "counts"}
+        assert set(row.get("board") or {}) <= {"state", "since", "stall"}
+        # every key the column order sorts by rides on the row, so a cold load sorts as the whole board will
+        part = parts.parts[f"thread/{row['id']}"]
+        assert row.get("opened_at") == part.get("opened_at")
+        assert row.get("board") == {k: v for k, v in (part.get("board") or {}).items()
+                                    if k in ("state", "since", "stall") and v not in (None, "")}
     web = next(row for row in index["threads"] if row["id"] == "web")
     assert web["board"]["state"] and web["counts"]
     # the column's freshness rides on the row, so a cold load sorts before the thread part arrives
@@ -761,7 +766,7 @@ def test_loopback_site_reports_the_build_even_before_parts(parts, tmp_path):
 def test_board_port_failure_is_a_degraded_condition(parts, port):
     import socket
     from brr.loom.runtime.loom import _serve_board
-    from brr.loom.runtime.health import Health, degraded_line
+    from brr.loom.runtime.health import Health, body_line
 
     with socket.socket() as taken:
         taken.bind(("127.0.0.1", 0))
@@ -773,8 +778,8 @@ def test_board_port_failure_is_a_degraded_condition(parts, port):
         failed = next(f for f in facts if f.kind == "loom.degraded")
         assert failed.data["step"] == "board"
         assert f"board port {chosen}:" in failed.data["error"]
-        assert "board since" in degraded_line(facts)
-        assert failed.data["error"] in degraded_line(facts)
+        assert "body: board " in body_line(facts, parts.home.install_id())
+        assert failed.data["error"] in body_line(facts, parts.home.install_id())
         server = None
         def retry():
             nonlocal server
@@ -866,6 +871,9 @@ def test_verdicts_age_on_an_idle_board_but_asks_stay_open(parts, monkeypatch):
     web = parts.parts["thread/web"]["board"]
     assert web["state"] == "your-call"
     assert web["open"] == 1
+    # Needs you sorts by since: the index row carries it, so a cold load needs no thread part to place the column
+    row = next(r for r in parts.parts["index"]["threads"] if r["id"] == "web")
+    assert row["board"] == {"state": "your-call", "since": web["since"]} and web["since"]
     docs = parts.parts["thread/docs"]["board"]
     assert docs["state"] != "your-call"
     assert docs["calls"][0]["stale"] is True
