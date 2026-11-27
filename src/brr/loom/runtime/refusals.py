@@ -89,6 +89,7 @@ VERB: dict[str, str] = {
     "attention": 'attention --note <letter id> --why "what was done"',
     "init": "init --person <name>",
     "wake": "wake --room <room> --thread <thread>",
+    "kit": "kit import <manifest.json>",
     "lib": 'lib add <name> <url> --kind known --whose <person> --for "why"',
     "send-self": "send-self --room .",
     "publish": "publish <repo>",
