@@ -14,8 +14,9 @@ def test_a_withheld_act_is_a_ledger_note_and_not_a_self_commit():
 
     assert Path(briefing.__file__).resolve() == (SRC / "brr/loom/runtime/briefing.py").resolve()
     bullet = next(line for line in briefing.BRIEFING.splitlines() if HOLD in line)
-    assert bullet.startswith("- When a grant, a source or a fact is missing")
-    assert "Never a self commit." in bullet
+    assert bullet.startswith("- No grant, source or fact:")
+    assert "withhold." in bullet
+    assert bullet.endswith("No self commit")
     assert "send-self" not in bullet
     # One bullet, no new section. The briefing already names `## Held` in an older line.
     assert not bullet.startswith("##")
