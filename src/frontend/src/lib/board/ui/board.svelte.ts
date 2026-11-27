@@ -8,7 +8,7 @@ import { normalize, panelIds, resolveRef, timeline, type Timeline } from '../bea
 import { allCalls, armedVerdict, correctDraft, verdictLetter } from '../calls.ts';
 import { byAt, dated, refTokens } from '../text.ts';
 import { unechoed } from '../ledger.ts';
-import { forget, remembering, type Held } from '../cache.ts';
+import { forget, rememberIndex, remembering, type Held } from '../cache.ts';
 import { DEFAULT_STATES, readFilters } from '../order.ts';
 import { EMPTY, PLACE, paneScroll, readPlace, type Place } from '../place.ts';
 
@@ -90,7 +90,7 @@ export class Board {
 		onRefused?: () => void
 	) {
 		this.onRefused = onRefused;
-		this.store = new Store(remembering(get));
+		this.store = new Store(remembering(get), rememberIndex);
 		if (typeof window !== 'undefined') {
 			this.place = readPlace(localStorage.getItem(PLACE));
 			// the last page's parts: the board paints now, and load() syncs it against the index
@@ -103,7 +103,7 @@ export class Board {
 				} catch {
 					// A torn or older cached part must not prevent mounting and the first network sync.
 					// Discard the hashes as well, or sync would treat the broken parts as current.
-					this.store = new Store(remembering(get));
+					this.store = new Store(remembering(get), rememberIndex);
 					this.model = null;
 					this.beads = null;
 					void forget();
