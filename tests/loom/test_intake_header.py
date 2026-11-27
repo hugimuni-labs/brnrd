@@ -50,7 +50,7 @@ def test_a_named_thread_keeps_the_letter_and_the_inbox_gets_one_line(ledger):
     assert header.data["notice"] is True and "about" not in header.data and "stands" not in header.data
     assert header.data["body"].splitlines()[0] == (
         "routed letter:fake:m1 from stranger:fake:visitor · place channel:fake/dm · "
-        "thread work · thread")
+        "thread work · thread · open: brnrd runtime letter letter:fake:m1")
     assert [fact for fact in inbox if not fact.data.get("notice")] == []
 
 
@@ -122,7 +122,8 @@ def test_a_native_reply_lands_on_the_thread_and_the_header_says_reply(ledger):
     letter = next(fact for fact in facts if fact.id == "letter:fake:back")
     assert letter.data["to"] == "thread:work"
     header = next(fact for fact in facts if fact.data.get("header_for") == "work")
-    assert header.data["body"].splitlines()[0].endswith(" · thread work · reply")
+    assert header.data["body"].splitlines()[0].endswith(
+        " · thread work · reply · open: brnrd runtime letter letter:fake:back")
 
 
 def _post_reply(home, ident, re):

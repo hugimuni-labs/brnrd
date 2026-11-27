@@ -129,8 +129,12 @@ class _Wish(argparse.Action):
 def _send(argv: list[str]) -> int:
     parser = Parser(verb="send", prog="python -m brr.loom.runtime send")
     parser.add_argument("--room")
-    parser.add_argument("--to", required=True)
+    parser.add_argument("--to")
     parser.add_argument("--re")
+    parser.add_argument("--forward", action="store_true",
+                        help="move the --re letter to --to; the body stays the original")
+    parser.add_argument("--off-topic", action="store_true",
+                        help="send the --re letter back to the inbox; no --to")
     parser.add_argument("--note")
     parser.add_argument("--wish", action=_Wish, default=None, help='w-id or new:"<line>"')
     parser.add_argument("--says", action=_Wish, help='"quote" or <letter id>:"quote"; never refused')
@@ -166,6 +170,25 @@ def _send(argv: list[str]) -> int:
     echo: list[str] = []
     room = _room(args.room)
     try:
+        if args.forward or args.off_topic:
+            if args.forward and args.off_topic:
+                raise PortError("send: one move: --forward or --off-topic")
+            if not args.re:
+                raise PortError("send: --re names the letter a move sends on")
+            if args.off_topic and args.to:
+                raise PortError("send: --off-topic has no --to; the inbox is the destination")
+            if args.forward and not args.to:
+                raise PortError("send: --forward needs --to thread:<id>")
+            if _move_extras(args):
+                raise PortError("send: a move sends the letter as it is; drop the body and the other flags")
+            from .intake import forward, off_topic
+            sender = strand_of_room(room)
+            moved = (off_topic(room, sender, args.re) if args.off_topic
+                     else forward(room, sender, args.re, args.to))
+            sys.stdout.write(moved + "\n")
+            return 0
+        if not args.to:
+            raise PortError("send: --to is required")
         if len(branches) > 1:
             raise PortError("send: one branch per letter: --correction, --silent or --hold")
         if args.at is not None and args.reopen is not None:
@@ -194,6 +217,15 @@ def _send(argv: list[str]) -> int:
     # stdout stays the letter id; the graph this send wrote goes beside it.
     sys.stderr.write("".join(line + "\n" for line in echo))
     return 0
+
+
+def _move_extras(args) -> bool:
+    """A forward or a return carries the letter that already exists."""
+    return bool(args.body or args.note or args.wish or args.chatter or args.chatter_of
+                or args.correction or args.silent or args.hold or args.ask_for
+                or args.reopen or args.at or args.body_choice or args.spend
+                or args.may_deliver or args.repo or args.budget or args.clean
+                or args.kind or args.ref)
 
 
 def _molt(argv: list[str]) -> int:

@@ -18,6 +18,7 @@ VERBS = {
     "rest": ("verbs_loom", "_rest"),
     "jack": ("verbs_loom", "_jack"),
     "attend": ("attend", "main"),
+    "letter": ("intake", "main"),
     "letter-wait": ("letter_wait", "main"),
     "resume": ("verbs_loom", "_resume"),
     "drop": ("verbs_loom", "_drop"),
@@ -84,6 +85,7 @@ SUMMARY = {
     "loom": "the loom process itself (loom machinery)",
     "jack": "a body's hook (loom machinery)",
     "attend": "wait warm on letters or the board",
+    "letter": "print a letter by id and record that this strand opened it",
     "letter-wait": "read how long letters waited for a thread’s boundaries",
     "merge-driver": "git merge driver for the self (loom machinery)",
 }

@@ -559,6 +559,8 @@ def route_header(home: Home, facts, letter: Fact, rule: str, *, who: str | None 
     unshown header for one thread replaces that thread's lines with one notice.
     A later letter replaces that notice, so the inbox still owes one line.
     ``who`` is the person who wrote, when the letter itself is from the loom.
+    One letter's line names ``brnrd runtime letter``. A folded line names several,
+    so it does not.
     """
     from .lifecycle import CLOSED, read_thread
     from .project import _destination, fold
@@ -592,7 +594,7 @@ def route_header(home: Home, facts, letter: Fact, rule: str, *, who: str | None 
         speaker = who or str(letter.data.get("from") or "")
         shown_place = place if place else "-"
         what = (f"routed {ident} from {speaker} · place {shown_place} · thread {thread} · {rule}"
-                f"{cause_bit}")
+                f"{cause_bit} · open: brnrd runtime letter {ident}")
         subject = ident
         covers = False
     return bool(notice(

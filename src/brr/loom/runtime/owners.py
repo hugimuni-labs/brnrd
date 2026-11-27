@@ -174,6 +174,17 @@ class OwnerProjection:
         return self.result
 
 
+def _current_thread(state, letter: Fact) -> str | None:
+    """The latest ``letter.routed`` destination, or the letter's own ``to``."""
+    ident = str(letter.data.get("id") or letter.id)
+    route = state.routes.get(ident)
+    if route is None and letter.id != ident:
+        route = state.routes.get(letter.id)
+    if route is not None:
+        return _destination(route.data)
+    return _destination(letter.data)
+
+
 def _letter_owners(facts, main, inputs=None, selected=None):
     facts = ordered_facts(facts)
     state = fold(facts)
@@ -208,7 +219,7 @@ def _letter_owners(facts, main, inputs=None, selected=None):
     candidates = letters.items() if selected is None else ((ident, letters[ident]) for ident in sorted(selected, key=inputs.positions.__getitem__))
     for ident, letter in candidates:
         d = letter.data
-        thread = _destination(d)
+        thread = _current_thread(state, letter)
         reply = reply_address(letter, thread)
         disposition = dispositions.get(ident, {})
         reason = disposition.get('reason', '')
@@ -308,7 +319,7 @@ def thread_axes(facts, main, ownership=None):
     ends, bodies = {}, {}
     if isinstance(facts, LedgerView):
         table = {fate.letter.id: fate for fate in active_owners(facts, main)}
-    origins = {ident: {_destination(fate.letter.data)} for ident, fate in table.items()}
+    origins = {ident: {_current_thread(state, fate.letter)} for ident, fate in table.items()}
     # Existing closure observations name their deterministic result notice.
     for fact in kind_facts(facts, "thread.closed"):
         if fact.kind == 'thread.closed' and fact.by.startswith('loom:'):
@@ -327,7 +338,7 @@ def thread_axes(facts, main, ownership=None):
                 seen.add((node, upper))
                 letter = all_letters.get(node)
                 if letter is not None:
-                    origin.add(_destination(letter.data))
+                    origin.add(_current_thread(state, letter))
                 origin.update(seeds.get(node, ()))
                 pending.extend((parent, edge) for edge, parent in state.origin_parents.get(node, ()) if edge < upper)
             origins[ident] = origin
