@@ -18,6 +18,8 @@ MARK = "\n  e.g. "
 FLAGS: dict[str, list[tuple[str, str]]] = {
     "update": [("--why", 'update hold --why "waiting for my local change to be ready"')],
     "send": [
+        ("--forward", "send --re <letter id> --to thread:<thread> --forward"),
+        ("--off-topic", "send --re <letter id> --off-topic"),
         ("--note", 'send --re <letter id> --to thread:<thread> --note "what you did"'),
         ("--budget", "send --to thread:<thread> --budget 2m"),
         ("--at", 'send --to thread:<thread> --at +30m "check the deploy"'),
@@ -67,6 +69,7 @@ FLAGS: dict[str, list[tuple[str, str]]] = {
 VERB: dict[str, str] = {
     "update": "update take",
     "attend": "attend --for 30s",
+    "letter": "letter <id>",
     "letter-wait": "letter-wait inbox --limit 10",
     "send": 'send --re <letter id> --to thread:inbox "reply"',
     "settle": 'settle <thread> --why "what it became"',

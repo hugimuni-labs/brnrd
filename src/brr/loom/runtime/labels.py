@@ -205,6 +205,11 @@ def strand_label(
                 letter = letters.get(str(ident))
                 if letter is not None:
                     label = join(label, _sender_label(letter, facts, self_root, seen))
+        elif kind == "letter.read" and (fact.data or {}).get("strand") == strand:
+            # The header names this verb. Opening the letter is reading it.
+            letter = letters.get(str((fact.data or {}).get("letter") or ""))
+            if letter is not None:
+                label = join(label, _sender_label(letter, facts, self_root, seen))
         elif kind == "label.tainted" and _about(fact, strand):
             label = join(label, Label(True, SELF_AUDIENCE))
         elif kind == "source" and _about(fact, strand) and _url((fact.data or {}).get("origin")):

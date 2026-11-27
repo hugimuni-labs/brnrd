@@ -110,7 +110,7 @@ def test_replay_twice_and_cursor_reset_do_not_duplicate_values(home):
         }
         assert letter.data == {
             "id": f"letter:relay:telegram:555:ev_{i}", "from": "person:ada", "to": "thread:inbox",
-            "body": f"message {i}", "cites": source.id,
+            "body": f"message {i}", "cites": source.id, "place": "channel:relay/telegram:555",
             "label": {"taint": False, "audience": ["self"]},
         }
         assert letter.after == (source.id,)

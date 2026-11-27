@@ -90,8 +90,19 @@ def test_a_line_comment_on_a_merged_pr_reaches_its_thread_once_with_path_line_an
     before = {f.id for f in read_facts(home)}
     comments.observe_comments(home, read_facts(home), True, rows + rows)
     told = [f for f in read_facts(home) if f.kind == "letter" and f.id not in before]
-    assert len(told) == 2 and {f.data["to"] for f in told} == {"thread:other"}
-    line = next(f for f in told if LINE["html_url"] in f.data["body"])
+    notes = [f for f in told if not f.data.get("header_for")]
+    headers = [f for f in told if f.data.get("header_for")]
+    assert len(notes) == 2 and {f.data["to"] for f in notes} == {"thread:other"}
+    assert {f.data["place"] for f in notes} == {f"pr:{REPO}#2567"}
+    assert {f.data["to"] for f in headers} == {"thread:inbox"}
+    assert all(f.data.get("notice") and f.data["body"].startswith("routed ") for f in headers)
+    notes_by_id = {fact.id: fact for fact in notes}
+    for header in headers:
+        routed = notes_by_id[header.data["routes"][0]]
+        login = routed.data["body"].split(" left a ", 1)[0]
+        assert f"from {login} ·" in header.data["body"].splitlines()[0]
+        assert "from loom" not in header.data["body"]
+    line = next(f for f in notes if LINE["html_url"] in f.data["body"])
     assert "Gurio left a review comment on hugimuni-labs/brnrd#2567 at tests/loom/test_reincarnate.py:113" in line.data["body"]
     assert "> @brnrd-bot is there a more direct pointer" in line.data["body"]
     assert f"gh api repos/{REPO}/pulls/2567/comments/4435435352/replies" in line.data["body"]
@@ -111,7 +122,8 @@ def test_a_line_comment_on_a_merged_pr_reaches_its_thread_once_with_path_line_an
     again.load(NOW)
     assert again.since(REPO, NOW) == "2026-11-01T10:55:00Z"
     comments.observe_comments(home, read_facts(home), True, rows)
-    assert len([f for f in read_facts(home) if f.kind == "letter" and f.id not in before]) == 2
+    assert len([f for f in read_facts(home) if f.kind == "letter" and f.id not in before
+                and not f.data.get("header_for")]) == 2
 
 
 def test_a_review_body_on_an_open_pr_arrives_and_an_empty_approval_does_not(ledger, tmp_path, monkeypatch):

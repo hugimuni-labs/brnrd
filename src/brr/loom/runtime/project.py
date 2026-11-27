@@ -29,6 +29,8 @@ class Fold:
     bodies: dict = field(default_factory=dict, repr=False, compare=False)
     ends: dict = field(default_factory=dict, repr=False, compare=False)
     origin_parents: dict = field(default_factory=lambda: defaultdict(list), repr=False, compare=False)
+    # Latest accepted move of a letter. The letter's own `to` stays the first assignment.
+    routes: dict = field(default_factory=dict, repr=False, compare=False)
 
 
 def _destination(data: dict) -> str | None:
@@ -285,6 +287,16 @@ class Reducer:
                     consider(strand, gen, re)
             elif fact.kind == "note":
                 consider(strand, gen, data.get("re"))
+            elif fact.kind == "letter.routed":
+                # A move is not a reply: the letter stays owed, on the new thread.
+                # dest follows the route, so the new owner's note or channel reply
+                # is the one consider accepts, and the old owner's is not.
+                moved = str(data.get("letter") or "")
+                if moved:
+                    state.routes[moved] = fact
+                    target = _destination(data)
+                    if target is not None:
+                        dest[moved] = target
             elif fact.kind == "shown":
                 ids = [str(item) for item in data.get("ids") or ()]
                 state.shown.setdefault(strand, set()).update(ids)
