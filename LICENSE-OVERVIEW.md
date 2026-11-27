@@ -30,7 +30,16 @@ In practice:
   source-availability obligation. Running the published code — self-hosting for
   yourself — does not.
 
-Inbound contributions carry the license of the package they touch. No CLA.
+Inbound contributions carry the license of the package they touch, and they are
+covered by the contributor agreement in [CLA.md](CLA.md). The contributor keeps
+the copyright. The grant is a license, of copyright and of patents, not an
+assignment. HugiMuni SAS may license a contribution under any license,
+including a commercial one, and must also keep that contribution available
+under the license of the package it touched: MIT or AGPLv3. That second
+promise is what keeps a later commercial license of the backend from becoming
+the move the next section describes. The terms a person already adopted stay
+in place. The agreement is what leaves the dual-license option open. It
+belongs in place before outside copyright accumulates in the AGPL packages.
 
 ## Why the split, and why it is not the Elasticsearch story
 
