@@ -263,8 +263,11 @@ export class Store {
 	held = new Map<string, string>();
 	private get: Get;
 	private loading: Promise<Beads> | null = null;
-	constructor(get: Get) {
+	// Told the index once every part it names is held: the cache keeps it only then (cache.ts rememberIndex).
+	private synced?: (index: Index) => unknown;
+	constructor(get: Get, synced?: (index: Index) => unknown) {
 		this.get = get;
+		this.synced = synced;
 	}
 
 	// Primed from the last page's cache (cache.ts): model() answers at once, and the first sync fetches only the parts
@@ -330,6 +333,7 @@ export class Store {
 		}
 		this.index = index;
 		this.cold = null;
+		void this.synced?.(index);
 		return true;
 	}
 
