@@ -18,7 +18,7 @@ export function cut(part, q, most = 200) {
 	return { ...part, letters: part.letters.slice(start, end), more: start > 0 };
 }
 
-export function partsServer(dir, port = 0, consent = null, site = null) {
+export function partsServer(dir, port = 0, consent = null, site = null, lag = null) {
 	const sent = [],
 		answers = [],
 		streams = new Set(),
@@ -157,6 +157,8 @@ export function partsServer(dir, port = 0, consent = null, site = null) {
 			res.end(JSON.stringify({ error: `no part ${path}` }));
 			return;
 		}
+		// A named part can be held back so a cold load's first paint is still partial when a test looks.
+		if (lag?.[path]) await new Promise((r) => setTimeout(r, lag[path]));
 		res.writeHead(200, { 'content-type': 'application/json', 'cache-control': 'no-cache' });
 		res.end(
 			path.startsWith('thread/') ? JSON.stringify(cut(JSON.parse(raw), url.searchParams)) : raw

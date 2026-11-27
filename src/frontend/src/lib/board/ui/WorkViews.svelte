@@ -60,11 +60,13 @@
 	});
 
 	// A backlink names the wish (a PR footer, a message): once the board has loaded, it opens the review
-	// waiting on that wish's current delivery, or the wish's history when nothing waits.
+	// waiting on that wish's current delivery, or the wish's history when nothing waits. A cold load's first
+	// model is not loaded: the calls ride on the thread parts, so resolving then opens the bead and never
+	// looks again.
 	const linkedWish = page.url.searchParams.get('wish');
 	let linkResolved = false;
 	$effect(() => {
-		if (linkResolved || !linkedWish || target || !b.model) return;
+		if (linkResolved || !linkedWish || target || !b.model || b.model.partial) return;
 		linkResolved = true;
 		const review = reviews.find((call) => call.wish === linkedWish && call.delivery_id);
 		untrack(() => {
