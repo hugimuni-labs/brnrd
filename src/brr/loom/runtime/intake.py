@@ -21,7 +21,11 @@ from .refusals import Parser, refuse
 
 
 def main(argv: list[str]) -> int:
-    parser = Parser(verb="letter", prog="brnrd runtime letter")
+    parser = Parser(
+        verb="letter", prog="brnrd runtime letter",
+        description="Print a letter by id. The read is recorded as letter.read for this strand, "
+                    "including a letter on a thread this strand does not hold.",
+    )
     parser.add_argument("letter_id")
     parser.add_argument("--room")
     args = parser.parse_args(argv)
@@ -65,6 +69,10 @@ def off_topic(room: Path, sender: str, ident: str) -> str:
 
 
 def _move(room: Path, sender: str, ident: str, *, how: str, target: str) -> str:
+    # The check runs, then append takes the ledger lock for the one write.
+    # Two moves of one letter can both pass. The fold keeps the last
+    # letter.routed. Holding this lock and calling append would lock a
+    # second file descriptor, which deadlocks on macOS.
     home = home_of_room(Path(room))
     facts = list(read_facts(home))
     letter = _find(facts, ident)

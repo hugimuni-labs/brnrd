@@ -136,6 +136,15 @@ class OwnerProjection:
             for key in ('re', 'letter', 'key'):
                 if d.get(key):
                     dirty.add(d[key])
+            if fact.kind == 'letter.routed':
+                # The index follows the letter, so a later lease on the new
+                # thread dirties it and one on the old thread does not.
+                moved = str(d.get('letter') or '')
+                target = _destination(d)
+                if moved and target is not None:
+                    for bucket in list(self.threads.values()):
+                        bucket.discard(moved)
+                    self.threads[target].add(moved)
             dirty.update(str(item['id']) for item in d.get('dispositions', ()))
             if fact.kind == 'shown':
                 dirty.update(d.get('ids') or ())

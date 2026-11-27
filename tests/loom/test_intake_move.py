@@ -1,8 +1,11 @@
 """Open a letter, forward it, or send it back. A refusal leaves the owner."""
 from brr.daemon2.facts import Fact
-from brr.loom.runtime.ledger import append, inject_letter, read_facts
+from brr.loom.runtime.intake import open_letter
+from brr.loom.runtime.labels import CLEAN, strand_label
+from brr.loom.runtime.ledger import append, inject_letter, read_facts, shared_reader
 from brr.loom.runtime.lifecycle import main_snapshot
 from brr.loom.runtime.owners import letters_for
+from brr.loom.runtime.project import fold
 from brr.loom.runtime.selfrepo import room
 from test_wake import commit
 from test_wishes import command, ledger  # noqa: F401
@@ -163,3 +166,99 @@ def test_a_settled_target_is_refused_and_the_owner_stays(ledger):
     facts = read_facts(home)
     assert _routes(facts) == []
     assert ident in {fact.id for fact in letters_for(facts, main_snapshot(home), "work")}
+
+
+def _note(home, strand, re):
+    append(home, Fact(kind="note", by=f"strand:{strand}", id=f"note:{strand}:{re}", data={
+        "re": re, "why": "answered", "gen": 1, "strand": strand,
+    }))
+
+
+def test_letter_help_says_the_read_is_recorded(ledger):
+    home, seat = ledger
+    text = command(home, seat, "letter", "--help")
+    assert "letter.read" in text and "recorded" in text
+
+
+def test_the_owners_note_settles_the_letter(ledger):
+    home, _seat = ledger
+    ident = inject_letter(home.root, to="thread:work", body="answer me")
+    _note(home, "s-aaaa-test", ident)
+    facts = read_facts(home)
+    assert ident in fold(facts).handled
+    assert ident not in {fact.id for fact in letters_for(facts, main_snapshot(home), "work")}
+
+
+def test_the_old_owner_cannot_settle_a_forwarded_letter(ledger):
+    home, seat = ledger
+    _lease(home, "other", "s-bbbb-other")
+    ident = inject_letter(home.root, to="thread:work", body="moved")
+    command(home, seat, "send", "--re", ident, "--to", "thread:other", "--forward")
+    _note(home, "s-aaaa-test", ident)
+    facts = read_facts(home)
+    assert ident not in fold(facts).handled
+    assert ident in {fact.id for fact in letters_for(facts, main_snapshot(home), "other")}
+
+
+def test_a_forward_arriving_later_lets_the_new_owner_settle(ledger):
+    home, seat = ledger
+    _lease(home, "other", "s-bbbb-other")
+    ident = inject_letter(home.root, to="thread:work", body="yours now")
+    reader = shared_reader(home)
+    view = reader.now(home)
+    main = main_snapshot(home)
+    assert ident in {fact.id for fact in letters_for(view, main, "work")}
+    reducer = view.reducer
+    command(home, seat, "send", "--re", ident, "--to", "thread:other", "--forward")
+    _note(home, "s-bbbb-other", ident)
+    again = reader.now(home)
+    assert again is view and view.reducer is reducer
+    assert ident in fold(view).handled
+    assert ident not in {fact.id for fact in letters_for(view, main, "other")}
+    assert ident not in {fact.id for fact in letters_for(view, main, "work")}
+    assert ident in view.ownership.threads["other"]
+    assert ident not in view.ownership.threads["work"]
+
+
+def test_the_new_owners_channel_reply_settles_the_letter(ledger):
+    home, seat = ledger
+    _lease(home, "other", "s-bbbb-other")
+    ident = inject_letter(home.root, to="thread:work", body="ask")
+    command(home, seat, "send", "--re", ident, "--to", "thread:other", "--forward")
+    reply = "s-bbbb-other/answer"
+    append(home, Fact(kind="letter", by="strand:s-bbbb-other", id=reply, data={
+        "id": reply, "from": "s-bbbb-other", "to": "channel:mine/1", "re": ident,
+        "gen": 1, "body": "the answer",
+    }))
+    assert fold(read_facts(home)).channel_replies[ident] == reply
+    append(home, Fact(kind="speech", by="loom:aaaa", id=f"speech:{reply}", data={
+        "key": reply, "state": "sent",
+    }))
+    facts = read_facts(home)
+    assert ident in fold(facts).handled
+    assert ident not in {fact.id for fact in letters_for(facts, main_snapshot(home), "other")}
+
+
+def test_opening_a_strangers_letter_taints_the_reader(ledger):
+    home, _seat = ledger
+    inbox = room(home.root, "s-bbbb-inbox").parent
+    _lease(home, "inbox", "s-bbbb-inbox")
+    append(home, Fact(kind="letter", by="person:stranger", id="channel-user/1", data={
+        "id": "channel-user/1", "to": "thread:inbox", "from": "channel-user", "body": "outside",
+    }))
+    assert open_letter(inbox, "s-bbbb-inbox", "channel-user/1") == "outside"
+    label = strand_label(read_facts(home), "s-bbbb-inbox",
+                         self_root=home.root / "self", jack_log="")
+    assert label.taint is True
+
+
+def test_opening_a_clean_persons_letter_leaves_the_reader_clean(ledger):
+    home, _seat = ledger
+    inbox = room(home.root, "s-bbbb-inbox").parent
+    _lease(home, "inbox", "s-bbbb-inbox")
+    (home.root / "self" / "people" / "ada").mkdir(parents=True)
+    ident = inject_letter(home.root, to="thread:inbox", body="hello", sender="p-ada")
+    assert open_letter(inbox, "s-bbbb-inbox", ident) == "hello"
+    label = strand_label(read_facts(home), "s-bbbb-inbox",
+                         self_root=home.root / "self", jack_log="")
+    assert label == CLEAN

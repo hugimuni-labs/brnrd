@@ -289,9 +289,14 @@ class Reducer:
                 consider(strand, gen, data.get("re"))
             elif fact.kind == "letter.routed":
                 # A move is not a reply: the letter stays owed, on the new thread.
+                # dest follows the route, so the new owner's note or channel reply
+                # is the one consider accepts, and the old owner's is not.
                 moved = str(data.get("letter") or "")
                 if moved:
                     state.routes[moved] = fact
+                    target = _destination(data)
+                    if target is not None:
+                        dest[moved] = target
             elif fact.kind == "shown":
                 ids = [str(item) for item in data.get("ids") or ()]
                 state.shown.setdefault(strand, set()).update(ids)
