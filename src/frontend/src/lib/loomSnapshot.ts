@@ -20,6 +20,14 @@ export interface LoomPresence {
 	now?: string;
 	owed?: number;
 	body?: string;
+	since?: string;
+	doing?: string;
+	step?: string;
+	last_body?: string;
+	shell?: string;
+	letters?: { id: string; filed: string; wish?: string; state?: string }[];
+	letters_more?: number;
+	wait?: string;
 }
 
 export interface LoomGauge {
@@ -33,6 +41,9 @@ export interface LoomShell {
 	state?: string;
 	gauges?: LoomGauge[];
 	cores?: string[];
+	// When the usage file was read, and the short-window pace sentence when the file has a session window.
+	read_at?: string;
+	pace?: string;
 	// Present only when this engine's initiative share is not 100.
 	initiative_share?: number;
 }

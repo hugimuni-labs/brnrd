@@ -131,11 +131,37 @@ export type Live = {
 };
 
 export type Gauge = { window: string; left_pct: number; resets_at?: string };
+export type PresenceLetter = {
+	id: string;
+	filed: 'wish' | 'chatter' | 'open';
+	wish?: string;
+	state?: string;
+};
+// The inbox seat. `now` is the plan's next wish line. `doing` is `plan` when that is the source.
+// `wait` names a park, a timer or a letter still owed, and says the next message only when nothing else will wake it.
+export type Presence = {
+	strand?: string;
+	thread?: string;
+	state?: string;
+	since?: string;
+	now?: string;
+	doing?: string;
+	step?: string;
+	owed?: number;
+	body?: string;
+	last_body?: string;
+	shell?: string;
+	letters?: PresenceLetter[];
+	letters_more?: number;
+	wait?: string;
+};
 export type Fuel = {
 	shell: string;
 	gauges: Gauge[];
 	state?: string;
 	error?: string;
+	read_at?: string;
+	pace?: string;
 	initiative_share?: number;
 };
 
@@ -176,6 +202,7 @@ export type Index = {
 	goals?: Goal[];
 	v: number;
 	threads: Thread[];
+	presence?: Presence;
 	fuel?: Fuel[];
 	// the resident's installs, the one leading inbox first (absent until a router fact is heard)
 	machines?: Machine[];
@@ -224,6 +251,7 @@ export type Model = {
 	tools: Record<string, ToolCall[]>;
 	live: Record<string, Live>;
 	fuel: Fuel[];
+	presence?: Presence;
 	machines: Machine[];
 	faces?: Record<string, string[]>;
 	person: string | null;

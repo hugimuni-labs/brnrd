@@ -107,7 +107,8 @@ def _fuel(home: Home, cores: dict[str, list[str]], floor: float) -> list[dict]:
     text stays in the file. ``unmetered`` is that word with no error key.
     """
     from .config import initiative_share
-    from .usage import FAILS, UNMETERED, _SHELL_NAME, _past_reset, collector_failed, gauge_windows, known_unmetered
+    from .usage import (FAILS, UNMETERED, _SHELL_NAME, _past_reset, collector_failed,
+                        gauge_windows, known_unmetered, session_pace, session_pace_line)
     found = []
     for path in sorted((home.root / "loom/usage").glob("*.json")):
         shell = path.name.removesuffix(".json")
@@ -126,12 +127,15 @@ def _fuel(home: Home, cores: dict[str, list[str]], floor: float) -> list[dict]:
             gauges = [{"window": w["name"], "left_pct": w["left_pct"],
                        **({"resets_at": _iso(w["resets_at"])} if w.get("resets_at") else {})}
                       for w in windows]
+            pace = session_pace_line(session_pace(payload))
         except (OSError, ValueError, KeyError, TypeError, AttributeError):
             continue
         state = ("dry" if any(g["left_pct"] <= floor for g in gauges)
                  else "stale" if _past_reset(payload, time.time()) else "ok")
         share = initiative_share(home.root, shell)
         found.append({"shell": shell, "state": state, "gauges": gauges,
+                      **({"read_at": _iso(float(payload["at"]))} if payload.get("at") else {}),
+                      **({"pace": pace} if pace else {}),
                       **({"initiative_share": share} if share != 100 else {}),
                       **({"cores": cores[shell]} if cores.get(shell) else {})})
     return found
@@ -297,22 +301,163 @@ def thread(v: View, row: dict) -> dict:
     return {k: val for k, val in entry.items() if val not in (None, "", [])}
 
 
-def presence(v: View) -> dict | None:
-    """The working thread with the newest activity."""
-    present = []
-    for row in v.table:
-        thread, now = row["thread"], _state(row["now"])
-        if now == "working" and thread in v.state.holder:
-            strand = v.state.holder[thread][0]
-            lease = v.leases.get(thread, {}).get(strand)
-            present.append((v.activity.get(thread) or 0, {
-                "strand": strand, "thread": thread, "state": now,
-                "now": (progress(v.told, thread) or {}).get("next"),
-                "owed": row["owed"],
-                "body": body_label(lease.data["shell"], lease.data.get("core") or "") if lease else None}))
-    if not present:
+# Letters on the resident row. More than this, and the row grows without a bound.
+SEAT_LETTERS = 5
+
+
+def _person_letter(sender: str) -> bool:
+    return sender.startswith(("person:", "p-", "stranger:"))
+
+
+def _seat_strand(v: View, thread: str, seated: bool) -> str | None:
+    held = v.state.holder.get(thread)
+    if seated and held:
+        return held[0]
+    leases = v.leases.get(thread, {})
+    if not leases:
+        return held[0] if held else None
+    return max(leases, key=lambda strand: leases[strand].at)
+
+
+def _seat_letters(v: View, strand: str | None) -> tuple[list[dict], int]:
+    """Person letters this strand was shown, since its last reply, newest five."""
+    if not strand:
+        return [], 0
+    shown_at: dict[str, str] = {}
+    for fact in v.state.accepted:
+        if fact.kind != "shown" or fact.data.get("strand") != strand:
+            continue
+        for ident in fact.data.get("ids") or []:
+            shown_at.setdefault(str(ident), fact.at)
+    letters = {str(fact.data.get("id") or fact.id): fact
+               for fact in v.state.accepted if fact.kind == "letter"}
+    reply_at = ""
+    for fact in letters.values():
+        if fact.by != f"strand:{strand}":
+            continue
+        data = fact.data
+        if data.get("re") or str(data.get("to") or "").startswith("channel:"):
+            if fact.at > reply_at:
+                reply_at = fact.at
+    filed: dict[str, object] = {}
+    for wish in v.told.values():
+        for say in wish.says:
+            filed.setdefault(say.letter, wish)
+    chatter: set[str] = set()
+    for fact in v.state.accepted:
+        if fact.kind in {"letter", "note"}:
+            for ident in fact.data.get("chatter") or ():
+                chatter.add(str(ident))
+    rows = []
+    for ident, shown in shown_at.items():
+        fact = letters.get(ident)
+        if fact is None or not _person_letter(str(fact.data.get("from") or "")):
+            continue
+        if reply_at and shown <= reply_at:
+            continue
+        rows.append((shown, ident))
+    rows.sort(reverse=True)
+    more = max(0, len(rows) - SEAT_LETTERS)
+    out = []
+    for _shown, ident in rows[:SEAT_LETTERS]:
+        wish = filed.get(ident)
+        if wish is not None:
+            out.append({"id": ident, "filed": "wish", "wish": wish.id, "state": wish.state})
+        elif ident in chatter:
+            out.append({"id": ident, "filed": "chatter"})
+        else:
+            out.append({"id": ident, "filed": "open"})
+    return out, more
+
+
+def _wake_line(v: View, thread: str, row: dict, seated: bool, strand: str | None,
+               word: str | None = None) -> str | None:
+    """What the row says will happen next. The next-message line only when nothing else will wake it.
+
+    A working seat has no clause: the inbox always has a park, and that park is not what the seat is doing.
+    Holding keeps its reasons.
+    """
+    if word == "working":
         return None
-    return {k: val for k, val in max(present, key=lambda p: p[0])[1].items() if val is not None}
+    from .timers import parse_instant
+    owed_by = str(row.get("owed-by") or "")
+    person_owed = bool(row.get("owed")) and ("person" in owed_by or owed_by.startswith("operator"))
+    reasons = []
+    body = v.state.bodies.get(strand) if strand else None
+    if body is not None and body.kind == "body.parked":
+        until = body.data.get("until")
+        window = body.data.get("window") or "a window"
+        when = _iso(until) if isinstance(until, (int, float)) and not isinstance(until, bool) and until else ""
+        reasons.append(f"a park on {window}" + (f" until {when}" if when else ""))
+    now = datetime.now(timezone.utc)
+    soon = None
+    for fact in v.state.accepted:
+        if fact.kind != "letter" or fact.data.get("to") != f"thread:{thread}" or fact.id in v.state.handled:
+            continue
+        at = parse_instant(fact.data.get("at"))
+        if at is not None and at > now and (soon is None or at < soon):
+            soon = at
+    if soon is not None:
+        reasons.append(f"a timed letter at {soon:%Y-%m-%d %H:%MZ}")
+    if row.get("waits"):
+        reasons.append(str(row["waits"]))
+    if person_owed:
+        reasons.append("a letter from you still owed")
+    if seated and person_owed and len(reasons) == 1:
+        return "waiting on you"
+    if not reasons:
+        return None if seated else "starts on your next message"
+    if seated:
+        return "waiting on " + ", and ".join(reasons)
+    return "wakes on " + ", and ".join(reasons)
+
+
+def presence(v: View) -> dict | None:
+    """The inbox seat, working or empty.
+
+    An empty seat is still a presence, so the board can say the sentence.
+    ``now`` is the plan's next wish line, from ``progress``, not live activity.
+    A left step, when the seat wrote one, is the last thing it said it would do.
+    """
+    thread = v.home.main_thread()
+    row = next((item for item in v.table if item["thread"] == thread), None)
+    if row is None:
+        return None
+    word = _state(row["now"])
+    seated = word in {"working", "holding"} and thread in v.state.holder
+    strand = _seat_strand(v, thread, seated)
+    lease = v.leases.get(thread, {}).get(strand) if strand else None
+    shell = (lease.data.get("shell") if lease else None) or ""
+    core = (lease.data.get("core") or "") if lease else ""
+    label = body_label(shell, core) if shell else None
+    if seated and lease is not None:
+        since = _iso(lease.at)
+    else:
+        end = v.state.ends.get(thread)
+        body = v.state.bodies.get(strand) if strand else None
+        since = _iso(end.at) if end is not None else _iso(body.at) if body is not None else None
+    plan = progress(v.told, thread) or {}
+    now_line = plan.get("next")
+    step = None
+    if now_line:
+        match = next((wish for wish in v.told.values()
+                      if wish.thread == thread and wish.sender == "person"
+                      and wish.line == now_line and wish.left and wish.left.get("steps")), None)
+        if match is not None:
+            step = match.left["steps"][0]
+    letters, more = _seat_letters(v, strand)
+    entry = {
+        "strand": strand, "thread": thread,
+        "state": word if seated else "empty",
+        "since": since, "now": now_line, "doing": "plan" if now_line else None,
+        "step": step, "owed": row["owed"],
+        "body": label if seated else None,
+        "last_body": None if seated else label,
+        "shell": shell or None,
+        "letters": letters, "letters_more": more or None,
+        "wait": _wake_line(v, thread, row, seated, strand, word),
+    }
+    return {k: val for k, val in entry.items() if val not in (None, "", [], {})}
 
 
 def fuel(v: View) -> list[dict]:

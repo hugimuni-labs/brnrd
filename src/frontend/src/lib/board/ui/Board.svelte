@@ -22,7 +22,7 @@
 		STATE_LABEL,
 		wanted
 	} from '../order.ts';
-	import { headerFuel, leadName, machinesTitle } from '../parts.ts';
+	import { headerFuel, leadName, machinesTitle, residentClosed, residentText } from '../parts.ts';
 	import { barGauge } from '../../loomSnapshot.ts';
 	import FuelMarks from '../../FuelMarks.svelte';
 	import { INBOX } from '../sides.ts';
@@ -118,6 +118,10 @@
 		void tick;
 		return Date.now();
 	});
+	const resident = $derived(residentText(b.model?.presence, b.model?.fuel));
+	const closed = $derived(residentClosed(b.model?.presence, b.model?.fuel));
+	// Closed until he taps. A newer snapshot updates the words and leaves this open.
+	let residentOpen = $state(false);
 	$effect(() => {
 		const threads = b.model?.threads;
 		// A cold paint is not a first look: threads still arriving did not move. The first whole model is the baseline.
@@ -251,6 +255,26 @@
 			><input type="checkbox" bind:checked={b.showAll} onchange={() => b.persist()} /> show internal</label
 		>
 	</header>
+	{#if view === 'board' && resident.length}
+		<div id="resident">
+			<button
+				type="button"
+				class="closed"
+				aria-expanded={residentOpen}
+				title={closed.line}
+				onclick={() => (residentOpen = !residentOpen)}
+			>
+				<span class="who">{closed.who}</span>
+				{#if closed.plan}<span class="plan">{closed.plan}</span>{/if}
+				{#if closed.pace}<span class="pace">{closed.pace}</span>{/if}
+			</button>
+			{#if residentOpen}
+				<div class="open">
+					{#each resident as line, i (i)}<span>{line}</span>{/each}
+				</div>
+			{/if}
+		</div>
+	{/if}
 	{#if view === 'board'}
 		<WorkViews bind:view={workView} />
 		<div hidden={!!workView} class="board-columns">

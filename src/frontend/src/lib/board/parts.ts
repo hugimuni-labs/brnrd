@@ -9,6 +9,7 @@ import type {
 	Letter,
 	Machine,
 	Model,
+	Presence,
 	Thread,
 	ThreadPart,
 	Topic,
@@ -111,6 +112,104 @@ export function headerFuel(fuel: Fuel[] | undefined): string {
 		.join('   ');
 }
 
+function hm(iso: string | undefined): string {
+	return iso && iso.length >= 16 ? iso.slice(11, 16) + 'Z' : '';
+}
+
+// A person's cloud letter is letter:cloud:telegram:<chat>:<n>. The open row shows n.
+function letterName(id: string): string {
+	const cut = id.lastIndexOf(':');
+	return cut >= 0 ? id.slice(cut + 1) : id;
+}
+
+function gaugeBit(
+	name: string,
+	gauge: { left_pct: number; resets_at?: string } | undefined
+): string {
+	if (!gauge) return '';
+	const reset = hm(gauge.resets_at);
+	return `${name} ${gauge.left_pct}% left${reset ? `, resets ${reset}` : ''}.`;
+}
+
+// The resident row, as sentences. Empty when the index has no presence yet.
+export function residentText(p: Presence | undefined, fuel: Fuel[] | undefined): string[] {
+	if (!p) return [];
+	const lines: string[] = [];
+	const since = hm(p.since);
+	if (p.state === 'working' || p.state === 'holding') {
+		const who = p.body || 'a body';
+		lines.push(
+			`${who} in the seat${since ? ` since ${since}` : ''}${p.wait ? `, ${p.wait}` : ''}.`
+		);
+	} else {
+		const last = (p.last_body || p.body || 'unknown').split('/')[0];
+		const wait = p.wait ? p.wait.charAt(0).toUpperCase() + p.wait.slice(1) : '';
+		lines.push(
+			`Seat empty${since ? ` since ${since}` : ''}. Last engine ${last}.${wait ? ` ${wait}.` : ''}`
+		);
+	}
+	if (p.now) {
+		const step = p.step ? ` The step still on that wish: ${p.step}.` : '';
+		lines.push(`Doing the plan's next line, not live work: ${p.now}.${step}`);
+	}
+	if (p.letters?.length) {
+		const bits = p.letters.map((letter) => {
+			const name = letterName(letter.id);
+			if (letter.filed === 'wish')
+				return `${name} filed as ${letter.wish || 'a wish'} ${letter.state || ''}`.trim();
+			if (letter.filed === 'chatter') return `${name} chatter`;
+			return `${name} not filed`;
+		});
+		const more = p.letters_more ? ` ${p.letters_more} more not shown.` : '';
+		lines.push(`Letters it has read: ${bits.join('; ')}.${more}`);
+	}
+	const shell = p.shell || (p.body || p.last_body || '').split('/')[0];
+	const row = (fuel ?? []).find((item) => item.shell === shell);
+	if (row) {
+		const session = row.gauges?.find((gauge) => gauge.window === 'session');
+		const week = row.gauges?.find((gauge) => gauge.window === 'week');
+		const read = hm(row.read_at);
+		const pace = row.pace ? ` ${row.pace}.` : '';
+		const taken = read ? ` Reading taken ${read}.` : '';
+		if (!session)
+			lines.push(
+				`No short window. ${gaugeBit('Week', week)}${taken}${pace}`.replace(/\s+/g, ' ').trim()
+			);
+		else
+			lines.push(
+				`${gaugeBit('Session', session)} ${gaugeBit('Week', week)}${taken}${pace}`
+					.replace(/\s+/g, ' ')
+					.trim()
+			);
+	}
+	return lines;
+}
+
+// Closed, the row is one line. The plan is the part that shortens. The pace
+// appears only when this shell's short window runs dry before its reset.
+const PLAN_CUT = 32;
+
+export function residentClosed(
+	p: Presence | undefined,
+	fuel: Fuel[] | undefined
+): { who: string; plan: string; pace: string; line: string } {
+	if (!p) return { who: '', plan: '', pace: '', line: '' };
+	const since = hm(p.since);
+	const who =
+		p.state === 'working' || p.state === 'holding'
+			? `${p.body || 'a body'} in the seat${since ? ` since ${since}` : ''}`
+			: `Seat empty${since ? ` since ${since}` : ''}. Last engine ${(p.last_body || p.body || 'unknown').split('/')[0]}`;
+	const raw = (p.now ?? '').replace(/\s+/g, ' ').trim();
+	const plan = raw.length > PLAN_CUT ? raw.slice(0, PLAN_CUT - 1).trimEnd() + '…' : raw;
+	const shell = p.shell || (p.body || p.last_body || '').split('/')[0];
+	const paceText = (fuel ?? []).find((item) => item.shell === shell)?.pace ?? '';
+	const pace = paceText.includes('before the reset')
+		? paceText.replace(/^session pace:\s*/, '')
+		: '';
+	const line = [who, plan, pace].filter((part) => part).join(' · ');
+	return { who, plan, pace, line };
+}
+
 // The leading machine, and on hover every machine this install has heard of. `seen` is the newest router beat
 // that reached this install, not liveness: a peer's facts come through the shuttle a couple of minutes late.
 export function leadName(machines: Machine[] | undefined): string {
@@ -172,6 +271,7 @@ export function assemble(index: Index, threads: Map<string, ThreadPart>, loose?:
 		tools,
 		live,
 		fuel: [...new Map((index.fuel || []).map((s) => [s.shell, s])).values()],
+		presence: index.presence,
 		machines: index.machines || [],
 		faces: index.faces,
 		person: index.person,

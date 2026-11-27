@@ -180,8 +180,13 @@ def test_document_matches_the_contract(board):
     doc = call["doc"]
     assert doc["v"] == 1 and doc["at"].endswith("Z")
     assert doc["bodies"] == {"default": "fake/haiku", "choices": ["fake/haiku"]}
-    assert doc["fuel"] == [{"shell": "fake", "state": "ok", "cores": ["haiku"], "gauges": [
-        {"window": "session", "left_pct": 82, "resets_at": "2026-10-19T05:00:00Z"}]}]
+    row = doc["fuel"][0]
+    # One reading has no burn yet. The clock is the file's own `at`, not a pinned instant.
+    assert row["pace"] == "session pace: one reading, burn not known yet"
+    assert row["read_at"].endswith("Z")
+    assert {k: v for k, v in row.items() if k not in {"pace", "read_at"}} == {
+        "shell": "fake", "state": "ok", "cores": ["haiku"], "gauges": [
+            {"window": "session", "left_pct": 82, "resets_at": "2026-10-19T05:00:00Z"}]}
     thread = next(t for t in doc["threads"] if t["id"] == "web")
     assert thread["id"] == "web" and thread["title"] == "Put the loom on the web."
     assert thread["status"] == "open" and thread["opened_by"] == "thread:inbox"

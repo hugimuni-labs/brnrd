@@ -113,9 +113,13 @@ def _ageless(line: str) -> str:
 
 def _slot(key: str) -> str:
     """The place a line holds: a line that changed in place (``body:``, ``asks:``,
-    one ``opened:`` thread) is said anew, never also as gone."""
+    one ``opened:`` thread, the session pace) is said anew, never also as gone."""
     if key.startswith(("opened: ", "waiting: ")):
         return " ".join(key.split()[:2])
+    # ``session pace:`` is two words. The first does not end in a colon, so a changed
+    # sentence would otherwise be said as new and again as gone.
+    if key.startswith("session pace:"):
+        return "session pace:"
     head = key.split(" ", 1)[0]
     return head if head.endswith((":", "?")) else key
 
