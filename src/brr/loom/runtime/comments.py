@@ -259,5 +259,5 @@ def observe_comments(home, facts, armed: bool, rows: list[dict]):
         by_id = getattr(facts, "by_id", None)
         letter = by_id[ident] if by_id is not None and ident in by_id else next(
             fact for fact in facts if fact.id == ident)
-        route_header(home, facts, letter, "pr")
+        route_header(home, facts, letter, "pr", who=row["login"])
     return facts

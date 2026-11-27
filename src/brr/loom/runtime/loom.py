@@ -552,11 +552,13 @@ def _supersede(home: Home, facts, kind: str, ident: str, covers=True) -> None:
 _HEADER_CAUSES = frozenset({"paced", "pending", "failed", "settled"})
 
 
-def route_header(home: Home, facts, letter: Fact, rule: str) -> bool:
+def route_header(home: Home, facts, letter: Fact, rule: str, *, who: str | None = None) -> bool:
     """One passive inbox line when a rule delivered the letter away from the inbox.
 
     A verdict stays on ``heard``. A closed thread stays on the climb. The fourth
     unshown header for one thread replaces that thread's lines with one notice.
+    A later letter replaces that notice, so the inbox still owes one line.
+    ``who`` is the person who wrote, when the letter itself is from the loom.
     """
     from .lifecycle import CLOSED, read_thread
     from .project import _destination, fold
@@ -587,10 +589,10 @@ def route_header(home: Home, facts, letter: Fact, rule: str) -> bool:
         covers = lambda fact, thread=thread: fact.data.get("header_for") == thread
     else:
         routes = [ident]
-        who = letter.data.get("from") or ""
+        speaker = who or str(letter.data.get("from") or "")
         shown_place = place if place else "-"
-        what = (f"routed {ident} from {who} · place {shown_place} · thread {thread} · {rule}"
-                f"{cause_bit} · open: brnrd runtime letter {ident}")
+        what = (f"routed {ident} from {speaker} · place {shown_place} · thread {thread} · {rule}"
+                f"{cause_bit}")
         subject = ident
         covers = False
     return bool(notice(
