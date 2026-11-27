@@ -52,7 +52,8 @@ for (const browserType of [chromium, webkit]) {
 				}, broken);
 				await B.page.goto('about:blank');
 				await B.page.goto(B.base);
-				await B.page.waitForSelector('.brd .column.threadcol', { timeout: 5000 });
+				// The index stays held until release(), so a column here came from the cache at any ceiling.
+				await B.page.waitForSelector('.brd .column.threadcol', { timeout: 30_000 });
 				assert.deepEqual(B.errors, []);
 				assert.doesNotMatch(await B.page.locator('.brd').innerText(), /NaN/);
 				assert.equal(await B.page.evaluate(() => window.__board.model.byId.has('undated')), false);

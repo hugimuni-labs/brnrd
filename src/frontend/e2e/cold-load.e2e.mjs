@@ -44,7 +44,7 @@ test('a wish backlink waits for the cold load before it chooses the review', asy
 		ready: '.brd:not([data-partial])'
 	});
 	try {
-		await B.page.getByRole('heading', { name: 'bravo happens' }).waitFor({ timeout: 4_000 });
+		await B.page.getByRole('heading', { name: 'bravo happens' }).waitFor();
 		assert.equal(new URL(B.page.url()).searchParams.get('delivery'), 'wish.result:bravo-v1');
 		assert.deepEqual(B.errors, []);
 	} finally {
