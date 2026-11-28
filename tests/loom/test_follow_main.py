@@ -643,6 +643,38 @@ def test_hold_records_why_settles_the_letter_and_the_next_tip_offers_again(world
     assert not world.execs
 
 
+def test_a_held_update_can_be_taken_on_the_same_tip(world):
+    _offer(world)
+    home = Home(world.root)
+    why = "finish the CPU measurement"
+    update.decide(home, world.source, "hold", why)
+    held = update.latest(read_facts(home), home, world.source, "update.decided")
+
+    update.decide(home, world.source, "take")
+
+    facts = read_facts(home)
+    taken = update.latest(facts, home, world.source, "update.decided")
+    assert taken.data["action"] == "take"
+    assert taken.data["tip"] == world.tip
+    assert taken.data["offer"] == held.data["offer"]
+    assert any(f.id == held.id and f.data["why"] == why for f in facts)
+    assert _git(world.source, "rev-parse", "HEAD") == world.tip
+
+
+def test_show_displays_a_held_offer_and_its_reason(world, capsys):
+    from brr.loom.runtime.__main__ import main
+
+    _offer(world)
+    why = "finish the CPU measurement"
+    update.decide(Home(world.root), world.source, "hold", why)
+
+    capsys.readouterr()
+    assert main(["update", "--home", str(world.root)]) == 0
+    shown = json.loads(capsys.readouterr().out)
+    assert shown["new"] == world.tip
+    assert shown["held"]["why"] == why
+
+
 def test_a_new_tip_updates_the_open_offer_without_a_second_letter_and_take_uses_it(world, capsys):
     _offer(world)
     letter = _update_letters(world)[0]
