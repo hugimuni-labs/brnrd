@@ -23,7 +23,9 @@ def _at(seconds):
 def _home(tmp_path):
     root = tmp_path / "home"
     write_thread(root, "inbox", "The inbox.\n", "quit-now")
-    return Home(root, install="aaaa")
+    # inject_letter opens its own Home. Both writers must share the same clock.
+    (root / "loom/install-id").write_text("aaaa\n")
+    return Home(root)
 
 
 def _lease(home, strand=SEAT, shell="claude", core="fable"):
