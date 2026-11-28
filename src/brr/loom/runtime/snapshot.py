@@ -184,7 +184,7 @@ def _wish_rows(told, facts) -> list[dict]:
 
     def last(wish):
         return max((_when(r["at"]) for r in wish.results), default=_when(wish.at))
-    plans = wish_plans(told)
+    plans = wish_plans(told, facts)
     rows = []
     for w in sorted(told.values(), key=lambda w: (not w.open, -last(w).timestamp(), w.id))[:WISHES]:
         says = []

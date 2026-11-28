@@ -158,7 +158,10 @@ def wishes(facts: Iterable[Fact]) -> dict[str, Wish]:
     ordered = union(facts)
     letters = {str(f.data.get("id", f.id)): f for f in ordered if f.kind == "letter"}
     found: dict[str, Wish] = {}
+    strand_threads: dict[str, str] = {}
     for fact in ordered:
+        if fact.kind == "lease":
+            strand_threads[f"strand:{fact.data['strand']}"] = fact.data["thread"]
         if fact.kind not in {"wish", "wish.read", "wish.result", "wish.verdict", "wish.left",
                              "wish.top", "wish.pick", "wish.goal"}:
             continue
@@ -185,7 +188,10 @@ def wishes(facts: Iterable[Fact]) -> dict[str, Wish]:
             wish = found[ident]
             if fact.kind == "wish.read":
                 wish.reading = d["reading"]
-                wish.reads.append(dict(d, at=fact.at, writer=fact.by))
+                thread = d.get("thread") or (
+                    (d.get("wait") or {}).get("thread") if fact.by.startswith("strand:") else None
+                ) or strand_threads.get(fact.by)
+                wish.reads.append(dict(d, at=fact.at, writer=fact.by, thread=thread))
             elif fact.kind == "wish.result":
                 wish.results.append(dict(d, at=fact.at, writer=fact.by, delivery_id=fact.id))
             elif fact.kind == "wish.top":
@@ -591,11 +597,17 @@ def wish_plan(wish: Wish) -> tuple[dict | None, list[list[str]]]:
                   if stamp["letters"] and stamp["at"] > after]
 
 
-def wish_plans(told: dict) -> dict:
-    """Project the plan and active park of each folded wish for board and wake."""
-    from .waits import live
+def wish_plans(told: dict, facts=None, *, thread=None) -> dict:
+    """Project the plan and newest applicable park of each wish for compact summaries."""
+    from .waits import live, park_thread, unresolved
 
-    parked = {wish.id: read for wish, read in live(told)}
+    parks = live(told) if facts is None else unresolved(told, facts)
+    parked = {}
+    for wish, read in parks:
+        if thread is not None and park_thread(wish, read) != thread:
+            continue
+        if wish.id not in parked or read["at"] >= parked[wish.id]["at"]:
+            parked[wish.id] = read
     return {wish.id: (*wish_plan(wish), parked.get(wish.id)) for wish in told.values()}
 
 
@@ -650,7 +662,7 @@ def wake_wishes(facts: Iterable[Fact], thread: str, plan_rows=(), told: dict | N
                     + (f" as: {_short(d['why'], 120)}" if d.get("why") else "") + "\n")
     # A delivered wish waits only on its acceptance; its result is the receipt, so
     # it takes its one line, without the tree, instead of crowding the README out.
-    plans = wish_plans({w.id: w for w in rows[:20]})
+    plans = wish_plans({w.id: w for w in rows[:20]}, facts, thread=thread)
     section += "".join(line + "\n" for w in rows[:20]
                        for line in ([wish_line(w)] if w.state == "delivered" else wish_tree(w, bodies, plan_rows, plan=plans[w.id])))
     if len(rows) > 20:

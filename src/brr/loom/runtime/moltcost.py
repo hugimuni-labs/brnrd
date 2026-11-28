@@ -51,17 +51,21 @@ def set_again(
     A park is a ``waiting:`` read. An ask is one whose reading starts ``waiting: ask``.
     The same wish with a different ``wait.on`` is a new wait, not one set again.
     """
+    from .home import notice_id
+    from .waits import subject
     from .wishes import wishes
 
+    facts = list(facts)
+    resolved = {f.id for f in facts if f.kind == "letter" and f.at < started_at}
     old_by, new_by = f"strand:{old_strand}", f"strand:{new_strand}"
     parks, asks = [], []
     for wish in wishes(facts).values():
-        if wish.thread != thread:
-            continue
         before = [
             r
             for r in wish.reads
-            if r.get("at", "") < started_at and r.get("writer") == old_by
+            if r["at"] < started_at and (r.get("thread") == thread or (
+                r.get("thread") is None and r["writer"] == old_by
+            ))
         ]
         if not before:
             continue
@@ -70,9 +74,8 @@ def set_again(
             "wait"
         ):
             continue
-        if any(
-            r.get("at", "") > last["at"] and r.get("at", "") < started_at
-            for r in wish.results
+        if notice_id("wait", subject(wish, last)) in resolved or any(
+            r["delivered"] and last["at"] < r["at"] < started_at for r in wish.results
         ):
             continue
         after = [

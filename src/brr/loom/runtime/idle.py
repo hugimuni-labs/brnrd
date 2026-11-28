@@ -146,7 +146,7 @@ def _shared(home, facts, now: float | None) -> dict:
     from .queues import queues
     from .receipts import receipts
     from .threads import pr_cards
-    from .waits import live
+    from .waits import parker, unresolved
     from .wishes import told, waits_on
     now = time.time() if now is None else now
     found = told(facts)
@@ -159,7 +159,8 @@ def _shared(home, facts, now: float | None) -> dict:
     return {
         "now": now, "found": found, "main": main, "q": queues(found, heads),
         "people": _people(facts), "cards": pr_cards(home),
-        "receipts": receipts(facts, home.install_id()), "parked": list(live(found)),
+        "receipts": receipts(facts, home.install_id()), "parked": [(parker(home, wish, read), wish, read)
+                   for wish, read in unresolved(found, facts)],
         "heard": heard,
         "open": [name for name, row in main.items() if row.get("status") not in CLOSED],
     }
@@ -223,7 +224,8 @@ def _quiet_line(row) -> str:
 
 
 def _held(shared, thread: str) -> tuple[list, set[str]]:
-    parked = sorted((row for row in shared["parked"] if row[0].thread == thread), key=lambda row: row[1]["at"])
+    parked = sorted(((wish, read) for owner, wish, read in shared["parked"] if owner == thread),
+                    key=lambda row: row[1]["at"])
     return parked, {wish.id for wish, _ in parked}
 
 

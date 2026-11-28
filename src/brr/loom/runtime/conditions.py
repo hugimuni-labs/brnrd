@@ -276,17 +276,20 @@ def firings(home, facts, found: dict, state, now: datetime, known: set[str] | No
             *room_kept(home, facts), *pass_due(home, facts, now, known or set())]
 
 
-def parks(home, facts, found: dict) -> dict[str, str]:
-    """Each condition name → the thread of the earliest live ``cond:`` park naming it."""
+def parks(home, facts, found: dict) -> dict[str, list[str]]:
+    """Each condition name → its distinct subscribed threads, oldest park first."""
     from .waits import parker, unresolved
     rows = sorted(unresolved(found, facts), key=lambda row: row[1]["at"])
-    out: dict[str, str] = {}
+    out: dict[str, list[str]] = {}
     for wish, read in rows:
         on = str(read["wait"].get("on") or "")
         if not on.startswith("cond:"):
             continue
         for name in parse(on[5:]):
-            out.setdefault(name, parker(home, facts, wish, read))
+            threads = out.setdefault(name, [])
+            thread = parker(home, wish, read)
+            if thread not in threads:
+                threads.append(thread)
     return out
 
 
@@ -318,8 +321,18 @@ def observe_conditions(home, facts, armed: bool, now: datetime | None = None, fo
         # pass-due always wakes the home thread. The notice is the wake: route
         # starts a body for an owed letter on an unheld thread, the same path
         # every other notice uses.
-        thread = firing.thread if firing.name == "pass-due" or firing.thread in held else parked.get(firing.name)
-        if thread is None:
+        if firing.name == "pass-due":
+            threads = [firing.thread]
+        else:
+            threads = parked.get(firing.name, [])
+            if firing.thread in held:
+                threads = [firing.thread, *(thread for thread in threads if thread != firing.thread)]
+        if not threads:
             continue
-        notice(home, facts, "cond", firing.subject, firing.what, firing.can, thread=thread)
+        primary, *others = threads
+        # Keep the original firing id as its completion marker. Write it last
+        # so a partial fanout can retry without duplicating existing notices.
+        for thread in others:
+            notice(home, facts, "cond", f"{firing.subject}|thread:{thread}", firing.what, firing.can, thread=thread)
+        notice(home, facts, "cond", firing.subject, firing.what, firing.can, thread=primary)
     return facts

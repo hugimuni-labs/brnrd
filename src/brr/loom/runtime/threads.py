@@ -135,10 +135,10 @@ def thread_table(home: Home, facts: list, opened_by: str | None = None) -> list[
     from .receipts import receipts
     shipped = receipts(facts, home.install_id())
     cards = pr_cards(home)
-    from .waits import live
+    from .waits import parker, unresolved
     from .wishes import _short, progress
-    parked = {wish.thread: _short(read['reading'].removeprefix('waiting:').strip(), 60)
-              for wish, read in sorted(live(told), key=lambda row: row[1]['at'])}
+    parked = {parker(home, wish, read): _short(read['reading'].removeprefix('waiting:').strip(), 60)
+              for wish, read in sorted(unresolved(told, facts), key=lambda row: row[1]['at'])}
     for thread, data, choice, created, date in _MAIN[repo][1]:
         if opened_by is not None and (data.get('opened-by') or '—') != opened_by:
             continue

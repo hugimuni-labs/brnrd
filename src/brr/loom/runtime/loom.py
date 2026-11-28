@@ -2424,7 +2424,7 @@ def _next_wake(home, facts, state, thread: str) -> str:
                      and (at := parse_instant(fact.data.get("at"))) is not None and at > now),
                     default=None)
     parks = [(wish, read) for wish, read in unresolved(told(facts), facts)
-             if parker(home, facts, wish, read) == thread]
+             if parker(home, wish, read) == thread]
     from .waits import rest_parks
     wake = rest_parks(parks)
     if next_time:
@@ -2436,10 +2436,10 @@ def _next_wake(home, facts, state, thread: str) -> str:
 
 
 def park_reminders(facts, thread):
-    from .waits import unresolved
+    from .waits import park_thread, unresolved
     from .wishes import told
     return "\n".join(read["wait"]["reminder"] for wish, read in unresolved(told(facts), facts)
-                     if wish.thread == thread and read.get("wait", {}).get("reminder"))
+                     if park_thread(wish, read) == thread and read.get("wait", {}).get("reminder"))
 
 
 def pace_shell(facts, config, thread: str) -> str:
