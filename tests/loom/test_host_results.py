@@ -1,5 +1,6 @@
 """A done can be a file on the host: stored at --result, carried where the channel takes files."""
 import hashlib
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -72,3 +73,27 @@ def test_the_loom_takes_a_file_only_on_a_channel_letter_from_its_store(tmp_path)
         fact_from_port(dict(letter, to="thread:other"), "s-aaaa-work", 1, room=room)
     with pytest.raises(PortError, match="expected <sha256> <name>"):
         fact_from_port(dict(letter, attach="../../etc/passwd x"), "s-aaaa-work", 1, room=room)
+
+
+def test_a_chat_receipt_for_a_file_in_the_persons_folder_reads_as_their_path(monkeypatch, tmp_path):
+    """A stranger's first task (threads/first-task): the receipt said the full path twice,
+    the second time as the loom's own check. In a chat it is ~/… once."""
+    import brr.loom.runtime.port as port
+    import brr.loom.runtime.project as project
+    import brr.loom.runtime.verbs_loom as verbs_loom
+    from brr.loom.runtime import verbs_wishes
+    from brr.loom.runtime.home import Home
+    from brr.loom.runtime.wishes import Say
+    sent = []
+    monkeypatch.setattr(verbs_wishes, "read_facts", lambda home: [])
+    monkeypatch.setattr(project, "reply_channels", lambda facts, home: {"L1": "channel:mine/42"})
+    monkeypatch.setattr(port, "write_send", lambda room, **kw: sent.append(kw))
+    monkeypatch.setattr(verbs_loom, "_room", lambda raw: tmp_path / "s-aaaa-work")
+    monkeypatch.setattr(verbs_wishes, "strand_of_room", lambda room: "s-aaaa-work")
+    monkeypatch.setattr(verbs_wishes.Path, "home", classmethod(lambda cls: Path("/Users/dana")))
+    wish = SimpleNamespace(id="w-want", line="A recap", sender="person", says=[Say("L1")])
+    ref = "/Users/dana/Documents/halvard/recap.md"
+    verbs_wishes._tell_delivered(Home(tmp_path), SimpleNamespace(room=None), wish, dict(
+        kind="file", ref=ref, line="The recap", verified=f"{ref} is on this machine"), "inbox")
+    assert sent[0]["body"] == ("delivered &w-want: A recap\nThe recap: ~/Documents/halvard/recap.md\n"
+                               "Reply ok to accept, or say what is off.\n")
