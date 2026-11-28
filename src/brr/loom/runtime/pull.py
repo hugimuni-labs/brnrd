@@ -12,14 +12,16 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from pathlib import Path
 
-from .raises import last_raise, move, prs
+from .ledger import LedgerView, kind_facts
+from .raises import last_raise, last_raises, move, prs
 
 BAND = 5
 # The kinds that move or stale an ask; the band reads no others.
-MOVES = frozenset({"letter", "wish", "pr.opened", "pr.merged"})
+MOVES = ("letter", "wish", "pr.opened", "pr.merged")
 
 
-def flavour(facts, ask, found: dict, room: Path | None, closed=frozenset()) -> tuple[str, str]:
+def flavour(facts, ask, found: dict, room: Path | None, closed=frozenset(), *,
+            raised: dict[str, datetime] | None = None) -> tuple[str, str]:
     """``(live|moved|stale, why)``: stale when its premise is gone, moved when
     something happened since it was last raised, else live."""
     parent = found.get(ask.parent)
@@ -27,13 +29,17 @@ def flavour(facts, ask, found: dict, room: Path | None, closed=frozenset()) -> t
         return "stale", f"{parent.id} {parent.state}"
     if ask.thread in closed:
         return "stale", f"{ask.thread} settled"
-    merged = sorted(str(f.data.get("number")) for f in facts
-                    if f.kind == "pr.merged" and str(f.data.get("number")) in prs(ask))
+    named = prs(ask)
+    merged = sorted(str(f.data.get("number")) for f in kind_facts(facts, "pr.merged")
+                    if str(f.data.get("number")) in named) if named else []
     if merged:
         return "stale", f"#{merged[0]} merged"
-    since = (last_raise(facts, room, ask.id) if room is not None else None) \
-        or datetime.fromisoformat(ask.born or ask.at)
-    why = move(facts, ask, since)
+    since = raised.get(ask.id) if raised is not None else None
+    if raised is None and room is not None:
+        since = last_raise(facts, room, ask.id)
+    since = since or datetime.fromisoformat(ask.born or ask.at)
+    moves = kind_facts(facts, *MOVES) if isinstance(facts, LedgerView) else facts
+    why = move(moves, ask, since)
     return ("moved", why) if why else ("live", "")
 
 
@@ -58,9 +64,9 @@ def band_line(facts, found: dict, thread: str, main: str, room: Path | None = No
     asks = thread_asks(found, thread, main)
     if not asks:
         return ""
-    # One pass over the ledger per render, not one per ask (loom-cpu).
-    facts = [f for f in facts if f.kind in MOVES]
-    rows = [(ask, *flavour(facts, ask, found, room, closed)) for ask in asks]
+    raised = last_raises(facts, room, {ask.id for ask in asks}) if room is not None else {}
+    relevant = facts if isinstance(facts, LedgerView) else kind_facts(facts, *MOVES)
+    rows = [(ask, *flavour(relevant, ask, found, room, closed, raised=raised)) for ask in asks]
     rows.sort(key=lambda row: order[row[1]])
     items = []
     for ask, kind, why in rows[:BAND]:

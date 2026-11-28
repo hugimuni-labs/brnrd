@@ -122,3 +122,32 @@ def test_the_stop_never_holds_on_a_rank_word_and_the_band_is_news_on_change(body
     pr(home, "pr.merged", 12)
     render(home)
     assert "stale (#12 merged)" in jack.execute("post", seat, "{}")
+
+
+def test_boundary_reads_the_outbox_once_for_all_asks(ledger, monkeypatch):
+    from pathlib import Path
+
+    from brr.loom.runtime.ledger import shared_reader
+    from brr.loom.runtime.loom import _pull
+
+    home, seat = ledger
+    channel(home)
+    person_wish(home, seat, "Ship the parser")
+    command(home, seat, "send", "--to", TO, "Merge #12?")
+    command(home, seat, "send", "--to", TO, "Merge #13?")
+    assert len(asks(home)) == 2
+    outbox = seat / "port" / "out"
+    outbox.mkdir(parents=True, exist_ok=True)
+    scans = []
+    glob = Path.glob
+
+    def counted(path, pattern, *args, **kwargs):
+        if path == outbox and pattern == "*.md":
+            scans.append(path)
+        return glob(path, pattern, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "glob", counted)
+    facts = shared_reader(home).refresh(home)
+    band = _pull(home, facts, "work", STRAND, seat)["band"]
+    assert "Merge #12?" in band and "Merge #13?" in band
+    assert len(scans) == 1
