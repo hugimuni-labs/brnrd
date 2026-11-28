@@ -825,8 +825,29 @@ def test_album_uses_one_free_slot_after_each_item_is_drained(
     )
 
 
+def _hold_test_clock(monkeypatch):
+    from brnrd import limits, models
+
+    now = datetime.now(timezone.utc)
+
+    class TestDatetime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return now.astimezone(tz) if tz is not None else now.astimezone().replace(tzinfo=None)
+
+    # Keep the SQLAlchemy timestamp defaults and the admission cutoff on the same clock.
+    monkeypatch.setattr(models, "datetime", TestDatetime)
+    monkeypatch.setattr(limits, "naive_utcnow", lambda: now.replace(tzinfo=None))
+
+    def advance(delta):
+        nonlocal now
+        now += delta
+
+    return advance
+
+
 def test_burst_held_photo_delivers_once_after_window_and_advanced_cursor(monkeypatch):
-    from brnrd import inbox, limits
+    from brnrd import inbox
 
     app, client, sends = _make_client(
         monkeypatch, limit_free_events_per_minute=1, limit_telegram_held_events=1,
@@ -837,8 +858,7 @@ def test_burst_held_photo_delivers_once_after_window_and_advanced_cursor(monkeyp
     code = _tg_pair_code(client, acc, rid)
     client.post("/v1/webhooks/telegram", json=_message(555, f"/start {code}"), headers=_HDR)
     dmn = _daemon_headers(client, acc, rid)
-    now = datetime.now(timezone.utc).replace(tzinfo=None)
-    monkeypatch.setattr(limits, "naive_utcnow", lambda: now)
+    advance_clock = _hold_test_clock(monkeypatch)
 
     def poll(since):
         response = client.get(
@@ -869,7 +889,7 @@ def test_burst_held_photo_delivers_once_after_window_and_advanced_cursor(monkeyp
     later = poll(first["cursor"])
     assert [e["body"] for e in later["events"]] == ["later event"]
 
-    now += timedelta(seconds=61)
+    advance_clock(timedelta(seconds=61))
     released = poll(later["cursor"])
     assert released["cursor"] > later["cursor"]
     [event] = released["events"]
@@ -880,8 +900,6 @@ def test_burst_held_photo_delivers_once_after_window_and_advanced_cursor(monkeyp
 
 
 def test_burst_held_album_delivers_as_one_event(monkeypatch):
-    from brnrd import limits
-
     _, client, sends = _make_client(
         monkeypatch, limit_free_events_per_minute=1, limit_telegram_held_events=3,
         home_gate_member_github_logins=(),
@@ -891,8 +909,7 @@ def test_burst_held_album_delivers_as_one_event(monkeypatch):
     code = _tg_pair_code(client, acc, rid)
     client.post("/v1/webhooks/telegram", json=_message(555, f"/start {code}"), headers=_HDR)
     dmn = _daemon_headers(client, acc, rid)
-    now = datetime.now(timezone.utc).replace(tzinfo=None)
-    monkeypatch.setattr(limits, "naive_utcnow", lambda: now)
+    advance_clock = _hold_test_clock(monkeypatch)
 
     def poll(since):
         response = client.get(
@@ -915,7 +932,7 @@ def test_burst_held_album_delivers_as_one_event(monkeypatch):
         assert any(s["reply_to_message_id"] == message_id and "kept this message" in s["text"] for s in sends)
     assert poll(first["cursor"])["events"] == []
 
-    now += timedelta(seconds=61)
+    advance_clock(timedelta(seconds=61))
     released = poll(first["cursor"])
     assert released["cursor"] > first["cursor"]
     [event] = released["events"]
