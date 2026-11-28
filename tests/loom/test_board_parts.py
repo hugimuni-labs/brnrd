@@ -345,6 +345,34 @@ def test_a_board_post_needs_the_pages_origin_and_records_what_it_saw(parts):
         server.server_close()
 
 
+def test_a_landed_letter_answers_200_when_the_post_record_fails(parts, monkeypatch):
+    """The letter is already in the drop. A raised board.post record must not turn that into an error."""
+    root = parts.home.root
+    (root / "loom/config.toml").write_text('connectors = ["mine=fake"]\n')
+    (root / "self/people/ada").mkdir(parents=True)
+    (root / "self/people/ada/channels.toml").write_text('channels = ["mine:42"]\n')
+    parts.step()
+
+    def fail(*_args, **_kwargs):
+        raise OSError("ledger lock")
+
+    monkeypatch.setattr(parts, "note_post", fail)
+    server = serve(parts, 0)
+    port = server.server_address[1]
+    try:
+        status, body = post(port, {"body": "landed anyway"}, **page(port))
+        assert status == 200, body
+        sent = json.loads(body)
+        assert sent["id"].startswith("letter:mine:")
+        letter = root / "loom/connectors/mine/state/in" / f"{sent['id'].removeprefix('letter:mine:')}.md"
+        assert letter.is_file()
+        assert "landed anyway" in letter.read_text()
+    finally:
+        parts.stop.set()
+        server.shutdown()
+        server.server_close()
+
+
 def test_loopback_serves_the_spa_build_beside_the_parts(parts, tmp_path):
     """The loom serves the SvelteKit build itself: ``/`` is the prerendered page whose probe finds the board, a client
     route gets the 200.html shell, a hashed chunk is immutable, a missing chunk 404s, nothing leaves the build."""
