@@ -94,7 +94,7 @@ def _wish_arguments(parser):
     parser.add_argument("--from", dest="sender", choices=("person", "resident"))
     action = parser.add_mutually_exclusive_group()
     action.add_argument("--read")
-    action.add_argument("--clear-wait", action="store_true", help="clear the wish's current wait")
+    action.add_argument("--clear-wait", action="store_true", help="clear your thread's wait on the wish")
     action.add_argument("--result")
     action.add_argument("--accept", choices=("word", "act", "implied"))
     action.add_argument("--drop")
@@ -176,10 +176,12 @@ def cmd_wish(args):
             if args.read is not None:
                 kind = "wish.read"
                 data.update(reading=args.read, by="person" if by.startswith("person:") else "resident")
+                if thread is not None:
+                    data["thread"] = thread
                 if args.wait is not None and not args.read.startswith("waiting:"):
                     data["reading"] = "waiting: " + args.read
                 if data["reading"].startswith("waiting:"):
-                    data["wait"] = _wait(home, facts, args.id, args.wait, args.until, thread=thread)
+                    data["wait"] = _wait(home, facts, args.id, args.wait, args.until, thread=thread, writer=by)
                     _guard_long_park(home, facts, args.id, data["wait"], args.read, thread, by)
             elif args.result is not None:
                 result_kind, sep, ref = args.result.partition(":")
@@ -515,7 +517,7 @@ def _recall(argv: list[str]) -> int:
     return 0
 
 
-def _wait(home, facts, ident, condition, until, default=None, *, thread=None):
+def _wait(home, facts, ident, condition, until, default=None, *, thread=None, writer=None):
     """A park's ``wait``: its condition with the repo filled in, its deadline and its turn."""
     from datetime import datetime, timezone
     from . import waits
@@ -527,7 +529,7 @@ def _wait(home, facts, ident, condition, until, default=None, *, thread=None):
         if condition.startswith("wish:") and condition[5:] not in found:
             raise ValueError(f"--wait {condition}: no wish {condition[5:]}")
     wait = waits.park(found[ident], condition, until, now, found=found, default=default,
-                      turn=float(load_config(home.root).turn or 0))
+                      turn=float(load_config(home.root).turn or 0), owner=thread or writer)
     wait["thread"] = thread or found[ident].thread
     return wait
 
@@ -720,10 +722,12 @@ def cmd_ask(args):
                 _say([f"already sent to {to}: not sent again"])
         if args.default_at is not None:
             # The asking wish parks on the ask; at its deadline the body is woken with its own rec.
-            append(home, Fact(kind="wish.read", by=by, id="wish.read:" + mint(12), data={
-                "wish": args.wish, "reading": f"waiting: ask {ident}: {args.what}", "by": "resident",
-                "wait": _wait(home, facts, args.wish, "wish:" + ident, args.default_at,
-                              default=args.rec, thread=thread)}))
+            data = {"wish": args.wish, "reading": f"waiting: ask {ident}: {args.what}", "by": "resident",
+                    "wait": _wait(home, facts, args.wish, "wish:" + ident, args.default_at,
+                                  default=args.rec, thread=thread, writer=by)}
+            if thread is not None:
+                data["thread"] = thread
+            append(home, Fact(kind="wish.read", by=by, id="wish.read:" + mint(12), data=data))
         _declare(args, "ask")
         if args.kind is None and (same is None or not same.kind):
             print("ask: no --kind; its answer counts under (no kind) in asks --calibrate", file=sys.stderr)

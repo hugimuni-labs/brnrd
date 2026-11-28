@@ -320,18 +320,90 @@ def test_a_prose_park_backs_off_and_asks_for_a_typed_wait(ledger):
     assert park(home, seat, ident)["wait"]["step"] == 1
 
 
-def test_a_result_or_a_new_reading_ends_the_wait(ledger):
+def test_delivery_or_the_owners_next_read_ends_the_wait(ledger):
     home, seat = ledger
     ident = heard(home, seat, "Ends")
     park(home, seat, ident, "--wait", "at:+1h")
     command(home, seat, "wish", ident, "--read", "Doing it now")
     assert told(home, now=later(hours=2)) == []
     park(home, seat, ident, "--wait", "at:+1h")
-    command(home, seat, "wish", ident, "--result", "pr:https://example.com/1", "--line", "Done")
+    command(home, seat, "wish", ident, "--result", "url:https://example.com/1", "--line", "Done", "--deliver")
     assert told(home, now=later(hours=2)) == []
 
     park(home, seat, ident, "--wait", "at:+1h")
     command(home, seat, "wish", ident, "--clear-wait")
+    assert told(home, now=later(hours=2)) == []
+
+
+def test_two_threads_keep_and_resolve_separate_parks_on_the_same_wish(ledger):
+    from brr.loom.runtime.selfrepo import room
+
+    home, seat = ledger
+    strand = "s-aaaa-other"
+    other = room(home.root, strand).parent
+    append(home, Fact(kind="lease", by="loom:aaaa", data={
+        "thread": "other", "strand": strand, "gen": 1, "install": "aaaa",
+        "router_gen": 1, "shell": "fake", "core": "fake", "repos": [],
+    }))
+    ident = heard(home, seat, "Ship it")
+    ci, pr = f"ci:{REPO}@abc1234", f"pr:{REPO}#42"
+    first = park(home, seat, ident, "--wait", ci)
+    command(home, seat, "wish", ident, "--read", "Scope it to the first change", person=True)
+    command(home, other, "wish", ident, "--read", "Review it")
+    assert waits.thread_lines(home, read_facts(home), "work") == [
+        f"waiting: {ident} on {ci} since {first['at']}"
+    ]
+    park(home, other, ident, "--wait", pr)
+    command(home, other, "wish", ident, "--clear-wait")
+    assert not waits.thread_lines(home, read_facts(home), "other")
+    second = park(home, other, ident, "--wait", pr)
+
+    url = f"https://github.com/{REPO}/pull/42"
+    append(home, Fact(kind="pr.opened", by="strand:s-aaaa-test", data={
+        "thread": "work", "repo": "brnrd", "number": 42, "url": url, "head": "loom/work",
+    }))
+    from brr.loom.runtime.loom import _grant_opened
+    _grant_opened(home, read_facts(home))
+    assert any(r["ref"] == url and not r["delivered"] for r in view(home, ident).results)
+
+    facts = read_facts(home)
+    assert waits.thread_lines(home, facts, "work") == [f"waiting: {ident} on {ci} since {first['at']}"]
+    assert waits.thread_lines(home, facts, "other") == [f"waiting: {ident} on {pr} since {second['at']}"]
+    forge = {waits.want(first): {"state": "green"}, pr: {"state": "merged", "url": url}}
+    notices = told(home, forge=forge)
+    assert {letter.data["to"] for letter in notices} == {"thread:work", "thread:other"}
+    wish = view(home, ident)
+    assert {letter.id for letter in notices} == {
+        notice_id("wait", waits.subject(wish, read)) for read in (first, second)
+    }
+    assert told(home, forge=forge) == []
+
+
+@pytest.mark.parametrize("cancelled_by", ["another read", "an opened PR"])
+def test_a_cancelled_legacy_park_stays_ended_after_upgrade(ledger, cancelled_by):
+    home, seat = ledger
+    ident = heard(home, seat, "Legacy work")
+    strand = "strand:s-aaaa-test"
+    due = later(hours=1).isoformat()
+    append(home, Fact(kind="wish.read", by=strand, id="wish.read:legacy-park", data={
+        "wish": ident, "by": "resident", "reading": "waiting: legacy timer",
+        "wait": {"thread": "work", "on": f"at:{due}"},
+    }))
+    facts = read_facts(home)
+    assert waits.thread_lines(home, facts, "work"), "the historical park starts out live"
+
+    if cancelled_by == "another read":
+        append(home, Fact(kind="wish.read", by="strand:s-aaaa-other", id="wish.read:legacy-read", data={
+            "wish": ident, "by": "resident", "reading": "reviewing",
+        }))
+    else:
+        url = f"https://github.com/{REPO}/pull/42"
+        append(home, Fact(kind="wish.result", by="loom:aaaa", id="wish.result:legacy-pr", data={
+            "wish": ident, "kind": "pr", "ref": url, "line": "opened it", "delivered": False,
+        }))
+
+    facts = read_facts(home)
+    assert not waits.live(wishes(facts))
     assert told(home, now=later(hours=2)) == []
 
 

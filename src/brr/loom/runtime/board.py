@@ -518,9 +518,14 @@ def board_threads(home: Home, facts, config, person: str | None = None, typed: d
         if not w.open or w.state == "delivered":
             continue
         left[w.thread] = left.get(w.thread, 0) + 1
-        read = next((r for r in reversed(w.reads) if r.get("by") != "person"), None)
-        if read and str(read.get("reading", "")).startswith("waiting:") and _iso(read["at"]) > parked.get(w.thread, ("",))[0]:
-            parked[w.thread] = (_iso(read["at"]), read["reading"], w.id)
+    from .waits import parker, unresolved
+    for wish, read in unresolved(raw, facts):
+        if read.get("by") == "person":
+            continue
+        thread = parker(home, facts, wish, read)
+        at = _iso(read["at"])
+        if at > parked.get(thread, ("",))[0]:
+            parked[thread] = (at, read["reading"], wish.id)
     from .owners import unanswered_by_thread
     marks = thread_marks(snap.get("threads") or [], raw, unanswered_by_thread(facts, main_snapshot(home)))
     now = time.time()
@@ -726,7 +731,8 @@ def machines_of(home: Home, facts) -> list[dict]:
 GOAL_STALL = 24 * 3600
 
 
-def goal_progress(goals: list[dict], told: dict, waits: dict[str, str], now: float | None = None) -> list[dict]:
+def goal_progress(goals: list[dict], told: dict, waits: dict[str, str], now: float | None = None,
+                  *, facts=None) -> list[dict]:
     """Each active goal with what the ledger says about the work linked to it (``wish --goal``).
 
     ``waits`` is ``waits_on``: who each open ask waits on. ``progress``: the linked wishes counted by
@@ -742,7 +748,7 @@ def goal_progress(goals: list[dict], told: dict, waits: dict[str, str], now: flo
     for wish in told.values():
         if wish.goal:
             groups.setdefault(wish.goal, []).append(wish)
-    plans = wish_plans({w.id: w for group in groups.values() for w in group if w.open})
+    plans = wish_plans({w.id: w for group in groups.values() for w in group if w.open}, facts)
     held = {told[i].parent for i in waits if i in told and told[i].state != "delivered"}
     out = []
     for goal in goals:
@@ -826,7 +832,7 @@ def compute(home: Home, facts, config, tools: dict, live: dict, person: str | No
         index["machines"] = machines
     found = told_of(facts)
     owners = {t["id"]: {"opened-by": t.get("opened_by"), "status": t.get("status")} for t in threads}
-    index["goals"] = goal_progress(active_goals(home), found, waits_on(found, owners))
+    index["goals"] = goal_progress(active_goals(home), found, waits_on(found, owners), facts=facts)
     parts["index"] = index
     return parts
 

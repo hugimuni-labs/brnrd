@@ -591,11 +591,17 @@ def wish_plan(wish: Wish) -> tuple[dict | None, list[list[str]]]:
                   if stamp["letters"] and stamp["at"] > after]
 
 
-def wish_plans(told: dict) -> dict:
-    """Project the plan and active park of each folded wish for board and wake."""
-    from .waits import live
+def wish_plans(told: dict, facts=None, *, thread=None) -> dict:
+    """Project the plan and newest applicable park of each wish for compact summaries."""
+    from .waits import live, park_thread, unresolved
 
-    parked = {wish.id: read for wish, read in live(told)}
+    parks = live(told) if facts is None else unresolved(told, facts)
+    parked = {}
+    for wish, read in parks:
+        if thread is not None and park_thread(wish, read, facts) != thread:
+            continue
+        if wish.id not in parked or read["at"] >= parked[wish.id]["at"]:
+            parked[wish.id] = read
     return {wish.id: (*wish_plan(wish), parked.get(wish.id)) for wish in told.values()}
 
 
@@ -650,7 +656,7 @@ def wake_wishes(facts: Iterable[Fact], thread: str, plan_rows=(), told: dict | N
                     + (f" as: {_short(d['why'], 120)}" if d.get("why") else "") + "\n")
     # A delivered wish waits only on its acceptance; its result is the receipt, so
     # it takes its one line, without the tree, instead of crowding the README out.
-    plans = wish_plans({w.id: w for w in rows[:20]})
+    plans = wish_plans({w.id: w for w in rows[:20]}, facts, thread=thread)
     section += "".join(line + "\n" for w in rows[:20]
                        for line in ([wish_line(w)] if w.state == "delivered" else wish_tree(w, bodies, plan_rows, plan=plans[w.id])))
     if len(rows) > 20:

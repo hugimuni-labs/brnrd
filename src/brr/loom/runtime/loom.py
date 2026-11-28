@@ -2436,10 +2436,10 @@ def _next_wake(home, facts, state, thread: str) -> str:
 
 
 def park_reminders(facts, thread):
-    from .waits import unresolved
+    from .waits import park_thread, unresolved
     from .wishes import told
     return "\n".join(read["wait"]["reminder"] for wish, read in unresolved(told(facts), facts)
-                     if wish.thread == thread and read.get("wait", {}).get("reminder"))
+                     if park_thread(wish, read, facts) == thread and read.get("wait", {}).get("reminder"))
 
 
 def pace_shell(facts, config, thread: str) -> str:
