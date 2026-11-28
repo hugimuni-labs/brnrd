@@ -189,6 +189,8 @@ class LedgerView(list):
         self.cache = {}
         self.merged_kinds = {}
         self.semantic_revision = 0
+        # Repairs so far: a key built from kind counts adds it, since a rebuild can shrink a kind.
+        self.rebuilds = 0
         self.reducer = None
         self.delta = ()
         self.reset = True
@@ -272,12 +274,13 @@ class LedgerView(list):
             ordered = union(self, delta, duplicates=duplicates)
             fresh = LedgerView(ordered)
             fresh.duplicates = duplicates
-            prior = self.revision
+            prior, rebuilds = self.revision, self.rebuilds
             self.__dict__.clear()
             self.__dict__.update(fresh.__dict__)
             super().clear()
             super().extend(fresh)
             self.revision = prior + 1
+            self.rebuilds = rebuilds + 1
             self.delta = tuple(ordered)
             self.reset = True
         else:
@@ -321,8 +324,24 @@ class LedgerView(list):
         self.letter_projections[name] = (inputs, counts, result)
         return result
 
-    def project(self, name, inputs, build):
+    def project(self, name, inputs, build, kinds=None):
+        """``build(self)`` once per change to what it reads, else the last result.
+
+        ``kinds`` declares what it reads: ``build`` then gets only those rows, in
+        ledger order, and an append of any other kind (a renewal, a receipt)
+        keeps the result. Without ``kinds`` a name falls back to the table below,
+        then to ``semantic_revision``: any fact but a renewal rebuilds it.
+        """
         from .wishes import WISH_KINDS
+
+        if kinds is not None:
+            kinds = tuple(kinds)
+            revision = tuple(len(self.by_kind[kind]) for kind in kinds)
+            key = (name, inputs)
+            prior = self.cache.get(key)
+            if prior is None or prior[0] != revision:
+                self.cache[key] = (revision, build(kind_facts(self, *kinds)))
+            return self.cache[key][1]
 
         dependencies = {
             'senders': ('lease',),
@@ -330,7 +349,6 @@ class LedgerView(list):
             'attachments': ('source', 'blob', 'letter'),
             'reply-context': ('source', 'letter'),
             'letters-by-sender': ('letter',),
-            'wishes': WISH_KINDS,
         }
         if name == 'body-state':
             revision = len(self.by_body[inputs[:2]])

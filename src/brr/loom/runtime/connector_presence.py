@@ -6,6 +6,19 @@ import time
 
 from .adapters import resolve
 from .connector import environment, instances
+from .ledger import LedgerView, kind_facts
+
+
+# Every kind ``update`` and ``observe`` read. On a ledger view the snapshot is
+# redone only when one of them grows: a renewal or a body's tool trace is not news.
+KINDS = ('letter', 'source', 'note', 'wish', 'shown', 'body.started', 'letter.presence',
+         'body.exited', 'body.stopped', 'attempt.ended')
+
+
+def _revision(facts):
+    if isinstance(facts, LedgerView):
+        return (id(facts), facts.rebuilds, tuple(len(facts.by_kind[kind]) for kind in KINDS))
+    return (len(facts), facts[-1].id if facts else None)
 
 
 class Presence:
@@ -29,20 +42,20 @@ class Presence:
             self.revision = None
             return
         self.updated = time.monotonic()
-        revision = (len(facts), facts[-1].id if facts else None)
+        revision = _revision(facts)
         if self.revision == revision:
             return
         from .letter_presence import observe
         facts = observe(self.home, facts)
-        self.revision = (len(facts), facts[-1].id if facts else None)
-        rows = [f.data for f in facts if f.kind == 'letter.presence']
+        self.revision = _revision(facts)
+        rows = [f.data for f in kind_facts(facts, 'letter.presence')]
         admitted = {r['letter']: r for r in rows if r['step'] == 'admitted' and r.get('channel')}
         self.seen.update(ident for ident, row in admitted.items() if row["at"] < self.began)
         answered = {r['letter'] for r in rows if r['step'] == 'first-word'}
-        ended = {(f.data.get('strand'), f.data.get('gen')) for f in facts
-                 if f.kind in {'body.exited', 'body.stopped', 'attempt.ended'}}
-        local = {(f.data.get('strand'), f.data.get('gen')) for f in facts
-                 if f.kind == 'body.started' and f.by == f'loom:{self.home.install_id()}'}
+        ended = {(f.data.get('strand'), f.data.get('gen'))
+                 for f in kind_facts(facts, 'body.exited', 'body.stopped', 'attempt.ended')}
+        local = {(f.data.get('strand'), f.data.get('gen')) for f in kind_facts(facts, 'body.started')
+                 if f.by == f'loom:{self.home.install_id()}'}
         working = {r['letter']: r for r in rows if r['step'] == 'booted' and r.get('channel')
                    and r['letter'] not in answered and (r.get('strand'), r.get('gen')) not in ended
                    and (r.get('strand'), r.get('gen')) in local}

@@ -260,6 +260,17 @@ def _answer(asked: list[Wish], letters: dict, ordered: list[Fact]) -> None:
             raised.setdefault(ident, set()).add(str(link))
     closed = {letter.data["closes_ask"]: ident for ident, letter in letters.items()
               if letter.by.startswith("loom:") and letter.data.get("closes_ask")}
+    # Only a letter that replies to the ask, replies to a letter linking it, or
+    # links it can answer it: index those, so each ask reads its own few letters
+    # and never every letter (asks x letters was the snapshot's largest cost).
+    place = {ident: at for at, ident in enumerate(letters)}
+    replies_to: dict[str, list[str]] = {}
+    for ident, letter in letters.items():
+        replies_to.setdefault(str(letter.data.get("re") or ""), []).append(ident)
+    linking: dict[str, list[str]] = {}
+    for ident, links in raised.items():
+        for link in links:
+            linking.setdefault(link, []).append(ident)
     for ask in asked:
         if ask.answered_by != "reply":
             ask.answer = closed.get(ask.id, "")
@@ -278,7 +289,13 @@ def _answer(asked: list[Wish], letters: dict, ordered: list[Fact]) -> None:
             return (letter.by.startswith("strand:") and replies
                     and writer != ask.thread and writer not in RELAYS)
         stamped = [i for s in ask.stamps for i in s["letters"] if i in letters and _person(letters[i])]
-        ask.answer = next(iter(stamped), None) or next((i for i, f in letters.items() if answers(f)), "")
+        if stamped:
+            ask.answer = stamped[0]
+            continue
+        near = {*replies_to.get(ask.id, ()), *linking.get(ask.id, ())}
+        for link in linking.get(ask.id, ()):
+            near.update(replies_to.get(link, ()))
+        ask.answer = next((i for i in sorted(near, key=place.__getitem__) if answers(letters[i])), "")
 
 
 WISH_KINDS = ("wish", "wish.read", "wish.result", "wish.verdict", "wish.left", "wish.top", "wish.pick", "wish.goal",
@@ -290,9 +307,8 @@ WISH_KINDS = ("wish", "wish.read", "wish.result", "wish.verdict", "wish.left", "
 
 def told(facts) -> dict[str, Wish]:
     """``wishes`` once per change to its kinds: a held tick never walks the ledger."""
-    from .ledger import kind_facts
     from .project import cached_projection
-    return cached_projection(facts, "wishes", (), lambda rows: wishes(kind_facts(rows, *WISH_KINDS)))
+    return cached_projection(facts, "wishes", (), wishes, kinds=WISH_KINDS)
 
 
 ONBOARDING_WISH = 'brnrd knows the person it works for'
