@@ -220,7 +220,10 @@ def test_failed_port_write_does_not_stamp_wish(ledger, monkeypatch):
     assert not (seat / "port/out").exists()
 
 
-def test_wake_caps_rows_with_asks_first(ledger):
+def test_wake_caps_rows_with_asks_first(ledger, monkeypatch):
+    # Leave space for the full briefing on a machine with multiple harnesses.
+    # This test checks the row cap and order. Wake byte limits are tested separately.
+    monkeypatch.setenv("LOOM_BUDGET_BYTES", "32000")
     home, seat = ledger
     for i in range(70):
         append(home, Fact(kind="wish", by="strand:s-aaaa-test", id=f"w-{i:03}", data={
