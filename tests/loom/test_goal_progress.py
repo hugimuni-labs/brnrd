@@ -88,7 +88,8 @@ def goal_command(tmp_path, monkeypatch):
     from brr.loom.runtime.ledger import append, read_facts
 
     home = Home(tmp_path, install="aaaa")
-    append(home, wish("w-pilot", at(20)))
+    append(home, letter("L1", at(30)))
+    append(home, wish("w-pilot", at(20), says=["L1"]))
     append(home, wish("w-ask", at(10), sender="resident", parent="w-pilot"))
     monkeypatch.setattr(verbs_wishes, "_context", lambda args: (home, "strand:s-aaaa-work", "work"))
     monkeypatch.setattr(idle, "active_goals", lambda home: [GOAL])
