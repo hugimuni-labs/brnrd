@@ -20,8 +20,8 @@ def home(ledger):
     (home.root / "self/people/ada").mkdir(parents=True)
     (home.root / "self/people/ada/channels.toml").write_text('channels = ["mine:42"]\n')
     collectors._SEEN.clear()
-    for shell in ("grok", "claude", "codex", "vibe"):
-        ran(home, shell)
+    for gen, shell in enumerate(("grok", "claude", "codex", "vibe"), start=1):
+        ran(home, shell, gen=gen)
     yield home, seat
     collectors._SEEN.clear()
 
@@ -38,11 +38,15 @@ def fresh(ledger):
     collectors._SEEN.clear()
 
 
-def ran(home, shell):
-    """A body of ``shell`` ran in this home: the lease the loom writes when it starts one."""
-    append(home, Fact(kind="lease", by="loom:aaaa", id=f"lease:{shell}:1", data={
-        "thread": "other", "strand": f"s-aaaa-{shell}", "gen": 1, "install": "aaaa",
-        "router_gen": 1, "shell": shell, "core": "", "repos": []}))
+def ran(home, shell, *, gen=1):
+    """Record a past body without leaving a lease the tick can start."""
+    seat = {"thread": "other", "strand": f"s-aaaa-{shell}", "gen": gen, "install": "aaaa"}
+    append(home, Fact(kind="lease", by="loom:aaaa", id=f"lease:{shell}:{gen}", data={
+        **seat, "router_gen": 1, "shell": shell, "core": "", "repos": [],
+    }))
+    append(home, Fact(kind="released", by="loom:aaaa", id=f"released:other:{gen}", data={
+        **seat, "why": "body ended",
+    }))
 
 
 _LAST = [0.0]
