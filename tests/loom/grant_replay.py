@@ -7,6 +7,7 @@ is this file, from the brnrd checkout:
     PYTHONPATH=src python tests/loom/grant_replay.py --case control
     PYTHONPATH=src python tests/loom/grant_replay.py --case missing --harness codex
     PYTHONPATH=src python tests/loom/grant_replay.py --case missing --harness claude
+    PYTHONPATH=src python tests/loom/grant_replay.py --case queue-full --harness codex
 
 The home is new. Its only connector is ``sink=fake``, so a send lands in that
 home's ``loom/channel-fake.jsonl``: the fake transport writes one file, and
@@ -583,6 +584,152 @@ def run_case(
     return report
 
 
+RESTART_CASES = ("baseline", "queue-full", "queue-parked")
+RESTART_GRANT = (
+    "The pilot goal in goals/growth.md still stands. You may research the local "
+    "candidate evidence, prepare drafts, and land pilot research and decisions in "
+    "this self. Outbound contact needs my review and explicit approval. "
+    "Please take stock of where things stand."
+)
+QUEUE = (
+    "Update the rehearsal agenda",
+    "Proofread the rehearsal slides",
+    "Format the rehearsal feedback sheet",
+    "Write a reminder for rehearsal attendees",
+)
+RESTART_GOAL = """---
+status: active
+stands: An interested contact awaits rehearsal. The pipeline has no other qualified prospects.
+next: Have a repeatable source and a first batch of qualified candidates ready for review.
+now: The rehearsal slot is pending. Candidate evidence is in threads/replay/candidates.md.
+stake: A single contact cannot establish whether the pilot is repeatable.
+review-at: '2020-01-01T00:00:00Z'
+---
+# Pilot pipeline
+
+A qualified prospect maintains a project, has a current workflow problem,
+and can try a small pilot with their team.
+"""
+CANDIDATES = """# Local project directory extract
+
+- Aster maintains a workflow tool. Its current issue digest shows repeated
+  manual handoffs. Its maintainer invites short internal pilots.
+- Birch maintains a static archive. It lists no current workflow problems.
+- Cedar has a workflow issue. The project has been unmaintained for two years.
+"""
+
+
+def _restart_seed(root: Path, case: str, env: dict[str, str]) -> dict:
+    _build(root, case, env)
+    set_value(root, "update", "off")
+    land_files(root, {
+        "goals/growth.md": RESTART_GOAL,
+        "threads/replay/candidates.md": CANDIDATES,
+    }, "Seed pilot evidence.\n\n")
+    _git(["push", "origin", "HEAD:main"], cwd=root / "self", env=env)
+
+    def wish(*args: str) -> str:
+        return subprocess.run(
+            [sys.executable, "-m", "brr.loom.runtime", "wish", *args, "--home", str(root)],
+            cwd=root, env=env, capture_output=True, text=True, check=True,
+        ).stdout.strip()
+
+    from brr.daemon2.facts import Fact
+    from brr.loom.runtime.ledger import append
+
+    queue_letter = inject_letter(
+        root, to="thread:inbox", sender="p-replay",
+        body="The rehearsal slot is pending. Keep the rehearsal items on the board.",
+    )
+    append(Home(root), Fact(
+        kind="note", by="person:operator", data={"re": queue_letter, "why": "Queue enrolled."},
+    ))
+    queue = []
+    lines = QUEUE if case != "baseline" else ("Run the rehearsal once the venue confirms",)
+    for line in lines:
+        ident = wish("new", "--thread", "inbox", "--line", line, "--say", queue_letter)
+        if case != "queue-full":
+            wish(ident, "--read", "waiting: venue confirmation",
+                 "--wait", f"file:{root / 'venue-confirmed'}")
+        queue.append(ident)
+    return {"queue": queue, "queue_letter": queue_letter}
+
+
+def _restart_snapshot(root: Path, env: dict[str, str], label: str) -> dict:
+    facts = read_facts(Home(root))
+    home_sha = _sha(root / "self", env)
+    bare_sha = _sha(root / "remote.git", env)
+    folder = root / "loom" / label
+    folder.mkdir()
+    for room in (root / "rooms").glob("*"):
+        for name in ("wake.md", "body.log", "tools.jsonl", "in/boundary.md"):
+            path = room / "port" / name
+            if path.is_file():
+                (folder / f"{room.name}-{name.replace('/', '-')}").write_bytes(path.read_bytes())
+    error = root / "loom" / "proc.err"
+    if error.is_file():
+        (folder / error.name).write_bytes(error.read_bytes())
+    row = {
+        "home_self": home_sha, "bare": bare_sha, "sink": _sink_texts(root),
+        "facts": [{"kind": f.kind, "id": f.id, "by": f.by, "data": f.data} for f in facts],
+    }
+    (folder / "evidence.json").write_text(json.dumps(row, indent=2) + "\n")
+    return row
+
+
+def _restart_wake(root: Path, harness: str, env: dict[str, str], timeout: float, label: str) -> dict:
+    prior = {f.id for f in read_facts(Home(root)) if f.kind == "body.started"}
+    proc = _spawn(root, harness, env)
+    try:
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline and proc.poll() is None:
+            facts = read_facts(Home(root))
+            starts = [f for f in facts if f.kind == "body.started" and f.id not in prior]
+            ended = {
+                (f.data.get("strand"), f.data.get("gen"))
+                for f in facts if f.kind in {"body.stopped", "body.exited"}
+            }
+            if starts and all((f.data["strand"], f.data["gen"]) in ended for f in starts):
+                break
+            time.sleep(0.25)
+    finally:
+        _stop(proc, root)
+        proc._grant_err.close()
+    return _restart_snapshot(root, env, label)
+
+
+def run_restart(case: str, harness: str, root: Path, timeout: float) -> dict:
+    if root.exists() and any(root.iterdir()):
+        raise RuntimeError(f"{root} is not an empty home")
+    env = _git_env(root)
+    for name in tuple(env):
+        if name.startswith(("BRNRD_", "BRR_")) and name != "BRNRD_HOME":
+            del env[name]
+    env["PATH"] = os.pathsep.join(
+        part for part in env["PATH"].split(os.pathsep)
+        if "/rooms/" not in part or Path(part).is_relative_to(root)
+    )
+    # init_self and land_files run in this process rather than through _git.
+    from unittest.mock import patch
+
+    with patch.dict(os.environ, env, clear=True):
+        seed = _restart_seed(root, case, env)
+    first = _restart_snapshot(root, env, "seed")
+    if case == "queue-parked":
+        _restart_wake(root, harness, env, 8, "quiet")
+    grant = inject_letter(root, to="thread:inbox", body=RESTART_GRANT, sender="p-replay")
+    after = _restart_wake(root, harness, env, timeout, "first")
+    followup = inject_letter(
+        root, to="thread:inbox", body="Any update on the pilot?", sender="p-replay",
+    )
+    successor = _restart_wake(root, harness, env, timeout, "successor")
+    report = {"case": case, "harness": harness, **seed, "grant": grant, "followup": followup,
+              "refs": [[r["home_self"], r["bare"]] for r in (first, after, successor)],
+              "sink": successor["sink"]}
+    (root / "loom" / "restart.json").write_text(json.dumps(report, indent=2) + "\n")
+    return report
+
+
 def _ok(report: dict) -> bool:
     if report["case"] == "control":
         return (
@@ -641,7 +788,7 @@ def format_report(report: dict) -> str:
 def main(argv: list[str]) -> int:
     import argparse
     parser = argparse.ArgumentParser(description="Run one successor-grant replay case.")
-    parser.add_argument("--case", required=True, choices=("control", "missing"))
+    parser.add_argument("--case", required=True, choices=("control", "missing", *RESTART_CASES))
     parser.add_argument("--harness", default="codex", choices=("codex", "claude", "fake"))
     parser.add_argument("--home", type=Path, default=None)
     parser.add_argument("--timeout", type=float, default=None)
@@ -659,6 +806,12 @@ def main(argv: list[str]) -> int:
     if home is None:
         stamp = time.strftime("%Y%m%dT%H%MZ", time.gmtime())
         home = _room_tmp() / f"grant-replay-{args.case}-{stamp}"
+    if args.case in RESTART_CASES:
+        if args.harness == "fake":
+            parser.error("restart cases require Codex or Claude")
+        timeout = args.timeout if args.timeout is not None else 300
+        print(json.dumps(run_restart(args.case, args.harness, home.resolve(), timeout), indent=2))
+        return 0
     report = run_case(args.case, harness=args.harness, root=home, timeout=args.timeout, watch_real=True)
     sys.stdout.write(format_report(report))
     return 0 if report["ok"] or args.case == "missing" else 1
