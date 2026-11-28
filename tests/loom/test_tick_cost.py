@@ -360,3 +360,55 @@ def test_main_tip_rereads_the_ref_only_when_main_moves(tmp_path: Path, monkeypat
     assert after != before
     assert after == git(repo, "rev-parse", "main").stdout.strip()
     assert len(reads) == 1
+
+
+def test_live_bodies_share_boundary_stats_and_skip_start_locks(tmp_path, monkeypatch):
+    import fcntl
+    from collections import Counter
+    from contextlib import ExitStack
+
+    from brr.daemon2.facts import Fact
+    from brr.loom.runtime import ledger, loom
+
+    home = Home(_home(tmp_path))
+    router = Router(home)
+    bodies = {}
+    tick_once(home, bodies, "fake", "haiku", router)
+    router.clock = lambda: router.lease.until - router.config.router_ttl
+    install = home.install_id()
+    rooms = set()
+    stats, mkdirs = Counter(), []
+    stat, mkdir = loom._stat, Path.mkdir
+
+    def counted_stat(path):
+        stats[path] += 1
+        return stat(path)
+
+    def counted_mkdir(path, *args, **kwargs):
+        if path in rooms:
+            mkdirs.append(path)
+        return mkdir(path, *args, **kwargs)
+
+    with ExitStack() as locks:
+        for i in range(1, 6):
+            strand = f"s-{install}-held{i}"
+            room = home.room(strand)
+            rooms.add(room)
+            (room / "port/in").mkdir(parents=True)
+            lock = locks.enter_context((room / ".body").open("a"))
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            ledger.append(home, Fact(kind="lease", by=f"loom:{install}", data={
+                "strand": strand, "thread": f"w-{i}", "gen": 1,
+                "router_gen": router.lease.gen, "install": install}))
+            ledger.append(home, Fact(kind="body.started", by=f"loom:{install}", data={
+                "strand": strand, "gen": 1, "shell": "fake", "core": "haiku",
+                "pid": 0, "readme": "", "lstart": ""}))
+            loom.ensure_room(home.root, strand)
+
+        tick_once(home, bodies, "fake", "haiku", router)
+        assert all((room / "port/in/boundary.md").is_file() for room in rooms)
+        monkeypatch.setattr(loom, "_stat", counted_stat)
+        monkeypatch.setattr(Path, "mkdir", counted_mkdir)
+        tick_once(home, bodies, "fake", "haiku", router)
+        config_checks = stats[str(home.root / "loom/config.toml")]
+        assert (config_checks, len(mkdirs)) == (1, 0)
