@@ -2,8 +2,8 @@
 
 A park is a ``wish.read`` whose reading starts ``waiting:``. Its ``wait``
 field is ``{"on": <condition>, "until": <instant>}``, ``on`` absent for a
-prose park. Each thread's latest read can be a park. A delivered result ends
-earlier parks, and a closed wish has none. Every tick
+prose park. Thread-owned parks end on the owner's next read or a closing
+result. Older parks retain the wish-wide cancellation rule. Every tick
 ``observe_waits`` checks the live waits against facts already held and the
 forge states the ``Watcher`` polled off the loop; when one comes true, or its
 ``until`` passes, the loom writes one notice to the parking thread, and that
@@ -179,7 +179,7 @@ def park(wish, condition: str | None, until: str | None, now: datetime, *, found
     else:
         prose = 0
         for read in reversed(wish.reads):
-            if owner is not None and read_owner(read) != owner:
+            if owner is not None and read.get("thread") != owner:
                 continue
             if not read["reading"].startswith("waiting:") or (read.get("wait") or {}).get("on"):
                 break
@@ -198,26 +198,31 @@ def park(wish, condition: str | None, until: str | None, now: datetime, *, found
     return wait
 
 
-def read_owner(read):
-    return read.get("thread") or read.get("writer")
-
-
-def park_thread(wish, read) -> str:
-    return read.get("thread") or (read.get("wait") or {}).get("thread") or wish.thread
+def park_thread(wish, read, facts=None) -> str:
+    thread = read.get("thread") or (read.get("wait") or {}).get("thread")
+    if not thread and facts is not None and read.get("writer", "").startswith("strand:"):
+        from .project import sender_threads
+        thread = sender_threads(facts).get(read["writer"].removeprefix("strand:"))
+    return thread or wish.thread
 
 
 def live(found: dict) -> list[tuple]:
-    """One ``(wish, read)`` per owner whose latest read remains a park."""
+    """One active park per thread, with the original rule for unstamped reads."""
     rows = []
     for wish in found.values():
         if not wish.open or not wish.reads:
             continue
         delivered = max((r["at"] for r in wish.results if r["delivered"]), default="")
-        latest = {read_owner(read): read for read in wish.reads}
+        latest = {read["thread"]: read for read in wish.reads if read.get("thread")}
         rows.extend((wish, read) for read in latest.values()
                     if read["at"] >= delivered and read.get("wait") and read["reading"].startswith("waiting:"))
-    return rows
 
+        # Do not revive a legacy park cancelled by any later read or result.
+        read = wish.reads[-1]
+        if (not read.get("thread") and read.get("wait") and read["reading"].startswith("waiting:")
+                and not any(result["at"] > read["at"] for result in wish.results)):
+            rows.append((wish, read))
+    return rows
 
 def wish_waiters(home, facts, found: dict, target: str, now: datetime) -> list[tuple]:
     """Open, unresolved parks on a wish, with the thread each would wake."""
@@ -228,7 +233,7 @@ def wish_waiters(home, facts, found: dict, target: str, now: datetime) -> list[t
     if not rows:
         return []
     notices = {fact.id for fact in kind_facts(facts, "letter")}
-    return [(wish, read, parker(home, wish, read)) for wish, read in rows
+    return [(wish, read, parker(home, facts, wish, read)) for wish, read in rows
             if notice_id("wait", subject(wish, read)) not in notices
             and outcome(wish, read, facts, found, {}, now) is None]
 
@@ -272,7 +277,7 @@ def thread_lines(home, facts, thread):
     from .wishes import told
     lines = []
     for wish, read in unresolved(told(facts), facts):
-        if parker(home, wish, read) != thread:
+        if parker(home, facts, wish, read) != thread:
             continue
         on = read["wait"].get("on") or read["reading"].removeprefix("waiting:").strip()
         lines.append(f"waiting: {wish.id} on {on} since {read['at']}")
@@ -439,7 +444,7 @@ def _turn(home, facts, wish, read, now: datetime, pace, held) -> None:
     if key in _JUDGED:
         return
     _JUDGED.add(key)
-    thread = parker(home, wish, read)
+    thread = parker(home, facts, wish, read)
     last = _TURNED.get(thread)
     if last is not None and (now - last).total_seconds() < int(read["wait"]["turn"]):
         return
@@ -584,7 +589,7 @@ def observe_waits(home, facts, armed: bool, forge: dict | None = None, now: date
         head = (f"wait on {wish.id} {'resolved' if resolved else 'ran out'}: {said}. "
                 f"Parked as: {read['reading']}")
         wrote = notice(home, facts, "wait", subject(wish, read), head, _advice(wish, read, resolved, said),
-                       thread=parker(home, wish, read))
+                       thread=parker(home, facts, wish, read))
         on = str(read["wait"].get("on") or "")
         if wrote and not resolved and read["wait"].get("default") is not None and on.startswith("wish:"):
             # The default date passed unanswered and the body is told to do its rec: the ask lapsed.
@@ -596,9 +601,9 @@ def observe_waits(home, facts, armed: bool, forge: dict | None = None, now: date
     return facts
 
 
-def parker(home, wish, read) -> str:
+def parker(home, facts, wish, read) -> str:
     """The recorded destination, with the wish's thread as a routing fallback."""
-    thread = park_thread(wish, read)
+    thread = park_thread(wish, read, facts)
     return thread if home.routable(thread) else wish.thread
 
 

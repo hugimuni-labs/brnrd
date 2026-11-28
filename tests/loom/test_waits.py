@@ -348,6 +348,7 @@ def test_two_threads_keep_and_resolve_separate_parks_on_the_same_wish(ledger):
     ident = heard(home, seat, "Ship it")
     ci, pr = f"ci:{REPO}@abc1234", f"pr:{REPO}#42"
     first = park(home, seat, ident, "--wait", ci)
+    command(home, seat, "wish", ident, "--read", "Scope it to the first change", person=True)
     command(home, other, "wish", ident, "--read", "Review it")
     assert waits.thread_lines(home, read_facts(home), "work") == [
         f"waiting: {ident} on {ci} since {first['at']}"
@@ -376,6 +377,34 @@ def test_two_threads_keep_and_resolve_separate_parks_on_the_same_wish(ledger):
         notice_id("wait", waits.subject(wish, read)) for read in (first, second)
     }
     assert told(home, forge=forge) == []
+
+
+@pytest.mark.parametrize("cancelled_by", ["another read", "an opened PR"])
+def test_a_cancelled_legacy_park_stays_ended_after_upgrade(ledger, cancelled_by):
+    home, seat = ledger
+    ident = heard(home, seat, "Legacy work")
+    strand = "strand:s-aaaa-test"
+    due = later(hours=1).isoformat()
+    append(home, Fact(kind="wish.read", by=strand, id="wish.read:legacy-park", data={
+        "wish": ident, "by": "resident", "reading": "waiting: legacy timer",
+        "wait": {"thread": "work", "on": f"at:{due}"},
+    }))
+    facts = read_facts(home)
+    assert waits.thread_lines(home, facts, "work"), "the historical park starts out live"
+
+    if cancelled_by == "another read":
+        append(home, Fact(kind="wish.read", by="strand:s-aaaa-other", id="wish.read:legacy-read", data={
+            "wish": ident, "by": "resident", "reading": "reviewing",
+        }))
+    else:
+        url = f"https://github.com/{REPO}/pull/42"
+        append(home, Fact(kind="wish.result", by="loom:aaaa", id="wish.result:legacy-pr", data={
+            "wish": ident, "kind": "pr", "ref": url, "line": "opened it", "delivered": False,
+        }))
+
+    facts = read_facts(home)
+    assert not waits.live(wishes(facts))
+    assert told(home, now=later(hours=2)) == []
 
 
 def test_wait_flags_need_a_park_and_a_known_grammar(ledger):

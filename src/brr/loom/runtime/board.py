@@ -522,7 +522,7 @@ def board_threads(home: Home, facts, config, person: str | None = None, typed: d
     for wish, read in unresolved(raw, facts):
         if read.get("by") == "person":
             continue
-        thread = parker(home, wish, read)
+        thread = parker(home, facts, wish, read)
         at = _iso(read["at"])
         if at > parked.get(thread, ("",))[0]:
             parked[thread] = (at, read["reading"], wish.id)

@@ -159,7 +159,7 @@ def _shared(home, facts, now: float | None) -> dict:
     return {
         "now": now, "found": found, "main": main, "q": queues(found, heads),
         "people": _people(facts), "cards": pr_cards(home),
-        "receipts": receipts(facts, home.install_id()), "parked": [(parker(home, wish, read), wish, read)
+        "receipts": receipts(facts, home.install_id()), "parked": [(parker(home, facts, wish, read), wish, read)
                    for wish, read in unresolved(found, facts)],
         "heard": heard,
         "open": [name for name, row in main.items() if row.get("status") not in CLOSED],

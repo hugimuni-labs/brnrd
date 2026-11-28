@@ -276,21 +276,22 @@ def firings(home, facts, found: dict, state, now: datetime, known: set[str] | No
             *room_kept(home, facts), *pass_due(home, facts, now, known or set())]
 
 
-def parks(home, facts, found: dict) -> dict[str, list[str]]:
-    """Each condition name → its distinct subscribed threads, oldest park first."""
+def parks(home, facts, found: dict) -> tuple[dict[str, str], dict[str, set[str]]]:
+    """Each condition’s original destination and any thread-owned subscriptions."""
     from .waits import parker, unresolved
     rows = sorted(unresolved(found, facts), key=lambda row: row[1]["at"])
-    out: dict[str, list[str]] = {}
+    first: dict[str, str] = {}
+    subscribed: dict[str, set[str]] = {}
     for wish, read in rows:
         on = str(read["wait"].get("on") or "")
         if not on.startswith("cond:"):
             continue
+        thread = parker(home, facts, wish, read)
         for name in parse(on[5:]):
-            threads = out.setdefault(name, [])
-            thread = parker(home, wish, read)
-            if thread not in threads:
-                threads.append(thread)
-    return out
+            first.setdefault(name, thread)
+            if read.get("thread"):
+                subscribed.setdefault(name, set()).add(thread)
+    return first, subscribed
 
 
 _LAST: dict[str, float] = {}
@@ -312,7 +313,7 @@ def observe_conditions(home, facts, armed: bool, now: datetime | None = None, fo
     now = now or datetime.now(timezone.utc)
     found = told(facts)
     state = fold(facts)
-    parked = parks(home, facts, found)
+    parked, subscribed = parks(home, facts, found)
     held = set(state.holder)
     ids = facts.by_id if isinstance(facts, LedgerView) else {f.id for f in facts}
     for firing in firings(home, facts, found, state, now, ids):
@@ -321,15 +322,10 @@ def observe_conditions(home, facts, armed: bool, now: datetime | None = None, fo
         # pass-due always wakes the home thread. The notice is the wake: route
         # starts a body for an owed letter on an unheld thread, the same path
         # every other notice uses.
-        if firing.name == "pass-due":
-            threads = [firing.thread]
-        else:
-            threads = parked.get(firing.name, [])
-            if firing.thread in held:
-                threads = [firing.thread, *(thread for thread in threads if thread != firing.thread)]
-        if not threads:
+        primary = firing.thread if firing.name == "pass-due" or firing.thread in held else parked.get(firing.name)
+        if primary is None:
             continue
-        primary, *others = threads
+        others = () if firing.name == "pass-due" else sorted(subscribed.get(firing.name, set()) - {primary})
         # Keep the original firing id as its completion marker. Write it last
         # so a partial fanout can retry without duplicating existing notices.
         for thread in others:

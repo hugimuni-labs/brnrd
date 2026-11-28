@@ -60,22 +60,18 @@ def set_again(
     old_by, new_by = f"strand:{old_strand}", f"strand:{new_strand}"
     parks, asks = [], []
     for wish in wishes(facts).values():
-        before = [
-            r
-            for r in wish.reads
-            if r["at"] < started_at and (r.get("thread") == thread or (
-                r.get("thread") is None and r["writer"] == old_by
-            ))
-        ]
+        before = [r for r in wish.reads if r["at"] < started_at]
         if not before:
             continue
-        last = before[-1]
-        if not str(last.get("reading") or "").startswith("waiting:") or not last.get(
-            "wait"
-        ):
+        last = next((r for r in reversed(before) if r.get("thread") == thread), None)
+        legacy = before[-1]
+        if not legacy.get("thread") and legacy["writer"] == old_by:
+            last = legacy
+        if not last or not last["reading"].startswith("waiting:") or not last.get("wait"):
             continue
         if notice_id("wait", subject(wish, last)) in resolved or any(
-            r["delivered"] and last["at"] < r["at"] < started_at for r in wish.results
+            (not last.get("thread") or r["delivered"])
+            and last["at"] < r["at"] < started_at for r in wish.results
         ):
             continue
         after = [

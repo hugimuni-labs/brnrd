@@ -484,7 +484,7 @@ def _wakes(home, facts, by: str, data: dict) -> str:
     from .waits import parker
     wait = data.get("wait") or {}
     on, until = wait.get("on"), wait.get("until")
-    thread = parker(home, wishes(facts)[data["wish"]], dict(data, writer=by))
+    thread = parker(home, facts, wishes(facts)[data["wish"]], dict(data, writer=by))
     if on and on.startswith("cond:"):
         when = f"on each firing of {on}, until it is re-read" + (f" or {until}" if until else "")
     else:
@@ -722,10 +722,12 @@ def cmd_ask(args):
                 _say([f"already sent to {to}: not sent again"])
         if args.default_at is not None:
             # The asking wish parks on the ask; at its deadline the body is woken with its own rec.
-            append(home, Fact(kind="wish.read", by=by, id="wish.read:" + mint(12), data={
-                "wish": args.wish, "reading": f"waiting: ask {ident}: {args.what}", "by": "resident",
-                "wait": _wait(home, facts, args.wish, "wish:" + ident, args.default_at,
-                              default=args.rec, thread=thread, writer=by)}))
+            data = {"wish": args.wish, "reading": f"waiting: ask {ident}: {args.what}", "by": "resident",
+                    "wait": _wait(home, facts, args.wish, "wish:" + ident, args.default_at,
+                                  default=args.rec, thread=thread, writer=by)}
+            if thread is not None:
+                data["thread"] = thread
+            append(home, Fact(kind="wish.read", by=by, id="wish.read:" + mint(12), data=data))
         _declare(args, "ask")
         if args.kind is None and (same is None or not same.kind):
             print("ask: no --kind; its answer counts under (no kind) in asks --calibrate", file=sys.stderr)

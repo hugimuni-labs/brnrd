@@ -158,10 +158,7 @@ def wishes(facts: Iterable[Fact]) -> dict[str, Wish]:
     ordered = union(facts)
     letters = {str(f.data.get("id", f.id)): f for f in ordered if f.kind == "letter"}
     found: dict[str, Wish] = {}
-    strand_threads: dict[str, str] = {}
     for fact in ordered:
-        if fact.kind == "lease":
-            strand_threads[f"strand:{fact.data['strand']}"] = fact.data["thread"]
         if fact.kind not in {"wish", "wish.read", "wish.result", "wish.verdict", "wish.left",
                              "wish.top", "wish.pick", "wish.goal"}:
             continue
@@ -188,10 +185,7 @@ def wishes(facts: Iterable[Fact]) -> dict[str, Wish]:
             wish = found[ident]
             if fact.kind == "wish.read":
                 wish.reading = d["reading"]
-                thread = d.get("thread") or (
-                    (d.get("wait") or {}).get("thread") if fact.by.startswith("strand:") else None
-                ) or strand_threads.get(fact.by)
-                wish.reads.append(dict(d, at=fact.at, writer=fact.by, thread=thread))
+                wish.reads.append(dict(d, at=fact.at, writer=fact.by))
             elif fact.kind == "wish.result":
                 wish.results.append(dict(d, at=fact.at, writer=fact.by, delivery_id=fact.id))
             elif fact.kind == "wish.top":
@@ -604,7 +598,7 @@ def wish_plans(told: dict, facts=None, *, thread=None) -> dict:
     parks = live(told) if facts is None else unresolved(told, facts)
     parked = {}
     for wish, read in parks:
-        if thread is not None and park_thread(wish, read) != thread:
+        if thread is not None and park_thread(wish, read, facts) != thread:
             continue
         if wish.id not in parked or read["at"] >= parked[wish.id]["at"]:
             parked[wish.id] = read
