@@ -34,6 +34,8 @@ KINDS = ("kept", "known")
 NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*")
 # Each library entry takes at most one bounded line in the wake.
 LINE_CAP = 200
+#: The tail of the purpose ``brnrd add`` writes (addproject.py).
+ADDED = "added with brnrd add"
 SHOWN = 12
 # The person's edits become a problem if they remain uncommitted this long.
 DIRTY_AFTER = 3600.0
@@ -215,6 +217,9 @@ def line(entry: Entry, here: str | None = None) -> str:
     here = here or machine()
     whose = f"{entry.whose}'s " if entry.whose else ""
     may = "I commit here" if entry.kind == "kept" else "read and work on request, tidy after"
+    if entry.kind == "known" and not entry.source and entry.purpose.endswith(ADDED):
+        # The person's own folder: a result they asked for is a file here, where they can open it.
+        may = f"results for {entry.whose or 'its person'} are written here; {may}"
     text = f"{entry.kind} {entry.name}: {whose}{_where(entry, here)}; {may}"
     if entry.kind == "kept" and entry.here(here) and Path(entry.path).is_dir():
         text += f"; {_kept_state(entry)}"

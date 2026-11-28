@@ -85,12 +85,12 @@ def add_project(home: Path, folder: Path) -> tuple[str, str]:
     shown = library._home_short(str(folder))
     if source:
         entry = library.Entry(name=name, kind="known", whose=person, source=source,
-                              purpose=f"the project at {shown}, added with brnrd add")
+                              purpose=f"the project at {shown}, {library.ADDED}")
     else:
         stat = folder.stat()
         entry = library.Entry(name=name, kind="known", whose=person, path=str(folder),
                               machine=library.machine(), inode=f"{stat.st_dev}:{stat.st_ino}",
-                              purpose="a project folder, added with brnrd add")
+                              purpose=f"a project folder, {library.ADDED}")
     land_files(Path(home), {f"library/{name}.md": library.page(entry)},
                f"library: add {name} (known), from brnrd add\n\n")
     return name, "added"
