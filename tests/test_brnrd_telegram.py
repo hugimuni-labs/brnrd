@@ -762,6 +762,69 @@ def test_media_group_album_coalesces_into_one_event(env):
     assert len(telegram_events[0]["attachments"]) == 3
 
 
+@pytest.mark.parametrize(
+    ("burst_limit", "daily_limit", "notice"),
+    [(2, 100, "burst limit"), (100, 2, "daily event limit")],
+)
+def test_album_uses_one_free_slot_after_each_item_is_drained(
+    monkeypatch, burst_limit, daily_limit, notice,
+):
+    app, client, sends = _make_client(
+        monkeypatch, limit_free_events_per_minute=burst_limit, limit_free_events_per_day=daily_limit,
+        home_gate_member_github_logins=(),
+    )
+    acc = _account(client)
+    rid = _repo(client, acc)
+    code = _tg_pair_code(client, acc, rid)
+    client.post("/v1/webhooks/telegram", json=_message(555, f"/start {code}"), headers=_HDR)
+    dmn = _daemon_headers(client, acc, rid)
+    cursor = 0
+
+    def post_and_drain(update):
+        assert client.post("/v1/webhooks/telegram", json=update, headers=_HDR).status_code == 200
+        return client.get(
+            "/v1/daemons/inbox", params={"since": cursor, "wait": 0}, headers=dmn,
+        ).json()
+
+    def finish(event):
+        assert client.post(
+            "/v1/daemons/responses",
+            json={"event_id": event["event_id"], "body_markdown": "received", "status": "done"},
+            headers=dmn,
+        ).status_code == 200
+
+    drained = post_and_drain(_message(555, "https://example.com", message_id=50))
+    cursor = drained["cursor"]
+    finish(drained["events"][0])
+
+    for message_id in range(51, 55):
+        update = _message(555, "", message_id=message_id)
+        msg = update["message"]
+        del msg["text"]
+        file_id = f"file-{message_id}"
+        msg["photo"] = [{"file_id": file_id, "width": 900, "height": 600}]
+        msg["media_group_id"] = "album-burst"
+        drained = post_and_drain(update)
+        assert len(drained["events"]) == 1
+        [event] = drained["events"]
+        assert [attachment["file_id"] for attachment in event["attachments"]] == [file_id]
+        cursor = drained["cursor"]
+        finish(event)
+
+    with app.state.SessionLocal() as db:
+        statuses = db.scalars(select(Event.status).where(Event.source == "telegram")).all()
+        assert statuses == [Event.STATUS_RESPONDED] * 5
+
+    denied = post_and_drain(_message(555, "new task", message_id=55))
+    assert denied["events"] == []
+    assert any(
+        reply["reply_to_message_id"] == 55
+        and "Message 55 was not queued" in reply["text"]
+        and notice in reply["text"]
+        for reply in sends
+    )
+
+
 def test_merged_album_item_stays_deliverable_after_an_interleaved_drain(env):
     """#1396 finding 1 — a merge that mutates the row *in place* never bumps
     ``Event.seq``, and delivery is ``Event.seq > since``. A daemon that is

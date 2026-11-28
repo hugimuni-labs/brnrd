@@ -150,6 +150,29 @@ def test_supporter_lifts_repo_cap_but_abuse_ceiling_holds():
     assert _detail(denied)["reason"] == "abuse_repo_ceiling"
 
 
+def test_member_lifts_free_repo_and_event_limits_but_abuse_ceilings_hold():
+    client = _client(
+        home_gate_member_github_logins=("pilot",),
+        limit_free_events_per_minute=1,
+        limit_free_events_per_day=1,
+        limit_abuse_events_per_minute=3,
+        limit_abuse_repos=2,
+    )
+    headers = _account(client, login="Pilot")
+    first_repo = _connect(client, headers, "one")
+    assert first_repo.status_code == 201
+    assert _connect(client, headers, "two").status_code == 201
+    denied = _connect(client, headers, "three")
+    assert denied.status_code == 403
+    assert _detail(denied)["reason"] == "abuse_repo_ceiling"
+
+    for _ in range(3):
+        assert _enqueue(client, headers, first_repo.json()["repo_id"]).status_code == 201
+    denied = _enqueue(client, headers, first_repo.json()["repo_id"])
+    assert denied.status_code == 429
+    assert _detail(denied)["reason"] == "abuse_event_rate"
+
+
 # --- event throttling --------------------------------------------------------
 
 
