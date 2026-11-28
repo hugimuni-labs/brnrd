@@ -22,8 +22,13 @@ def ledger(tmp_path, monkeypatch):
     write_thread(root / "self", "work", "Wish work\n\n## Plan\n\n- [ ] Build\n\n## Notes\nKeep notes")
     write_thread(root / "self", "other", "Another thread")
     commit(root / "self", "threads")
+    # Ingress and seat commands reopen Home from its path. Give them the
+    # same install and HLC as the router and lease in this fixture.
+    install_id = root / "loom" / "install-id"
+    install_id.parent.mkdir(parents=True, exist_ok=True)
+    install_id.write_text("aaaa\n")
+    home = Home(root)
     clone = room(root, "s-aaaa-test")
-    home = Home(root, install="aaaa")
     append(home, Fact(kind="router", by="loom:aaaa", data={"gen": 1}))
     append(home, Fact(kind="lease", by="loom:aaaa", data={
         "thread": "work", "strand": "s-aaaa-test", "gen": 1,

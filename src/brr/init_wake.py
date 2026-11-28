@@ -996,8 +996,7 @@ class _Session:
             # terminal after that, or the interrupt reads as ignored.
             return
         self.refresh_portals("interview", awaiting_reply=True)
-        self._awaiting_started = time.monotonic()
-        read_started = time.monotonic()
+        read_started = self._awaiting_started = time.monotonic()
         reply = ""
         try:
             reply = self.reader()
@@ -1007,8 +1006,9 @@ class _Session:
             # Rec 1 (#1036): bank the window before anything else, so a
             # reader that raises still charges the wait to "awaiting", never
             # to the wake's own budget.
+            read_elapsed = time.monotonic() - read_started
             if self._awaiting_started is not None:
-                self._awaiting_elapsed += time.monotonic() - self._awaiting_started
+                self._awaiting_elapsed += read_elapsed
                 self._awaiting_started = None
             self.refresh_portals("interview")
         if not reply.strip():
@@ -1025,7 +1025,7 @@ class _Session:
             # So an empty read only counts toward the cap when it came back
             # faster than a keystroke, and any read a human plausibly made
             # resets the tally along with a real answer.
-            instant = (time.monotonic() - read_started) < EMPTY_READ_HUMAN_FLOOR
+            instant = read_elapsed < EMPTY_READ_HUMAN_FLOOR
             if instant:
                 self._empty_reads += 1
             else:

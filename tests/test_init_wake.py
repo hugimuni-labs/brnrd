@@ -20,9 +20,9 @@ from __future__ import annotations
 
 import json
 import threading
-import itertools
 import time
 from pathlib import Path
+from unittest.mock import Mock
 
 import pytest
 
@@ -209,7 +209,7 @@ class TestTerminalLoop:
         )
         assert result.ok and result.replies == 0
 
-    def test_a_flooded_stdin_stops_being_asked(self, tmp_path):
+    def test_a_flooded_stdin_stops_being_asked(self, tmp_path, monkeypatch):
         """#1107: `yes ''` into the interview used to spin at memory speed.
 
         Found by the 2026-08-04 OOM incident (#1104): a strand verified the
@@ -232,7 +232,23 @@ class TestTerminalLoop:
         what this now simulates.
         """
         repo = _repo(tmp_path)
-        reads = itertools.count()
+        reads = 0
+        now = time.monotonic()
+        refresh = init_wake._Session.refresh_portals
+
+        def refresh_with_slow_publish(session, phase, *, awaiting_reply=False):
+            nonlocal now
+            refresh(session, phase, awaiting_reply=awaiting_reply)
+            # Publishing the portal after a read must not count as stdin wait.
+            now += 2 * init_wake.EMPTY_READ_HUMAN_FLOOR
+
+        def empty_input():
+            nonlocal reads
+            reads += 1
+            return ""
+
+        monkeypatch.setattr(init_wake, "time", Mock(wraps=time, monotonic=lambda: now))
+        monkeypatch.setattr(init_wake._Session, "refresh_portals", refresh_with_slow_publish)
 
         def script(invocation):
             outbox = Path(invocation.env["BRR_OUTBOX_DIR"])
@@ -243,7 +259,7 @@ class TestTerminalLoop:
             repo, "mock-runner", cfg={},
             invoke=_scripted_runner(script),
             writer=lambda _t: None,
-            reader=lambda: (next(reads), "")[1],   # forever empty, never blocks
+            reader=empty_input,
             poll_interval=0.01,
         )
 
@@ -254,8 +270,8 @@ class TestTerminalLoop:
         # Bounded, and by the constant rather than by a magic number — the
         # count is what separates "a person skipped a question" from "there
         # is nobody there", so it is the thing under test.
-        assert next(reads) <= init_wake.EMPTY_READS_BEFORE_DEGRADING, (
-            f"read {next(reads)} times for a cap of "
+        assert reads <= init_wake.EMPTY_READS_BEFORE_DEGRADING, (
+            f"read {reads} times for a cap of "
             f"{init_wake.EMPTY_READS_BEFORE_DEGRADING}"
         )
 
