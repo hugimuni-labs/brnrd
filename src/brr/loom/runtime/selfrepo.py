@@ -898,20 +898,44 @@ def hold_back(text: str) -> tuple[str, str]:
     return "".join(kept), "".join(later)
 
 
-def fit_held(rows: list[str], budget: int) -> str:
-    """Keep complete rows in priority order and leave a receipt for the cut."""
+def _fit_held_rows(rows: list[str], budget: int, receipt: str, limit: int | None = None) -> str:
+    """Keep a prefix of complete rows and reserve space for any omitted count."""
+    count = len(rows)
+    shown = min(count, limit) if limit is not None else count
+    lines = [f"{row}\n" for row in rows[:shown]]
+    sizes = [len(line.encode("utf-8")) for line in lines]
+    used = sum(sizes)
+    for kept in range(shown, -1, -1):
+        note = receipt.format(count - kept) + "\n" if kept < count else ""
+        if used + len(note.encode("utf-8")) <= budget:
+            return "".join(lines[:kept]) + note
+        if kept:
+            used -= sizes[kept - 1]
+    return ""
+
+
+def fit_held(goals: list[str], asks: list[str], queue: list[str], budget: int, *,
+             queue_limit: int | None = None) -> str:
+    """Goals get first claim on Held. Standing asks use at most 960 bytes of its usual 3 KB."""
     heading = "## Held\n"
-    body = "".join(f"{row}\n" for row in rows) or "No goals or queue rows recorded.\n"
-    if len((heading + body).encode("utf-8")) <= budget:
-        return heading + body
-    kept = heading
-    for index, row in enumerate(rows):
-        note = f"[Cut {len(rows) - index} held rows. Whole in goals/ and brnrd runtime wishes.]\n"
-        if len((kept + row + "\n" + note).encode("utf-8")) > budget:
-            block = kept + note
-            return block if len(block.encode("utf-8")) <= budget else ""
-        kept += row + "\n"
-    return kept if rows else ""
+    if not (goals or asks or queue):
+        empty = heading + "No goals or queue rows recorded.\n"
+        return empty if len(empty) <= budget else ""
+    held = heading + _fit_held_rows(goals, budget - len(heading),
+                                   "[Cut {} goal rows. Whole in goals/.]")
+    ask_note = "[{} more open asks. Whole in brnrd runtime asks.]"
+    ask_help = (
+        "Keep or amend the same ask with wish --line or --parent. For status, cite the ask ID "
+        "and attach the letter to the work wish. Attaching it to the ask records an answer.\n"
+    )
+    ask_budget = min(960, budget - len(held.encode("utf-8")))
+    if asks and ask_budget >= len(ask_help) + len(ask_note.format(len(asks))) + 1:
+        held += _fit_held_rows(asks, ask_budget - len(ask_help), ask_note, limit=3) + ask_help
+    else:
+        held += _fit_held_rows(asks, ask_budget, ask_note, limit=3)
+    held += _fit_held_rows(queue, budget - len(held.encode("utf-8")),
+                           "[Cut {} queue rows. Whole in brnrd runtime wishes.]", limit=queue_limit)
+    return held if len(held.encode("utf-8")) <= budget else ""
 
 
 def insert_topics(prompt: str, section: str) -> str:
@@ -1074,8 +1098,7 @@ def run_wake(room_dir: Path, thread: str, owed: Path | None = None, *,
     from .ledger import read_facts
     from .wishes import insert_wishes, wake_wishes
     section = ""
-    held_rows = []
-    priority_rows = []
+    goal_rows, ask_rows, queue_rows = [], [], []
     try:
         home = home_of_room(clone.parent)
     except ValueError:
@@ -1099,9 +1122,9 @@ def run_wake(room_dir: Path, thread: str, owed: Path | None = None, *,
         from .wishes import waits_on
 
         waits = waits_on(told_wishes, main)
-        priority_rows = standing_ask_rows(told_wishes, waits, thread, env_names)
-        priority_rows += goal_lines(home, told=told_wishes, waits=waits)
-        held_rows = priority_rows + held_rows_for(told_wishes, waits, thread, home.main_thread())
+        goal_rows = goal_lines(home, told=told_wishes, waits=waits)
+        ask_rows = standing_ask_rows(told_wishes, waits, thread, env_names)
+        queue_rows = held_rows_for(told_wishes, waits, thread, home.main_thread())
     from .briefing import section as briefing_section
     briefing = briefing_section(home)
     topics = _wake_topics(clone, thread, owed)
@@ -1114,7 +1137,7 @@ def run_wake(room_dir: Path, thread: str, owed: Path | None = None, *,
     # Reserve what the loom adds before the recipe fits its tree/README to the budget:
     # the tree is what gives way to the topic heads.
     limit = wake_budget()
-    held = fit_held(held_rows, limit // 8)
+    held = fit_held(goal_rows, ask_rows, queue_rows, limit // 8)
 
     def recipe_budget() -> str:
         return str(max(0, limit - len(
@@ -1165,10 +1188,7 @@ def run_wake(room_dir: Path, thread: str, owed: Path | None = None, *,
         if proc.returncode == 3:
             # Over budget: the loom's own parts give way before the wake is refused.
             # Each is whole one command away; a refused wake costs the person a letter.
-            rest = len(held_rows) - len(priority_rows)
-            hard = fit_held(priority_rows, limit // 8) if priority_rows else "## Held\n"
-            if rest > 0:
-                hard += f"[Cut {rest} queue rows to fit. Whole in brnrd runtime wishes.]\n"
+            hard = fit_held(goal_rows, ask_rows, queue_rows, limit // 8, queue_limit=0)
             if hard != held:
                 held = hard
                 folded.append("held")

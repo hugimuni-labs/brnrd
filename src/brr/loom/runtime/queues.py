@@ -87,11 +87,11 @@ def standing_ask_rows(found: dict[str, Wish], heads: dict[str, str], thread: str
     from .person_names import label
 
     rows = []
-    for ident, head in heads.items():
-        ask = found[ident]
-        if ask.thread != thread:
-            continue
-        row = f"Your open ask {ident} · waiting on {label(head, names)} · {_short(ask.line, 320)}"
+    asks = sorted((found[ident] for ident in heads if found[ident].thread == thread),
+                  key=lambda ask: (ask.born, ask.id), reverse=True)
+    for ask in asks:
+        ident, head = ask.id, heads[ask.id]
+        row = f"Your open ask {ident} · waiting on {label(head, names)} · {_short(ask.line, 120)}"
         if ask.parent:
             parent = found.get(ask.parent)
             state = f" ({parent.state})" if parent else ""
