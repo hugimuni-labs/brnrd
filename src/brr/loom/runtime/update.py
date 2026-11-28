@@ -597,7 +597,7 @@ def offer_update(home, root, facts, found):
     previous = latest(facts, home, root, "update.offered")
     current = open_offer(facts, home, root)
     if previous and previous.data["new"] == found.new and not current:
-        return  # held or taken: one decision per green tip
+        return  # A hold or take suppresses repeat notices for this tip.
     subject = current.data["subject"] if current else f"{home.install_id()}:{mint(12)}"
     letter = notice_id("update", subject)
     source = DevSource(root, None)
@@ -696,7 +696,7 @@ def decide(home, root, action, why=""):
         offered = open_offer(facts, home, root)
         if offered is None and action == "take":
             decided = latest(facts, home, root, "update.decided")
-            if decided and decided.data["action"] == "take":
+            if decided and decided.data["action"] in ("hold", "take"):
                 offered = latest(facts, home, root, "update.offered")
         if offered is None:
             raise Refused("no open update offer")
@@ -757,10 +757,19 @@ def main(argv=None):
         home, root = home_for(args.home, args.room), source_root()
         if args.action == "show":
             from .ledger import read_facts
-            offered = open_offer(read_facts(home), home, root)
+            facts = read_facts(home)
+            offered = open_offer(facts, home, root)
+            held = None
+            if offered is None:
+                decided = latest(facts, home, root, "update.decided")
+                if decided and decided.data["action"] == "hold":
+                    held = decided
+                    offered = latest(facts, home, root, "update.offered")
             if offered is None:
                 raise Refused("no open update offer")
             data = dict(offered.data)
+            if held is not None:
+                data["held"] = {"why": held.data["why"]}
             # The durable offer and wake stay bounded; inspection can list every
             # landing directly from the offered range without a forge request.
             source = DevSource(root, None)
