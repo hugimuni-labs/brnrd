@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import gc
 import json
 import os
 import sys
@@ -50,10 +51,18 @@ def _loom(argv: list[str]) -> int:
         choice = _require_body(Path(args.home).expanduser().resolve())
         from .adapters import parse_body
         adapter, core = parse_body(choice)
-    run_loom(
-        args.home, adapter=adapter, core=core, tick=args.tick,
-        install=args.install,
-    )
+    # The board rebuilds many short-lived containers over a long-lived ledger.
+    # A larger young-generation budget cuts repeated scans of that live heap.
+    thresholds = gc.get_threshold()
+    if 0 < thresholds[0] < 7000:
+        gc.set_threshold(7000, *thresholds[1:])
+    try:
+        run_loom(
+            args.home, adapter=adapter, core=core, tick=args.tick,
+            install=args.install,
+        )
+    finally:
+        gc.set_threshold(*thresholds)
     return 0
 
 

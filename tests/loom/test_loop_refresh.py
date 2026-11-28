@@ -1,4 +1,5 @@
 """Clock refresh and recovery run through the process loop."""
+import gc
 import os
 import sys
 import threading
@@ -10,6 +11,30 @@ from brr.loom.runtime import config, loom, usage
 from brr.loom.runtime.home import Home
 from brr.loom.runtime.ledger import read_facts
 from _step import write_thread
+
+
+@pytest.mark.parametrize(("initial", "during"), [(2000, 7000), (0, 0), (9000, 9000)])
+def test_loom_cli_ticks_with_a_larger_gc_budget(tmp_path, monkeypatch, initial, during):
+    from brr.loom.runtime import verbs_loom
+
+    write_thread(tmp_path, 'brnrd', 'Brnrd', 'quit-now')
+    monkeypatch.setattr(usage, 'shells', lambda home: ())
+    seen = []
+
+    def after_tick(*args):
+        seen.append(gc.get_threshold())
+        return True
+
+    monkeypatch.setattr(loom, '_pause', after_tick)
+    thresholds = gc.get_threshold()
+    gc.set_threshold(initial, 11, 12)
+    try:
+        assert verbs_loom._loom(['--home', str(tmp_path), '--adapter', 'fake']) == 0
+        assert seen == [(during, 11, 12)]
+        assert any(f.kind == "router" for f in read_facts(Home(tmp_path)))
+        assert gc.get_threshold() == (initial, 11, 12)
+    finally:
+        gc.set_threshold(*thresholds)
 
 
 def test_bad_config_keeps_inputs_and_ticks_on_last_good_snapshot(tmp_path, monkeypatch):
