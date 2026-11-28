@@ -6,7 +6,6 @@ The resident is who repairs its home, and it can only do that awake.
 import json
 
 from brr.daemon2.facts import Fact
-from brr.loom.runtime.home import Home
 from brr.loom.runtime.ledger import append, inject_letter, read_facts
 from brr.loom.runtime.lifecycle import main_snapshot
 from brr.loom.runtime.loom import _prepare
@@ -14,7 +13,7 @@ from brr.loom.runtime.owners import letter_owners
 from brr.loom.runtime.project import sender_threads
 from brr.loom.runtime.selfrepo import git, room
 
-from _step import Loom, kill_bodies, mail, wait_until, write_thread
+from _step import home_with_install, Loom, kill_bodies, mail, wait_until, write_thread
 
 
 def _lease(home, strand, gen, parent):
@@ -37,7 +36,7 @@ def test_a_successor_starts_from_its_parents_head_when_the_strand_branch_is_gone
     # worked on main, and every successor failed to fetch strand/<parent>.
     root = tmp_path / "home"
     write_thread(root, "inbox", "Inbox", "quit-now")
-    home = Home(root, install="aaaa")
+    home = home_with_install(root, "aaaa")
     parent = _parent_without_its_branch(root)
     _lease(home, "s-aaaa-child", 1, "s-aaaa-parent")
     facts = read_facts(home)
@@ -56,7 +55,7 @@ def test_a_room_cloned_before_a_crash_is_seeded_on_the_retry(tmp_path):
     # retry saw `.git` and took the room as seeded. The ledger decides now.
     root = tmp_path / "home"
     write_thread(root, "inbox", "Inbox", "quit-now")
-    home = Home(root, install="aaaa")
+    home = home_with_install(root, "aaaa")
     parent = room(root, "s-aaaa-parent")
     (parent / "memory/kept.md").write_text("the parent's work\n")
     git(parent, "add", "memory")
@@ -80,7 +79,7 @@ def test_a_room_cloned_before_a_crash_is_seeded_on_the_retry(tmp_path):
 def test_a_room_with_its_own_work_is_never_reset_to_its_parent(tmp_path):
     root = tmp_path / "home"
     write_thread(root, "inbox", "Inbox", "quit-now")
-    home = Home(root, install="aaaa")
+    home = home_with_install(root, "aaaa")
     parent = room(root, "s-aaaa-parent")
     git(parent, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", "p")
     child = room(root, "s-aaaa-child")
@@ -97,7 +96,7 @@ def test_a_room_with_its_own_work_is_never_reset_to_its_parent(tmp_path):
 def test_owed_letters_that_do_not_fit_the_wake_arrive_at_the_first_boundary(tmp_path, monkeypatch):
     root = tmp_path / "home"
     write_thread(root, "inbox", "Inbox", "quit-now")
-    home = Home(root, install="aaaa")
+    home = home_with_install(root, "aaaa")
     empty = _prepare(home, "s-aaaa-empty", "inbox", 1, [], {}, read_facts(home), "hand")
     base = len((empty / "port/wake.md").read_bytes())
     ids = [inject_letter(root, to="thread:inbox", body=f"{n} " + "x" * 3000) for n in range(3)]

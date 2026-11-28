@@ -15,6 +15,15 @@ from brr.loom.runtime.project import fold, is_notice
 from brr.loom.runtime.selfrepo import _commit, git, init_self
 
 
+def home_with_install(root: Path, install: str) -> Home:
+    """Pin the install before any writer opens the test home."""
+    path = root / "loom" / "install-id"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("x") as stream:
+        stream.write(install + "\n")
+    return Home(root)
+
+
 def write_thread(root: Path, thread: str, readme: str, policy: str,
                  wait: str = "20") -> None:
     init_self(root)

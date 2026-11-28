@@ -2,10 +2,10 @@
 import pytest
 
 from brr.daemon2.facts import Fact
-from brr.loom.runtime.home import Home
 from brr.loom.runtime.ledger import append, inject_letter, read_facts
 from brr.loom.runtime.selfrepo import init_self, room
 from brr.loom.runtime.wishes import wishes
+from _step import home_with_install
 from test_wake import cli, commit, write_thread
 
 
@@ -17,7 +17,7 @@ def brnrd(tmp_path):
         write_thread(root / "self", name, name.title())
     commit(root / "self", "threads")
     clone = room(root, "s-aaaa-test")
-    home = Home(root, install="aaaa")
+    home = home_with_install(root, "aaaa")
     append(home, Fact(kind="router", by="loom:aaaa", data={"gen": 1}))
     append(home, Fact(kind="lease", by="loom:aaaa", data={
         "thread": "inbox", "strand": "s-aaaa-test", "gen": 1,

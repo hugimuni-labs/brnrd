@@ -3,13 +3,12 @@ import pytest
 
 from brr.daemon2.facts import Fact
 from brr.loom.runtime.connector import ingest
-from brr.loom.runtime.home import Home
 from brr.loom.runtime.ledger import append, inject_letter, read_facts
 from brr.loom.runtime.port import fact_from_port, parse_frontmatter
 from brr.loom.runtime.refs import tokens
 from test_dispositions import by_line, out_file, send
 from test_wishes import ledger  # noqa: F401  (fixture)
-from _step import write_thread
+from _step import home_with_install, write_thread
 
 
 def notices(home, kind):
@@ -59,7 +58,7 @@ def test_a_thread_letter_that_cites_nothing_is_refused(ledger):
 
 @pytest.fixture
 def person_home(tmp_path):
-    home = Home(tmp_path / "home", install="aaaa")
+    home = home_with_install(tmp_path / "home", "aaaa")
     write_thread(home.root, "inbox", "Brnrd", "quit-now")
     (home.root / "loom/config.toml").write_text('connectors = ["mine=fake"]\n')
     person = home.root / "self/people/ada"

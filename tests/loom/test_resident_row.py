@@ -6,11 +6,10 @@ from datetime import datetime, timedelta, timezone
 
 from brr.daemon2.facts import Fact
 from brr.loom.runtime.config import load_config
-from brr.loom.runtime.home import Home
 from brr.loom.runtime.ledger import append, inject_letter, read_facts
 from brr.loom.runtime.port import render_boundary
 from brr.loom.runtime import snapshot, usage
-from _step import write_thread
+from _step import home_with_install, write_thread
 
 SEAT = "s-aaaa-seat"
 WISH = "w-residentrow1"
@@ -23,7 +22,7 @@ def _at(seconds):
 def _home(tmp_path):
     root = tmp_path / "home"
     write_thread(root, "inbox", "The inbox.\n", "quit-now")
-    return Home(root, install="aaaa")
+    return home_with_install(root, "aaaa")
 
 
 def _lease(home, strand=SEAT, shell="claude", core="fable"):

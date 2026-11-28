@@ -6,11 +6,11 @@ from io import StringIO
 import pytest
 
 from brr.daemon2.facts import Fact
-from brr.loom.runtime.home import Home
 from brr.loom.runtime.ledger import append, inject_letter, read_facts, fact_filename
 from brr.loom.runtime.registry import UndeclaredFact
 from brr.loom.runtime.selfrepo import init_self, room, run_wake
 from brr.loom.runtime.wishes import Say, wishes
+from _step import home_with_install
 from test_wake import cli, commit, write_thread
 
 
@@ -22,12 +22,7 @@ def ledger(tmp_path, monkeypatch):
     write_thread(root / "self", "work", "Wish work\n\n## Plan\n\n- [ ] Build\n\n## Notes\nKeep notes")
     write_thread(root / "self", "other", "Another thread")
     commit(root / "self", "threads")
-    # Ingress and seat commands reopen Home from its path. Give them the
-    # same install and HLC as the router and lease in this fixture.
-    install_id = root / "loom" / "install-id"
-    install_id.parent.mkdir(parents=True, exist_ok=True)
-    install_id.write_text("aaaa\n")
-    home = Home(root)
+    home = home_with_install(root, "aaaa")
     clone = room(root, "s-aaaa-test")
     append(home, Fact(kind="router", by="loom:aaaa", data={"gen": 1}))
     append(home, Fact(kind="lease", by="loom:aaaa", data={
