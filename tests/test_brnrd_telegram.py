@@ -771,7 +771,7 @@ def test_album_uses_one_free_slot_after_each_item_is_drained(
 ):
     app, client, sends = _make_client(
         monkeypatch, limit_free_events_per_minute=burst_limit, limit_free_events_per_day=daily_limit,
-        home_gate_member_github_logins=(),
+        home_gate_member_github_logins=(), limit_telegram_held_events=0,
     )
     acc = _account(client)
     rid = _repo(client, acc)
@@ -819,10 +819,64 @@ def test_album_uses_one_free_slot_after_each_item_is_drained(
     assert denied["events"] == []
     assert any(
         reply["reply_to_message_id"] == 55
-        and "Message 55 was not queued" in reply["text"]
+        and "I couldn’t take this message" in reply["text"]
         and notice in reply["text"]
         for reply in sends
     )
+
+
+def test_burst_held_photo_delivers_once_after_window_and_advanced_cursor(monkeypatch):
+    from brnrd import inbox, limits
+
+    app, client, sends = _make_client(
+        monkeypatch, limit_free_events_per_minute=1, limit_telegram_held_events=1,
+        home_gate_member_github_logins=(),
+    )
+    acc = _account(client)
+    rid = _repo(client, acc)
+    code = _tg_pair_code(client, acc, rid)
+    client.post("/v1/webhooks/telegram", json=_message(555, f"/start {code}"), headers=_HDR)
+    dmn = _daemon_headers(client, acc, rid)
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    monkeypatch.setattr(limits, "naive_utcnow", lambda: now)
+
+    def poll(since):
+        response = client.get(
+            "/v1/daemons/inbox", params={"since": since, "wait": 0}, headers=dmn,
+        )
+        assert response.status_code == 200
+        return response.json()
+
+    client.post("/v1/webhooks/telegram", json=_message(555, "first", message_id=50), headers=_HDR)
+    first = poll(0)
+    assert [e["body"] for e in first["events"]] == ["first"]
+
+    photo = _message(555, "", message_id=51)
+    del photo["message"]["text"]
+    photo["message"]["caption"] = "screenshot"
+    photo["message"]["photo"] = [{"file_id": "held-photo", "width": 900, "height": 600}]
+    for _ in range(2):  # webhook retry does not spend another hold slot
+        assert client.post("/v1/webhooks/telegram", json=photo, headers=_HDR).status_code == 200
+    overflow = _message(555, "too much", message_id=52)
+    assert client.post("/v1/webhooks/telegram", json=overflow, headers=_HDR).status_code == 200
+    assert any(s["reply_to_message_id"] == 51 and "kept this message" in s["text"] for s in sends)
+    assert any(s["reply_to_message_id"] == 52 and "couldn’t take this message" in s["text"] for s in sends)
+    assert poll(first["cursor"])["events"] == []
+
+    # An internal enqueue advances the shared sequence while the photo waits.
+    with app.state.SessionLocal() as db:
+        inbox.enqueue(db, repo_id=rid, body="later event")
+    later = poll(first["cursor"])
+    assert [e["body"] for e in later["events"]] == ["later event"]
+
+    now += timedelta(seconds=61)
+    released = poll(later["cursor"])
+    assert released["cursor"] > later["cursor"]
+    [event] = released["events"]
+    assert event["body"] == "screenshot"
+    assert [attachment["file_id"] for attachment in event["attachments"]] == ["held-photo"]
+    assert event["reply_to"]["message_id"] == 51
+    assert poll(released["cursor"])["events"] == []
 
 
 def test_merged_album_item_stays_deliverable_after_an_interleaved_drain(env):

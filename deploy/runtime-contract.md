@@ -118,6 +118,7 @@ All values are non-secret integers consumed by `limits.py`.
 | --- | --- | --- |
 | `BRNRD_LIMIT_FREE_REPOS` | `1` | Connected-repository cap for free accounts. |
 | `BRNRD_LIMIT_FREE_EVENTS_PER_MINUTE` | `20` | Free-account event burst cap. |
+| `BRNRD_LIMIT_TELEGRAM_HELD_EVENTS` | `20` | Telegram messages held per account after a free burst refusal. |
 | `BRNRD_LIMIT_FREE_EVENTS_PER_DAY` | `200` | Free-account daily event cap. |
 | `BRNRD_LIMIT_ABUSE_REPOS` | `100` | All-tier abuse ceiling for connected repositories. |
 | `BRNRD_LIMIT_ABUSE_EVENTS_PER_MINUTE` | `60` | All-tier event-rate abuse ceiling. |

@@ -161,6 +161,7 @@ def test_incoming_limit_reply_is_once_per_episode_not_per_message(clock, monkeyp
     client = TestClient(create_app(Settings(
         database_url="sqlite:///:memory:", telegram_bot_token="bot:TOKEN",
         telegram_webhook_secret=secret, limit_free_events_per_minute=1,
+        limit_telegram_held_events=0,
     )))
     headers = brnrd_account_headers(client.app, github_id="123", login="octocat", email="o@example.com")
     repo_id = client.post("/v1/accounts/repos", json={"repo_full_name": "Gurio/demo"}, headers=headers).json()["repo_id"]

@@ -67,7 +67,7 @@ class LimitDecision:
 _ALLOW = LimitDecision(True)
 
 
-def _naive_utcnow() -> datetime:
+def naive_utcnow() -> datetime:
     # Model DateTime columns hold naive UTC (models._utcnow via SQLite).
     return datetime.now(timezone.utc).replace(tzinfo=None)
 
@@ -152,7 +152,7 @@ def check_event_admission(
             status=413,
         )
 
-    now = _naive_utcnow()
+    now = naive_utcnow()
     minute_start = now - timedelta(minutes=1)
     minute_count = _account_event_count(db, account.id, since=minute_start)
     if minute_count >= settings.limit_abuse_events_per_minute:

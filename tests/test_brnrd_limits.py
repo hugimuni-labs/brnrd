@@ -308,8 +308,7 @@ def test_telegram_over_limit_gets_one_line_reply_not_silence(monkeypatch):
     assert client.post("/v1/webhooks/telegram", json=_msg("first task", 2), headers=hdr).json()["ok"]
     assert client.post("/v1/webhooks/telegram", json=_msg("second task", 3), headers=hdr).json()["ok"]
 
-    # Exactly one event enqueued; the second message earned a reply naming
-    # the limit — a polite drop, never a silent one.
+    # The relay only sees the first event until the next admission window.
     with client.app.state.SessionLocal() as db:
         assert len(list(db.execute(select(Event)).scalars())) == 1
-    assert any("Free-tier burst limit" in text for text in sends)
+    assert any("kept this message" in text for text in sends)

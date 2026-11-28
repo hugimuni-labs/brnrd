@@ -27,6 +27,7 @@ from brnrd.models import (
     Daemon,
     DaemonRepo,
     Event,
+    TelegramHold,
     GitHubInstallation,
     GitHubInstalledRepo,
     PairRequest,
@@ -821,6 +822,9 @@ def _pair_repo_telegram_core(request: Request, db: Session, account_id: str, rep
 
 
 def _disconnect_repo_core(db: Session, account_id: str, repo_id: str) -> str:
+    from brnrd.telegram_holds import lock_account
+
+    lock_account(db, account_id)
     repo = db.execute(select(Repo).where(Repo.id == repo_id, Repo.account_id == account_id)).scalar_one_or_none()
     if repo is None:
         raise HTTPException(status_code=404, detail="repo not found")
@@ -839,7 +843,7 @@ def _disconnect_repo_core(db: Session, account_id: str, repo_id: str) -> str:
     # still references it: ActivityRecord points at tokens/daemons, Daemon at
     # tokens (#502 — ActivityRecord and ConfigChangeRequest were missing here,
     # so a disconnect with live activity rows died on the FK).
-    for model in (ActivityRecord, ConfigChangeRequest, Daemon, Event, TgPairCode, PairRequest, Token):
+    for model in (ActivityRecord, ConfigChangeRequest, Daemon, Event, TelegramHold, TgPairCode, PairRequest, Token):
         db.execute(delete(model).where(model.repo_id == repo.id))
     db.delete(repo)
     # #502: the corpus mirror is account-level; when the last repo disconnects
