@@ -111,3 +111,24 @@ def test_attended_letter_is_shown_once_even_before_the_loom_drains(body, capsys)
     assert "Only show these words once" not in jack.execute("post", room, "{}")
     assert main(["attend", "--for", "0.05s"]) == 0
     assert capsys.readouterr().out == "attend: nothing in 0.05s\n"
+
+
+def _receipts(room):
+    rows = [parse_frontmatter(p.read_text()) for p in (room / "port/out").glob("*.md")]
+    return [row for row in rows if row.get("kind") == "shown"]
+
+
+def test_an_owed_letter_is_receipted_once_however_many_calls_follow(body):
+    home, room = body
+    ident = inject_letter(home.root, to="thread:work", body="Owed through a long turn")
+    _boundary(home, room)
+    jack.execute("start", room, "{}")
+    assert [row["ids"] for row in _receipts(room)] == [ident]
+    for _ in range(5):
+        jack.execute("post", room, "{}")
+    assert [row["ids"] for row in _receipts(room)] == [ident]
+    later = inject_letter(home.root, to="thread:work", body="A second letter mid-turn")
+    _boundary(home, room)
+    assert later in jack.execute("post", room, "{}")
+    jack.execute("post", room, "{}")
+    assert sorted(row["ids"] for row in _receipts(room)) == sorted([ident, f"{ident} {later}"])

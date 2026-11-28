@@ -257,6 +257,13 @@ def _shown(room: Path, parsed: Boundary, boundary: dict, displayed: list[str]) -
         return
     if not parsed.strand:
         raise ValueError("boundary names owed letters and no strand")
+    # A receipt that shows nothing and names no letter this gen has not receipted says
+    # nothing new. Written at every tool call of a body owing one letter, it was 23% of
+    # a week's ledger and made every live body's boundary render again (cpu-shown).
+    state = _state(room).get("receipted") or {}
+    receipted = set(state.get("ids") or ()) if state.get("gen") == parsed.gen else set()
+    if not displayed and receipted.issuperset(parsed.ids):
+        return
     stem = mint(5)
     ids = " ".join(parsed.ids)
     timing = f"boundary: {json.dumps(dict(boundary, displayed=displayed))}\n" if displayed else ""
@@ -271,6 +278,7 @@ def _shown(room: Path, parsed: Boundary, boundary: dict, displayed: list[str]) -
         "---\n"
     )
     atomic_write(room / "port" / "out" / f"{stem}.md", text)
+    _set_state(room, receipted={"gen": parsed.gen, "ids": sorted(receipted.union(parsed.ids))})
 
 
 LEFT_EVERY = 60.0
