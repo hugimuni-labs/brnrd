@@ -65,7 +65,9 @@ def test_an_unlinked_goal_shows_its_prose_and_no_counts():
 
 def args(**kw):
     base = dict(id="w-pilot", goal="growth", top=None, pick=None, read=None, result=None, accept=None,
-                drop=None, answer=None, left=[], clear_wait=False)
+                drop=None, answer=None, left=[], clear_wait=False, line=None, sender=None,
+                thread=None, parent=None, ref=None, wait=None, until=None, say=[],
+                force=False, deliver=False)
     return SimpleNamespace(**{**base, **kw})
 
 
@@ -77,7 +79,44 @@ def test_goal_verb_names_only_an_active_goal(monkeypatch):
     with pytest.raises(ValueError, match="not an active goal"):
         verbs_wishes._goal_fact(None, args(goal="nope"), facts(), "strand:x")
     with pytest.raises(ValueError, match="goes alone"):
-        verbs_wishes._goal_fact(None, args(pick="why"), facts(), "strand:x")
+        verbs_wishes._goal_fact(None, args(top="L1"), facts(), "strand:x")
+
+
+@pytest.fixture
+def goal_command(tmp_path, monkeypatch):
+    from brr.loom.runtime.home import Home
+    from brr.loom.runtime.ledger import append, read_facts
+
+    home = Home(tmp_path, install="aaaa")
+    append(home, letter("L1", at(30)))
+    append(home, wish("w-pilot", at(20), says=["L1"]))
+    append(home, wish("w-ask", at(10), sender="resident", parent="w-pilot"))
+    monkeypatch.setattr(verbs_wishes, "_context", lambda args: (home, "strand:s-aaaa-work", "work"))
+    monkeypatch.setattr(idle, "active_goals", lambda home: [GOAL])
+    return lambda: read_facts(home)
+
+
+def test_goal_and_pick_write_both_facts_in_order(goal_command):
+    before = len(goal_command())
+    assert verbs_wishes._wish(["w-pilot", "--goal", "growth", "--pick", "Screen  the extract"]) == 0
+    assert [(f.kind, f.data) for f in goal_command()[before:]] == [
+        ("wish.goal", {"wish": "w-pilot", "goal": "growth"}),
+        ("wish.pick", {"wish": "w-pilot", "why": "Screen the extract"}),
+    ]
+
+
+@pytest.mark.parametrize(("ident", "flags", "error"), [
+    ("w-pilot", ["--goal", "nope", "--pick", "Screen the extract"], "not an active goal"),
+    ("w-pilot", ["--goal", "growth", "--pick", " "], "--pick needs its why"),
+    ("w-ask", ["--goal", "growth", "--pick", "Handle the ask"], "not an open wish"),
+    ("w-pilot", ["--goal", "growth", "--result", "file:report.md"], "--goal goes alone or with --pick"),
+    ("w-pilot", ["--goal", "growth", "--pick", "Screen", "--line", "New line"], "--goal goes alone or with --pick"),
+])
+def test_refused_goal_command_writes_no_facts(goal_command, capsys, ident, flags, error):
+    before = list(goal_command())
+    assert verbs_wishes._wish([ident, *flags]) == 1
+    assert error in capsys.readouterr().err
+    assert list(goal_command()) == before
 
 
 def test_an_ask_names_what_it_holds_up_and_what_moves_meanwhile():
