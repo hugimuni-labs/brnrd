@@ -9,7 +9,7 @@ from datetime import datetime, timedelta
 from sqlalchemy import func, select, update
 from sqlalchemy.orm import Session
 
-from . import ids, inbox, limits
+from . import inbox, limits
 from .config import Settings
 from .models import Account, Event, Repo, TelegramHold
 
@@ -95,25 +95,27 @@ def release_due(
     for held in db.scalars(due).all():
         reply_to = inbox.decode_reply_to(held.reply_to)
         group = reply_to.get("media_group_id")
+        attachments = json.loads(held.attachments_json)
         decision = limits.check_event_admission(
             db, settings, account, body=held.body,
-            attachment_count=len(json.loads(held.attachments_json)),
+            attachment_count=len(attachments),
             telegram_album=(held.chat_id, group) if group else None,
         )
         if not decision.allowed:
             held.retry_at = _retry_at(db, account_id, now, decision.reason)
             continue
-        # Inserting here gives the message a sequence beyond the relay's
-        # advanced cursor. A single commit makes release atomic on retry.
-        db.add(Event(
-            event_id=ids.event_id(),
+        # Commit the album update and its hold deletion together.
+        inbox.enqueue(
+            db,
             repo_id=held.repo_id,
             body=held.body,
             source="telegram",
             created_at=now,
-            reply_to=held.reply_to,
-            attachments_json=held.attachments_json,
-        ))
+            reply_to=reply_to,
+            attachments=attachments,
+            media_group_id=group,
+            commit=False,
+        )
         db.delete(held)
         db.flush()
     db.commit()

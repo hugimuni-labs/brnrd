@@ -255,6 +255,7 @@ _MEDIA_GROUP_MERGE_MAX_ATTEMPTS = 12
 
 def _find_open_media_group(
     db: Session, *, repo_id: str, media_group_id: str, chat_id: Any = None,
+    now: datetime | None = None,
 ) -> Event | None:
     """The most recent still-**queued** event carrying *media_group_id*.
 
@@ -275,7 +276,7 @@ def _find_open_media_group(
     carries ``chat_id`` for every Telegram event, so this costs nothing to
     check.
     """
-    cutoff = datetime.now(timezone.utc) - _MEDIA_GROUP_MERGE_WINDOW
+    cutoff = (now or datetime.now(timezone.utc)) - _MEDIA_GROUP_MERGE_WINDOW
     candidates = db.execute(
         select(Event)
         .where(
@@ -304,6 +305,8 @@ def _merge_into_open_media_group(
     body: str,
     attachments: list[dict[str, Any]] | None,
     chat_id: Any = None,
+    now: datetime | None = None,
+    commit: bool = True,
 ) -> Event | None:
     """Fold *body* / *attachments* into the open media-group event, or
     ``None`` (no open event — the caller mints a fresh one).
@@ -378,7 +381,7 @@ def _merge_into_open_media_group(
     """
     for _ in range(_MEDIA_GROUP_MERGE_MAX_ATTEMPTS):
         existing = _find_open_media_group(
-            db, repo_id=repo_id, media_group_id=media_group_id, chat_id=chat_id,
+            db, repo_id=repo_id, media_group_id=media_group_id, chat_id=chat_id, now=now,
         )
         if existing is None:
             return None
@@ -412,6 +415,9 @@ def _merge_into_open_media_group(
             conversation_id=existing.conversation_id,
             attachments_json=new_attachments_json,
         )
+        # For held items, roll back only this attempt on a lost CAS.
+        # The outer transaction still owns the account lock and prior releases.
+        transaction = db if commit else db.begin_nested()
         db.add(replacement)
         db.flush()  # assigns replacement.seq without committing
         result = db.execute(
@@ -427,14 +433,14 @@ def _merge_into_open_media_group(
             # overwrite it with a merge computed from data that's now
             # stale. Roll back (discards the placeholder insert above too)
             # and retry against freshly re-read state.
-            db.rollback()
+            transaction.rollback()
             continue
         db.execute(
             update(Event)
             .where(Event.seq == replacement.seq)
             .values(event_id=existing.event_id)
         )
-        db.commit()
+        transaction.commit()
         # #1763 — no `db.refresh(replacement)` here, the same shape as the
         # bare-insert path in `enqueue` below (see its comment for the full
         # mechanism): the moment this commits, `replacement` is itself a
@@ -462,6 +468,8 @@ def enqueue(
     reply_to: dict[str, Any] | None = None,
     attachments: list[dict[str, Any]] | None = None,
     media_group_id: str | None = None,
+    created_at: datetime | None = None,
+    commit: bool = True,
 ) -> Event:
     """Queue one inbound event, or fold it into an open Telegram album.
 
@@ -473,6 +481,9 @@ def enqueue(
     event with five attachments rather than five events with one photo
     each. No match ⇒ an ordinary new event, with the marker folded into
     its own ``reply_to`` so a *later* item in the same album can find it.
+
+    With ``commit=False``, flush the event and leave the transaction open
+    so the caller can commit it together with the associated hold deletion.
     """
     media_group_id = str(media_group_id or "").strip() or None
     if media_group_id:
@@ -483,6 +494,8 @@ def enqueue(
             body=body,
             attachments=attachments,
             chat_id=(reply_to or {}).get("chat_id"),
+            now=created_at,
+            commit=commit,
         )
         if merged_event is not None:
             return merged_event
@@ -497,9 +510,13 @@ def enqueue(
         reply_to=json.dumps(reply_to),
         attachments_json=json.dumps(attachments or []),
         status=Event.STATUS_QUEUED,
+        created_at=created_at,
     )
     db.add(event)
-    db.commit()
+    if commit:
+        db.commit()
+    else:
+        db.flush()
     # #1763 — no `db.refresh(event)` here, and that is load-bearing, not an
     # omission. When `media_group_id` is set, this row is a legitimate
     # merge target the moment it commits: any concurrently-running album
