@@ -2,10 +2,10 @@
 import pytest
 
 from brr.daemon2.facts import Fact
-from brr.loom.runtime.home import Home
 from brr.loom.runtime.ledger import append, inject_letter
 from brr.loom.runtime.lifecycle import read_thread
 from brr.loom.runtime.selfrepo import init_self, room
+from _step import home_with_install
 from test_wake import cli, commit, write_thread
 
 DONE = ("Work\n\n## Answer\n\nShipped.\n\n## Done\n\n"
@@ -35,7 +35,7 @@ def loom(tmp_path, monkeypatch):
     commit(root / "self", "threads")
     seat = room(root, "s-aaaa-work").parent
     room(root, "s-aaaa-inbx")
-    home = Home(root, install="aaaa")
+    home = home_with_install(root, "aaaa")
     append(home, Fact(kind="router", by="loom:aaaa", data={"gen": 1}))
     lease(home, "inbox", "s-aaaa-inbx", 1)
     lease(home, "work", "s-aaaa-work", 1)
