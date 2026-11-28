@@ -3265,6 +3265,8 @@ def run(root: Path | str, *, adapter: str = "fake", core: str = "haiku",
         from .receipts import source_root
         updater = Updater(home, _log, source_root())
         router.watcher = Watcher(home.root / "loom" / "prs.json", home.root / "loom" / "pr-comments.json")
+        from .friction import ScarWatch
+        scars = ScarWatch(home, _log)
         from .receipts import record_start
         try:
             # Each start and re-exec: which merged pull requests this code holds.
@@ -3319,6 +3321,7 @@ def run(root: Path | str, *, adapter: str = "fake", core: str = "haiku",
                 health.guard("waits", router.watcher.step, config, router.armed(), backoff=False)
                 health.guard("mirror", mirror.step, config, backoff=False)
                 health.guard("library", keeper.step, backoff=False)
+                health.guard("scars", scars.step, backoff=False)
                 health.guard("sample", sampler.step, backoff=False)
                 health.guard("disk", reaper.disk, backoff=False)
                 health.guard("cpu", cpu.step, backoff=False)

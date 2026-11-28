@@ -237,7 +237,8 @@ def wishes(facts: Iterable[Fact]) -> dict[str, Wish]:
             return _person(letter) if wish.sender == "person" else letter.by.startswith("strand:")
         # An ask cites no letter: the resident who writes it is the one saying it.
         asked = wish.sender == "resident" and not wish.says
-        wish.origin = "said" if asked or (wish.says and all(map(own_say, wish.says))) else "derived"
+        wish.origin = ("own" if wish.sender == "self" else
+                       "said" if asked or (wish.says and all(map(own_say, wish.says))) else "derived")
     return found
 
 

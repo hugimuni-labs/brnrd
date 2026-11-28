@@ -77,7 +77,10 @@ def _ended(rows, pred, install: str) -> tuple[str, str] | None:
                              and (row.data.get("strand"), row.data.get("gen")) == pred), None)
                 count = molt.data.get("context") if molt else None
                 size = f", at {count // 1000}k" if isinstance(count, int) and count > 0 else ""
-                return cause, f"Molted at {f.at[11:16]}Z{size}. Carried across:"
+                friction = (molt.data.get("friction") or {}) if molt else {}
+                felt = (f" Its friction ({friction.get('sink') or 'unsorted'}): {friction['line']}."
+                        if friction.get("line") else "")
+                return cause, f"Molted at {f.at[11:16]}Z{size}.{felt} Carried across:"
             if cause in ("idle", "settled"):
                 return cause, f"Rested at {f.at[11:16]}Z."
             why = ("the machine restarted" if restart and cause == "failed" else

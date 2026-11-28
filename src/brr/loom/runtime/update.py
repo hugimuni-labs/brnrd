@@ -350,6 +350,20 @@ def forge_for(config):
     return GitHubChecks(config.forge_token)
 
 
+def checkout_mode(root: Path) -> str:
+    """What ``update = auto`` follows from ``root``: its own ``brnrd.update`` (stable|dev),
+    else dev; off when it is no checkout. The Updater and the friction install kind both
+    read it here, so the two never disagree about how this loom follows."""
+    if not (root / ".git").exists():
+        return "off"
+    try:
+        found = subprocess.run(["git", "-C", str(root), "config", "--get", "brnrd.update"],
+                               capture_output=True, text=True, timeout=10).stdout.strip()
+    except (OSError, subprocess.SubprocessError):
+        found = ""
+    return found if found in ("stable", "dev") else "dev"
+
+
 class Updater:
     """Polls its source off the loop; moves only when the loop says it is idle."""
 
@@ -391,12 +405,7 @@ class Updater:
         except OSError:
             stamp = None
         if self.checkout_mode is None or self.checkout_mode[0] != stamp:
-            try:
-                found = subprocess.run(["git", "-C", str(self.root), "config", "--get", "brnrd.update"],
-                                       capture_output=True, text=True, timeout=10).stdout.strip()
-            except (OSError, subprocess.SubprocessError):
-                found = ""
-            self.checkout_mode = (stamp, found if found in ("stable", "dev") else "dev")
+            self.checkout_mode = (stamp, checkout_mode(self.root))
         return self.checkout_mode[1]
 
     def _source(self, config):

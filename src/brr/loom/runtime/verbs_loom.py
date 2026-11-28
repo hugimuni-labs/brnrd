@@ -237,9 +237,17 @@ def _molt(argv: list[str]) -> int:
     handover.add_argument("--why", help="leave a text note instead of a carry file")
     parser.add_argument("--fresh", action="store_true", help="start from main (requires --why)")
     parser.add_argument("--cites", metavar="LETTER_ID", help="the letter on this thread it answers: its receipt")
+    from .friction import SINKS
+    parser.add_argument("--friction", metavar="LINE", help="what cost this gen most, recorded as brnrd runtime friction")
+    parser.add_argument("--sink", choices=SINKS, help="where the friction went (with --friction)")
+    parser.add_argument("--at", help="the path in the self that carries it (with --friction)")
     args = parser.parse_args(argv)
     try:
         room = _room(args.room)
+        if (args.sink or args.at) and not args.friction:
+            raise PortError("--sink and --at describe a --friction")
+        friction = ({"line": args.friction, "sink": args.sink, "at": args.at}
+                    if args.friction is not None else None)
         fresh = args.fresh
         carry = None
         if args.carry is not None:
@@ -253,7 +261,7 @@ def _molt(argv: list[str]) -> int:
             why = args.why
             if not fresh:
                 sys.stderr.write(_stakes(room))
-        fact_id = write_reincarnate(room, why, fresh=fresh, carry=carry, cites=args.cites)
+        fact_id = write_reincarnate(room, why, fresh=fresh, carry=carry, cites=args.cites, friction=friction)
     except (PortError, SelfError, ValueError, OSError) as exc:
         return refuse("molt", exc)
     if not fresh:
