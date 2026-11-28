@@ -1307,15 +1307,15 @@ def _pull(home: Home, facts, thread: str, strand: str, room: Path) -> dict[str, 
     """The asks band and a done thread (requests R4)."""
     from .lifecycle import CLOSED
     from .pull import band_line, done_line
-    from .threads import thread_table
     from .wishes import told
-    found = told(facts)
+
+    found, main = told(facts), home.main_thread()
     try:
-        closed = {row['thread'] for row in thread_table(home, facts) if row['status'] in CLOSED}
+        closed = {name for name, data in main_snapshot(home).items() if data["status"] in CLOSED}
     except (OSError, ValueError, KeyError):
         closed = set()
-    return {"band": band_line(facts, found, thread, home.main_thread(), room, closed),
-            "done": done_line(found, thread, home.main_thread())}
+    return {"band": band_line(facts, found, thread, main, room, closed),
+            "done": done_line(found, thread, main)}
 
 
 def _reply_context(facts, thread: str, letters, room: Path | None = None) -> dict[str, str]:

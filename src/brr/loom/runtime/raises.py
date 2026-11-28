@@ -78,19 +78,33 @@ def capture(facts, *, by: str, thread: str | None, main: str, body: str, links, 
 
 def last_raise(facts, room: Path, ask: str) -> datetime | None:
     """When a letter to a channel last linked ``ask``: the ledger, or this room's unsent port."""
+    return last_raises(facts, room, {ask}).get(ask)
+
+
+def last_raises(facts, room: Path, asks: set[str]) -> dict[str, datetime]:
+    """Read channel raises from the ledger and pending outbox once for these asks."""
     from .ledger import kind_facts
     from .port import PortError, parse_frontmatter
-    times = [datetime.fromisoformat(f.at) for f in kind_facts(facts, "letter")
-             if is_channel(str(f.data.get("to", ""))) and ask in _links(f.data)]
+
+    times: dict[str, datetime] = {}
+
+    def record(links: set[str], at: datetime) -> None:
+        for ask in links:
+            times[ask] = max(times.get(ask, at), at)
+
+    for fact in kind_facts(facts, "letter"):
+        if is_channel(str(fact.data.get("to", ""))) and (links := asks.intersection(_links(fact.data))):
+            record(links, datetime.fromisoformat(fact.at))
     out = Path(room) / "port" / "out"
     for path in out.glob("*.md") if out.is_dir() else ():
         try:
             sent = parse_frontmatter(path.read_text())
-        except PortError:
+            if is_channel(str(sent.get("to", ""))) and (links := asks.intersection(_links(sent))):
+                record(links, datetime.fromtimestamp(path.stat().st_mtime, timezone.utc))
+        except (FileNotFoundError, PortError):
+            # Ingestion can remove a pending letter between listing and reading it.
             continue
-        if is_channel(str(sent.get("to", ""))) and ask in _links(sent):
-            times.append(datetime.fromtimestamp(path.stat().st_mtime, timezone.utc))
-    return max(times, default=None)
+    return times
 
 
 PR = re.compile(r"(?:/pull/|#)(\d+)\b")
