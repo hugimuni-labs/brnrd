@@ -107,6 +107,11 @@ def test_successor_wake_carries_a_standing_ask_after_parent_delivery(ledger):
     standing = f"Your open ask {ask} · waiting on operator · {question} · for {parent} (delivered)"
     assert wake.index("## Held\n") < wake.index(standing) < wake.index("## threads/work/README.md")
 
+    followup = inject_letter(home.root, to="thread:work", body="Any update on the pilot?")
+    command(home, seat, "send", "--re", followup, "--to", "thread:work", "--wish", parent,
+            "--note", f"Qualification is delivered. Waiting for an answer to {ask}.")
+    assert view(home, ask).open
+
     revised = "May I draft Aster outreach for review now that we know it is a new contact?"
     command(home, seat, "wish", ask, "--line", revised)
     out = StringIO()
