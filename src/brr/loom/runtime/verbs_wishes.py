@@ -416,9 +416,16 @@ def _tell_delivered(home, args, wish, result, thread) -> None:
             return
     channel = is_channel(target)
     room = _room(args.room)
-    body = f"delivered &{wish.id}: {wish.line}\n{result['line']}: {result['ref']}\n"
+    ref = result['ref']
+    if channel and ref.startswith("/"):
+        # A person reads the path where they keep the file: ~/Documents/…, not the home's full path.
+        home_dir = str(Path.home())
+        ref = "~" + ref[len(home_dir):] if ref.startswith(home_dir + "/") else ref
+    body = f"delivered &{wish.id}: {wish.line}\n{result['line']}: {ref}\n"
     for said in (result.get("verified"), result.get("word"), result.get("weakened")):
-        if said:
+        # In a chat, the check that only restates the path above ("<path> is on this machine")
+        # is the ledger's, not the person's: it stays on the wish.result fact.
+        if said and not (channel and said == result.get("verified") and said.startswith(result['ref'] + " ")):
             body += said + "\n"
     attach = None
     if result.get("kind") == "host":
