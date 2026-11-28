@@ -839,6 +839,50 @@ def test_wake_opens_with_held_goals_and_queue(tmp_path):
     assert json.loads(sizes.read_text())["parts"]["held"] > 0
 
 
+def test_crowded_inbox_wake_keeps_goals_and_only_the_newest_asks(tmp_path, monkeypatch):
+    from datetime import datetime, timedelta, timezone
+    from io import StringIO
+
+    from brr.daemon2.facts import Fact
+    from brr.loom.runtime.ledger import append
+
+    monkeypatch.setenv("LOOM_BUDGET_BYTES", "24000")
+    assert cli(["init", "--home", str(tmp_path)]).returncode == 0
+    home = Home(tmp_path)
+    thread = home.main_thread()
+    repo = tmp_path / "self"
+    goals = repo / "goals"
+    goals.mkdir()
+    (goals / "launch.md").write_text(
+        '---\nstatus: active\nstands: First draft\nnext: Get a read\n'
+        'now: Send to the team\nstake: Ship this week\n---\n# Launch\n')
+    commit(repo, "launch goal")
+    append(home, Fact(kind="letter", id="p-test/pilot", by="person:test",
+                      data={"id": "p-test/pilot", "from": "p-test", "to": f"thread:{thread}"}))
+    append(home, Fact(kind="wish", id="w-parent", by="person:test",
+                      data={"wish": "w-parent", "from": "person", "thread": thread,
+                            "line": "Review the pilot", "says": [{"letter": "p-test/pilot"}]}))
+    start = datetime.now(timezone.utc) - timedelta(minutes=1)
+    for n in range(16):
+        ident = f"w-ask-{n:02}"
+        append(home, Fact(kind="wish", id=ident, by="strand:s-aaaa-first", at=(start + timedelta(seconds=n)).isoformat(),
+                          data={"wish": ident, "from": "resident", "thread": thread,
+                                "line": f"Question {n:02}? " + "x" * 300, "says": [],
+                                "parent": "w-parent"}))
+    clone = selfrepo.room(tmp_path, "s-aaaa-successor", gen=2)
+    out = StringIO()
+    assert selfrepo.run_wake(clone, thread, stdout=out) == 0
+    held = out.getvalue().split("## Held\n", 1)[1].split("\n## ", 1)[0]
+    rows = held.splitlines()
+    assert rows[0].startswith("goal launch: First draft")
+    assert [row.split()[3] for row in rows[1:4]] == ["w-ask-15", "w-ask-14", "w-ask-13"]
+    assert all(len(row.split(" · ")[2]) == 120 for row in rows[1:4])
+    assert rows[4] == "[13 more open asks. Whole in brnrd runtime asks.]"
+    assert "Attaching it to the ask records an answer." in rows[5]
+    assert len("\n".join(rows[1:6]).encode("utf-8")) + 1 <= 960
+
+
+
 def test_the_seed_recipe_folds_topics_before_refusing_and_keeps_the_page_in_hand(tmp_path: Path) -> None:
     # A new self gets the fold the inbox's own recipe landed after 2026-11-23 17:41Z.
     home = tmp_path / "home"

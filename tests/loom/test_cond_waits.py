@@ -66,7 +66,9 @@ def test_a_moot_ask_wakes_the_seat_that_holds_its_thread_once(ledger):
     assert letter.id == notice_id("cond", f"ask-moot|{ask}|dropped")
     assert letter.data["to"] == "thread:work", "the seat holds work: no park needed"
     assert f"ask-moot: {ask}" in letter.data["body"] and f"{root}, which is dropped" in letter.data["body"]
-    assert f"wish {ask} --drop" in letter.data["body"], "the act rides in the letter"
+    assert f"Your question {ask} is still open." in letter.data["body"]
+    assert f"wish {ask} --parent <wish-id>" in letter.data["body"]
+    assert "--drop" not in letter.data["body"]
     assert told(home) == [], "the id derives from the firing: one letter"
 
 

@@ -43,7 +43,7 @@ UNREAD = timedelta(hours=24)
 STALE = timedelta(days=7)
 #: Seconds between evaluations: the queries fold the ledger.
 EVERY = 60
-#: Parent states that make an ask moot.
+#: Parent states that prompt a review of the standing ask.
 ENDED = frozenset({"delivered", "accepted", "dropped", "expired", "answered"})
 
 _KEPT_IN = re.compile(r"^(?:leftovers in|a stash in) ([^:\s]+)")
@@ -120,7 +120,9 @@ def ask_moot(found: dict) -> list[Firing]:
             continue
         rows.append(Firing("ask-moot", f"{ask.id}|{parent.state}", ask.thread,
                            f"ask-moot: {ask.id} (\"{_first(ask.line)}\") asks for {parent.id}, which is {parent.state}",
-                           f"drop it with the why: `brnrd runtime wish {ask.id} --drop \"{parent.id} is {parent.state}\"`"))
+                           f"Your question {ask.id} is still open. If it still needs an answer, keep it or move it "
+                           f"with `brnrd runtime wish {ask.id} --parent <wish-id>`. "
+                           "Drop it with a reason only if its answer is no longer needed."))
     return rows
 
 
