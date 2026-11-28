@@ -1268,11 +1268,13 @@ def telegram_webhook(request: Request, payload: dict, x_telegram_bot_api_secret_
             db.get(Account, route.account_id),
             body=body,
             attachment_count=len(parsed.attachments or []),
+            telegram_album=(str(parsed.chat_id), parsed.media_group_id)
+            if parsed.media_group_id else None,
         )
         if not decision.allowed:
             _audit_reject(parsed, reason=f"limit:{decision.reason}")
             if _tell_refusal(settings, route.account_id, decision):
-                _reply(settings, parsed, decision.message)
+                _reply(settings, parsed, f"Message {parsed.message_id} was not queued. {decision.message}")
             return {"ok": True}
         _enqueue_telegram_event(db, parsed, repo_id=repo.id, body=body)
         if settings.telegram_bot_token:

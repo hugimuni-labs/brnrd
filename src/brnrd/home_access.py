@@ -69,7 +69,7 @@ def window_end(account: Account) -> datetime | None:
     return None if started is None else _utc(started) + TRIAL_LENGTH
 
 
-def _member(settings: Settings, account: Account) -> bool:
+def is_member(settings: Settings, account: Account) -> bool:
     return (account.github_login or "").lower() in settings.home_gate_member_github_logins
 
 
@@ -77,7 +77,7 @@ def trial_status(settings: Settings, account: Account, *, now: datetime | None =
     """``GET /v1/accounts/home-trial``: the window the gate uses."""
     now = now or datetime.now(timezone.utc)
     labels = {
-        "member": _member(settings, account),
+        "member": is_member(settings, account),
         "subscribed": account.tier == Account.TIER_SUBSCRIBED,
     }
     ends = window_end(account)
@@ -96,7 +96,7 @@ def decide(db: Session, settings: Settings, account: Account | str | None, *, no
         return HomeAccess(True, "degraded")
     if row is None:
         return HomeAccess(True, "no_account")  # authentication is not this function's job
-    if _member(settings, row):
+    if is_member(settings, row):
         return HomeAccess(True, "member")
     ent = billing.entitlements(db, row)
     if ent.degraded:

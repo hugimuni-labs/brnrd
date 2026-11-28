@@ -4,9 +4,8 @@ decision ledger 2026-07-21).
 Two distinct kinds of bound, deliberately kept apart:
 
 - **Headroom limits** bind only the free tier and lift entirely for any
-  account with a live subscription (the supporter tier's one concrete
-  entitlement). Decided by :func:`brnrd.billing.entitlements` — enforcement
-  points never inspect subscription state themselves.
+  member account or any account with lifted billing headroom. Membership
+  uses the same allowlist as home access.
 - **Abuse ceilings** bind every tier, sit far above real use, and exist as
   protection, not product.
 
@@ -38,7 +37,7 @@ from fastapi import HTTPException
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from . import billing
+from . import billing, home_access, inbox
 from .config import Settings
 from .models import Account, Event, Repo
 
@@ -92,6 +91,32 @@ def _account_event_count(db: Session, account_id: str, *, since: datetime) -> in
     )
 
 
+def _free_window_full(
+    db: Session,
+    account_id: str,
+    *,
+    since: datetime,
+    limit: int,
+    telegram_album: tuple[str, str] | None,
+) -> bool:
+    # Responded rows retain their routing metadata, so a relay drain does
+    # not spend a fresh free slot for each remaining item of an album.
+    rows = db.execute(
+        select(Event.source, Event.reply_to)
+        .join(Repo, Event.repo_id == Repo.id)
+        .where(Repo.account_id == account_id, Event.created_at >= since)
+    )
+    albums: set[tuple[str, str]] = set()
+    singles = 0
+    for source, reply_to in rows:
+        meta = inbox.decode_reply_to(reply_to) if source == "telegram" else {}
+        if meta.get("media_group_id") and meta.get("chat_id") is not None:
+            albums.add((str(meta["chat_id"]), str(meta["media_group_id"])))
+        else:
+            singles += 1
+    return telegram_album not in albums and singles + len(albums) >= limit
+
+
 def check_event_admission(
     db: Session,
     settings: Settings,
@@ -99,6 +124,7 @@ def check_event_admission(
     *,
     body: str = "",
     attachment_count: int = 0,
+    telegram_album: tuple[str, str] | None = None,
 ) -> LimitDecision:
     """May this account enqueue one more inbox event right now?
 
@@ -127,14 +153,16 @@ def check_event_admission(
         )
 
     now = _naive_utcnow()
-    minute_count = _account_event_count(db, account.id, since=now - timedelta(seconds=60))
+    minute_start = now - timedelta(minutes=1)
+    minute_count = _account_event_count(db, account.id, since=minute_start)
     if minute_count >= settings.limit_abuse_events_per_minute:
         return LimitDecision(
             False,
             "abuse_event_rate",
             f"Account event-rate ceiling reached ({settings.limit_abuse_events_per_minute}/min); wait a moment and retry.",
         )
-    day_count = _account_event_count(db, account.id, since=now - timedelta(days=1))
+    day_start = now - timedelta(days=1)
+    day_count = _account_event_count(db, account.id, since=day_start)
     if day_count >= settings.limit_abuse_events_per_day:
         return LimitDecision(
             False,
@@ -142,20 +170,25 @@ def check_event_admission(
             f"Account daily event ceiling reached ({settings.limit_abuse_events_per_day}/day); retry tomorrow.",
         )
 
-    ent = _entitlements(db, account)
-    if ent.headroom_lifted:
+    if home_access.is_member(settings, account) or _entitlements(db, account).headroom_lifted:
         return _ALLOW
-    if minute_count >= settings.limit_free_events_per_minute:
+    burst_limit = settings.limit_free_events_per_minute
+    if minute_count >= burst_limit and _free_window_full(
+        db, account.id, since=minute_start, limit=burst_limit, telegram_album=telegram_album,
+    ):
         return LimitDecision(
             False,
             "free_event_burst",
-            f"Free-tier burst limit reached ({settings.limit_free_events_per_minute} events/min); {_UPGRADE_HINT}",
+            f"Free-tier burst limit reached ({burst_limit} events/min); {_UPGRADE_HINT}",
         )
-    if day_count >= settings.limit_free_events_per_day:
+    daily_limit = settings.limit_free_events_per_day
+    if day_count >= daily_limit and _free_window_full(
+        db, account.id, since=day_start, limit=daily_limit, telegram_album=telegram_album,
+    ):
         return LimitDecision(
             False,
             "free_daily_events",
-            f"Free-tier daily event limit reached ({settings.limit_free_events_per_day}/day); {_UPGRADE_HINT}",
+            f"Free-tier daily event limit reached ({daily_limit}/day); {_UPGRADE_HINT}",
         )
     return _ALLOW
 
@@ -178,8 +211,11 @@ def check_repo_connect(db: Session, settings: Settings, account: Account) -> Lim
             f"Connected-repo ceiling reached ({settings.limit_abuse_repos} repos).",
             status=403,
         )
-    ent = _entitlements(db, account)
-    if not ent.headroom_lifted and count >= settings.limit_free_repos:
+    if (
+        count >= settings.limit_free_repos
+        and not home_access.is_member(settings, account)
+        and not _entitlements(db, account).headroom_lifted
+    ):
         return LimitDecision(
             False,
             "free_repo_limit",
