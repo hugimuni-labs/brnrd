@@ -17,6 +17,9 @@ error is a new fault. The marker is this home's: a router that moves
 to another install has none there and stays quiet, the side that never asks
 twice. An actionable error asks only once two readings carry it. Grok billing
 failures without evidence of an authentication problem stay on the fuel display.
+The ask is mailed only for a shell this home has run a body on (a lease with
+that shell) or one the person named in their preferences or config; another
+shell's ask stays on the board and in the ledger.
 """
 
 from __future__ import annotations
@@ -146,8 +149,25 @@ def observe_collectors(home, facts, armed: bool):
         facts.append(append(home, Fact(kind="wish", by=by, id=ident, data={
             "wish": ident, "says": [], "from": "resident", "line": want, "thread": thread,
             "parent": parent})))
-        _mail(home, facts, ident, want, thread)
+        if shell in _known(home, facts):
+            _mail(home, facts, ident, want, thread)
+        else:
+            from .loom import _log
+            _log(home, f"collectors: ask {ident} is on the board only: no {shell} body ran in this home")
     return facts
+
+
+def _known(home, facts) -> set[str]:
+    """The shells this home has used or the person named: a lease's shell, or a hand-set preference.
+
+    A collector reads whatever key the machine holds; an engine the person never
+    set up is not theirs to be told about. ``bodies.order`` does not count: setup
+    writes every ranked shell there, installed or not.
+    """
+    from .adapters import named_shells
+    from .ledger import kind_facts
+    ran = {str(f.data.get("shell")) for f in kind_facts(facts, "lease")}
+    return ran | named_shells(home)
 
 
 def _mail(home, facts, ident: str, what: str, thread: str) -> None:
