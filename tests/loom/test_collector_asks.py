@@ -20,8 +20,29 @@ def home(ledger):
     (home.root / "self/people/ada").mkdir(parents=True)
     (home.root / "self/people/ada/channels.toml").write_text('channels = ["mine:42"]\n')
     collectors._SEEN.clear()
+    for shell in ("grok", "claude", "codex", "vibe"):
+        ran(home, shell)
     yield home, seat
     collectors._SEEN.clear()
+
+
+@pytest.fixture
+def fresh(ledger):
+    """A brand-new home whose person has a direct chat; only the ledger fixture's lease, shell fake."""
+    home, seat = ledger
+    (home.root / "loom/config.toml").write_text('connectors = ["mine=fake"]\n')
+    (home.root / "self/people/ada").mkdir(parents=True)
+    (home.root / "self/people/ada/channels.toml").write_text('channels = ["mine:42"]\n')
+    collectors._SEEN.clear()
+    yield home
+    collectors._SEEN.clear()
+
+
+def ran(home, shell):
+    """A body of ``shell`` ran in this home: the lease the loom writes when it starts one."""
+    append(home, Fact(kind="lease", by="loom:aaaa", id=f"lease:{shell}:1", data={
+        "thread": "other", "strand": f"s-aaaa-{shell}", "gen": 1, "install": "aaaa",
+        "router_gen": 1, "shell": shell, "core": "", "repos": []}))
 
 
 _LAST = [0.0]
@@ -205,3 +226,46 @@ def test_an_ask_the_person_dropped_is_not_filed_again_while_the_error_holds(home
         reads(home, "grok", "grok billing HTTP 401; no authentication refresh attempted")
     old, new = asks(home)
     assert old.id == ask.id and new.open and new.line == ask.line
+
+
+def test_a_collector_for_an_engine_never_run_here_stays_on_the_board(fresh):
+    """The rehearsal's case: a fresh home, this Mac's grok key failing, no grok body ever leased."""
+    home = fresh
+    assert usage_shells(home) >= {"grok", "claude"}
+    for _ in range(2):
+        reads(home, "grok", "grok billing HTTP 401; no authentication refresh attempted")
+    ask, = asks(home)
+    assert ask.open  # in the ledger and on the board
+    assert mails(home, ask.id) == []
+    assert not [f for f in read_facts(home) if f.kind == "letter" and f.data.get("to") == "channel:mine/42"]
+    # Positive control: the engine that does run bodies here reaches the person, through the same tick.
+    ran(home, "claude")
+    for _ in range(2):
+        reads(home, "claude", "no quota buckets parsed from /usage screen")
+    mine, = asks(home, "claude")
+    mail, = mails(home, mine.id)
+    assert mail.data["to"] == "channel:mine/42"
+
+
+def test_an_engine_the_person_named_reaches_them_before_any_body_ran(fresh):
+    home = fresh
+    (home.root / "loom/preferences.toml").write_text('bodies.order = ["claude", "codex", "grok"]\n')
+    for _ in range(2):
+        reads(home, "grok", "grok billing HTTP 401; no authentication refresh attempted")
+    quiet, = asks(home)
+    assert mails(home, quiet.id) == []  # setup writes every ranked shell to bodies.order
+    (home.root / "loom/preferences.toml").write_text('spend.burn = ["grok"]\n')
+    reads(home, "codex", windows=["week"])
+    for _ in range(2):
+        reads(home, "codex", "token expired")
+    assert mails(home, asks(home, "codex")[0].id) == []
+    (home.root / "loom/preferences.toml").write_text('model.default = "codex/gpt-5"\n')
+    for _ in range(2):
+        reads(home, "codex", "account unreachable")
+    named = next(a for a in asks(home, "codex") if a.open)
+    assert len(mails(home, named.id)) == 1
+
+
+def usage_shells(home):
+    from brr.loom.runtime import usage
+    return set(usage.shells(home))

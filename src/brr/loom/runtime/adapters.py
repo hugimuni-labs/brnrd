@@ -306,6 +306,34 @@ def default_body(home) -> str:
     return str(choice).strip() if choice else ""
 
 
+def named_shells(home) -> set[str]:
+    """Shells the person named by hand: ``model.*``, ``quota.*``, ``spend.*``, ``config.toml``'s ``body``, or a home body folder.
+
+    ``bodies.order`` is left out: setup fills it with every ranked shell.
+    """
+    from .config import load_config
+    found = _preferences(home)[1]
+    named: set[str] = set()
+    for key, value in found.items():
+        if key == "bodies.order":
+            continue
+        for choice in value if isinstance(value, list) else [value]:
+            try:
+                named.add(parse_body(choice)[0])
+            except ValueError:
+                continue
+    body = load_config(home.root).body
+    if body:
+        try:
+            named.add(parse_body(body)[0])
+        except ValueError:
+            pass
+    folder = home.root / "loom" / "bodies"
+    if folder.is_dir():
+        named.update(p.name for p in folder.iterdir() if p.is_dir())
+    return named
+
+
 def installed_shells(home) -> list[str]:
     """Harnesses this machine has: ``body_order()`` shells whose binary is on PATH.
 
