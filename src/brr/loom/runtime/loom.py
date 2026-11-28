@@ -6,6 +6,7 @@ import hashlib
 import fcntl
 import functools
 from contextlib import nullcontext
+from contextvars import ContextVar
 import json
 import os
 import re
@@ -1757,14 +1758,15 @@ def _fenced(home, facts) -> bool:
     return False
 
 
-def _observe_body(home, facts, strand, thread, gen, bodies, *, choice=None, force=False):
+def _observe_body(home, facts, strand, thread, gen, bodies, *, choice=None, force=False, alive=None):
     from .config import load_config
     from .lifecycle import CLOSED, closing_commit, read_thread
     from .memory import pressed
     from .usage import fuels, reading
     from types import SimpleNamespace
     now, config, room = time.time(), load_config(home.root), home.room(strand)
-    alive = body_alive(room)
+    if alive is None:
+        alive = body_alive(room)
     state = state_of(facts, strand, gen, alive=alive)
     lease = fact_for(facts, "lease", strand, gen).data
     start = fact_for(facts, "body.started", strand, gen)
@@ -2271,6 +2273,7 @@ def _repaired(facts, strand, gen) -> str:
 RENDER_MAX_AGE = 30.0
 _RENDERS: dict[str, tuple] = {}
 _READING: list = [None]
+_RENDER_STATS = ContextVar("loom_render_stats", default=None)
 
 
 def _note_read(event, args):
@@ -2302,10 +2305,19 @@ def _seen_alive(room, alive):
 
 def _rendered(facts, key, render):
     """``render()``, or its last text when nothing it read has changed since."""
+    stats = _RENDER_STATS.get()
+
+    def checked_stat(path):
+        if stats is None:
+            return _stat(path)
+        if path not in stats:
+            stats[path] = _stat(path)
+        return stats[path]
+
     prior = _RENDERS.get(key[0])
     if (prior is not None and prior[5] is facts and prior[0] == key
             and time.monotonic() - prior[1] < RENDER_MAX_AGE
-            and all(_stat(path) == stat for path, stat in prior[2].items())
+            and all(checked_stat(path) == stat for path, stat in prior[2].items())
             and all(body_alive(Path(room)) == alive for room, alive in prior[3].items())):
         return prior[4]
     reading = _READING[0] = (threading.get_ident(), set(), {})
@@ -2316,6 +2328,8 @@ def _rendered(facts, key, render):
     from .spend import claude_projects, codex_home
     unwatched = (str(claude_projects()) + os.sep, str(codex_home()) + os.sep)
     paths = {path: _stat(path) for path in reading[1] if not path.startswith(unwatched)}
+    if stats is not None:
+        stats.update(paths)
     _RENDERS[key[0]] = (key, time.monotonic(), paths, reading[2], text, facts)
     return text
 
@@ -2850,9 +2864,19 @@ def _advance_bodies(home, bodies, facts, choice, *, reader=None):
                          else next((f for f in reversed(facts) if f.kind == "lease" and f.data.get("strand") == strand), None))
             if lease is not None:
                 d = lease.data
-                if not state_of(facts, strand, d["gen"]).released:
-                    facts = _start(home, strand, d["thread"], d["gen"], bodies, facts, choice,
-                                   reader=reader)
+                thread, gen = d["thread"], d["gen"]
+                state = state_of(facts, strand, gen)
+                if state.released:
+                    continue
+                if (fold(facts).holder.get(thread) == (strand, gen) and state.name == "running"
+                        and body_alive(home.room(strand))):
+                    # This observation can only advance a live generation. Keep
+                    # starts and exits on the locked path with its lease refresh.
+                    o, context = _observe_body(home, facts, strand, thread, gen, bodies,
+                                               choice=choice, alive=True)
+                    facts = _execute_body(home, bodies, facts, o, context)
+                else:
+                    facts = _start(home, strand, thread, gen, bodies, facts, choice, reader=reader)
     return facts
 
 
@@ -2913,7 +2937,12 @@ def tick_once(home: Home, bodies: dict[str, Body], adapter: str, core: str,
         facts = _ingest(home, facts, router.config.router_ttl)
         facts = _grant_landed(home, facts)
         facts = _grant_opened(home, facts)
-        facts = _advance_bodies(home, bodies, facts, (adapter, core), reader=router.reader)
+        # A shared input needs one cache validation per tick across all boundaries.
+        render_stats = _RENDER_STATS.set({})
+        try:
+            facts = _advance_bodies(home, bodies, facts, (adapter, core), reader=router.reader)
+        finally:
+            _RENDER_STATS.reset(render_stats)
         presence = getattr(router, "presence", None)
         if presence is not None:
             presence.update(facts, armed=router.armed())
