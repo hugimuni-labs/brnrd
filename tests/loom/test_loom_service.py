@@ -777,7 +777,10 @@ def test_cli_install_stops_a_loom_outside_the_service_before_starting(tmp_path, 
     child = _lock_holder(home)
     try:
         manager.holders = [child.pid]
-        manager.on_bootstrap = lambda: child.poll()
+        # Install waits for the lock to drop, and the kernel drops it a moment before
+        # the child can be reaped: wait for the exit, never poll it. A loom that was
+        # not signalled sleeps on and this times out.
+        manager.on_bootstrap = lambda: child.wait(timeout=5)
         assert _brnrd("loom", "install", "--home", str(home)) == 0
         # Stopped (SIGTERM, a clean exit) before the new service was loaded.
         assert manager.at_bootstrap == [0]
