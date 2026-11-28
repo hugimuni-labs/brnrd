@@ -470,6 +470,22 @@ class Event(Base):
     attachments_json: Mapped[str] = mapped_column(Text, default="[]")
 
 
+class TelegramHold(Base):
+    """Bounded inbound overflow awaiting a fresh inbox sequence."""
+
+    __tablename__ = "telegram_holds"
+    __table_args__ = (UniqueConstraint("account_id", "chat_id", "message_id"),)
+    seq: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    account_id: Mapped[str] = mapped_column(String(64), index=True)
+    repo_id: Mapped[str] = mapped_column(String(64), index=True)
+    chat_id: Mapped[str] = mapped_column(String(64))
+    message_id: Mapped[int] = mapped_column(BigInteger)
+    body: Mapped[str] = mapped_column(Text)
+    reply_to: Mapped[str] = mapped_column(Text)
+    attachments_json: Mapped[str] = mapped_column(Text)
+    retry_at: Mapped[datetime] = mapped_column(DateTime)
+
+
 class ChannelRoute(Base):
     __tablename__ = "channel_routes"
     __table_args__ = (UniqueConstraint("platform", "channel_id", "topic_id", name="uq_channel_route"),)

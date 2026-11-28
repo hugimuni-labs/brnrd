@@ -10,6 +10,7 @@ import logging
 import mimetypes
 import re
 import time
+from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import PurePosixPath
 from typing import Any, Callable
@@ -35,6 +36,7 @@ from .. import (
     run_respawn_requests,
     run_stop_requests,
     schemas,
+    telegram_holds,
     wake_requests,
 )
 from ..activity_records import ACTIVITY_STALE_TTL
@@ -1325,8 +1327,14 @@ async def inbox(request: Request, since: int | None = Query(default=None), wait:
         request.app.state.SessionLocal,
         principal,
     )
+    @contextmanager
+    def poll_session():
+        with request.app.state.SessionLocal() as db:
+            telegram_holds.release_due(db, settings, principal.account_id, repo_ids)
+            yield db
+
     events = await inbox_service.long_poll_many(
-        request.app.state.SessionLocal,
+        poll_session,
         repo_ids,
         since_seq,
         max_wait_s=max_wait,

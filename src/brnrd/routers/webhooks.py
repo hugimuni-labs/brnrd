@@ -25,6 +25,7 @@ from .. import (
     inbox as inbox_service,
     limits,
     stripe_api,
+    telegram_holds,
 )
 from ..looms import loom_repos
 from ..models import Account, ChannelRoute, Daemon, Event, Repo, StripeEvent, TgPairCode
@@ -271,12 +272,7 @@ def _repo_list_text(repos: list[Repo], current_id: str | None) -> str:
     return "\n".join(lines)
 
 
-def _enqueue_telegram_event(db: Session, parsed: tg.ParsedMessage, *, repo_id: str, body: str) -> None:
-    # #1389 — `media_group_id` folds an album (a text/caption plus N
-    # photos, delivered as N separate webhook calls) into the one event a
-    # still-open member of the same group already opened, instead of one
-    # event per photo. `None` for an ordinary message: `enqueue` no-ops the
-    # merge path entirely in that case.
+def _telegram_event_target(parsed: tg.ParsedMessage) -> dict[str, Any]:
     reply_to = {
         "platform": "telegram", "chat_id": parsed.chat_id,
         "topic_id": parsed.topic_id, "message_id": parsed.message_id,
@@ -284,8 +280,12 @@ def _enqueue_telegram_event(db: Session, parsed: tg.ParsedMessage, *, repo_id: s
     }
     if parsed.reply_to_message_id is not None:
         reply_to["reply_to_message_id"] = parsed.reply_to_message_id
+    return reply_to
+
+
+def _enqueue_telegram_event(db: Session, parsed: tg.ParsedMessage, *, repo_id: str, body: str) -> None:
     inbox_service.enqueue(
-        db, repo_id=repo_id, body=body, source="telegram", reply_to=reply_to,
+        db, repo_id=repo_id, body=body, source="telegram", reply_to=_telegram_event_target(parsed),
         attachments=parsed.attachments or None, media_group_id=parsed.media_group_id,
     )
 
@@ -1259,22 +1259,38 @@ def telegram_webhook(request: Request, payload: dict, x_telegram_bot_api_secret_
             # #525 — images now ride as pointers; only non-image media
             # (video, voice, non-image documents) stays annotated-not-fetched.
             body += "\n\n[attached media not ingested — brnrd received the text only]"
-        # Free-tier headroom throttle + abuse ceilings (limits.py): polite
-        # drop with a logged reason + one-line reply naming the limit —
-        # never a silent loss, never a crash.
+        attachments = parsed.attachments or []
         decision = limits.check_event_admission(
             db,
             settings,
             db.get(Account, route.account_id),
             body=body,
-            attachment_count=len(parsed.attachments or []),
+            attachment_count=len(attachments),
             telegram_album=(str(parsed.chat_id), parsed.media_group_id)
             if parsed.media_group_id else None,
         )
         if not decision.allowed:
             _audit_reject(parsed, reason=f"limit:{decision.reason}")
-            if _tell_refusal(settings, route.account_id, decision):
-                _reply(settings, parsed, f"Message {parsed.message_id} was not queued. {decision.message}")
+            if (
+                decision.reason == "free_event_burst"
+                and settings.limit_telegram_held_events > 0
+                and parsed.message_id is not None
+            ):
+                reply_to = _telegram_event_target(parsed)
+                if parsed.media_group_id:
+                    reply_to["media_group_id"] = parsed.media_group_id
+                held = telegram_holds.hold(
+                    db, settings, account_id=route.account_id, repo_id=repo.id,
+                    body=body, reply_to=reply_to, attachments=attachments,
+                )
+                if held:
+                    notice = "I’ve kept this message. I’ll try again when a slot opens in the next minute."
+                else:
+                    db.rollback()
+                    notice = "I couldn’t take this message because the waiting queue is full. Please resend it in a minute."
+                _reply(settings, parsed, notice)
+            elif _tell_refusal(settings, route.account_id, decision):
+                _reply(settings, parsed, f"I couldn’t take this message. {decision.message}")
             return {"ok": True}
         _enqueue_telegram_event(db, parsed, repo_id=repo.id, body=body)
         if settings.telegram_bot_token:

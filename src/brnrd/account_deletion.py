@@ -51,6 +51,7 @@ from .models import (
     Daemon,
     DaemonRepo,
     Event,
+    TelegramHold,
     GitHubInstallation,
     GitHubInstalledRepo,
     LoomPart,
@@ -175,6 +176,10 @@ def delete_account(db: Session, settings: Settings, account: Account) -> Deletio
     account_id = account.id
 
     canceled = _cancel_live_subscriptions(db, settings, account_id)
+    # Coordinate with Telegram overflow writers before deleting their rows.
+    from .telegram_holds import lock_account
+
+    lock_account(db, account_id)
 
     repo_ids = list(
         db.execute(select(Repo.id).where(Repo.account_id == account_id)).scalars()
@@ -208,6 +213,7 @@ def delete_account(db: Session, settings: Settings, account: Account) -> Deletio
         _in(ActivityRecord.token_id, token_ids),
         _in(ActivityRecord.daemon_id, daemon_ids),
     )
+    db.execute(delete(TelegramHold).where(TelegramHold.account_id == account_id))
     if repo_ids:
         db.execute(delete(Event).where(Event.repo_id.in_(repo_ids)))
         db.execute(delete(BoardConsent).where(BoardConsent.repo_id.in_(repo_ids)))

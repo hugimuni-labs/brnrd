@@ -340,6 +340,7 @@ class Settings:
     # outside this block carries a limit numeral.
     limit_free_repos: int = _env_int("BRNRD_LIMIT_FREE_REPOS", 1)
     limit_free_events_per_minute: int = _env_int("BRNRD_LIMIT_FREE_EVENTS_PER_MINUTE", 20)
+    limit_telegram_held_events: int = _env_int("BRNRD_LIMIT_TELEGRAM_HELD_EVENTS", 20)
     limit_free_events_per_day: int = _env_int("BRNRD_LIMIT_FREE_EVENTS_PER_DAY", 200)
     limit_abuse_repos: int = _env_int("BRNRD_LIMIT_ABUSE_REPOS", 100)
     limit_abuse_events_per_minute: int = _env_int("BRNRD_LIMIT_ABUSE_EVENTS_PER_MINUTE", 60)
