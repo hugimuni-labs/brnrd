@@ -879,6 +879,54 @@ def test_burst_held_photo_delivers_once_after_window_and_advanced_cursor(monkeyp
     assert poll(released["cursor"])["events"] == []
 
 
+def test_burst_held_album_delivers_as_one_event(monkeypatch):
+    from brnrd import limits
+
+    _, client, sends = _make_client(
+        monkeypatch, limit_free_events_per_minute=1, limit_telegram_held_events=3,
+        home_gate_member_github_logins=(),
+    )
+    acc = _account(client)
+    rid = _repo(client, acc)
+    code = _tg_pair_code(client, acc, rid)
+    client.post("/v1/webhooks/telegram", json=_message(555, f"/start {code}"), headers=_HDR)
+    dmn = _daemon_headers(client, acc, rid)
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    monkeypatch.setattr(limits, "naive_utcnow", lambda: now)
+
+    def poll(since):
+        response = client.get(
+            "/v1/daemons/inbox", params={"since": since, "wait": 0}, headers=dmn,
+        )
+        assert response.status_code == 200
+        return response.json()
+
+    client.post("/v1/webhooks/telegram", json=_message(555, "first", message_id=50), headers=_HDR)
+    first = poll(0)
+    assert [event["body"] for event in first["events"]] == ["first"]
+    for message_id in range(51, 54):
+        photo = _message(555, "", message_id=message_id)
+        del photo["message"]["text"]
+        photo["message"]["media_group_id"] = "held-album"
+        photo["message"]["photo"] = [{"file_id": f"photo-{message_id}", "width": 900, "height": 600}]
+        if message_id == 52:
+            photo["message"]["caption"] = "screenshots"
+        assert client.post("/v1/webhooks/telegram", json=photo, headers=_HDR).status_code == 200
+        assert any(s["reply_to_message_id"] == message_id and "kept this message" in s["text"] for s in sends)
+    assert poll(first["cursor"])["events"] == []
+
+    now += timedelta(seconds=61)
+    released = poll(first["cursor"])
+    assert released["cursor"] > first["cursor"]
+    [event] = released["events"]
+    assert event["body"] == "screenshots"
+    assert [attachment["file_id"] for attachment in event["attachments"]] == [
+        "photo-51", "photo-52", "photo-53",
+    ]
+    assert event["reply_to"]["message_id"] == 51
+    assert poll(released["cursor"])["events"] == []
+
+
 def test_merged_album_item_stays_deliverable_after_an_interleaved_drain(env):
     """#1396 finding 1 — a merge that mutates the row *in place* never bumps
     ``Event.seq``, and delivery is ``Event.seq > since``. A daemon that is
