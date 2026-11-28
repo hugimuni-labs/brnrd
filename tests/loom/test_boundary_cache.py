@@ -28,6 +28,8 @@ CHILD = "---\nid: c-1\nstatus: open\ntense: plan\nopened-by: thread:w-1\n---\n# 
 def test_kept_boundary_equals_a_fresh_render_and_every_input_re_renders(tmp_path, monkeypatch):
     # The header clock is sampled on render and is independent of cache inputs.
     stamp = port.clock()
+    now = [100.0]
+    monkeypatch.setattr(loom, "_live_observation_time", lambda: now[0])
     monkeypatch.setattr(port, "clock", lambda: stamp)
     root = tmp_path / "home"
     write_thread(root, "w-1", "# parent\n", "quit-now", wait="0")
@@ -42,6 +44,9 @@ def test_kept_boundary_equals_a_fresh_render_and_every_input_re_renders(tmp_path
         ledger.append(home, Fact(kind="lease", by=f"loom:{install}", data={
             "strand": strand, "thread": thread, "gen": 1,
             "router_gen": router.lease.gen, "install": install}))
+        ledger.append(home, Fact(kind="body.started", by=f"loom:{install}", data={
+            "strand": strand, "gen": 1, "shell": "fake", "core": "haiku",
+            "pid": 0, "readme": "", "lstart": ""}))
         (home.room(strand) / "port/in").mkdir(parents=True)
 
     renders, real = [], loom._rendered
@@ -89,17 +94,22 @@ def test_kept_boundary_equals_a_fresh_render_and_every_input_re_renders(tmp_path
 
         # The child's jack state was opened by the render: a write to it re-renders.
         (home.room(child) / "port/jack-state.json").write_text(json.dumps({"stop_blocks": 1}))
+        now[0] += .2
+        assert not tick()
+        now[0] += .8
         assert tick()
         assert not tick()
 
         # The child's body ends: the parent sees it (the loom records the end in
         # the same tick, so the ledger revision alone re-renders it here).
         fcntl.flock(held, fcntl.LOCK_UN)
+        now[0] += 1
         assert tick()
         assert "opened: c-1 holding" not in boundary()
 
         # Main moves: a new child landed on main appears in the parent's boundary.
         write_thread(root, "c-2", CHILD.replace("c-1", "c-2"), "quit-now", wait="0")
+        now[0] += 1
         assert tick()
         assert "idle: 2 more opened here" in boundary()
 
@@ -118,11 +128,13 @@ def test_kept_boundary_equals_a_fresh_render_and_every_input_re_renders(tmp_path
         # A config change is a file the render opened.
         config = root / "loom/config.toml"
         config.write_text(config.read_text() + "\n# touched\n")
+        now[0] += 1
         assert tick()
         assert not tick()
 
         # The clock is the one input no stat sees: a render is retired after its age.
         monkeypatch.setattr(loom, "RENDER_MAX_AGE", 0.0)
+        now[0] += 1
         assert tick()
     held.close()
     for proc in started:
