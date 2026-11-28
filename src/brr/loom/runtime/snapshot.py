@@ -107,15 +107,18 @@ def _fuel(home: Home, cores: dict[str, list[str]], floor: float) -> list[dict]:
     text stays in the file. ``unmetered`` is that word with no error key.
     """
     from .config import initiative_share
+    from .tick_inputs import read_json
     from .usage import (FAILS, UNMETERED, _SHELL_NAME, _past_reset, collector_failed,
-                        gauge_windows, known_unmetered, session_pace, session_pace_line)
+                        gauge_windows, known_unmetered, session_pace, session_pace_line, usage_files)
     found = []
-    for path in sorted((home.root / "loom/usage").glob("*.json")):
+    for path in usage_files(home):
         shell = path.name.removesuffix(".json")
         if not _SHELL_NAME.fullmatch(shell):
             continue
+        valid, payload = read_json(path)
+        if not valid:
+            continue
         try:
-            payload = json.loads(path.read_text())
             windows = gauge_windows(payload)
             if not windows:
                 extra = {"cores": cores[shell]} if cores.get(shell) else {}

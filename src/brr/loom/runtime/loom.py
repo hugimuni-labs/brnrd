@@ -40,6 +40,7 @@ from .port import (
     fact_from_port, fact_from_taint, letter_attachments, letter_replies,
     parse_boundary, parse_frontmatter, render_boundary,
 )
+from .tick_inputs import stat as _stat, tick_inputs, watch_inputs
 from .project import projection_cache, fold, generation, is_notice, reply_channels, sender_threads
 from .owners import active_owners, letters_for, letter_owners
 from .lifecycle import main_snapshot
@@ -2288,14 +2289,6 @@ def _note_read(event, args):
 sys.addaudithook(_note_read)
 
 
-def _stat(path):
-    try:
-        st = os.stat(path)
-    except OSError:
-        return None
-    return st.st_mtime_ns, st.st_size, st.st_ino
-
-
 def _seen_alive(room, alive):
     reading = _READING[0]
     if reading is not None and reading[0] == threading.get_ident():
@@ -2322,14 +2315,17 @@ def _rendered(facts, key, render):
         return prior[4]
     reading = _READING[0] = (threading.get_ident(), set(), {})
     try:
-        text = render()
+        with watch_inputs() as watched:
+            text = render()
     finally:
         _READING[0] = None
     from .spend import claude_projects, codex_home
     unwatched = (str(claude_projects()) + os.sep, str(codex_home()) + os.sep)
-    paths = {path: _stat(path) for path in reading[1] if not path.startswith(unwatched)}
+    paths = {path: _stat(path) for path in reading[1] - watched.keys()
+             if not path.startswith(unwatched)}
     if stats is not None:
         stats.update(paths)
+    paths.update(watched)
     _RENDERS[key[0]] = (key, time.monotonic(), paths, reading[2], text, facts)
     return text
 
@@ -2952,7 +2948,7 @@ def tick_once(home: Home, bodies: dict[str, Body], adapter: str, core: str,
     if router.projection_revision != router.reader.revision:
         router.projections.clear()
         router.projection_revision = router.reader.revision
-    with projection_cache(router.projections):
+    with projection_cache(router.projections), tick_inputs():
         facts = router.begin_tick(facts)
         facts = _ingest(home, facts, router.config.router_ttl)
         facts = _grant_landed(home, facts)
@@ -3296,7 +3292,7 @@ def run(root: Path | str, *, adapter: str = "fake", core: str = "haiku",
                 _log(home, "lease settings changed; re-executing loom before inputs")
                 _reexec(bodies, inputs)
                 return
-            with tick_config(home.root, config):
+            with tick_config(home.root, config, config_stamp), tick_inputs():
                 router.config = config
                 github.step(config.forge_token)
                 if time.monotonic() >= next_usage:

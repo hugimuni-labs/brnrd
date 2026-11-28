@@ -32,7 +32,15 @@ def test_only_a_loom_start_delivers_a_cached_merged_wish(ledger, monkeypatch, ca
     git(source, "init")
     git(source, "commit", "--allow-empty", "-m", "Ship the switch (#7)")
     merged = git(source, "rev-parse", "HEAD").stdout.strip()
-    monkeypatch.setattr(receipts, "source_root", lambda: source)
+    import brr
+    from brr.loom.runtime.tick_inputs import tick_inputs
+
+    # Follow the imported package through a symlink. Moving it between ticks
+    # must affect the wish on the next ledger projection.
+    alias = home.root / "running-source"
+    alias.symlink_to(home.root / "no-checkout", target_is_directory=True)
+    monkeypatch.delenv("BRNRD_LOOM_SOURCE", raising=False)
+    monkeypatch.setattr(brr, "__file__", str(alias / "src/brr/__init__.py"))
     ident = heard(home, seat, "Ship the switch")
     command(home, seat, "wish", ident, "--result", "pr:7", "--line", "Switch merged")
     facts = LedgerView(read_facts(home))
@@ -40,7 +48,9 @@ def test_only_a_loom_start_delivers_a_cached_merged_wish(ledger, monkeypatch, ca
     def read():
         return told(facts)[ident].state if caller == "told" else _plan(home, "work", facts)
 
-    before = read()
+    with tick_inputs():
+        assert receipts.source_root() == home.root.resolve() / "no-checkout"
+        before = read()
     if caller == "told":
         assert before == "granting"
     else:
@@ -50,7 +60,10 @@ def test_only_a_loom_start_delivers_a_cached_merged_wish(ledger, monkeypatch, ca
     assert len(facts) == count + 1
     assert [f.kind for f in facts.delta] == ["loom.started"]
     assert not facts.reset
-    assert read() == ("delivered" if caller == "told" else "plan 1/1")
+    alias.unlink()
+    alias.symlink_to(source, target_is_directory=True)
+    with tick_inputs():
+        assert read() == ("delivered" if caller == "told" else "plan 1/1")
     assert told(facts)[ident].results[0]["held"] == merged
 
 

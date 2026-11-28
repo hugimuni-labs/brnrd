@@ -15,6 +15,7 @@ from pathlib import Path
 from .adapters import resolve
 from .home import atomic_write
 from .selfrepo import _env_without_pin
+from .tick_inputs import input_stat, once, read_json
 
 CACHE_TTL = 300
 REFRESH_INTERVAL = 600
@@ -162,27 +163,34 @@ def reading(home, shell: str, after: float = 0, *, fresh=False, cached_only=Fals
 
     ``cached_only`` never starts a collector; stale or absent fuel is None.
     """
-    path = (home.root / "loom/usage" / f"{shell}.json").resolve()
-    try:
-        script = resolve(home, shell) / "usage"
-    except ValueError:
+    path = home.root / "loom/usage" / f"{shell}.json"
+
+    def collector():
+        try:
+            script = resolve(home, shell) / "usage"
+        except ValueError:
+            return None
+        return script if script.is_file() else None
+
+    script = once("usage-collector", (home.root, shell), collector)
+    if script is None:
         return {"windows": []}
-    if not script.is_file():
-        return {"windows": []}
+    valid, reading = read_json(path)
     try:
-        reading = json.loads(path.read_text())
         # An exit requires fresh *fuel*, not another failed PTY probe. Keep
         # unknown gauges for the same five-minute TTL so every new start does
         # not wait out the collector timeout while the shell is unavailable.
         # A window that has reset since the reading was taken is not known:
         # at the reset, a 2% reading taken a minute earlier re-parked a body.
-        after = max([after] + [_reset(w) for w in reading["windows"] if _reset(w) <= time.time()])
-        if 0 <= time.time() - reading["at"] < CACHE_TTL and (reading["at"] > after or not fresh and not reading["windows"]):
-            return reading
-    except (OSError, ValueError, KeyError, TypeError):
+        if valid:
+            after = max([after] + [_reset(w) for w in reading["windows"] if _reset(w) <= time.time()])
+            if 0 <= time.time() - reading["at"] < CACHE_TTL and (reading["at"] > after or not fresh and not reading["windows"]):
+                return reading
+    except (ValueError, KeyError, TypeError):
         pass
     if cached_only:
         return None
+    path = once("usage-path", path, path.resolve)
     if _stuck(path) is not None:
         # Unknown, not pending; no second refresh joins the blocked one.
         return {"windows": []}
@@ -432,11 +440,8 @@ def pace_line_for(home, shell: str) -> str:
     if not shell or not _SHELL_NAME.fullmatch(shell):
         return ""
     path = home.root / "loom" / "usage" / f"{shell}.json"
-    try:
-        payload = json.loads(path.read_text())
-    except (OSError, ValueError):
-        return ""
-    return session_pace_line(session_pace(payload))
+    valid, payload = read_json(path)
+    return session_pace_line(session_pace(payload)) if valid else ""
 
 
 def _past_reset(payload, now: float) -> bool:
@@ -450,16 +455,19 @@ def _past_reset(payload, now: float) -> bool:
     return bool(passed) and float(payload["at"]) < max(passed)
 
 
+def usage_files(home):
+    folder = home.root / "loom" / "usage"
+    input_stat(folder)
+    return once("usage-files", folder, lambda: sorted(folder.glob("*.json")))
+
+
 def _shell_readings(home):
-    for path in sorted((home.root / "loom" / "usage").glob("*.json")):
+    for path in usage_files(home):
         name = path.stem
         if not _SHELL_NAME.fullmatch(name):
             continue
-        try:
-            payload = json.loads(path.read_text())
-        except (OSError, ValueError):
-            continue
-        if (windows := gauge_windows(payload)) is not None:
+        valid, payload = read_json(path)
+        if valid and (windows := gauge_windows(payload)) is not None:
             yield name, payload, windows
 
 

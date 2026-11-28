@@ -59,7 +59,8 @@ def source_root() -> Path:
     if override := os.environ.get("BRNRD_LOOM_SOURCE"):
         return Path(override)
     import brr
-    return Path(brr.__file__).resolve().parents[2]
+    from .tick_inputs import once
+    return once("source-root", brr.__file__, lambda: Path(brr.__file__).resolve().parents[2])
 
 
 def record_start(home, facts, *, root: Path | None = None) -> Fact:
@@ -200,8 +201,10 @@ def held_merge(result: dict, start: dict | None, *, root: Path | None = None) ->
     that GitHub titled for it (``update.pull_of``). A ``pr:N`` names the loom's own repo;
     a URL must name it too. ``None`` when the start knows no commit."""
     commit = (start or {}).get("commit")
+    if not commit:
+        return None
     root = source_root() if root is None else root
-    if not commit or not (root / ".git").exists():
+    if not (root / ".git").exists():
         return None
     ref = str(result.get("ref") or "")
     if result.get("kind") == "pr" and ref.isdigit():
