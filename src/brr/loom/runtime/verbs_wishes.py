@@ -107,7 +107,8 @@ def _wish_arguments(parser):
                         help="the person's letter that puts this wish on top of their order")
     parser.add_argument("--pick", metavar="WHY", help="the resident works this wish next, and why")
     parser.add_argument("--goal", metavar="GOAL",
-                        help="the active goal this wish serves (its file name under goals/), or none")
+                        help="the active goal this wish serves (its file name under goals/), or none; "
+                             "use alone or with --pick")
     from .trust import ANSWERS
     parser.add_argument("--answer", choices=ANSWERS,
                         help="how the person answered this ask: took the rec, changed it, or said never")
@@ -122,7 +123,11 @@ def cmd_wish(args):
         if args.force and args.drop is None:
             raise ValueError("--force requires --drop")
         if args.goal is not None:
-            append(home, _goal_fact(home, args, facts, by))
+            goal = _goal_fact(home, args, facts, by)
+            pick = _rank_fact(args, facts, by) if args.pick is not None else None
+            append(home, goal)
+            if pick is not None:
+                append(home, pick)
             print(args.id)
             return 0
         if args.top is not None or args.pick is not None:
@@ -294,9 +299,11 @@ def _rank_fact(args, facts, by):
 def _goal_fact(home, args, facts, by):
     """``--goal``: link a wish to the active goal it serves, so the board counts it there; ``none`` unlinks."""
     from .idle import active_goals
-    if any(x is not None for x in (args.top, args.pick, args.read, args.result, args.accept, args.drop,
-                                   args.answer)) or args.left or args.clear_wait:
-        raise ValueError("--goal goes alone")
+    if (any(x is not None for x in (args.top, args.read, args.result, args.accept, args.drop,
+                                   args.answer, args.line, args.sender, args.thread, args.parent,
+                                   args.ref, args.wait, args.until))
+            or args.left or args.clear_wait or args.say or args.force or args.deliver):
+        raise ValueError("--goal goes alone or with --pick")
     if args.id not in wishes(facts):
         raise ValueError(f"no wish {args.id}")
     goal = args.goal.strip()
