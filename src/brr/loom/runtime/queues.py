@@ -81,6 +81,25 @@ def held_row(wish: Wish, asks: list[Wish]) -> str:
     return f"held {_row(wish)}{words}{move}"
 
 
+def standing_ask_rows(found: dict[str, Wish], heads: dict[str, str], thread: str,
+                      names: dict[str, str]) -> list[str]:
+    """The thread owns these questions across bodies, including after delivery."""
+    from .person_names import label
+
+    rows = []
+    for ident, head in heads.items():
+        ask = found[ident]
+        if ask.thread != thread:
+            continue
+        row = f"Your open ask {ident} · waiting on {label(head, names)} · {_short(ask.line, 320)}"
+        if ask.parent:
+            parent = found.get(ask.parent)
+            state = f" ({parent.state})" if parent else ""
+            row += f" · for {ask.parent}{state}"
+        rows.append(row)
+    return rows
+
+
 def held_rows_for(found: dict[str, Wish], heads: dict[str, str], thread: str, home_thread: str) -> list[str]:
     q = queues(found, heads)
     return [held_row(wish, q.blocked.get(wish.id, []))

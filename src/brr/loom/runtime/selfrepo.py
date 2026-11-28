@@ -1059,7 +1059,8 @@ def run_wake(room_dir: Path, thread: str, owed: Path | None = None, *,
         names_repo = home_of_room(clone.parent).root / "self"
     except ValueError:
         names_repo = clone
-    env["LOOM_PERSON_NAMES"] = json.dumps(names(names_repo))
+    env_names = names(names_repo)
+    env["LOOM_PERSON_NAMES"] = json.dumps(env_names)
     env.pop("LOOM_PREVIEW", None)
     if preview_handover is not None:
         env["LOOM_PREVIEW"] = "1"
@@ -1074,7 +1075,7 @@ def run_wake(room_dir: Path, thread: str, owed: Path | None = None, *,
     from .wishes import insert_wishes, wake_wishes
     section = ""
     held_rows = []
-    goal_rows = []
+    priority_rows = []
     try:
         home = home_of_room(clone.parent)
     except ValueError:
@@ -1094,12 +1095,13 @@ def run_wake(room_dir: Path, thread: str, owed: Path | None = None, *,
             ids = sorted(w.id for w in told_wishes.values() if w.thread == thread and w.open)
             (Path(owed).parent / WISHES).write_text(json.dumps(ids) + "\n")
         from .idle import goal_lines
-        from .queues import held_rows_for
+        from .queues import held_rows_for, standing_ask_rows
         from .wishes import waits_on
 
         waits = waits_on(told_wishes, main)
-        goal_rows = goal_lines(home, told=told_wishes, waits=waits)
-        held_rows = goal_rows + held_rows_for(told_wishes, waits, thread, home.main_thread())
+        priority_rows = standing_ask_rows(told_wishes, waits, thread, env_names)
+        priority_rows += goal_lines(home, told=told_wishes, waits=waits)
+        held_rows = priority_rows + held_rows_for(told_wishes, waits, thread, home.main_thread())
     from .briefing import section as briefing_section
     briefing = briefing_section(home)
     topics = _wake_topics(clone, thread, owed)
@@ -1163,8 +1165,8 @@ def run_wake(room_dir: Path, thread: str, owed: Path | None = None, *,
         if proc.returncode == 3:
             # Over budget: the loom's own parts give way before the wake is refused.
             # Each is whole one command away; a refused wake costs the person a letter.
-            rest = len(held_rows) - len(goal_rows)
-            hard = fit_held(goal_rows, limit // 8) if goal_rows else "## Held\n"
+            rest = len(held_rows) - len(priority_rows)
+            hard = fit_held(priority_rows, limit // 8) if priority_rows else "## Held\n"
             if rest > 0:
                 hard += f"[Cut {rest} queue rows to fit. Whole in brnrd runtime wishes.]\n"
             if hard != held:

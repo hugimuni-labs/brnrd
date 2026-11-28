@@ -92,6 +92,34 @@ def test_full_lifecycle_and_wake(ledger):
             assert fact_filename(f) == ("loom.jsonl" if f.by.startswith("person:") else "s-aaaa-test.jsonl")
 
 
+def test_successor_wake_carries_a_standing_ask_after_parent_delivery(ledger):
+    home, seat = ledger
+    parent = heard(home, seat, "Qualify the pilot candidates")
+    command(home, seat, "wish", parent, "--result", "url:https://example.com/review",
+            "--line", "Aster qualifies", "--deliver")
+    question = "Is Aster the waiting contact, and may I draft outreach for review?"
+    ask = command(home, seat, "ask", question, "--for", parent)
+
+    successor = room(home.root, "s-aaaa-successor", gen=2)
+    out = StringIO()
+    assert run_wake(successor, "work", stdout=out) == 0
+    wake = out.getvalue()
+    standing = f"Your open ask {ask} · waiting on operator · {question} · for {parent} (delivered)"
+    assert wake.index("## Held\n") < wake.index(standing) < wake.index("## threads/work/README.md")
+
+    revised = "May I draft Aster outreach for review now that we know it is a new contact?"
+    command(home, seat, "wish", ask, "--line", revised)
+    out = StringIO()
+    assert run_wake(successor, "work", stdout=out) == 0
+    assert standing.replace(question, revised) in out.getvalue()
+    assert question not in out.getvalue()
+
+    command(home, seat, "wish", ask, "--drop", "Draft no longer needed")
+    out = StringIO()
+    assert run_wake(successor, "work", stdout=out) == 0
+    assert f"Your open ask {ask}" not in out.getvalue()
+
+
 def test_says_asks_and_send_stamp(ledger):
     home, seat = ledger
     letter = inject_letter(home.root, to="thread:work", body="A long enough letter")
