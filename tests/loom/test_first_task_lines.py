@@ -18,17 +18,26 @@ def test_a_folder_added_with_brnrd_add_says_its_persons_results_are_written_ther
 
 
 def test_the_briefing_puts_a_persons_file_where_they_can_open_it():
-    assert "A file the person asked for lands where they can open it, in their folder from `lib list`, never only in the self." in briefing.BRIEFING
+    assert "A file the person asked for goes in their folder from `lib list`, never only in the self." in briefing.BRIEFING
 
 
 def test_a_refused_self_landing_is_never_a_persons_ask():
-    assert "A self landing the guard refuses stays in this thread's record as a note. Never put it to a person as an ask." in briefing.BRIEFING
+    assert "A self landing the guard refuses stays a note, never a person's ask." in briefing.BRIEFING
 
 
 def test_the_briefing_offers_only_the_hands_this_installation_has():
-    bullet = next(line for line in briefing.BRIEFING.splitlines() if line.startswith("- Offer only connections"))
-    assert "no mail, no calendar and no live documents" in bullet
+    bullet = next(line for line in briefing.BRIEFING.splitlines() if line.startswith("- Offer only hands"))
+    assert "no mail, calendar or live documents" in bullet
     assert "never tell a person to connect one" in bullet
     # The bundled connectors are chat doors only; a mail or calendar one would make the line false.
     bundled = Path(briefing.__file__).parent / "connectors"
     assert sorted(p.name for p in bundled.iterdir() if p.is_dir()) == ["fake", "relay", "telegram", "web"]
+
+
+#: main f3c07534's briefing, in bytes. Every wake pays for each one (test_wishes'
+#: row-cap wake had under 60 to spare): a new sentence pays for itself here, by name.
+BRIEFING_CEILING = 5037
+
+
+def test_the_briefing_costs_no_more_than_it_did():
+    assert len(briefing.BRIEFING.encode("utf-8")) <= BRIEFING_CEILING
