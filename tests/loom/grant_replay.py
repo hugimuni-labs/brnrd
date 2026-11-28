@@ -621,6 +621,7 @@ CANDIDATES = """# Local project directory extract
 
 def _restart_seed(root: Path, case: str, env: dict[str, str]) -> dict:
     _build(root, case, env)
+    set_value(root, "update", "off")
     land_files(root, {
         "goals/growth.md": RESTART_GOAL,
         "threads/replay/candidates.md": CANDIDATES,
@@ -684,15 +685,12 @@ def _restart_wake(root: Path, harness: str, env: dict[str, str], timeout: float,
         while time.monotonic() < deadline and proc.poll() is None:
             facts = read_facts(Home(root))
             starts = [f for f in facts if f.kind == "body.started" and f.id not in prior]
-            if starts:
-                start = starts[-1]
-                if any(
-                    f.kind in {"body.stopped", "body.exited"}
-                    and (f.data.get("strand"), f.data.get("gen"))
-                    == (start.data.get("strand"), start.data.get("gen"))
-                    for f in facts
-                ):
-                    break
+            ended = {
+                (f.data.get("strand"), f.data.get("gen"))
+                for f in facts if f.kind in {"body.stopped", "body.exited"}
+            }
+            if starts and all((f.data["strand"], f.data["gen"]) in ended for f in starts):
+                break
             time.sleep(0.25)
     finally:
         _stop(proc, root)
