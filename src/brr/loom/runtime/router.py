@@ -143,6 +143,7 @@ class Router:
         self.reader = shared_reader(home)
         self.projections = {}
         self.projection_revision = -1
+        self.live_observations: dict[str, tuple] = {}
         self.config = config if config is not None else load_config(home.root)
         self.clock = loom_clock
         self.authority = LocalLeaseAuthority(

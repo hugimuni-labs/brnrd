@@ -2851,9 +2851,17 @@ def _advance_body(home, strand, thread, gen, bodies, facts, *, choice=None, forc
     return _execute_body(home, bodies, facts, o, c)
 
 
-def _advance_bodies(home, bodies, facts, choice, *, reader=None):
+LIVE_OBSERVE_EVERY = 0.8
+_live_observation_time = time.monotonic
+
+
+def _advance_bodies(home, bodies, facts, choice, *, reader=None, observations=None):
     from .router import install_of
     holders = {strand: (thread, gen) for thread, (strand, gen) in fold(facts).holder.items()}
+    observations = observations if observations is not None else {}
+    for strand in observations.keys() - holders.keys():
+        del observations[strand]
+    now = _live_observation_time()
     for strand in holders.keys() | bodies.keys():
         if install_of(strand) == home.install_id():
             if strand in holders:
@@ -2872,10 +2880,22 @@ def _advance_bodies(home, bodies, facts, choice, *, reader=None):
                         and body_alive(home.room(strand))):
                     # This observation can only advance a live generation. Keep
                     # starts and exits on the locked path with its lease refresh.
+                    observed_facts = facts
+                    revision = facts.semantic_revision if isinstance(facts, LedgerView) else None
+                    prior = observations.get(strand)
+                    # Probe the lock above on every tick, even inside the observation window.
+                    if (revision is not None and prior is not None and prior[0] is facts
+                            and prior[1:3] == (gen, revision) and now < prior[3]):
+                        continue
+                    observations.pop(strand, None)
                     o, context = _observe_body(home, facts, strand, thread, gen, bodies,
                                                choice=choice, alive=True)
+                    steady = not TABLE[row_for(facts, o)].commands
                     facts = _execute_body(home, bodies, facts, o, context)
+                    if steady and revision is not None:
+                        observations[strand] = (observed_facts, gen, revision, now + LIVE_OBSERVE_EVERY)
                 else:
+                    observations.pop(strand, None)
                     facts = _start(home, strand, thread, gen, bodies, facts, choice, reader=reader)
     return facts
 
@@ -2940,7 +2960,8 @@ def tick_once(home: Home, bodies: dict[str, Body], adapter: str, core: str,
         # A shared input needs one cache validation per tick across all boundaries.
         render_stats = _RENDER_STATS.set({})
         try:
-            facts = _advance_bodies(home, bodies, facts, (adapter, core), reader=router.reader)
+            facts = _advance_bodies(home, bodies, facts, (adapter, core), reader=router.reader,
+                                    observations=router.live_observations)
         finally:
             _RENDER_STATS.reset(render_stats)
         presence = getattr(router, "presence", None)
@@ -3175,8 +3196,10 @@ def run(root: Path | str, *, adapter: str = "fake", core: str = "haiku",
         _migrate_gates(home)
         _converge_forge_token(home)
         _refresh_stand_ins(home)
-        from .config import ConfigError, load_config, tick_config
+        from .config import ConfigError, config_path, load_config, tick_config
         from . import usage
+        path = config_path(home.root)
+        config_stamp = _stat(path)
         config = load_config(home.root)
         from . import audit
         audit_writer = audit.start(home, config.audit == "on", doors=config.doors == "on")
@@ -3255,12 +3278,15 @@ def run(root: Path | str, *, adapter: str = "fake", core: str = "haiku",
                    f"last healthy commit {recovered['to']}. Failed code remains at {recovered['ref']}.",
                    "inspect the failed commit before taking another update")
         while not (stop is not None and stop.is_set()):
-            try:
-                config = load_config(home.root)
-            except ConfigError as exc:
-                _log(home, str(exc))
-                notice(home, read_facts(home), "config-error", str(home.root), str(exc),
-                       "fix loom/config.toml; the loop is using its last valid config")
+            stamp = _stat(path)
+            if stamp != config_stamp:
+                config_stamp = stamp
+                try:
+                    config = load_config(home.root)
+                except ConfigError as exc:
+                    _log(home, str(exc))
+                    notice(home, read_facts(home), "config-error", str(home.root), str(exc),
+                           "fix loom/config.toml; the loop is using its last valid config")
             if _lease_settings(config) != lease_settings:
                 # Setup may enroll this already-running standalone loom into
                 # a shared self. Never start its new relay on the old authority.

@@ -362,10 +362,8 @@ def test_main_tip_rereads_the_ref_only_when_main_moves(tmp_path: Path, monkeypat
     assert len(reads) == 1
 
 
-def test_live_bodies_share_boundary_stats_and_skip_start_locks(tmp_path, monkeypatch):
+def _held_bodies(tmp_path, locks):
     import fcntl
-    from collections import Counter
-    from contextlib import ExitStack
 
     from brr.daemon2.facts import Fact
     from brr.loom.runtime import ledger, loom
@@ -376,39 +374,116 @@ def test_live_bodies_share_boundary_stats_and_skip_start_locks(tmp_path, monkeyp
     tick_once(home, bodies, "fake", "haiku", router)
     router.clock = lambda: router.lease.until - router.config.router_ttl
     install = home.install_id()
-    rooms = set()
-    stats, mkdirs = Counter(), []
-    stat, mkdir = loom._stat, Path.mkdir
+    held = {}
+    for i in range(1, 6):
+        strand = f"s-{install}-held{i}"
+        room = home.room(strand)
+        (room / "port/in").mkdir(parents=True)
+        lock = locks.enter_context((room / ".body").open("a"))
+        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        held[strand] = lock
+        ledger.append(home, Fact(kind="lease", by=f"loom:{install}", data={
+            "strand": strand, "thread": f"w-{i}", "gen": 1,
+            "router_gen": router.lease.gen, "install": install}))
+        ledger.append(home, Fact(kind="body.started", by=f"loom:{install}", data={
+            "strand": strand, "gen": 1, "shell": "fake", "core": "haiku",
+            "pid": 0, "readme": "", "lstart": ""}))
+        loom.ensure_room(home.root, strand)
 
-    def counted_stat(path):
-        stats[path] += 1
-        return stat(path)
+    tick_once(home, bodies, "fake", "haiku", router)
+    assert all((home.room(strand) / "port/in/boundary.md").is_file() for strand in held)
+    return home, router, bodies, held
 
-    def counted_mkdir(path, *args, **kwargs):
-        if path in rooms:
-            mkdirs.append(path)
-        return mkdir(path, *args, **kwargs)
 
+def test_live_bodies_share_boundary_stats_and_skip_start_locks(tmp_path, monkeypatch):
+    from collections import Counter
+    from contextlib import ExitStack
+
+    from brr.loom.runtime import loom
+
+    now = [100.]
+    monkeypatch.setattr(loom, "_live_observation_time", lambda: now[0])
     with ExitStack() as locks:
-        for i in range(1, 6):
-            strand = f"s-{install}-held{i}"
-            room = home.room(strand)
-            rooms.add(room)
-            (room / "port/in").mkdir(parents=True)
-            lock = locks.enter_context((room / ".body").open("a"))
-            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-            ledger.append(home, Fact(kind="lease", by=f"loom:{install}", data={
-                "strand": strand, "thread": f"w-{i}", "gen": 1,
-                "router_gen": router.lease.gen, "install": install}))
-            ledger.append(home, Fact(kind="body.started", by=f"loom:{install}", data={
-                "strand": strand, "gen": 1, "shell": "fake", "core": "haiku",
-                "pid": 0, "readme": "", "lstart": ""}))
-            loom.ensure_room(home.root, strand)
+        home, router, bodies, held = _held_bodies(tmp_path, locks)
+        rooms = {home.room(strand) for strand in held}
+        stats, mkdirs = Counter(), []
+        stat, mkdir = loom._stat, Path.mkdir
 
-        tick_once(home, bodies, "fake", "haiku", router)
-        assert all((room / "port/in/boundary.md").is_file() for room in rooms)
+        def counted_stat(path):
+            stats[path] += 1
+            return stat(path)
+
+        def counted_mkdir(path, *args, **kwargs):
+            if path in rooms:
+                mkdirs.append(path)
+            return mkdir(path, *args, **kwargs)
+
         monkeypatch.setattr(loom, "_stat", counted_stat)
         monkeypatch.setattr(Path, "mkdir", counted_mkdir)
+        now[0] += 1
         tick_once(home, bodies, "fake", "haiku", router)
         config_checks = stats[str(home.root / "loom/config.toml")]
         assert (config_checks, len(mkdirs)) == (1, 0)
+
+
+def test_steady_live_bodies_only_do_full_work_after_the_observation_window(tmp_path, monkeypatch):
+    from contextlib import ExitStack
+
+    from brr.loom.runtime import loom
+
+    now = [100.]
+    monkeypatch.setattr(loom, "_live_observation_time", lambda: now[0], raising=False)
+    with ExitStack() as locks:
+        home, router, bodies, held = _held_bodies(tmp_path, locks)
+        observed, executed = [], []
+        observe, execute = loom._observe_body, loom._execute_body
+
+        def count_observe(home, facts, strand, *args, **kwargs):
+            observed.append(strand)
+            return observe(home, facts, strand, *args, **kwargs)
+
+        def count_execute(home, bodies, facts, observation, context):
+            executed.append(observation.strand)
+            return execute(home, bodies, facts, observation, context)
+
+        monkeypatch.setattr(loom, "_observe_body", count_observe)
+        monkeypatch.setattr(loom, "_execute_body", count_execute)
+        for offset in (.2, .4, .6):
+            now[0] = 100. + offset
+            tick_once(home, bodies, "fake", "haiku", router)
+        assert observed == executed == []
+        now[0] = 101.
+        tick_once(home, bodies, "fake", "haiku", router)
+        assert sorted(observed) == sorted(executed) == sorted(held)
+
+
+def test_live_observation_window_never_delays_a_letter(tmp_path, monkeypatch):
+    from contextlib import ExitStack
+
+    from brr.loom.runtime import ledger, loom
+
+    monkeypatch.setattr(loom, "_live_observation_time", lambda: 100.)
+    with ExitStack() as locks:
+        home, router, bodies, held = _held_bodies(tmp_path, locks)
+        strand = next(iter(held))
+        boundary = home.room(strand) / "port/in/boundary.md"
+        ledger.inject_letter(home.root, to="thread:w-1", body="A new word for this body.")
+        tick_once(home, bodies, "fake", "haiku", router)
+        assert "A new word for this body." in boundary.read_text()
+
+
+def test_live_observation_window_never_delays_an_exit(tmp_path, monkeypatch):
+    import fcntl
+    from contextlib import ExitStack
+
+    from brr.loom.runtime import loom
+
+    monkeypatch.setattr(loom, "_live_observation_time", lambda: 100.)
+    with ExitStack() as locks:
+        home, router, bodies, held = _held_bodies(tmp_path, locks)
+        strand, lock = next(iter(held.items()))
+        tick_once(home, bodies, "fake", "haiku", router)
+        fcntl.flock(lock, fcntl.LOCK_UN)
+        tick_once(home, bodies, "fake", "haiku", router)
+        events = {fact.kind for fact in read_facts(home) if fact.data.get("strand") == strand}
+        assert {"body.exited", "port.drained", "released"} <= events
