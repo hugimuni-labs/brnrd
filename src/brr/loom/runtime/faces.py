@@ -88,7 +88,9 @@ def triggers(facts, strand: str, gen: int, thread: str, now: datetime | None = N
     if ended is not None and ended.data.get("code") not in (0, None):
         found.append({"kind": "failed", "fact": ended.id, "at": began,
                       "token": f"exit {ended.data['code']}"})
-    letters, seen, outs = letter_index(kind_facts(facts, "letter")), set(), [began]
+    from .project import cached_projection
+    letters = cached_projection(facts, "letter-index", (), letter_index, kinds=("letter",))
+    seen, outs = set(), [began]
     wished = {w.id: w.thread for w in told(facts).values()} if kind_facts(facts, "wish.result") else {}
     for fact in _met(facts, strand):
         if fact.kind == "shown" and fact.data.get("strand") == strand:

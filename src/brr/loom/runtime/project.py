@@ -75,14 +75,18 @@ def projection_cache(cache=None):
         _projection_cache.reset(token)
 
 
-def cached_projection(facts, name, inputs, build):
+def cached_projection(facts, name, inputs, build, kinds=None):
     """Reuse a pure projection of immutable fact objects and explicit inputs.
 
     Pin the objects just as fold does; append/replacement and caller inputs
     change the key. Without a tick context, always compute a fresh result.
+    ``kinds`` names every kind ``build`` reads: it sees only those rows, and on
+    a ledger view only an append of one of them rebuilds it (``LedgerView.project``).
     """
     if isinstance(facts, LedgerView):
-        return facts.project(name, inputs, build)
+        return facts.project(name, inputs, build, kinds)
+    if kinds is not None:
+        facts = kind_facts(facts, *kinds)
     cache = _projection_cache.get()
     if cache is None:
         return build(facts)

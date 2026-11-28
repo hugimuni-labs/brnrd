@@ -225,7 +225,7 @@ class View:
         from .receipts import receipts
         from .selfrepo import forge_threads
         from .threads import _table_inputs, thread_table
-        from .wishes import waits_on, wishes
+        from .wishes import told as told_wishes, waits_on
         self.home, self.facts, self.config = home, facts, config
         self.table = [row for row in thread_table(home, facts) if row["thread"] != "operator"]
         self.main = main_snapshot(home)
@@ -245,7 +245,10 @@ class View:
                 if f.data.get("core"):
                     cores.setdefault(f.data["shell"], set()).add(f.data["core"])
         self.cores = {shell: sorted(c) for shell, c in cores.items()}
-        self.told = told if told is not None else wishes([f for f in facts if f.kind.startswith("wish") or f.kind == "letter"])
+        # The ledger view's own wish projection, the one every boundary reads: a
+        # second derivation here was a full replay at every assemble, without
+        # leases or loom.started, so its answers and deliveries could differ.
+        self.told = told if told is not None else told_wishes(facts)
         self.shipped = receipts(facts, home.install_id())
         # An open ask is the person's turn unless it waits on a thread that has not asked onward.
         self.waits: dict[str, list[str]] = {}

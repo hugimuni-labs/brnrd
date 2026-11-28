@@ -38,8 +38,14 @@ def flavour(facts, ask, found: dict, room: Path | None, closed=frozenset(), *,
     if raised is None and room is not None:
         since = last_raise(facts, room, ask.id)
     since = since or datetime.fromisoformat(ask.born or ask.at)
-    moves = kind_facts(facts, *MOVES) if isinstance(facts, LedgerView) else facts
-    why = move(moves, ask, since)
+    if isinstance(facts, LedgerView):
+        from .project import cached_projection
+        # Each render asked every open ask to walk every letter; the answer
+        # changes only with a fact of MOVES or with what the ask is matched on.
+        why = cached_projection(facts, "ask-move", (ask.id, ask.parent, tuple(sorted(named)), since),
+                                lambda rows: move(rows, ask, since), kinds=MOVES)
+    else:
+        why = move(facts, ask, since)
     return ("moved", why) if why else ("live", "")
 
 

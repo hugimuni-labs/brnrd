@@ -212,14 +212,14 @@ def allocation(facts, thread: str, opener: str, writers: dict[str, str], default
     """
     if not opener.startswith("thread:"):
         return None
-    key = (id(facts), thread, len(facts), opener, default, door)
-    if key not in _ALLOCATED:
-        _ALLOCATED.clear()
-        _ALLOCATED[key] = _allocation(facts, thread, {opener.removeprefix("thread:"), door}, writers, default)
-    return _ALLOCATED[key]
-
-
-_ALLOCATED: dict[tuple, int] = {}
+    from .project import cached_projection
+    # Once per thread per new letter or lease (``writers`` is the leases' sender
+    # table), not once per body boundary: a one-slot cache keyed on the ledger's
+    # length missed at every renewal and at every other body's thread.
+    parents = {opener.removeprefix("thread:"), door}
+    return cached_projection(facts, "allocation", (thread, opener, default, door),
+                             lambda letters: _allocation(letters, thread, parents, writers, default),
+                             kinds=("letter", "lease"))
 
 
 def _allocation(facts, thread, parents, writers, default) -> int:

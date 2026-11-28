@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 
 from brr.daemon2.facts import Fact
 from .dispositions import is_person
-from .ledger import append
+from .ledger import append, kind_facts
 from .project import is_notice
 from .wishes import read_says
 
@@ -15,10 +15,11 @@ def timestamp(fact):
 
 def steps(facts):
     """Stable rows with event time, including letters injected without a connector."""
-    letters = {str(f.data.get('id', f.id)): f for f in facts
-               if f.kind == 'letter' and (is_person(f) or f.data.get('cites', '').startswith('source:'))}
-    sources = {f.id: f for f in facts if f.kind == 'source'}
-    starts = {(f.data.get('strand'), f.data.get('gen')): f for f in facts if f.kind == 'body.started'}
+    # Read by kind: on a ledger view these are its indexes, never a walk of every fact.
+    letters = {str(f.data.get('id', f.id)): f for f in kind_facts(facts, 'letter')
+               if is_person(f) or f.data.get('cites', '').startswith('source:')}
+    sources = {f.id: f for f in kind_facts(facts, 'source')}
+    starts = {(f.data.get('strand'), f.data.get('gen')): f for f in kind_facts(facts, 'body.started')}
     rows = {}
 
     def add(ident, step, fact, **extra):
@@ -32,7 +33,7 @@ def steps(facts):
 
     for ident, letter in letters.items():
         add(ident, 'admitted', letter)
-    for fact in facts:
+    for fact in kind_facts(facts, 'wish', 'letter', 'note', 'shown'):
         d = fact.data
         if fact.kind == 'wish':
             for say in read_says(d.get('says')):
@@ -66,7 +67,7 @@ def steps(facts):
 
 
 def observe(home, facts):
-    known = {f.id for f in facts if f.kind == 'letter.presence'}
+    known = {f.id for f in kind_facts(facts, 'letter.presence')}
     for row in steps(facts):
         key = [row['letter'], row['step'], row.get('strand'), row.get('gen')]
         ident = 'letter.presence:' + hashlib.sha256(repr(key).encode()).hexdigest()[:32]
