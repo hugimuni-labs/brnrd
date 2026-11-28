@@ -164,3 +164,91 @@ def test_a_growing_transcript_keeps_the_render_and_a_watched_file_retires_it(tmp
     watched.write_text("a = 2\n")
     loom._rendered(facts, key, render)
     assert len(renders) == 2
+
+
+def test_two_boundaries_share_file_reads_and_both_see_replacement(tmp_path, monkeypatch):
+    from collections import Counter
+    from pathlib import Path
+    from types import SimpleNamespace
+
+    from brr.loom.runtime.tick_inputs import tick_inputs
+
+    root = tmp_path / "home"
+    for name in ("a", "b"):
+        write_thread(root, name, f"# parent {name}\n", "quit-now", wait="0")
+        child = CHILD.replace("c-1", f"c-{name}").replace("w-1", name)
+        write_thread(root, f"c-{name}", child, "quit-now", wait="0")
+    home = Home(root)
+    install = home.install_id()
+    opened = [Fact(kind="pr.opened", by=f"loom:{install}", data={
+        "thread": f"c-{name}", "repo": "acme/tool", "number": 7, "head": "abc"})
+        for name in ("a", "b")]
+    facts = ledger.LedgerView(opened)
+    cards = root / "loom/prs.json"
+    gauges = root / "loom/usage"
+    gauges.mkdir()
+    sample = gauges / "claude.json"
+    reads = Counter()
+    original = Path.read_text
+
+    def counted(path, *args, **kwargs):
+        if path in (cards, sample):
+            reads[path] += 1
+        return original(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "read_text", counted)
+    monkeypatch.setattr(loom, "RENDER_MAX_AGE", 3600)
+
+    def boundaries():
+        with tick_inputs():
+            result = []
+            for name in ("a", "b"):
+                strand = f"s-{install}-{name}"
+                path = home.room(strand) / "port/in"
+                path.mkdir(parents=True, exist_ok=True)
+                context = SimpleNamespace(thread=name, fuel="", why="", shell="claude")
+                loom._boundary(home, facts, strand, 1, context)
+                result.append((path / "boundary.md").read_text())
+            return result
+
+    # Both renders register absence, including the render that hit the cache.
+    assert all("#7" in text and "session pace:" not in text for text in boundaries())
+    for state, left in (("pending", 31), ("green", 52)):
+        for path, payload in (
+            (cards, {"acme/tool#7": {"state": "open", "ci": state}}),
+            (sample, {"at": 100, "windows": [
+                {"name": "session", "left_pct": left, "resets_at": "2099-01-01T00:00:00Z"}]}),
+        ):
+            fresh = path.with_suffix(".new")
+            fresh.write_text(json.dumps(payload))
+            fresh.replace(path)
+        reads.clear()
+        rendered = boundaries()
+        assert all(f"#7 ready {state}" in text and f"session {left}%" in text for text in rendered)
+        assert reads == {cards: 1, sample: 1}
+    cards.unlink()
+    sample.unlink()
+    assert all("#7 ready" not in text and "session pace:" not in text for text in boundaries())
+
+
+def test_connector_config_snapshot_retires_boundary_when_config_is_replaced(tmp_path):
+    from brr.loom.runtime.config import load_config, tick_config
+    from brr.loom.runtime.connector import instances
+    from brr.loom.runtime.tick_inputs import stat, tick_inputs
+
+    home = Home(tmp_path)
+    config = tmp_path / "loom/config.toml"
+    config.parent.mkdir()
+    alias = tmp_path.parent / (tmp_path.name + "-alias")
+    alias.symlink_to(tmp_path, target_is_directory=True)
+    facts = object()
+
+    def render():
+        return ", ".join(instances(Home(alias)))
+
+    for name in ("first", "second"):
+        fresh = config.with_suffix(".new")
+        fresh.write_text(f'connectors = ["{name}"]\n')
+        fresh.replace(config)
+        with tick_config(home.root, load_config(home.root), stat(config)), tick_inputs():
+            assert loom._rendered(facts, ("connector-config",), render) == name

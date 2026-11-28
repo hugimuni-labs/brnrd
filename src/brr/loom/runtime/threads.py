@@ -1,6 +1,5 @@
 """One derived view of threads, shared by the CLI and opener boundaries."""
 
-import json
 import time
 from datetime import datetime
 
@@ -11,6 +10,7 @@ from .lifecycle import CLOSED, read_thread, main_snapshot, main_tree, readme_at
 from .owners import active_owners, letter_owners, thread_axes, unanswered_by_thread
 from .project import cached_projection, fold, sender_threads
 from .selfrepo import git
+from .tick_inputs import input_stat, read_json
 
 
 # Main changes on a landed commit, not on every router tick. Cache only its
@@ -167,11 +167,13 @@ def thread_table(home: Home, facts: list, opened_by: str | None = None) -> list[
             value = axes[thread]['cause']
         elif strand and body_alive(home.room(strand)):
             path = home.room(strand) / 'port/jack-state.json'
-            try:
-                jack = json.loads(path.read_text())
-                recent = max(boundary.get(strand, 0), path.stat().st_mtime)
-            except (OSError, ValueError):
-                jack, recent = {}, boundary.get(strand, 0)
+            valid, jack = read_json(path)
+            stamp = input_stat(path)
+            recent = boundary.get(strand, 0)
+            if valid and stamp is not None:
+                recent = max(recent, stamp[0] / 1e9)
+            else:
+                jack = {}
             if not count or jack.get('stop_blocks'):
                 value = 'holding'
                 if jack.get('held_at'):
@@ -212,10 +214,8 @@ def thread_table(home: Home, facts: list, opened_by: str | None = None) -> list[
 
 def pr_cards(home: Home) -> dict[str, dict]:
     """``loom/prs.json``: what the waits watcher last read of each open pull request."""
-    try:
-        return json.loads((home.root / 'loom' / 'prs.json').read_text())
-    except (OSError, ValueError):
-        return {}
+    valid, cards = read_json(home.root / 'loom' / 'prs.json')
+    return cards if valid else {}
 
 
 def pr_word(number: int, card: dict | None, now: float) -> str:

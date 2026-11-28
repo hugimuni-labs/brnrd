@@ -386,3 +386,27 @@ def test_vibe_collector_reports_unmetered_without_inventing_fuel(tmp_path):
     assert "error" not in result
     assert usage.shell_fuels(home)["vibe"] == "unmetered"
     assert usage.fuels(home, "vibe") == "fuel vibe unmetered"
+
+
+def test_tick_fuel_view_follows_collector_install_and_removal(tmp_path, monkeypatch):
+    from brr.loom.runtime.tick_inputs import tick_inputs
+
+    home = Home(tmp_path)
+    shell = "local-test"
+    gauge = tmp_path / f"loom/usage/{shell}.json"
+    gauge.parent.mkdir(parents=True)
+    gauge.write_text(json.dumps({"at": 100, "windows": [{"name": "session", "left_pct": 73}]}))
+    monkeypatch.setattr(usage.time, "time", lambda: 200)
+    adapter = tmp_path / f"loom/bodies/{shell}"
+    adapter.mkdir(parents=True)
+    (adapter / "run").touch()
+    collector = adapter / "usage"
+    with tick_inputs():
+        assert usage.fuel(home, shell) == ""
+    collector.touch()
+    with tick_inputs():
+        assert usage.fuel(home, shell) == f"fuel {shell} session 73%"
+        collector.unlink()
+        assert usage.fuel(home, shell) == f"fuel {shell} session 73%"
+    with tick_inputs():
+        assert usage.fuel(home, shell) == ""
