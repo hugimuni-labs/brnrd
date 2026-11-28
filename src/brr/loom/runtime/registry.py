@@ -71,7 +71,7 @@ REGISTRY = (
     _kind("body.stopped",      "body",    "strand gen pid why",                               "loom",        "machine", once=True),
     _kind("body.unidentified", "body",    "strand gen pid why",                               "loom",        "machine"),
     _kind("body.exited",       "body",    "strand gen code why? failure_origin? failure_letters?",                             "loom",        "global",  once=True),
-    _kind("wish",              "wish",    "wish says from line thread parent? rec? kind? answered_by?",     "strand person loom", "global"),
+    _kind("wish",              "wish",    "wish says from line thread parent? rec? kind? answered_by? friction?",     "strand person loom", "global"),
     _kind("ask.answer",        "wish",    "wish as ref",                                      "strand person loom", "global"),
     _kind("wish.read",         "wish",    "wish reading by wait?",                             "strand person", "global"),
     _kind("wish.result",       "wish",    "wish kind ref line delivered cmd? sha256? size? name? mime? verified? word? unverified? weakened?", "strand loom", "global"),
@@ -89,7 +89,9 @@ REGISTRY = (
     _kind("lease",             "thread",  "thread strand gen install router_gen shell core repos parent? pin? body_source?", "loom", "global", once=True),
     _kind("released",          "thread",  "thread strand gen why install router_gen?",        "loom",        "global",  once=True),
     _kind("shown",             "letter",  "strand gen ids wait?",                                   "loom strand", "global"),
-    _kind("reincarnate",              "letter",  "strand gen why fresh? cites? carry?",              "strand",      "global"),
+    _kind("reincarnate",              "letter",  "strand gen why fresh? cites? carry? friction?",    "strand",      "global"),
+    # What cost a body, and the sink it went to (friction.py); an own wish names it back.
+    _kind("friction",          "friction", "line sink thread strand version install at? gen? wish? home?", "strand", "global"),
     _kind("hold",              "letter",  "strand gen why context",                           "strand",      "global"),
     _kind("rest.why",          "rest",    "strand gen why wishes",                            "strand",      "global"),
     _kind("guard.granted",     "letter",  "strand gen thread class target letter wish",       "strand",      "global"),
@@ -177,12 +179,18 @@ def admit(fact: Fact) -> None:
                 found.append("the loom writes only the resident's own wishes")
             elif loom_resident:
                 pass
+            elif fact.data["from"] == "self":
+                # The resident's own work item, born of a friction a body recorded: it cites that.
+                if not fact.by.startswith("strand:") or not fact.data.get("friction"):
+                    found.append("an own wish is a body's, born of its friction")
             elif not fact.data["says"] and not fact.data.get("parent"):
                 found.append("a new wish needs --say <letter> or --parent <wish>")
             elif fact.data["from"] == "resident" and not fact.data.get("parent"):
                 found.append("an ask needs the wish it unblocks: ask --for <wish>")
         elif not fact.id.startswith("wish:"):
             found.append("a wish fact is a birth (id = the wish) or a touch (id wish:…)")
+        if "friction" in fact.data and fact.data["from"] != "self":
+            found.append("only an own wish carries a friction")
         if "rec" in fact.data and fact.data["from"] != "resident":
             found.append("only an ask carries a rec")
         if "answered_by" in fact.data and fact.data["from"] != "resident":

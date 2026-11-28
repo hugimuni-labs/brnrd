@@ -205,6 +205,10 @@ def _park_line(wish, read, now: float) -> str:
 
 def _heard_line(wish) -> str:
     from .wishes import _short
+    if wish.sender == "self":
+        # A friction a body recorded: the resident's own work item, nobody's ask.
+        return (f'own {wish.id}: "{_short(wish.line, 60)}" — build it, move it, or '
+                f'`wish {wish.id} --drop "<why>"`')
     return (f'{wish.id} is heard, never read: "{_short(wish.line, 60)}" — '
             f'`wish {wish.id} --read "<what it asks>"`')
 

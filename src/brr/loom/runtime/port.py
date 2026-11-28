@@ -1089,7 +1089,8 @@ def _carried(home, facts, stamped, re, target, sender) -> list:
 
 
 def write_reincarnate(room: Path, why: str, *, fresh: bool = False,
-                      cites: str | None = None, carry: str | None = None) -> str:
+                      cites: str | None = None, carry: str | None = None,
+                      friction: dict | None = None) -> str:
     """Record a molt using the existing reincarnate wire and ledger kind."""
     if not why:
         raise PortError("molt: --why is empty")
@@ -1108,6 +1109,11 @@ def write_reincarnate(room: Path, why: str, *, fresh: bool = False,
     if cites:
         from .cites import check_cite
         check_cite(facts, cites, thread)
+    if friction is not None:
+        # Refused before anything lands: a molt with a friction that cannot be recorded does not go.
+        from .friction import check as check_friction
+        friction = dict(friction, **dict(zip(("line", "at"), check_friction(
+            home, friction["line"], friction.get("sink"), friction.get("at")))))
     from .wishes import owed_lefts, wishes
     owed = owed_lefts(wishes(facts), facts, thread, strand)
     if owed:
@@ -1141,6 +1147,17 @@ def write_reincarnate(room: Path, why: str, *, fresh: bool = False,
         fields["fresh"] = "true"
     if cites:
         fields["cites"] = cites
+    if friction is not None:
+        from .friction import room_gen, facts_for
+        from .ledger import append
+        recorded = facts_for(home, read_facts(home), by="strand:" + strand, thread=thread, strand=strand,
+                             gen=room_gen(room), line=friction["line"], sink=friction.get("sink"),
+                             at=friction.get("at"))
+        for fact in reversed(recorded):
+            append(home, fact)
+        fields["friction"] = recorded[0].id
+        fields["friction_line"] = friction["line"]
+        fields["friction_sink"] = friction.get("sink") or ""
     write_port(room, stem, _front(fields))
     write_send(room, to=f"thread:{thread}", sender=strand,
                body=FRESH_MOLT if fresh else why, reincarnate=fact_id)
@@ -1351,7 +1368,9 @@ def fact_from_port(fm: dict[str, str], strand: str, gen: int | None,
             data={"strand": strand, "gen": gen, "why": fm["why"], **({"fresh": True} if fm.get("fresh") == "true" else {}),
                   **({"cites": fm["cites"]} if fm.get("cites") else {}),
                   **({"context": int(fm["context"])} if fm.get("context", "").isdigit() else {}),
-                  **({"carry": fm["carry"]} if "carry" in fm else {})},
+                  **({"carry": fm["carry"]} if "carry" in fm else {}),
+                  **({"friction": {"id": fm["friction"], "line": fm.get("friction_line", ""),
+                                   "sink": fm.get("friction_sink", "")}} if fm.get("friction") else {})},
         )
     if kind == "face":
         from .faces import face_of
