@@ -786,6 +786,10 @@ class Router:
                     from .project import reply_channels
                     if event_id and reply_channels(facts).get(fact.data.get("re")) == to:
                         context["re"] = event_id
+                # The chat reads words; the ledger letter keeps its ids and links,
+                # and a reply binds by the platform receipt and those links.
+                from .plain import for_person
+                body = for_person(body)
                 status, speech, unsure = speak(
                     self.home, self.lease, key, body, channel=str(to), context=context,
                     authorize=self.armed,
