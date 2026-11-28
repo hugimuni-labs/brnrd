@@ -46,14 +46,13 @@ def install_kind(home: Home, root: Path | None = None) -> str:
     (a fork) is dev; a release or a checkout that does not follow main is plain."""
     from .config import load_config
     from .receipts import source_root
-    from .update import slug
+    from .update import checkout_mode, slug
     root = source_root() if root is None else root
     if not (root / ".git").exists():
         return "plain"
     mode = load_config(home.root).update
     if mode == "auto":
-        found = _git(root, "config", "--get", "brnrd.update").stdout.strip()
-        mode = found if found in ("stable", "dev") else "dev"
+        mode = checkout_mode(root)
     if mode != "dev":
         return "plain"
     url = _git(root, "remote", "get-url", "origin").stdout.strip()
@@ -112,13 +111,31 @@ def facts_for(home: Home, facts, *, by: str, thread: str, strand: str, gen: int 
     out = [friction]
     words = ("sort" if sink is None else
              "fix upstream" if sink == "upstream" and kind in ("upstream", "dev") else None)
-    if words is not None:
+    held = _open_fix(facts, at) if words == "fix upstream" else None
+    if held is not None:
+        # The count is the signal: a scar paid again points at its open fix, never a second row.
+        friction.data["wish"] = held
+    elif words is not None:
         wish = wish_fact(facts, by=by, ident="new", line=f"{words}: {line}", thread=home.main_thread(),
                          sender="self")
         wish.data["friction"] = friction.id
         friction.data["wish"] = wish.id
         out.append(wish)
     return out
+
+
+def _open_fix(facts, at: str | None) -> str | None:
+    """The open own wish an earlier upstream friction on this scar opened, if any."""
+    from .wishes import wishes
+    rows = None
+    for fact in reversed(facts):
+        if (fact.kind == "friction" and fact.data.get("sink") == "upstream" and fact.data.get("at") == at
+                and fact.data.get("wish")):
+            rows = wishes(facts) if rows is None else rows
+            row = rows.get(fact.data["wish"])
+            if row is not None and row.open:
+                return row.id
+    return None
 
 
 def paid(facts, at: str) -> int:
@@ -131,7 +148,10 @@ def said(fact: Fact, facts) -> str:
     d = fact.data
     where = d.get("sink") or "unsorted"
     text = f"{fact.id} · {where}" + (f" · {d['at']} (paid {paid(facts, d['at'])})" if d.get("at") else "")
-    if d.get("wish"):
+    if d.get("wish") and not any(f.kind == "wish" and f.id == d["wish"] and f.data.get("friction") == fact.id
+                                 for f in facts):
+        text += f" · own wish {d['wish']} already open"
+    elif d.get("wish"):
         text += f" · own wish {d['wish']} on thread {d.get('home') or 'home'}"
     elif d.get("sink") == "upstream":
         text += f" · no fix wish: this {d['install']} install opens no pull request on brnrd; the scar stays"
@@ -144,7 +164,7 @@ def record(home: Home, *, by: str, thread: str, strand: str, gen: int | None,
     facts = read_facts(home)
     line, at = check(home, line, sink, at)
     out = facts_for(home, facts, by=by, thread=thread, strand=strand, gen=gen, line=line, sink=sink, at=at)
-    if len(out) > 1:
+    if out[0].data.get("wish"):
         out[0].data["home"] = home.main_thread()
     for fact in reversed(out):  # the wish first: the friction fact names it
         append(home, fact)
@@ -226,28 +246,40 @@ def scars_upstream(self_repo: Path, tip: str) -> dict[str, int]:
 
 
 def _owner(facts, path: str, home: Home) -> str:
-    """The thread that last recorded a friction on this scar, else the home thread."""
+    """The open thread that last recorded a friction on this scar, else the home thread.
+
+    A settled thread boots no body (the router passes over it), so a notice there
+    would sit unread: it goes home instead."""
+    from .lifecycle import CLOSED, read_thread
     for fact in reversed([f for f in facts if f.kind == "friction"]):
-        if fact.data.get("at") == path and fact.data.get("thread"):
-            return str(fact.data["thread"])
+        thread = fact.data.get("thread")
+        if fact.data.get("at") == path and thread and read_thread(home, str(thread)).get("status") not in CLOSED:
+            return str(thread)
     return home.main_thread()
 
 
-def loaded_notices(home: Home, facts, *, root: Path | None = None) -> list[str]:
+def loaded_notices(home: Home, facts, *, root: Path | None = None,
+                   scars: dict[str, int] | None = None) -> list[str]:
     """One notice per scar whose upstream fix is merged and in the code this loom runs."""
+    from .home import notice_id
     from .lifecycle import main_tip
     from .loom import notice
     from .receipts import held_merge, source_root
+    if scars is None:
+        scars = scars_upstream(home.root / "self", main_tip(home.root / "self"))
+    if not scars:
+        return []
     root = source_root() if root is None else root
     install = home.install_id()
     start = next((f.data for f in reversed([f for f in facts if f.kind == "loom.started"])
                   if f.data.get("install") == install), None)
     if not start or not start.get("commit"):
         return []
-    self_repo = home.root / "self"
-    tip = main_tip(self_repo)
+    ids = {f.id for f in facts}
     sent = []
-    for path, number in sorted(scars_upstream(self_repo, tip).items()):
+    for path, number in sorted(scars.items()):
+        if notice_id("scar-loaded", f"{path}:{number}") in ids:
+            continue  # told once already: no merge to look up
         merge = held_merge({"kind": "pr", "ref": str(number)}, start, root=root)
         if not merge:
             continue
@@ -281,5 +313,9 @@ class ScarWatch:
         tip = main_tip(self.home.root / "self")
         if tip == self.seen:
             return
-        loaded_notices(self.home, read_facts(self.home))
+        # Self main moves at every landing: the grep comes first, and the ledger is read
+        # only when some scar names an upstream fix.
+        scars = scars_upstream(self.home.root / "self", tip)
+        if scars:
+            loaded_notices(self.home, read_facts(self.home), scars=scars)
         self.seen = tip

@@ -193,3 +193,86 @@ def test_a_scars_upstream_fix_raises_one_notice_once_loaded_never_on_merge_alone
     assert upstream_ref("# t\nUpstream: https://github.com/hugimuni-labs/brnrd/pull/34\n") == 34
     assert upstream_ref("# t\nupstream: otherrepo#5\n") is None
     assert upstream_ref("# t\n" + "line\n" * 12 + "upstream: brnrd#9\n") is None
+
+
+def _upstream_checkout(tmp_path):
+    source = tmp_path / "src"
+    source.mkdir()
+    _git(source, "init", "-q")
+    _git(source, "remote", "add", "origin", "https://github.com/hugimuni-labs/brnrd.git")
+    return source
+
+
+def test_a_scar_paid_again_points_at_its_open_fix_wish(tmp_path, monkeypatch):
+    """Upstream install: the second friction on one scar opens no second wish; it counts."""
+    import brr.loom.runtime.receipts as receipts
+    from brr.loom.runtime import friction
+    root = tmp_path / "home"
+    init_self(root, person="test")
+    _land_scar(root)
+    home = Home(root)
+    source = _upstream_checkout(tmp_path)
+    monkeypatch.setattr(receipts, "source_root", lambda: source)
+    first = friction.record(home, by="strand:s-x", thread="work", strand="s-x", gen=1,
+                            line="a send drops its wish", sink="upstream", at=SCAR)
+    second = friction.record(home, by="strand:s-y", thread="work", strand="s-y", gen=1,
+                             line="the send dropped it again", sink="upstream", at=SCAR)
+    facts = read_facts(home)
+    own = [w for w in wishes(facts).values() if w.sender == "self"]
+    # Positive control: the first friction opened the fix wish.
+    assert [f.kind for f in first] == ["friction", "wish"] and len(own) == 1
+    assert [f.kind for f in second] == ["friction"]
+    assert second[0].data["wish"] == own[0].id == first[1].id
+    assert f"(paid 2) · own wish {own[0].id} already open" in friction.said(second[0], facts)
+    assert "already open" not in friction.said(first[0], facts)
+
+
+def test_scar_watch_reads_no_ledger_until_a_scar_names_an_upstream_fix(tmp_path, monkeypatch):
+    """The loop's caller: a tip move with no upstream scar reads no ledger; a told scar looks up no merge."""
+    import brr.loom.runtime.ledger as ledger
+    import brr.loom.runtime.receipts as receipts
+    from brr.loom.runtime.friction import ScarWatch
+    root = tmp_path / "home"
+    init_self(root, person="test")
+    write_thread(root, "work", "Work", "work", wait="0")
+    home = Home(root)
+    source, _, merged = _source(tmp_path)
+    _started(home, merged)
+    monkeypatch.setattr(receipts, "source_root", lambda: source)
+    reads, merges = [], []
+    real_read, real_merge = ledger.read_facts, receipts.held_merge
+    monkeypatch.setattr(ledger, "read_facts", lambda *a, **k: reads.append(1) or real_read(*a, **k))
+    monkeypatch.setattr(receipts, "held_merge", lambda *a, **k: merges.append(1) or real_merge(*a, **k))
+    watch = ScarWatch(home, lambda *a: None)
+
+    def move(path, head):
+        _land_scar(root, path, head=head)
+        watch.next = 0.0
+        watch.step()
+
+    move("memory/scars/git/no-upstream.md", "nothing filed")
+    assert reads == [] and merges == []
+    # Positive control: a scar naming its fix reads the ledger and tells its thread once.
+    move(SCAR, "upstream: brnrd#7")
+    assert len(reads) == 1 and len(merges) == 1
+    assert len(_loaded(home, real_read(home))) == 1
+    # Told already: the next tip move reads the ledger but looks up no merge.
+    move("memory/scars/git/another.md", "nothing filed")
+    assert len(reads) == 2 and len(merges) == 1
+    assert len(_loaded(home, real_read(home))) == 1
+
+
+def test_a_scar_loaded_notice_skips_a_settled_thread(tmp_path):
+    """A settled thread boots no body: its scar's notice goes to the home thread."""
+    from brr.loom.runtime.friction import loaded_notices
+    root = tmp_path / "home"
+    init_self(root, person="test")
+    write_thread(root, "done", "---\nid: done\nstatus: settled\ntense: plan\n---\n# Done\n", "done", wait="0")
+    _land_scar(root)
+    home = Home(root)
+    append(home, Fact(kind="friction", by="strand:s-x", id="friction:one",
+                      data={"line": "x", "sink": "upstream", "at": SCAR, "thread": "done", "strand": "s-x"}))
+    source, _, merged = _source(tmp_path)
+    _started(home, merged)
+    assert loaded_notices(home, read_facts(home), root=source) == [SCAR]
+    assert _loaded(home, read_facts(home))[0].data["to"] == f"thread:{home.main_thread()}"
